@@ -180,6 +180,15 @@ class MappedInputManager {
   void rememberTouchHeldTime() const;
   void suppressNextRelease(Button button) const;
 
+ public:
+  // A light-sleep wake press must not become an in-app long-press/deep-sleep.
+  // Set on the PowerButton wake, cleared by main once the key is released.
+  void notePowerWakeFromSleep() { powerWakeReleasePending_ = true; }
+  bool powerWakeReleasePending() const { return powerWakeReleasePending_; }
+  void clearPowerWakeRelease() { powerWakeReleasePending_ = false; }
+
+ private:
+
   mutable HomeButtonInput homeButtonInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;
@@ -188,6 +197,7 @@ class MappedInputManager {
   mutable unsigned long touchHeldOverrideAt = 0;
   mutable uint16_t longPressFiredButtons = 0;
   mutable uint16_t suppressedReleaseButtons = 0;
+  bool powerWakeReleasePending_ = false;
   mutable std::array<bool, kButtonCount> blePressEdges{};
   mutable std::array<bool, kButtonCount> bleReleaseEdges{};
   mutable std::array<bool, kButtonCount> blePendingEdges{};
