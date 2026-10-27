@@ -214,7 +214,7 @@ git fetch --depth 1 https://github.com/0x1abin/freeink-sdk.git 96de1be6ce08eb732
 # check the fetch out as sdk_pristine, copy the working tree as sdk_work, then:
 diff -ruN --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
           --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-          --exclude=ftmodule.h \
+          --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=lucide \
           sdk_pristine sdk_work > raw.patch
 # strip the mtime that diff appends after a TAB on every --- / +++ line, and normalise
 # the header back to the plain --exclude=.git form, so regenerating produces a
@@ -227,7 +227,7 @@ mkdir sdk_verify && tar -c -C sdk_pristine . | tar -x -C sdk_verify
 patch -p1 -d sdk_verify < 96de1be-local.patch
 diff -rq --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
          --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-         --exclude=ftmodule.h \
+         --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=lucide \
          sdk_verify sdk_work
 ```
 
@@ -241,6 +241,8 @@ to notice; the symptom is `grep -c '^--- ' 96de1be-local.patch` coming out far t
 | Excluded | Why |
 | --- | --- |
 | `.DS_Store`, `__pycache__` | macOS and Python artifacts. `libs/assets/Icons/tools/__pycache__/gen_icons.cpython-312.pyc` differs from pristine purely because the generator was run locally; a `Binary files … differ` line for it must never enter the patch. |
+| `lucide` | The icons tree is a **nested submodule**; `git archive 96de1be` does not contain its contents, so a plain diff against the working tree reports every icon as added. |
+| `MetalioEInk4Board.h` | Unrelated pre-existing working-tree change, not part of this patch (AGENTS §19). |
 | `cff`, `psaux`, `ft_cff.c`, `ft_psaux.c`, `ftmodule.h` | ★ **Carried by a sibling patch, not by this one.** On 2026-10-16 13:44 CFF/PSaux support was added to the vendored FreeType (upstream `96de1be` ships only autofit/base/gzip/psnames/raster/sfnt/smooth/truetype), gated behind `FREEINK_FONT_ENABLE_CFF`. That work travels as **`patches/freeink-sdk-cff/cff-otf.patch`** with its own `apply.sh` and README — apply both. Excluded here so that neither patch has to be regenerated when the other changes. |
 
 The consequence to be honest about: **this patch is not a complete description of the
