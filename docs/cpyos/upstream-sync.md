@@ -19,6 +19,8 @@ git merge main
 
 GitHub 的「Sync fork」按钮只更新 `main`，不会改 `cpyos`；同步后仍需把 `main` 合进 `cpyos`。
 
+★ 2026-10-27 的状态：`main` 已到上游 `6b5566c8`，而 `cpyos` 的基座仍是 `83b0f81`，相差约 2300 个提交。**这是一次需要专门排期的大规模合并**，不是日常 fast-forward；应在 `work/upstream-sync` 分支完成、完整构建并真机验收后再合回 `cpyos`，不要在发版当天顺手做。
+
 日常功能改动不要直接写 `main` 或裸 `cpyos`：
 
 ```bash
