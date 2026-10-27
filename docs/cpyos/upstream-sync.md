@@ -19,6 +19,21 @@ git merge main
 
 GitHub 的「Sync fork」按钮只更新 `main`，不会改 `cpyos`；同步后仍需把 `main` 合进 `cpyos`。
 
+日常功能改动不要直接写 `main` 或裸 `cpyos`：
+
+```bash
+git fetch fork --prune
+git switch cpyos
+git merge --ff-only fork/cpyos
+git switch -c work/<topic>
+# 修改 + 构建 + 测试 + 提交
+git switch cpyos
+git merge --no-ff work/<topic>
+git push fork cpyos
+```
+
+只推 `fork`；`origin`/`upstream` 是只读的 CrossMux。旧设备树 `repos/crossmux`（`feat/jjwxc`）含旧历史与旧截图，**不要 push**；公开工作使用 `repos/cpyos-public`。
+
 ## 子模块与补丁
 
 `freeink-sdk` 是固定提交的 gitlink，本地显示 / 字体改动不在 gitlink 里，而在：

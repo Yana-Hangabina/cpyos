@@ -7,12 +7,36 @@
 - 使用语义版本：`0.1.0` → `0.1.1`（修复）/ `0.2.0`（功能）/ `1.0.0`（不兼容）。OTA 只比较前三段，因此不要用 `0.1.0-cpyos.2` 这种 tag 做用户可见发布。
 - CPYOS 从 `0.1.0` 开始独立计数，不再接续 CrossMux 的 `1.x`。首次安装用完整包；从 `0.1.0` 起的后续版本才通过 OTA 按 CPYOS 版本比较。
 
+## 日常分支与合并
+
+`main` 是上游镜像，`cpyos` 是默认、集成和发版分支。功能改动不要直接提交到 `main`：
+
+```bash
+git fetch fork --prune
+git switch cpyos
+git merge --ff-only fork/cpyos
+git switch -c work/<topic>
+
+# 修改、构建、测试、提交
+pio run -e readpico
+python3 scripts/generate_data_manifest.py
+python3 scripts/verify_release_artifacts.py
+
+git switch cpyos
+git merge --no-ff work/<topic>
+git push fork cpyos
+```
+
+- 只推 `fork`（`Yana-Hangabina/cpyos`）；`origin`/`upstream` 是只读的 CrossMux。
+- 多个人/agent 并行时，各自用 `work/<topic>`，不要改写别人的分支。
+- 公开树不放设备截图、书名、WiFi、账号；`refreshed UI` 是界面名称，`kiikoread` 是致谢名称。
+
 ## 发布前检查
 
 ```bash
 git status --short                     # 必须干净；CI 会拒绝 -dirty 镜像
 git switch cpyos
-git pull --ff-only
+git merge --ff-only fork/cpyos
 pio run -e readpico
 python3 scripts/verify_release_artifacts.py --release
 python3 scripts/tests/test_release_artifacts.py
@@ -31,10 +55,20 @@ python3 scripts/tests/test_release_artifacts.py
 ```bash
 # 本仓库的 fork remote；origin 指向上游 CrossMux，不要往那里推 CPYOS tag
 git remote add fork git@github.com:Yana-Hangabina/cpyos.git   # 首次
-git tag -a 0.1.0 -m "脆皮鸭 CPYOS 0.1.0"
+
+# 1. 先把版本、CHANGELOG 和两份 release notes 提交到 cpyos
+#    platformio.ini [crosspoint] version = <v>
+#    docs/releases/<v>.md / docs/releases/<v>.ota.json
+git add platformio.ini CHANGELOG.md docs/releases/<v>.md docs/releases/<v>.ota.json
+git commit -m "release: <v>"
+
+# 2. tag 必须与 platformio.ini 的 version 完全一致，不带 v
+git tag -a <v> -m "脆皮鸭 CPYOS <v>"
 git push fork cpyos
-git push fork 0.1.0
+git push fork <v>
 ```
+
+已发布的 tag 不再移动；修复发新的 patch 版本。
 
 `.github/workflows/cpyos-release.yml` 会：
 

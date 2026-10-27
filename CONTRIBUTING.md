@@ -9,13 +9,25 @@
 - 设备型号（Read Pico / RDP-G01-W）与 CPYOS 版本（设置 → 关于本机）；
 - 复现步骤，尽量缩到最少；
 - 串口日志（**先脱敏**：删除 `loginName=`、`loginPassword=`、`sid=`、`Cookie:`、`Authorization:` 与任何账号数据）；
-- 如果是显示问题，附一张 `CMD:SCREENSHOT` 导出的帧缓冲或屏幕照片。
+- 如果是显示问题，先描述区域和现象；**不要上传整屏截图/帧缓冲**。如必须附图，请先遮挡书名、作者、WiFi 名称、账号等私人信息，并且不要把图片提交进仓库。
 
 安全或账号相关问题请用 GitHub 的 **Security → Report a vulnerability**，不要公开粘贴凭据或未脱敏日志。
 
 ## 提交代码
 
-1. 从 `cpyos` 分支切出功能分支，PR 目标也是 `cpyos`（不是上游 `main`）。
+1. 从 `cpyos` 分支切出功能分支，PR 目标也是 `cpyos`（不是上游 `main`）：
+
+   ```bash
+   git fetch fork --prune
+   git switch cpyos
+   git merge --ff-only fork/cpyos
+   git switch -c work/<topic>
+   # 修改、构建、测试、提交
+   git push fork work/<topic>
+   ```
+
+   维护者把功能分支合回 `cpyos`（`git merge --no-ff work/<topic>`）后再推送 `fork/cpyos`；不要直接改 `main` 或往 `origin` 推。
+
 2. 保持改动聚焦：一个 PR 解决一件事，不要顺手重构无关文件。
 3. 不提交账号、密码、token、Cookie、抓包正文或真机日志。
 4. 改了 i18n YAML 后重跑 `python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ --strip-unused`，并说明语言包键数变化（数据分区需要一起刷新）。
