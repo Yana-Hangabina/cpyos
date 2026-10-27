@@ -192,9 +192,20 @@ gray, so each needs on-panel comparison, not just a host test.
    Revert by making `EpdiyLcdDriver::idlePowerTick()` a no-op or removing the
    `renderer.idlePowerTick(millis())` call in `main.cpp`.
 
+9. **PMU short-key wake (`BoardReadPico::pmuTakeKeyWakeup`).** The PMU keeps
+   KEY_DOWN / KEY_SHORT / KEY_LONG in its event FIFO until acknowledged. A short
+   press releases the FCA9555 INT# before the S3 is awake, so a level-only light
+   sleep can miss it and need a long hold. `pmuTakeKeyWakeup()` drains the FIFO,
+   acknowledges every event and reports key types (or a currently held key).
+   `HalPowerManager::lightSleepReadPico` now sleeps in 2 s slices (matching rpr's
+   `APP_LOCK_KEY_POLL_US`) and polls that function after each wake; a key event
+   returns `PowerButton` before the 60 s clock tick. The same patch adds
+   `LightSleepWakeReason::External` so AC-in / card-detect wakes do not masquerade
+   as a key and leave a stale "swallow the next release" flag.
+
 ## Upgrading an older tree
 
-This patch grew from 20 to 26 files when items 6 and 7 landed; the idempotence marker
+This patch grew from 20 to 27 files when items 6–9 landed; the idempotence marker
 moved from `e0470_textturn_soft_settle` to `epd_draw_base_start` when item 6 landed. A working tree that still
 carries the earlier version cannot be patched in place: `apply.sh` detects that state and
 refuses. Restore the tree to `96de1be` first (re-checkout in a scratch clone, then
@@ -218,7 +229,7 @@ diff -ruN --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
           sdk_pristine sdk_work > raw.patch
 # strip the mtime that diff appends after a TAB on every --- / +++ line, and normalise
 # the header back to the plain --exclude=.git form, so regenerating produces a
-# content-only diff instead of touching all 25 headers:
+# content-only diff instead of touching all 27 headers:
 sed -E 's/^(---|\+\+\+) (sdk_pristine|sdk_work)\/([^[:space:]]+)[[:space:]].*$/\1 \2\/\3/' raw.patch \
   | sed -E 's|^diff -ruN --exclude=[^ ]+( --exclude=[^ ]+)* sdk_pristine/|diff -ruN --exclude=.git sdk_pristine/|' \
   > 96de1be-local.patch

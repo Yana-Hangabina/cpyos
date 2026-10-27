@@ -1642,8 +1642,13 @@ void loop() {
   // that drives auto-downclock. Standby (a clock face) wants deep sleep blocked
   // but still benefits from the framework dropping CPU to LOW_POWER_FREQ.
 
-  if (wakePowerReleasePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
+  // A press that woke the device (boot or light sleep) must never also become an
+  // in-app long-press: Standby's light-sleep wake sets this through
+  // MappedInputManager. Swallow the entire press, and clear only on release.
+  const bool powerWakePending = wakePowerReleasePending || mappedInputManager.powerWakeReleasePending();
+  if (powerWakePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
     wakePowerReleasePending = false;
+    mappedInputManager.clearPowerWakeRelease();
     return;
   }
 
@@ -1725,7 +1730,7 @@ void loop() {
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP &&
                                         gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
 
-  if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
+  if (!powerWakePending && !x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -1753,7 +1758,7 @@ void loop() {
   // the next press wakes this same reader. Long holds still reach deep sleep
   // through the block above, and the release that woke the device is filtered
   // by wakePowerReleasePending.
-  if (activityManager.isReaderForeground() && !wakePowerReleasePending && millis() >= allowSleepAt &&
+  if (activityManager.isReaderForeground() && !powerWakePending && millis() >= allowSleepAt &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Reader power short press -> standby");
     activityManager.goToReaderStandby();

@@ -3131,17 +3131,71 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/Pan
 diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/include/BoardReadPico.h sdk_work/libs/hardware/BoardReadPico/include/BoardReadPico.h
 --- sdk_pristine/libs/hardware/BoardReadPico/include/BoardReadPico.h
 +++ sdk_work/libs/hardware/BoardReadPico/include/BoardReadPico.h
-@@ -122,4 +122,10 @@
+@@ -88,6 +88,12 @@
+ // pmu_charge_state values (0 unknown, 1 not charging, 2 charging, 3 full, 4 fault).
+ bool pmuBattery(uint16_t& mV, uint16_t& socPermille, uint8_t& chargeState);
+ 
++// Drain the PMU event FIFO and report whether it contained a key press
++// (KEY_DOWN / KEY_SHORT / KEY_LONG). Used after a light-sleep timer wake: the
++// FCA9555 INT# edge can be missed for a short press, but the PMU keeps the event
++// until it is acknowledged. Also returns true when the key is currently held.
++bool pmuTakeKeyWakeup();
++
+ // Rtc::PmuTimeHooks implementations: PMU_CMD_TIME_GET (0x0007) / PMU_CMD_TIME_SYNC
+ // (0x0005). `synced` is the PMU's own calibration flag; a PMU that has never been
+ // synced returns unixSec = 0.
+@@ -121,5 +127,11 @@
+ bool epdPrepare();
  bool epdPowerOn();
  void epdPowerOff();
- 
++
 +// Release the pixel drive (drop XOE) while KEEPING the HV rails up. Called at the
 +// end of a frame push so an idle/still frame is not left driven; the next
 +// epdPowerOn() re-raises XOE. Returns false only on an I2C error (the caller may
 +// retry; the panel image is unaffected either way — it is bistable).
 +bool epdReleaseDrive();
-+
+ 
  }  // namespace BoardReadPico
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/BoardReadPico.cpp sdk_work/libs/hardware/BoardReadPico/src/BoardReadPico.cpp
+--- sdk_pristine/libs/hardware/BoardReadPico/src/BoardReadPico.cpp
++++ sdk_work/libs/hardware/BoardReadPico/src/BoardReadPico.cpp
+@@ -125,6 +125,9 @@
+ constexpr uint8_t kPmuPwrShutdownPending = 4;
+ constexpr uint8_t kPmuPwrSoftSleep = 8;
+ 
++constexpr uint8_t kPmuEvtKeyDown = 0x01;
++constexpr uint8_t kPmuEvtKeyShort = 0x03;
++constexpr uint8_t kPmuEvtKeyLong = 0x04;
+ constexpr uint8_t kPmuEvtShutdownRequested = 0x22;
+ // STATUS.flags (read_pico_pmu.c `parse_status`: raw[4..7], u32 LE) bit 5. This is
+ // a LEVEL, not an event: it stays set for the whole press, which is what the
+@@ -774,6 +777,26 @@
+   socPermille = (socValid && soc != kPmuSocUnknown) ? soc : 0;
+   chargeState = raw[4];
+   return mV != 0;
++}
++
++bool pmuTakeKeyWakeup() {
++  if (!g_pmuPresent) return false;
++  bool wake = false;
++  for (int i = 0; i < 8; ++i) {
++    if (!pmuPoll()) break;
++    if (g_pmuKeyDown) wake = true;
++    if (g_pmuPendingEvents == 0) break;
++    uint16_t id = 0;
++    uint8_t type = 0;
++    if (!pmuPeekEvent(id, type)) break;
++    if (type == kPmuEvtKeyDown || type == kPmuEvtKeyShort || type == kPmuEvtKeyLong) wake = true;
++    // ACK every event, including key-up and unrelated charge/card events, so a
++    // stale head cannot hide the next key press. This mirrors the reference
++    // read_pico_pmu_take_key_wakeup() drain loop.
++    (void)pmuEventAck(id);
++    if (id == 0) break;
++  }
++  return wake;
+ }
+ 
+ bool pmuTimeGet(uint32_t& unixSec, bool& synced) {
 diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
 --- sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
 +++ sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
