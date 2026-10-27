@@ -151,6 +151,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // page of its own (refreshed UI frame 16), not a wash over the body text; it owns
   // input until dismissed once.
   bool gestureHintVisible = false;
+  // A tap that opened the book can still be mid-release when the first frame
+  // lands; ignore input for a moment so the page is not dismissed unseen.
+  uint32_t gestureHintShownAt = 0;
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
   void drawGestureHint();
@@ -449,6 +452,11 @@ class EpubReaderActivity final : public ReaderActivity {
     uint16_t paragraphIndex = 0;
     uint16_t total = 0;
     uint32_t paragraphId = 0;
+    // 0 = filled pill with the count, 1 = count only (no pill), 2 = marker.
+    // The last two are only used when the final line leaves too little room to
+    // the screen edge for the full pill; every style still starts after the last
+    // glyph, so none of them can cover text.
+    uint8_t style = 0;
   };
   // Worst page measured on a 1216x684 panel is ~30 short lines; 48 bounds the
   // hit array (48 * 16 = 768 bytes) without ever truncating a real page.
@@ -662,6 +670,11 @@ class EpubReaderActivity final : public ReaderActivity {
   void debugSetContentsFilter(int filter) override;
   void debugActivateContentsRow(int row) override;
   void debugDismissHint() override;
+  void debugOpenJjwxcComment() override;
+  void debugOpenFakeJjwxcComment() override;
+  void debugPageTurn(bool forward) override;
+  void debugDumpPage() override;
+  void debugOpenStressComment() override;
 
   void onExit() override;
   void loop() override;

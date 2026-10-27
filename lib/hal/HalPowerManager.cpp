@@ -444,11 +444,11 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   return _batteryCachedPercent / 10;
 }
 
-HalPowerManager::Lock::Lock() {
+HalPowerManager::Lock::Lock(bool quiet) : quiet_(quiet) {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
   // Current limitation: only one lock at a time
   if (powerManager.currentLockMode != None) {
-    LOG_ERR("PWR", "Lock already held, ignore");
+    if (!quiet_) LOG_ERR("PWR", "Lock already held, ignore");
     valid = false;
   } else {
     powerManager.currentLockMode = NormalSpeed;

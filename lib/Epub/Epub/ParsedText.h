@@ -112,8 +112,8 @@ class ParsedText {
   bool extractLine(size_t lineIndex, size_t lineBreak, size_t lastBreakAt, size_t lineCount, int pageWidth,
                    const std::vector<uint16_t>& wordWidths, const std::vector<bool>& continuesVec,
                    const std::vector<bool>& noSpaceBeforeVec,
-                   const std::function<bool(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
-                   const GfxRenderer& renderer, int fontId);
+                   const std::function<bool(std::unique_ptr<TextBlock>, uint32_t, bool)>& processLine,
+                   const GfxRenderer& renderer, int fontId, bool paragraphFinal);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
@@ -152,7 +152,7 @@ class ParsedText {
   bool isEmpty() const { return words.empty(); }
   bool hadDroppedWords() const { return droppedWords; }
   bool layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
-                             const std::function<bool(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
+                             const std::function<bool(std::unique_ptr<TextBlock>, uint32_t, bool)>& processLine,
                              bool includeLastLine = true, int8_t characterSpacing = 0,
                              uint8_t wordSpacingPercent = 100);
 };

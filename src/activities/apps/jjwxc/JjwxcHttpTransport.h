@@ -30,10 +30,16 @@ class JjwxcHttpTransport final : public jjwxc::Transport {
 
  private:
   static constexpr size_t kIoBufferSize = 4096;
-  // Two sessions, keyed by host. A VIP chapter alternates m.jjwxc.net (page) and
-  // static.jjwxc.net (watermark font); with one session every chapter paid two
-  // full handshakes (measured: 313 new TLS connections and 309 host switches for
-  // a 155-chapter run). Requests are serial, so two connections are enough.
+  // Two sessions, keyed by host. A free-chapter run alternates app-cdn (body) and
+  // www (comment counts), and that pair really does reuse both connections.
+  //
+  // A VIP chapter cycles THREE hosts (m page, static font, www comments), so the
+  // slots evict each other on every request; keeping the survivor resident only
+  // raised the peak during the next handshake. Measured on a retry run that
+  // aborted in the task watchdog: internal free fell to 3.8 KB / largest 1 KB
+  // with two TLS contexts live. selectSession() therefore drops every slot when a
+  // third host arrives, which keeps exactly one context alive through that
+  // handshake; a two-host batch still reuses both.
   static constexpr size_t kSessionSlots = 2;
 
   struct SessionSlot {

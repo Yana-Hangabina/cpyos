@@ -47,7 +47,8 @@
 class JjwxcCommentActivity final : public Activity {
  public:
   JjwxcCommentActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string novelId,
-                       uint32_t chapterId, uint32_t paragraphId, uint16_t paragraphIndex);
+                       uint32_t chapterId, uint32_t paragraphId, uint16_t paragraphIndex,
+                       bool debugFake = false, bool debugStress = false);
 
   void onEnter() override;
   void onExit() override;
@@ -77,6 +78,7 @@ class JjwxcCommentActivity final : public Activity {
     LikeReply,
     PostComment,
     PostReply,
+    DebugStress,
   };
 
   enum class WifiPurpose : uint8_t { FirstFetch, Refresh, Action };
@@ -144,7 +146,7 @@ class JjwxcCommentActivity final : public Activity {
   int replyCardHeight(const jjwxc::CommentReplyItem& reply, int textWidth) const;
   // Shared card body drawing. Returns the y just past the body.
   int drawCardBody(const char* author, const char* body, const char* ip, const char* date, int x, int y,
-                   int textWidth, int bodyHeight, int metaHeight);
+                   int textWidth, int metaHeight);
 
   static bool onCommentItem(void* ctx, const jjwxc::CommentItem& item, size_t index);
   static bool collectBody(void* ctx, const uint8_t* data, size_t len);
@@ -153,6 +155,11 @@ class JjwxcCommentActivity final : public Activity {
   uint32_t chapterId_ = 0;
   uint32_t paragraphId_ = 0;
   uint16_t paragraphIndex_ = 0;
+  // Serial-only diagnostic: populate an offline sample instead of reading the
+  // card or the network, so the card wrapping/font path can be checked without
+  // a live session.
+  bool debugFake_ = false;
+  bool debugStress_ = false;
 
   JjwxcHttpTransport transport_;
   jjwxc::CookieJar* jar_ = nullptr;
@@ -245,6 +252,12 @@ class JjwxcCommentActivity final : public Activity {
   TaskHandle_t fetchTask_ = nullptr;
   bool fetchTaskInPsram_ = false;
   std::atomic<bool> fetchDone_{false};
+  // Set by onExit(). The worker owns this activity's transport, PSRAM buffers
+  // and vectors; deleting it mid-request (as the old immediate reap did) can
+  // leave the heap lock held or free a block the worker is still using, which
+  // surfaced as "free() target pointer is outside heap areas" after returning
+  // from the comment panel. onExit waits for this handshake before teardown.
+  std::atomic<bool> exitRequested_{false};
   ActionKind pendingAction_ = ActionKind::None;
   uint32_t pendingOffset_ = 0;
   bool pendingAppend_ = false;

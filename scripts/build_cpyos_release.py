@@ -54,6 +54,7 @@ DATA_FILES = {
     'hyphen': 'hyphen.dat',
     'i18n': 'i18n_pack.dat',
     'web': 'web_pack.dat',
+    'emoji': 'emoji.dat',
 }
 
 
@@ -103,7 +104,7 @@ def read_data_manifest(root: Path) -> list[dict]:
         })
     if not rows:
         fail('the data manifest contains no blobs')
-    missing = {'pinyin', 'hyphen', 'i18n', 'web'} - {row['role'] for row in rows}
+    missing = {'pinyin', 'hyphen', 'i18n', 'web', 'emoji'} - {row['role'] for row in rows}
     if missing:
         fail('the data manifest is missing required blobs: ' + ', '.join(sorted(missing)))
     return rows
@@ -154,7 +155,7 @@ Use `manifest-install.json` (or the web flasher on the project site). It writes:
 | readpico-partitions.bin | 0x8000 |
 | readpico-boot_app0.bin | 0xE000 |
 | readpico-firmware.bin | 0x10000 |
-| pinyin.dat / web_pack.dat / hyphen.dat / i18n_pack.dat | data partition |
+| pinyin.dat / web_pack.dat / hyphen.dat / i18n_pack.dat / emoji.dat | data partition |
 
 The install manifest asks the browser to erase the chip. That is required when
 coming from the factory partition layout (7.19 MiB slots vs the factory table at
@@ -178,7 +179,8 @@ esptool.py --chip esp32s3 write_flash \\
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \\
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \\
   0xE70000 pinyin.dat 0xEC6000 web_pack.dat \\
-  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat
+  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \\
+  0xFD0000 emoji.dat
 ```
 
 Verify every file against `SHA256SUMS` before flashing. A complete chip backup

@@ -18,6 +18,7 @@
 #include <Memory.h>
 #include <SdCardFontCache.h>
 #include <SdCardFontSystem.h>
+#include "EmojiFont.h"
 #include <TtfEpdFont.h>
 #include <TrustedTime.h>
 #include <Txt.h>
@@ -953,6 +954,10 @@ constexpr int kAnnotationCardButtonH = 40;
 constexpr int kCommentBubbleHitPadLeft = 2;
 constexpr int kCommentBubbleHitPadRight = 8;
 constexpr int kCommentBubbleHitPadY = 8;
+// Last-resort marker for a final line that reaches the screen edge with a count
+// too wide to print. 14 px fits any line (lineEnd is at most screenWidth - 30) and
+// still reads as a tappable dot once the hit padding is applied.
+constexpr int kCommentMarkerSize = 14;
 }  // namespace
 
 void EpubReaderActivity::loadAnnotations() {
@@ -2254,9 +2259,13 @@ void EpubReaderActivity::loop() {
         tapped && gestureHintSettingsRect_.width > 0 && hintX >= gestureHintSettingsRect_.x &&
         hintX < gestureHintSettingsRect_.x + gestureHintSettingsRect_.width && hintY >= gestureHintSettingsRect_.y &&
         hintY < gestureHintSettingsRect_.y + gestureHintSettingsRect_.height;
-    const bool dismiss =
-        tapped || mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        mappedInput.wasReleased(MappedInputManager::Button::Back);
+    // Any deliberate input closes it. Only tap/Confirm/Back used to count, so a
+    // reader who paged with the capacitive strip or swiped never dismissed it and
+    // met the same page on every book. A short grace period keeps the release
+    // that opened the book from swallowing the hint before it is seen.
+    const bool anyInput = tapped || mappedInput.wasScreenTouchReleased() || mappedInput.wasAnyPressed() ||
+                          mappedInput.wasAnyReleased();
+    const bool dismiss = anyInput && millis() - gestureHintShownAt >= 300;
     if (dismiss) {
       gestureHintVisible = false;
       SETTINGS.readerGestureHintSeen = 1;
@@ -2265,7 +2274,9 @@ void EpubReaderActivity::loop() {
       forcedRefreshPending = true;
       // Persist on the UI task: saveToFile() touches NVS, and the render task's
       // stack lives in PSRAM where an internal-flash write would panic.
-      if (!SETTINGS.saveToFile()) LOG_ERR("ERS", "gesture hint: could not persist dismissal");
+      const bool persisted = SETTINGS.saveToFile();
+      LOG_INF("ERS", "gesture hint dismissed; persisted=%d", persisted ? 1 : 0);
+      if (!persisted) LOG_ERR("ERS", "gesture hint: could not persist dismissal");
       if (settingsTapped) {
         // Settings -> Controls is category 2 (the paging gestures live there).
         startActivityForResultWith<SettingsActivity>(
@@ -4262,7 +4273,7 @@ void EpubReaderActivity::drawJjwxcPlaceholderAction(const int fontId, const int 
   const auto& meta = jjwxcTocMeta_[static_cast<size_t>(tocIndex)];
   const auto state = static_cast<JjwxcStore::ChapterState>(meta.state);
   if (state == JjwxcStore::ChapterState::Cached || state == JjwxcStore::ChapterState::Locked ||
-      meta.chapterId == 0) {
+      state == JjwxcStore::ChapterState::AppOnly || meta.chapterId == 0) {
     return;
   }
   // VIP ownership is unknown here: the app's price page decides between caching
@@ -4390,6 +4401,28 @@ int EpubReaderActivity::layoutCommentBubbles(const Page& page, const int fontId,
   const int numberHeight = renderer.getLineHeight(SMALL_FONT_ID);
 
   int count = 0;
+#ifdef BOARD_HAS_PSRAM
+  // Strict invariant: a badge may never sit inside a text line's box. This is the
+  // one property the reader can check without knowing the glyph ink, so a
+  // regression shows up in the log instead of only on the glass.
+  const auto overlapsText = [&](const int bx, const int by, const int bw, const int bh) -> int {
+    for (size_t k = 0; k < page.elements.size(); ++k) {
+      const auto& e = page.elements[k];
+      if (e->getTag() != TAG_PageLine) continue;
+      const auto& ln = static_cast<const PageLine&>(*e);
+      const TextBlock& b = *ln.getBlock();
+      if (b.wordCount() == 0) continue;
+      const uint16_t lastWord = static_cast<uint16_t>(b.wordCount() - 1);
+      const int lx0 = left + ln.xPos;
+      const int lx1 = lx0 + b.wordXpos(lastWord) +
+                      renderer.getTextWidth(fontId, b.wordText(lastWord), b.wordStyle(lastWord));
+      const int ly0 = top + ln.yPos;
+      const int ly1 = ly0 + baseLineHeight + b.getRubyShift(ascender);
+      if (bx < lx1 && bx + bw > lx0 && by < ly1 && by + bh > ly0) return static_cast<int>(k);
+    }
+    return -1;
+  };
+#endif
   for (size_t i = 0; i < page.elements.size() && count < maxOut; ++i) {
     const auto& element = page.elements[i];
     if (element->getTag() != TAG_PageLine) continue;
@@ -4398,17 +4431,12 @@ int EpubReaderActivity::layoutCommentBubbles(const Page& page, const int fontId,
     const uint16_t paragraphIndex = block.getParagraphIndex();
     if (paragraphIndex == 0xFFFF) continue;
 
-    // Only the last line of the paragraph on this page gets a bubble. "Last on
-    // this page" is deliberate: a paragraph that continues onto the next page
-    // puts its bubble at the bottom edge, which is where the reader saw it end.
-    bool lastOnPage = true;
-    for (size_t j = i + 1; j < page.elements.size(); ++j) {
-      if (page.elements[j]->getTag() != TAG_PageLine) continue;
-      const auto& next = static_cast<const PageLine&>(*page.elements[j]);
-      lastOnPage = next.getBlock()->getParagraphIndex() != paragraphIndex;
-      break;
-    }
-    if (!lastOnPage) continue;
+    // Only the line carrying the paragraph's final word gets a bubble. The old
+    // "last line with this paragraphIndex on this page" test also matched the
+    // line before a page break, so a paragraph split across pages showed a
+    // bubble at the bottom of BOTH pages. paragraphFinal is stored with the line,
+    // so cached pages answer this without the next page being built.
+    if (!block.isParagraphFinal()) continue;
 
     const uint16_t total = commentTotalFor(paragraphIndex);
     if (total == 0) continue;
@@ -4416,14 +4444,9 @@ int EpubReaderActivity::layoutCommentBubbles(const Page& page, const int fontId,
     char label[12];
     snprintf(label, sizeof(label), "%u", static_cast<unsigned>(total));
     const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
-    const int bubbleHeight = numberHeight + 4;
-    const int bubbleWidth = std::max(bubbleHeight, textWidth + 8);
     const int lineHeight = baseLineHeight + block.getRubyShift(ascender);
 
-    int bubbleY = top + line.yPos + (lineHeight - bubbleHeight) / 2;
-    if (bubbleY + bubbleHeight > contentBottom) bubbleY = contentBottom - bubbleHeight;
-    if (bubbleY < top) bubbleY = top;
-    if (bubbleY + bubbleHeight > contentBottom || bubbleY < 0) continue;
+    const int lineTop = top + line.yPos;
 
     int lineEnd = left + line.xPos;
     if (block.wordCount() > 0) {
@@ -4431,18 +4454,66 @@ int EpubReaderActivity::layoutCommentBubbles(const Page& page, const int fontId,
       lineEnd += block.wordXpos(lastWord) +
                  renderer.getTextWidth(fontId, block.wordText(lastWord), block.wordStyle(lastWord));
     }
-    int bubbleX = lineEnd + 3;
-    if (bubbleX + bubbleWidth > contentRight) {
-      // A full line leaves no room after its last glyph. Prefer the right
-      // margin (it is outside the text area) over covering the last character.
-      bubbleX = contentRight + 2;
-      if (bubbleX + bubbleWidth > screenWidth - 2) bubbleX = contentRight - bubbleWidth;
-    }
-    if (bubbleX < left || bubbleX + bubbleWidth > screenWidth) continue;
 
-    out[count++] = CommentBubble{static_cast<int16_t>(bubbleX), static_cast<int16_t>(bubbleY),
-                                 static_cast<int16_t>(bubbleWidth), static_cast<int16_t>(bubbleHeight),
-                                 paragraphIndex, total, static_cast<uint32_t>(paragraphIndex)};
+    // Placement rule: the badge always starts AFTER the last glyph of the final
+    // line and stays inside that line's own vertical band. That makes overlap with
+    // text structurally impossible -- the old code instead demanded the badge fit
+    // inside the content column, and when it did not (a 38 px pill against a 30 px
+    // margin) it moved the badge into the gap below the line, which is exactly
+    // where the next paragraph starts.
+    //
+    // Only the screen edge can still block it, so the badge degrades in place:
+    // full pill -> count without the pill -> small marker. All three are anchored
+    // at the same x/y, so none of them can drift onto the text.
+    const int screenEdge = screenWidth - 2;
+    int bubbleX = lineEnd + 3;
+    int bubbleW = std::max(numberHeight + 4, textWidth + 8);
+    int bubbleH = std::min(numberHeight + 4, std::max(1, lineHeight - 2));
+    uint8_t style = 0;
+    const char* placement = "pill";
+    if (bubbleX + bubbleW > screenEdge) {
+      const int digitsW = textWidth + 2;
+      if (bubbleH >= numberHeight && bubbleX + digitsW <= screenEdge) {
+        bubbleW = digitsW;
+        style = 1;
+        placement = "digits";
+      } else {
+        // A full line with a wide count leaves no room for the number at all.
+        // A small marker still fits (14 px needs only lineEnd <= 665), and the
+        // exact count stays visible in the panel's header.
+        bubbleW = std::min(kCommentMarkerSize, screenEdge - bubbleX);
+        bubbleH = std::min(kCommentMarkerSize, std::max(1, lineHeight - 2));
+        style = 2;
+        placement = "marker";
+      }
+    }
+    int bubbleY = lineTop + (lineHeight - bubbleH) / 2;
+    if (bubbleY + bubbleH > contentBottom) bubbleY = contentBottom - bubbleH;
+    if (bubbleY < top) bubbleY = top;
+    if (bubbleY + bubbleH > contentBottom || bubbleY < 0) continue;
+    if (style != 0) {
+      LOG_INF("ERS", "comment bubble placement=%s para=%u lineEnd=%d contentR=%d count=%u %dx%d at %d,%d", placement,
+              static_cast<unsigned>(paragraphIndex), lineEnd, contentRight, static_cast<unsigned>(total), bubbleW,
+              bubbleH, bubbleX, bubbleY);
+    }
+#ifdef BOARD_HAS_PSRAM
+    if (overlapsText(bubbleX, bubbleY, bubbleW, bubbleH) >= 0) {
+      LOG_ERR("ERS", "comment bubble OVERLAPS text: para=%u placement=%s lineEnd=%d bubble=%d,%d %dx%d",
+              static_cast<unsigned>(paragraphIndex), placement, lineEnd, bubbleX, bubbleY, bubbleW, bubbleH);
+    }
+#endif
+    if (bubbleX < left || bubbleX + bubbleW > screenWidth || bubbleY + bubbleH > contentBottom) continue;
+
+    CommentBubble bubble{};
+    bubble.x = static_cast<int16_t>(bubbleX);
+    bubble.y = static_cast<int16_t>(bubbleY);
+    bubble.w = static_cast<int16_t>(bubbleW);
+    bubble.h = static_cast<int16_t>(bubbleH);
+    bubble.paragraphIndex = paragraphIndex;
+    bubble.total = total;
+    bubble.paragraphId = static_cast<uint32_t>(paragraphIndex);
+    bubble.style = style;
+    out[count++] = bubble;
   }
   return count;
 }
@@ -4452,17 +4523,25 @@ void EpubReaderActivity::drawCommentBubbleList(const CommentBubble* bubbles, con
   // Fills first, then labels: a fill must never land on a number already drawn.
   for (int i = 0; i < count; ++i) {
     const auto& bubble = bubbles[i];
-    renderer.fillRoundedRect(bubble.x, bubble.y, bubble.w, bubble.h, bubble.h / 2, Color::Black);
+    if (bubble.style == 2) {
+      // Marker: a small disc in the trailing whitespace. It has no digit, so it
+      // cannot be clipped; the panel header carries the count.
+      renderer.fillRoundedRect(bubble.x, bubble.y, bubble.w, bubble.h, bubble.h / 2, Color::Black);
+      continue;
+    }
+    if (bubble.style == 0) {
+      renderer.fillRoundedRect(bubble.x, bubble.y, bubble.w, bubble.h, bubble.h / 2, Color::Black);
+    }
   }
   const int numberHeight = renderer.getLineHeight(SMALL_FONT_ID);
   for (int i = 0; i < count; ++i) {
     const auto& bubble = bubbles[i];
-    if (bubble.total == 0) continue;
+    if (bubble.total == 0 || bubble.style == 2) continue;
     char label[12];
     snprintf(label, sizeof(label), "%u", static_cast<unsigned>(bubble.total));
     const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
     renderer.drawText(SMALL_FONT_ID, bubble.x + (bubble.w - textWidth) / 2,
-                      bubble.y + (bubble.h - numberHeight) / 2, label, /*black=*/false);
+                      bubble.y + (bubble.h - numberHeight) / 2, label, /*black=*/bubble.style != 0);
   }
 }
 
@@ -4608,7 +4687,9 @@ void EpubReaderActivity::activateJjwxcChapterChip(const int tocIndex) {
   const bool ok = toc.read(ordinal, rec);
   toc.close();
   if (!ok || rec.chapterId == 0) return;
-  if (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Locked)) return;
+  if (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Locked) ||
+      rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::AppOnly))
+    return;
   const bool purchase = rec.isVip != 0 &&
                         (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Unpurchased) ||
                          rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Missing));
@@ -4739,6 +4820,12 @@ void EpubReaderActivity::openContentsPanel(const int focusTocIndex) {
 // from an existing StrId; the design's heading and its "no confirm key" line
 // have no translation key yet, so the page leads with the touch-controls
 // caption and the paging sentence instead.
+// First-run page: the body is a full-page map, not a list of cards. Two hairlines
+// cut the touch area into the same three regions detectTouchPageTurn() uses, and
+// each region's action sits in its centre. Everything that is not a region tap
+// (long-press selection, pinch, swipe, bubble/link taps) is a line below with an
+// icon and a label, so the map stays readable instead of listing every gesture
+// in the same visual weight.
 void EpubReaderActivity::drawGestureHint() {
   const int w = renderer.getScreenWidth();
   const int h = renderer.getScreenHeight();
@@ -4746,51 +4833,65 @@ void EpubReaderActivity::drawGestureHint() {
 
   const int lh10 = renderer.getLineHeight(UI_10_FONT_ID);
   const int lh12 = renderer.getLineHeight(UI_12_FONT_ID);
-  const int margin = std::max(24, std::min(40, w / 16));
+  const int lh18 = renderer.getLineHeight(NOTOSERIF_18_FONT_ID);
+  const int margin = std::max(20, std::min(36, w / 24));
   const int contentW = w - margin * 2;
   const bool landscape = w > h;
-  // Short landscape panels (X3/X4 at 480 px tall) cannot hold the portrait
-  // rhythm; tighten the same blocks rather than clipping the page.
   const bool compact = landscape && h < 640;
-  const int gap = compact ? 4 : (landscape ? 8 : 18);
-  const int smallGap = compact ? 2 : std::max(4, gap / 2);
-  const int zoneH = compact ? 52 : (landscape ? 72 : 112);
-  const int keyH = compact ? 52 : (landscape ? 72 : 112);
-  const int buttonH = compact ? 52 : (landscape ? 64 : 96);
+  const int gap = compact ? 8 : std::max(12, h / 48);
 
   const bool tapsPage = ReaderUtils::gestureAllowsTap(SETTINGS.pageTurnGesture) ||
                         ReaderUtils::gestureAllowsTap(SETTINGS.previousPageGesture);
   const char* pagingLine = tapsPage ? tr(STR_GESTURE_HINT_PAGING_TAP) : tr(STR_GESTURE_HINT_PAGING_SWIPE);
 
-  const int total = lh10 + smallGap + lh12 + gap + zoneH + gap + lh10 + smallGap +
-                    std::max(48, lh10) + gap + lh10 + smallGap + keyH + gap + lh10 + smallGap + lh10 + smallGap +
-                    lh10 + gap + buttonH + smallGap + lh10;
-  int y = std::max(16, (h - total) / 2);
-  // Frame 16's page title, with the same rule the reader header uses. It sits
-  // above the centred diagram rather than inside the measured block so the
-  // three-zone composition keeps its designed whitespace.
-  renderer.drawText(NOTOSERIF_18_FONT_ID, margin, std::max(12, y - 76),
-                    tr(STR_GESTURE_HINT_TITLE), true, EpdFontFamily::BOLD);
-  renderer.drawLine(margin, std::max(12, y - 76) + renderer.getLineHeight(NOTOSERIF_18_FONT_ID) + 10, w - margin,
-                    std::max(12, y - 76) + renderer.getLineHeight(NOTOSERIF_18_FONT_ID) + 10, true);
+  // Header: title, the paging sentence, then a rule. The settings shortcut is a
+  // small outlined capsule on the title line; tapping it is handled by loop().
+  int y = std::max(12, margin / 2);
+  renderer.drawText(NOTOSERIF_18_FONT_ID, margin, y, tr(STR_GESTURE_HINT_TITLE), true, EpdFontFamily::BOLD);
+  {
+    const std::string label = std::string(tr(STR_TOUCH_READER_CONTROLS)) + "  ›";
+    const int sw = renderer.getTextWidth(UI_10_FONT_ID, label.c_str()) + 20;
+    const int sh = lh10 + 12;
+    const int sx = w - margin - sw;
+    const int sy = y - 2;
+    renderer.drawRoundedRect(sx, sy, sw, sh, 1, sh / 2, true);
+    renderer.drawText(UI_10_FONT_ID, sx + 10, sy + (sh - lh10) / 2, label.c_str(), true);
+    gestureHintSettingsRect_ = Rect{sx, sy, sw, sh};
+  }
+  y += lh18 + 4;
+  renderer.drawText(UI_10_FONT_ID, margin, y, pagingLine, true);
+  y += lh10 + 8;
+  renderer.drawLine(margin, y, w - margin, y, 2, true);
+  const int headerBottom = y + gap;
 
-  const auto fitted = [&](const int fontId, const char* text) {
-    return renderer.truncatedText(fontId, text, contentW);
-  };
-  const auto caption = [&](const char* text) {
-    renderer.drawText(UI_10_FONT_ID, margin, y, fitted(UI_10_FONT_ID, text).c_str(), true);
-    y += lh10 + smallGap;
-  };
-  const auto line = [&](const char* text) {
-    renderer.drawText(UI_10_FONT_ID, margin, y, fitted(UI_10_FONT_ID, text).c_str(), true);
-    y += lh10 + smallGap;
-  };
+  // Bottom block is measured first so the map can take all remaining height.
+  const int rowCount = 4;
+  const int rowH = compact ? 30 : 36;
+  const int rowGap = compact ? 4 : 6;
+  const int rowsH = rowCount * rowH + (rowCount - 1) * rowGap;
+  const int buttonH = compact ? 46 : 56;
+  const int noteH = lh10 + 6;
+  const int bottomGap = compact ? 10 : 16;
+  const int rowToButtonGap = compact ? 6 : 12;
+  const int bottomTotal = rowsH + bottomGap + rowToButtonGap + buttonH + 6 + noteH;
+  const int frameTop = headerBottom;
+  int frameBottom = h - margin - bottomTotal;
+  if (frameBottom - frameTop < 120) frameBottom = frameTop + 120;
+  const int frameH = frameBottom - frameTop;
 
-  // Small vector arrows keep the three zones and the three keys legible
-  // without another bitmap asset per direction.
+  // The touch map: one hairline border, two vertical hairlines. The middle
+  // region is left blank rather than filled so the labels read as one page.
+  renderer.drawRect(margin, frameTop, contentW, frameH, 2, true);
+  const int third = contentW / 3;
+  const int lineTop = frameTop + 10;
+  const int lineBottom = frameBottom - 10;
+  renderer.drawLine(margin + third, lineTop, margin + third, lineBottom, 1, true);
+  renderer.drawLine(margin + third * 2, lineTop, margin + third * 2, lineBottom, 1, true);
+
+  // Small vector arrows/menu marks: no extra bitmap assets per direction.
   enum class Arrow { Left, Right, Up, Down };
   const auto drawArrow = [&](const int cx, const int cy, const Arrow direction, const bool ink) {
-    constexpr int kReach = 11;
+    constexpr int kReach = 12;
     constexpr int kHead = 6;
     switch (direction) {
       case Arrow::Left:
@@ -4816,120 +4917,98 @@ void EpubReaderActivity::drawGestureHint() {
     }
   };
 
-  caption(tr(STR_TOUCH_READER_CONTROLS));
-  renderer.drawText(UI_12_FONT_ID, margin, y, fitted(UI_12_FONT_ID, pagingLine).c_str(), true, EpdFontFamily::BOLD);
-  y += lh12 + gap;
-
-  // Touch zones: equal thirds of the body.
-  {
-    const int zoneGap = std::max(6, gap / 2);
-    const int zoneW = (contentW - zoneGap * 2) / 3;
-    const struct Zone {
-      const char* label;
-      Arrow arrow;
-      bool filled;
-    } zones[3] = {{tr(STR_GESTURE_HINT_PREV), Arrow::Left, false},
-                  {tr(STR_GESTURE_HINT_MENU), Arrow::Right, true},  // replaced by the list mark below
-                  {tr(STR_GESTURE_HINT_NEXT), Arrow::Right, false}};
-    for (int i = 0; i < 3; ++i) {
-      const int x = margin + i * (zoneW + zoneGap);
-      if (zones[i].filled) {
-        renderer.fillRoundedRect(x, y, zoneW, zoneH, 12, Color::LightGray);
+  const int centerY = frameTop + frameH / 2;
+  const int iconY = centerY - 36;
+  const auto region = [&](const int index, const char* label, const bool menu) {
+    const int cx = margin + third * index + third / 2;
+    if (menu) {
+      // Three stacked bars in a rounded plate: the same shape the middle zone
+      // opens in the reader.
+      renderer.drawRoundedRect(cx - 20, iconY - 4, 40, 32, 2, 6, true);
+      for (int row = -1; row <= 1; ++row) {
+        renderer.drawLine(cx - 12, iconY + 12 + row * 7, cx + 12, iconY + 12 + row * 7, 2, true);
       }
-      renderer.drawRoundedRect(x, y, zoneW, zoneH, 2, 12, true);
-      const int iconCx = x + 20 + 12;
-      const int centerY = y + zoneH / 2;
-      if (i == 1) {
-        // The middle zone opens the reader panel: three stacked lines.
-        for (int row = -1; row <= 1; ++row) {
-          renderer.drawLine(iconCx - 10, centerY + row * 8, iconCx + 10, centerY + row * 8, 2, true);
-        }
-      } else {
-        drawArrow(iconCx, centerY, zones[i].arrow, true);
-      }
-      const int labelX = iconCx + 22;
-      const int labelW = zoneW - (labelX - x) - 12;
-      if (labelW > 0) {
-        const std::string label = renderer.truncatedText(UI_10_FONT_ID, zones[i].label, labelW);
-        const int labelY = centerY - renderer.getLineHeight(UI_10_FONT_ID) / 2;
-        renderer.drawText(UI_10_FONT_ID, labelX, labelY, label.c_str(), true);
-      }
+    } else {
+      drawArrow(cx, iconY + 12, index == 0 ? Arrow::Left : Arrow::Right, true);
     }
-    y += zoneH + gap;
+    const std::string text = renderer.truncatedText(UI_12_FONT_ID, label, third - 16);
+    const int tw = renderer.getTextWidth(UI_12_FONT_ID, text.c_str(), EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, cx - tw / 2, centerY + 12, text.c_str(), true, EpdFontFamily::BOLD);
+  };
+  region(0, tr(STR_GESTURE_HINT_PREV), false);
+  region(1, tr(STR_GESTURE_HINT_MENU), true);
+  region(2, tr(STR_GESTURE_HINT_NEXT), false);
+
+  // Bookmark corner: a miniature of the real ribbon, flush with the map's top
+  // right corner, so the corner tap is not hidden among the three regions.
+  {
+    constexpr int ribbonW = 16;
+    constexpr int ribbonH = 28;
+    const int rx = margin + contentW - ribbonW - 10;
+    const int ry = frameTop + 10;
+    renderer.fillRect(rx, ry, ribbonW, ribbonH - 6, true);
+    for (int row = ribbonH - 6; row < ribbonH; ++row) {
+      const int d = (row - (ribbonH - 6)) * (ribbonW / 2) / 6;
+      renderer.fillRect(rx + d, ry + row, ribbonW - d * 2, 1, true);
+    }
+    const std::string label = renderer.truncatedText(UI_10_FONT_ID, tr(STR_GESTURE_HINT_BOOKMARK), 80);
+    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
+    renderer.drawText(UI_10_FONT_ID, rx - 8 - tw, ry + (ribbonH - lh10) / 2, label.c_str(), true);
   }
 
-  line(tr(STR_GESTURE_HINT_POINTS));
-  {
-    // Bookmark callout: a miniature of the real 28x72 ribbon, flush right,
-    // with the one-line explanation.
-    const int ribbonW = 20;
-    const int ribbonH = 48;
-    const int ribbonX = w - margin - ribbonW;
-    const int ribbonY = y;
-    renderer.fillRect(ribbonX, ribbonY, ribbonW, ribbonH - 8, true);
-    for (int row = ribbonH - 8; row < ribbonH; ++row) {
-      const int d = (row - (ribbonH - 8)) * (ribbonW / 2) / 8;
-      renderer.fillRect(ribbonX + d, ribbonY + row, ribbonW - d * 2, 1, true);
+  // Non-region gestures: icon in a fixed gutter, label on one baseline.
+  int ry = frameBottom + bottomGap;
+  const auto gestureRow = [&](const int index, const char* label) {
+    const int y0 = ry + index * (rowH + rowGap);
+    const int cx = margin + 14;
+    const int cy = y0 + rowH / 2;
+    switch (index) {
+      case 0:  // long press: a press ring around a fill
+        renderer.drawRoundedRect(cx - 12, cy - 12, 24, 24, 1, 12, true);
+        renderer.drawRoundedRect(cx - 7, cy - 7, 14, 14, 1, 7, true);
+        renderer.fillRect(cx - 3, cy - 3, 6, 6, true);
+        break;
+      case 1:  // pinch: two arrows facing a centre line
+        drawArrow(cx - 10, cy, Arrow::Right, true);
+        drawArrow(cx + 10, cy, Arrow::Left, true);
+        renderer.drawLine(cx, cy - 8, cx, cy + 8, 2, true);
+        break;
+      case 2:  // swipe: a horizontal line with both arrow heads
+        renderer.drawLine(cx - 12, cy, cx + 12, cy, 2, true);
+        renderer.drawLine(cx - 12, cy, cx - 7, cy - 5, 2, true);
+        renderer.drawLine(cx - 12, cy, cx - 7, cy + 5, 2, true);
+        renderer.drawLine(cx + 12, cy, cx + 7, cy - 5, 2, true);
+        renderer.drawLine(cx + 12, cy, cx + 7, cy + 5, 2, true);
+        break;
+      default:  // comment/link bubble with a small tail
+        renderer.drawRoundedRect(cx - 12, cy - 9, 24, 16, 1, 5, true);
+        renderer.drawLine(cx - 5, cy + 7, cx - 9, cy + 12, 2, true);
+        renderer.drawLine(cx - 9, cy + 12, cx - 2, cy + 8, 2, true);
+        renderer.drawLine(cx - 6, cy - 1, cx + 6, cy - 1, 1, true);
+        break;
     }
-    const int textW = contentW - ribbonW - 16;
-    const std::string label = renderer.truncatedText(UI_10_FONT_ID, tr(STR_GESTURE_HINT_BOOKMARK), textW);
-    renderer.drawText(UI_10_FONT_ID, margin, ribbonY + (ribbonH - lh10) / 2, label.c_str(), true);
-    y += std::max(ribbonH, lh10) + gap;
-  }
+    const std::string text = renderer.truncatedText(UI_12_FONT_ID, label, contentW - 40);
+    renderer.drawText(UI_12_FONT_ID, margin + 36, y0 + (rowH - lh12) / 2, text.c_str(), true);
+  };
+  gestureRow(0, tr(STR_GESTURE_HINT_LONG_PRESS));
+  gestureRow(1, tr(STR_GESTURE_HINT_PINCH));
+  gestureRow(2, pagingLine);
+  gestureRow(3, tr(STR_GESTURE_HINT_POINTS));
 
-  caption(tr(STR_PAGE_TURN));
-
-  // Hardware keys: three cards, the middle one inverted like the design's
-  // "pressed" state.
-  {
-    const int keyGap = std::max(6, gap / 2);
-    const int keyW = (contentW - keyGap * 2) / 3;
-    const struct Key {
-      const char* label;
-      Arrow arrow;
-      bool pressed;
-    } keys[3] = {{tr(STR_GESTURE_HINT_PREV), Arrow::Up, false},
-                 {tr(STR_BACK), Arrow::Left, false},
-                 {tr(STR_GESTURE_HINT_NEXT), Arrow::Down, true}};
-    for (int i = 0; i < 3; ++i) {
-      const int x = margin + i * (keyW + keyGap);
-      if (keys[i].pressed) {
-        renderer.fillRoundedRect(x, y, keyW, keyH, 12, Color::Black);
-      }
-      renderer.drawRoundedRect(x, y, keyW, keyH, 2, 12, true);
-      const bool ink = !keys[i].pressed;
-      drawArrow(x + keyW / 2, y + keyH / 4 + 6, keys[i].arrow, ink);
-      const std::string label = renderer.truncatedText(UI_10_FONT_ID, keys[i].label, keyW - 12);
-      const int labelW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
-      renderer.drawText(UI_10_FONT_ID, x + (keyW - labelW) / 2, y + keyH - lh10 - 10, label.c_str(), ink);
-    }
-    y += keyH + gap;
-  }
-
-  line(tr(STR_GESTURE_HINT_LONG_PRESS));
-  line(tr(STR_GESTURE_HINT_PINCH));
-  line(tr(STR_GESTURE_HINT_DISMISS));
-
-  // Start button: the design's 604x96 black pill (full content width here).
-  gestureHintStartRect_ = Rect{margin, y, contentW, buttonH};
-  renderer.fillRoundedRect(margin, y, contentW, buttonH, 12, Color::Black);
+  // Start button: the same black pill the reader uses for primary actions.
+  const int buttonY = h - margin - noteH - 6 - buttonH;
+  gestureHintStartRect_ = Rect{margin, buttonY, contentW, buttonH};
+  renderer.fillRoundedRect(margin, buttonY, contentW, buttonH, 12, Color::Black);
   {
     const std::string label = renderer.truncatedText(UI_12_FONT_ID, tr(STR_START_READING), contentW - 24);
-    const int textW = renderer.getTextWidth(UI_12_FONT_ID, label.c_str(), EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, margin + (contentW - textW) / 2,
-                      y + (buttonH - lh12) / 2, label.c_str(), false, EpdFontFamily::BOLD);
+    const int tw = renderer.getTextWidth(UI_12_FONT_ID, label.c_str(), EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, margin + (contentW - tw) / 2, buttonY + (buttonH - lh12) / 2, label.c_str(),
+                      false, EpdFontFamily::BOLD);
   }
-  y += buttonH + smallGap;
-
-  // Bottom note: a tappable shortcut to Settings -> Controls, where the paging
-  // gestures live. The design's exact sentence has no key; the caption names
-  // the destination instead.
   {
-    const std::string label =
-        std::string(renderer.truncatedText(UI_10_FONT_ID, tr(STR_TOUCH_READER_CONTROLS), contentW - 40)) + "  >";
-    const int textW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
-    gestureHintSettingsRect_ = Rect{std::max(0, (w - textW) / 2 - 16), y - 8, textW + 32, lh10 + 16};
-    renderer.drawText(UI_10_FONT_ID, (w - textW) / 2, y, label.c_str(), true);
+    const std::string label = renderer.truncatedText(UI_10_FONT_ID, tr(STR_GESTURE_HINT_DISMISS), contentW);
+    const int tw = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
+    renderer.drawText(UI_10_FONT_ID, (w - tw) / 2, h - margin - lh10, label.c_str(), true);
   }
 }
 
@@ -4947,7 +5026,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Fresh reader instance before the one-shot hint has been dismissed: show the
   // zone map over this first page.
   if (!SETTINGS.readerGestureHintSeen && !gestureHintVisible) {
+    // Timestamp first: the UI task reads both fields, and it must never see
+    // visible=true with a zero timestamp (which would defeat the grace period).
+    gestureHintShownAt = millis();
     gestureHintVisible = true;
+    LOG_INF("ERS", "gesture hint shown (seen flag=0)");
     forcedRefreshPending = true;  // the hint page is a full-screen frame
   }
   const int fontId = SETTINGS.getReaderFontId();
@@ -6065,6 +6148,93 @@ void EpubReaderActivity::debugOpenPanel(const int tool) {
   requestUpdate();
 }
 
+void EpubReaderActivity::debugOpenStressComment() {
+#if defined(BOARD_HAS_PSRAM)
+  // Serial-only teardown probe. The stress worker never touches the network or the
+  // novel store, so a placeholder id is fine and lets this run from any book.
+  const std::string novelId = jjwxcNovelId_[0] != '\0' ? std::string(jjwxcNovelId_) : std::string("0");
+  const uint32_t chapterId = jjwxcChapterId_ != 0 ? jjwxcChapterId_ : 1;
+  auto activity = makeUniqueNoThrow<JjwxcCommentActivity>(renderer, mappedInput, novelId, chapterId, 0xFFFFFFFEu,
+                                                          0xFFFF, /*debugFake=*/true, /*debugStress=*/true);
+  if (!activity) return;
+  startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+    RenderLock lock;
+    sdFontSystem.ensureLoaded(renderer);
+    requestUpdate();
+  });
+#endif
+}
+
+void EpubReaderActivity::debugPageTurn(const bool forward) {
+  if (!section) return;
+  if (pageTurn(forward)) requestUpdate();
+}
+
+void EpubReaderActivity::debugDumpPage() {
+  if (!section) {
+    LOG_INF("ERS", "PAGEDUMP no section");
+    return;
+  }
+  const int pageIndex = section->currentPage;
+  auto page = section->loadPage(static_cast<uint16_t>(pageIndex));
+  if (!page) {
+    LOG_INF("ERS", "PAGEDUMP no page");
+    return;
+  }
+  LOG_INF("ERS", "PAGEDUMP spine=%d page=%d/%u chapter=%lu", currentSpineIndex, pageIndex, section->pageCount,
+          static_cast<unsigned long>(jjwxcChapterId_));
+  int lastPara = -1;
+  for (const auto& element : page->elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    const TextBlock& block = *line.getBlock();
+    const uint16_t para = block.getParagraphIndex();
+    if (para != 0xFFFF) lastPara = para;
+    LOG_INF("ERS", "  line y=%d para=%u final=%d words=%u total=%u", line.yPos, (unsigned)para,
+            block.isParagraphFinal() ? 1 : 0, (unsigned)block.wordCount(), (unsigned)commentTotalFor(para));
+  }
+  const auto next = section->getParagraphIndexForPage(static_cast<uint16_t>(pageIndex + 1));
+  LOG_INF("ERS", "  lastPara=%d nextPageStarts=%d", lastPara, next ? static_cast<int>(*next) : -1);
+  LOG_INF("ERS", "  bubbles=%d", commentBubbleCount_);
+  for (int i = 0; i < commentBubbleCount_; ++i) {
+    const auto& b = commentBubbles_[i];
+    LOG_INF("ERS", "    bubble para=%u style=%u rect=%d,%d %dx%d total=%u", static_cast<unsigned>(b.paragraphIndex),
+            static_cast<unsigned>(b.style), b.x, b.y, b.w, b.h, static_cast<unsigned>(b.total));
+  }
+}
+
+void EpubReaderActivity::debugOpenFakeJjwxcComment() {
+#if defined(BOARD_HAS_PSRAM)
+  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0') return;
+  auto activity = makeUniqueNoThrow<JjwxcCommentActivity>(
+      renderer, mappedInput, std::string(jjwxcNovelId_), jjwxcChapterId_ != 0 ? jjwxcChapterId_ : 1, 0xFFFFFFFEu,
+      0xFFFF, /*debugFake=*/true);
+  if (!activity) return;
+  startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+    RenderLock lock;
+    sdFontSystem.ensureLoaded(renderer);
+    requestUpdate();
+  });
+#endif
+}
+
+void EpubReaderActivity::debugOpenJjwxcComment() {
+#if defined(BOARD_HAS_PSRAM)
+  if (!jjwxcBook_) return;
+  if (commentCounts_.empty()) loadJjwxcCommentCounts();
+  for (const auto& entry : commentCounts_) {
+    if (entry.total == 0) continue;
+    CommentBubble bubble{};
+    bubble.paragraphId = entry.paragraphId;
+    bubble.paragraphIndex = static_cast<uint16_t>(entry.paragraphId);
+    bubble.total = entry.total;
+    openCommentBubble(bubble);
+    return;
+  }
+  LOG_INF("ERS", "debug comment: no paragraph with comments on this chapter");
+#endif
+}
+
 void EpubReaderActivity::debugDismissHint() {
   if (!gestureHintVisible) return;
   gestureHintVisible = false;
@@ -6336,6 +6506,7 @@ void EpubReaderActivity::renderOverlay() {
           case State::Unpurchased:
             return {ReaderToolbarUi::TailBadge::VipYen, ReaderToolbarUi::TailAction::None};
           case State::Locked:
+          case State::AppOnly:
             return {ReaderToolbarUi::TailBadge::Lock, ReaderToolbarUi::TailAction::None};
         }
         return {};
@@ -6924,6 +7095,7 @@ void EpubReaderActivity::applyReaderTextSettings() {
   // The reader otherwise only loads SD fonts on book open, so without this an
   // in-reader font change wouldn't take effect until re-opening the book.
   sdFontSystem.ensureLoaded(renderer);
+  emoji_font::setPointSize(renderer, SETTINGS.fontPointSize);
   if (section) {
     rememberCurrentContentOffset();
     cachedSpineIndex = currentSpineIndex;

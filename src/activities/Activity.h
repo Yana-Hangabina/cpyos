@@ -72,6 +72,11 @@ class Activity {
   virtual void debugOpenPanel(int) {}
   virtual void debugSetTab(int) {}
   virtual void debugDismissHint() {}
+  virtual void debugOpenJjwxcComment() {}
+  virtual void debugOpenFakeJjwxcComment() {}
+  virtual void debugPageTurn(bool) {}
+  virtual void debugDumpPage() {}
+  virtual void debugOpenStressComment() {}
   virtual void debugOpenSearch() {}
   virtual void debugOpenSearchSample() {}
   virtual void debugRequestSnapshot() {}

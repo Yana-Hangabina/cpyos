@@ -98,7 +98,7 @@ struct Credentials {
 
 // What one `novelbasicinfo` reply carries, minus the blurb.
 //
-// The service returns 66 keys (measured 2026-10-15, novelId=<novelId>, anonymous,
+// The service returns 66 keys (measured 2026-10-15, novelId=3157187, anonymous,
 // 5,494 bytes); these are the ones a reader UI can do something with. Every field
 // is optional on the wire: a blocked or half-populated book omits keys rather than
 // sending them empty, so each one is copied through copyField() and callers must
@@ -136,6 +136,12 @@ struct ChapterEntry {
   char date[24] = {};
   uint32_t size = 0;
   uint8_t isVip = 0;  // 0 = free, 2 = VIP
+  // chaptertype is 0 for a real chapter. The service also emits entries with
+  // chaptertype=1 ("HELLO WORLD", "OPEN WORLD", ...) that duplicate a real
+  // chapter id with size 0; they are not chapters and must not enter toc.bin,
+  // or the book grows by four entries and every ordinal after them is +1
+  // against the site's own numbering.
+  uint8_t chapterType = 0;
   uint32_t price = 0;      // `point`, discounted price in JJWXC coins
   uint32_t listPrice = 0;  // `originalPrice`
   bool isLock = false;

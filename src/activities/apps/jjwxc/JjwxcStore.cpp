@@ -433,6 +433,9 @@ std::string chapterPath(const char* novelId, const uint32_t chapterId) {
 
 std::string commentCountsDir(const char* novelId) { return novelDirectory(novelId) + "/comments"; }
 
+// One byte, root level: it is a global caching preference, not per novel.
+std::string commentBodiesPrefPath() { return std::string(kRoot) + "/commentbodies"; }
+
 std::string commentCountsPath(const char* novelId, const uint32_t chapterId) {
   char name[40];
   snprintf(name, sizeof(name), "/comments/%lu.bin", static_cast<unsigned long>(chapterId));
@@ -635,6 +638,21 @@ std::string finalBookPath(const NovelRecord& rec) {
   const std::string title = StringUtils::sanitizeFilename(rec.title, 80);
   const std::string id = StringUtils::sanitizeFilename(rec.novelId, 15);
   return std::string(kOutputDir) + "/" + title + "-" + id + ".epub";
+}
+
+bool loadCacheCommentBodiesPref(bool& enabled) {
+  enabled = false;  // opt-in: the whole-book cost is hours, not minutes
+  std::string stored;
+  const std::string path = commentBodiesPrefPath();
+  if (!readSmallFile(path.c_str(), stored, 8)) return false;
+  enabled = !stored.empty() && stored[0] == '1';
+  return true;
+}
+
+bool saveCacheCommentBodiesPref(const bool enabled) {
+  if (!Storage.ensureDirectoryExists("/.crosspoint") || !Storage.ensureDirectoryExists(kRoot)) return false;
+  const std::string path = commentBodiesPrefPath();
+  return writeSmallFile(path.c_str(), enabled ? "1\n" : "0\n");
 }
 
 bool ensureBookContentKey(const std::string& epubPath, uint8_t (&key)[16]) {
@@ -917,6 +935,8 @@ bool readTocSummary(const char* novelId, TocSummary& out, uint32_t& outHighestPa
         ++out.unpurchased;
       } else if (rec.state == static_cast<uint8_t>(ChapterState::Locked)) {
         ++out.locked;
+      } else if (rec.state == static_cast<uint8_t>(ChapterState::AppOnly)) {
+        ++out.appOnly;
       }
     }
     ++out.count;
@@ -983,6 +1003,7 @@ bool TocMerger::add(const jjwxc::ChapterEntry& entry, TocRecord& out) {
         }
         break;
       case ChapterState::Locked:
+      case ChapterState::AppOnly:
         out.state = previousRecord_.state;
         out.localBytes = previousRecord_.localBytes;
         out.savedAt = previousRecord_.savedAt;
@@ -1006,6 +1027,8 @@ bool TocMerger::add(const jjwxc::ChapterEntry& entry, TocRecord& out) {
       ++summary_.unpurchased;
     } else if (out.state == static_cast<uint8_t>(ChapterState::Locked)) {
       ++summary_.locked;
+    } else if (out.state == static_cast<uint8_t>(ChapterState::AppOnly)) {
+      ++summary_.appOnly;
     }
   }
   ++summary_.count;

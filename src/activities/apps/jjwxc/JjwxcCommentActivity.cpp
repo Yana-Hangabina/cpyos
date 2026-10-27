@@ -26,12 +26,18 @@
 
 #ifdef ARDUINO
 #include <WiFi.h>
+#include <esp_system.h>
 #include <esp_wifi.h>
 #endif
 
 namespace {
 
 constexpr const char* kTag = "JJWXC";
+
+// Upper bound on waiting for an in-flight comment request when the panel is
+// popped. The transport timeout is 45 s, so this covers a blocked read; a task
+// deleted before it reaches a safe point is what corrupted the heap.
+constexpr uint32_t kExitWaitMs = 50000;
 
 // 64 KB of PSRAM. A 20-comment page is typically 10-30 KB of JSON once the
 // bodies are in UTF-8; keeping the room means a long comment cannot turn into a
@@ -169,12 +175,15 @@ uint32_t jsonCommentTotal(const char* body) {
 
 JjwxcCommentActivity::JjwxcCommentActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            std::string novelId, const uint32_t chapterId,
-                                           const uint32_t paragraphId, const uint16_t paragraphIndex)
+                                           const uint32_t paragraphId, const uint16_t paragraphIndex,
+                                           const bool debugFake, const bool debugStress)
     : Activity("JjwxcComment", renderer, mappedInput),
       novelId_(std::move(novelId)),
       chapterId_(chapterId),
       paragraphId_(paragraphId),
-      paragraphIndex_(paragraphIndex) {}
+      paragraphIndex_(paragraphIndex),
+      debugFake_(debugFake),
+      debugStress_(debugStress) {}
 
 bool JjwxcCommentActivity::ensureSession() {
   if (jar_ != nullptr && wapIo_ != nullptr && wap_ != nullptr) return true;
@@ -303,6 +312,36 @@ void JjwxcCommentActivity::onEnter() {
   incoming_.reserve(kMaxComments);
   replies_.reserve(kMaxReplies);
   incomingReplies_.reserve(kMaxReplies);
+
+  if (debugFake_) {
+    const auto add = [this](const char* author, const char* body, const char* date, const uint32_t agree) {
+      jjwxc::CommentItem item{};
+      snprintf(item.commentId, sizeof(item.commentId), "%u", static_cast<unsigned>(comments_.size() + 1));
+      snprintf(item.author, sizeof(item.author), "%s", author);
+      snprintf(item.body, sizeof(item.body), "%s", body);
+      snprintf(item.date, sizeof(item.date), "%s", date);
+      item.agreeNum = agree;
+      comments_.push_back(item);
+    };
+    add("读者甲",
+        "这是一条离线测试段评，用来验证换行后的字号是否一致。中文中文中文中文😀👍❤️中文中文中文中文，"
+        "English mixed with 中文 and more text to force several wrapped lines in the comment card. "
+        "再来一段中文中文中文中文，确保超过一屏宽度并产生多次换行。",
+        "刚刚", 12);
+    add("读者乙",
+        "第二行同样包含😀和生僻字测试：龘靐齉。中文中文中文中文中文中文中文中文中文中文中文中文。"
+        "This line is deliberately long enough to wrap at least twice on the reader's 684px width.",
+        "2小时前", 3);
+    commentTotal_ = static_cast<uint32_t>(comments_.size());
+    showingCache_ = true;
+    state_ = State::Ready;
+    requestUpdate();
+    if (debugStress_) {
+      pendingAction_ = ActionKind::DebugStress;
+      startWorker();
+    }
+    return;
+  }
 
   // Cached comments are the normal path: no radio, no cookie jar, no TLS.
   if (loadCachedComments()) {
@@ -472,7 +511,37 @@ void JjwxcCommentActivity::fail(const char* text) {
 }
 
 void JjwxcCommentActivity::onExit() {
+  // The worker borrows transport_, wap_, the PSRAM buffers and the vectors.
+  // Reaping it while a request is in flight (the old immediate vTaskDelete) can
+  // delete a task inside malloc/free or with the heap lock held; the next free
+  // then asserted "free() target pointer is outside heap areas" on the way back
+  // to the reader. Let it finish the request first, exactly as
+  // JjwxcActivity::stopJob() does, and only then tear the session down.
+  if (fetchTask_ != nullptr) {
+    exitRequested_.store(true);
+    const uint32_t joinStart = millis();
+    const uint32_t deadline = joinStart + kExitWaitMs;
+    while (!fetchDone_.load() && millis() < deadline) {
+      delay(20);
+    }
+    if (fetchDone_.load()) {
+      LOG_INF(kTag, "comment worker joined in %ums", (unsigned)(millis() - joinStart));
+    }
+    if (!fetchDone_.load()) {
+      // Deleting a task that is still inside the heap allocator is exactly what
+      // produced "free() target pointer is outside heap areas" on the way back
+      // to the reader. There is no safe in-process teardown at this point: the
+      // worker still owns this activity's transport and buffers. Reboot instead
+      // of corrupting the heap; the activity's data is all persisted.
+      LOG_ERR(kTag, "comment worker did not stop within %ums; restarting instead of deleting it mid-heap",
+              (unsigned)kExitWaitMs);
+      delay(50);
+      esp_restart();
+      return;
+    }
+  }
   reapFetch();
+  exitRequested_.store(false);
   transport_.resetSession();
   if (wifiBroughtUp_ && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -1319,14 +1388,17 @@ void JjwxcCommentActivity::startWorker() {
   fetchDone_.store(false);
 #ifdef ARDUINO
   BaseType_t ok = pdFAIL;
+  // Same reasoning as JjwxcActivity's job task: the TLS handshake's ECC work is
+  // CPU-bound, so run at IDLE priority on core 0 to keep IDLE0 feeding the task
+  // watchdog rather than aborting the chip mid-handshake.
 #ifdef BOARD_HAS_PSRAM
-  ok = xTaskCreatePinnedToCoreWithCaps(fetchTrampoline, "jjwxcComment", 32 * 1024, this, 1, &fetchTask_, 0,
-                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  ok = xTaskCreatePinnedToCoreWithCaps(fetchTrampoline, "jjwxcComment", 32 * 1024, this, tskIDLE_PRIORITY, &fetchTask_,
+                                       0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   fetchTaskInPsram_ = ok == pdPASS;
   if (ok != pdPASS) fetchTask_ = nullptr;
 #endif
   if (fetchTask_ == nullptr) {
-    ok = xTaskCreatePinnedToCore(fetchTrampoline, "jjwxcComment", 12 * 1024, this, 1, &fetchTask_, 0);
+    ok = xTaskCreatePinnedToCore(fetchTrampoline, "jjwxcComment", 12 * 1024, this, tskIDLE_PRIORITY, &fetchTask_, 0);
     fetchTaskInPsram_ = false;
     if (ok != pdPASS) {
       fetchTask_ = nullptr;
@@ -1368,6 +1440,7 @@ void JjwxcCommentActivity::startRepliesFetch(const bool append) {
 }
 
 void JjwxcCommentActivity::workerRun() {
+  if (exitRequested_.load()) return;
   switch (pendingAction_) {
     case ActionKind::FetchPage:
       fetchPage(pendingOffset_, pendingAppend_);
@@ -1386,6 +1459,23 @@ void JjwxcCommentActivity::workerRun() {
       break;
     case ActionKind::PostReply:
       performPostReply();
+      break;
+    case ActionKind::DebugStress:
+      // Serial-only teardown stress: allocate/free while the UI pops the panel.
+      // The old onExit deleted this task immediately, mid-heap; the join below
+      // must wait for fetchDone_ instead. 8000 ms outlives the ~2.4 s panel
+      // render, so HOME lands while the worker is still mid-heap and the join
+      // path is actually exercised. The loop deliberately does NOT check
+      // exitRequested_: a real in-flight network request can't be interrupted
+      // either, so this reproduces "onExit while the worker is busy" faithfully.
+      for (int i = 0; i < 8000; ++i) {
+        void* p = malloc(256);
+        if (p != nullptr) {
+          memset(p, 0x5A, 256);
+          free(p);
+        }
+        vTaskDelay(1);
+      }
       break;
     case ActionKind::None:
       break;
@@ -1552,23 +1642,23 @@ constexpr int kTextInset = 3;
 // font for the whole run, so a mixed ASCII/CJK line can be a little wider than
 // the sum. This reserve keeps such a line off the clip instead of shaving the
 // final glyph.
-constexpr int kWrapSafety = 12;
+constexpr int kWrapSafety = 28;
 constexpr int kScrollbarWidth = 4;
 constexpr int kScrollbarGap = 8;
 }  // namespace
 
 namespace {
-int cardMeasure(const GfxRenderer& renderer, const char* text, const size_t bytes) {
+int cardMeasure(const GfxRenderer& renderer, const int fontId, const char* text, const size_t bytes) {
   char probe[512];
   const size_t copy = bytes < sizeof(probe) ? bytes : sizeof(probe) - 1;
   memcpy(probe, text, copy);
   probe[copy] = '\0';
-  return renderer.getTextWidth(UI_12_FONT_ID, probe, EpdFontFamily::REGULAR);
+  return renderer.getTextWidth(fontId, probe, EpdFontFamily::REGULAR);
 }
 
-int countBodyLines(const GfxRenderer& renderer, const char* body, const int textWidth) {
-  const auto measure = [&renderer](const char* text, const size_t bytes) {
-    return cardMeasure(renderer, text, bytes);
+int countBodyLines(const GfxRenderer& renderer, const int fontId, const char* body, const int textWidth) {
+  const auto measure = [&renderer, fontId](const char* text, const size_t bytes) {
+    return cardMeasure(renderer, fontId, text, bytes);
   };
   const size_t bodyLen = strlen(body);
   size_t pos = 0;
@@ -1587,23 +1677,29 @@ int cardChipHeight(const GfxRenderer& renderer) { return renderer.getLineHeight(
 
 int JjwxcCommentActivity::commentCardHeight(const jjwxc::CommentItem& comment, const int textWidth) const {
   const int metaHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int bodyHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int lines = countBodyLines(renderer, comment.body, textWidth);
+  // One face for the whole body: resolving per line let a line with a rarer
+  // glyph fall back to a different point size, so a wrapped comment alternated
+  // between two font sizes.
+  const int bodyFont = renderer.chooseFontForText(UI_12_FONT_ID, comment.body, EpdFontFamily::REGULAR);
+  const int bodyHeight = renderer.getLineHeight(bodyFont);
+  const int lines = countBodyLines(renderer, bodyFont, comment.body, textWidth);
   const int footer = comment.commentId[0] != '\0' ? 6 + cardChipHeight(renderer) : 0;
   return kCardPadY * 2 + metaHeight + (lines > 0 ? 4 + lines * bodyHeight : 0) + footer;
 }
 
 int JjwxcCommentActivity::replyCardHeight(const jjwxc::CommentReplyItem& reply, const int textWidth) const {
   const int metaHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int bodyHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int lines = countBodyLines(renderer, reply.body, textWidth);
+  const int bodyFont = renderer.chooseFontForText(UI_12_FONT_ID, reply.body, EpdFontFamily::REGULAR);
+  const int bodyHeight = renderer.getLineHeight(bodyFont);
+  const int lines = countBodyLines(renderer, bodyFont, reply.body, textWidth);
   const int footer = reply.replyId[0] != '\0' ? 6 + cardChipHeight(renderer) : 0;
   return kCardPadY * 2 + metaHeight + (lines > 0 ? 4 + lines * bodyHeight : 0) + footer;
 }
 
 int JjwxcCommentActivity::drawCardBody(const char* author, const char* body, const char* ip, const char* date,
-                                       const int x, const int y, const int textWidth, const int bodyHeight,
-                                       const int metaHeight) {
+                                       const int x, const int y, const int textWidth, const int metaHeight) {
+  const int bodyFont = renderer.chooseFontForText(UI_12_FONT_ID, body, EpdFontFamily::REGULAR);
+  const int bodyHeight = renderer.getLineHeight(bodyFont);
   const char* shownAuthor = author != nullptr && author[0] != '\0' ? author : "—";
   renderer.drawText(SMALL_FONT_ID, x, y, shownAuthor, true, EpdFontFamily::BOLD);
   const int authorWidth = renderer.getTextWidth(SMALL_FONT_ID, shownAuthor, EpdFontFamily::BOLD);
@@ -1621,8 +1717,8 @@ int JjwxcCommentActivity::drawCardBody(const char* author, const char* body, con
     renderer.drawText(SMALL_FONT_ID, x + authorWidth + 4, y, meta, true, EpdFontFamily::REGULAR);
   }
 
-  const auto measure = [this](const char* text, const size_t bytes) {
-    return cardMeasure(renderer, text, bytes);
+  const auto measure = [this, bodyFont](const char* text, const size_t bytes) {
+    return cardMeasure(renderer, bodyFont, text, bytes);
   };
   const size_t bodyLen = strlen(body);
   size_t pos = 0;
@@ -1640,7 +1736,7 @@ int JjwxcCommentActivity::drawCardBody(const char* author, const char* body, con
     const size_t copy = bytes < sizeof(line) ? bytes : sizeof(line) - 1;
     memcpy(line, body + pos, copy);
     line[copy] = '\0';
-    renderer.drawText(UI_12_FONT_ID, x, lineY, line, true, EpdFontFamily::REGULAR);
+    renderer.drawText(bodyFont, x, lineY, line, true, EpdFontFamily::REGULAR);
     lineY += bodyHeight;
     pos += bytes;
   }
@@ -1771,7 +1867,7 @@ void JjwxcCommentActivity::drawList(const int top) {
       if (y >= bottom) break;
 
       drawCardBody(comment.author, comment.body, comment.ip, comment.date, textX, y + kCardPadY, textWidth,
-                   bodyHeight, metaHeight);
+                   metaHeight);
 
       if (comment.commentId[0] != '\0') {
         const int chipY = y + height - kCardPadY - chipH;
@@ -1917,7 +2013,7 @@ void JjwxcCommentActivity::drawReplies(const int top) {
       }
       if (y >= bottom) break;
 
-      drawCardBody(reply.author, reply.body, reply.ip, reply.date, textX, y + kCardPadY, textWidth, bodyHeight,
+      drawCardBody(reply.author, reply.body, reply.ip, reply.date, textX, y + kCardPadY, textWidth,
                    metaHeight);
 
       if (reply.replyId[0] != '\0') {

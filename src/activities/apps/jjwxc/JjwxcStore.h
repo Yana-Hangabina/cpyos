@@ -71,6 +71,11 @@ enum class ChapterState : uint8_t {
   Cached = 1,       // chapters/<chapterId>.xhtml is on the card
   Unpurchased = 2,  // VIP chapter this account has not bought; holds a placeholder
   Locked = 3,       // author-locked chapter; holds a placeholder
+  // Unlocked bonus (福利番外) that the WAP reader itself says it cannot display
+  // ("由于技术问题，目前无法在wap站显示，请使用App阅读"). Keeping it as its own
+  // state is what stops the app from telling a fully-paid account that it still
+  // has an unpurchased chapter.
+  AppOnly = 4,
 };
 
 // True when the record points at a chapter file that belongs in the EPUB: a real
@@ -229,6 +234,12 @@ bool saveCommentBodies(const char* novelId, uint32_t chapterId, uint32_t paragra
 bool loadCommentBodies(const char* novelId, uint32_t chapterId, uint32_t paragraphId,
                        JjwxcCommentSidecar::Bodies::Item* out, size_t maxOut, size_t& outCount, uint32_t& total);
 bool removeCommentBodies(const char* novelId, uint32_t chapterId, uint32_t paragraphId);
+// Cache-range preference: also fetch comment bodies while caching chapters.
+// Off by default because a chapter has 10-108 commented paragraphs, so a whole
+// book turns ~18 min into hours. Persisted as one byte at
+// /.crosspoint/jjwxc/commentbodies so it survives restarts.
+bool loadCacheCommentBodiesPref(bool& enabled);
+bool saveCacheCommentBodiesPref(bool enabled);
 std::string coverSourcePath(const char* novelId);
 // The device-wrapped AES-128 content key for the finished EPUB at `epubPath`
 // (bookkey::write). Reuses an existing key when it was wrapped by this device,
@@ -313,6 +324,7 @@ struct TocSummary {
   uint32_t packaged = 0;     // state != Missing, i.e. everything in the EPUB
   uint32_t unpurchased = 0;  // state == Unpurchased
   uint32_t locked = 0;       // state == Locked
+  uint32_t appOnly = 0;      // state == AppOnly
   uint32_t firstPending = 0;
   uint32_t lastPending = 0;
   bool hasPending = false;
