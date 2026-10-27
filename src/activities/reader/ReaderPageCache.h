@@ -10,6 +10,10 @@ struct ReaderPageCacheKey {
   ReaderRenderSpec spec;
   uint32_t sectionGeneration = 0;
   uint32_t renderEpoch = 0;
+  // Bumped whenever the JJWXC paragraph-comment sidecar is (re)loaded. The cache
+  // stores finished pixels, bubbles included, so a slot built before the counts
+  // arrived must not be served after them.
+  uint32_t commentGeneration = 0;
   int spine = -1;
   int page = -1;
   int top = 0;

@@ -20,14 +20,10 @@
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
-#include "components/CoverGridHomeUi.h"
 #include "components/SelectionCursorPolicy.h"
 #include "components/themes/BaseTheme.h"
-#include "components/themes/inx/InxTheme.h"
-#include "components/themes/lyra/Lyra3CoversTheme.h"
-#include "components/themes/lyra/LyraCarouselTheme.h"
-#include "components/themes/lyra/LyraTheme.h"
-#include "components/themes/roundedraff/RoundedRaffTheme.h"
+#include "components/themes/cpy/CpyTheme.h"
+#include "components/themes/upstream/UpstreamStyleTheme.h"
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
 #include <builtinFonts/notosans_14_bold.h>
 #include <builtinFonts/notosans_14_regular.h>
@@ -72,74 +68,43 @@ UITheme::UITheme() {
 }
 
 void UITheme::reload() {
-  const bool inx = SETTINGS.uiTheme == CrossPointSettings::INX;
+  const bool modern = usesModernLayout();
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
-  (void)inx;
+  (void)modern;
   ui18RegularFont.data = &notosans_16_regular;
   ui18BoldFont.data = &notosans_16_bold;
 #else
-  ui18RegularFont.data = inx ? offlineReaderFont.data : &notosans_18_regular;
-  ui18BoldFont.data = inx ? offlineReaderFont.data : &notosans_18_bold;
+  ui18RegularFont.data = modern ? offlineReaderFont.data : &notosans_18_regular;
+  ui18BoldFont.data = modern ? offlineReaderFont.data : &notosans_18_bold;
 #endif
   auto themeType = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
   setTheme(themeType);
 }
 
-bool UITheme::supportsCoverGrid() { return HalMemory::getPsramHeap().totalBytes > 0; }
-
-bool UITheme::hasCoverGridHome() { return SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && supportsCoverGrid(); }
-
-void UITheme::drawCoverGridHome(CoverGridHomeUi& home) { home.renderUi(); }
-
 void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
   std::unique_ptr<BaseTheme> nextTheme;
   const ThemeMetrics* nextMetrics = &BaseMetrics::values;
-  if (type == CrossPointSettings::COVER_GRID && !supportsCoverGrid()) type = CrossPointSettings::LYRA;
 
   switch (type) {
-    case CrossPointSettings::UI_THEME::CLASSIC:
-      LOG_DBG("UI", "Using Classic theme");
-      nextTheme = makeUniqueNoThrow<BaseTheme>();
-      break;
-    case CrossPointSettings::UI_THEME::COVER_GRID:
-    case CrossPointSettings::UI_THEME::LYRA:
-      LOG_DBG("UI", "Using Lyra theme");
-      nextTheme = makeUniqueNoThrow<LyraTheme>();
-      nextMetrics = &LyraMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::ROUNDEDRAFF:
-      LOG_DBG("UI", "Using RoundedRaff theme");
-      nextTheme = makeUniqueNoThrow<RoundedRaffTheme>();
-      nextMetrics = &RoundedRaffMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::LYRA_3_COVERS:
-      LOG_DBG("UI", "Using Lyra 3 Covers theme");
-      nextTheme = makeUniqueNoThrow<Lyra3CoversTheme>();
-      nextMetrics = &Lyra3CoversMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::LYRA_CAROUSEL:
-      LOG_DBG("UI", "Using Lyra Carousel theme");
-      nextTheme = makeUniqueNoThrow<LyraCarouselTheme>();
-      nextMetrics = &LyraCarouselMetrics::values;
-      break;
-    case CrossPointSettings::UI_THEME::INX:
-      LOG_DBG("UI", "Using INX theme");
-      nextTheme = makeUniqueNoThrow<InxTheme>();
-      nextMetrics = &InxMetrics::values;
+    case CrossPointSettings::UI_THEME::CPY:
+      LOG_DBG("UI", "Using CPY theme");
+      nextTheme = makeUniqueNoThrow<CpyTheme>();
+      nextMetrics = &CpyMetrics::values;
       break;
     default:
-      LOG_ERR("UI", "Unknown theme %d, falling back to Classic", static_cast<int>(type));
-      nextTheme = makeUniqueNoThrow<BaseTheme>();
-      type = CrossPointSettings::UI_THEME::CLASSIC;
+      LOG_ERR("UI", "Unknown theme %d, using CPY", static_cast<int>(type));
+      type = CrossPointSettings::UI_THEME::CPY;
+      nextTheme = makeUniqueNoThrow<CpyTheme>();
+      nextMetrics = &CpyMetrics::values;
       break;
   }
 
   if (!nextTheme) {
-    LOG_ERR("UI", "OOM creating theme %d; using static Classic fallback", static_cast<int>(type));
+    LOG_ERR("UI", "OOM creating theme %d; using static BaseTheme fallback", static_cast<int>(type));
     ownedTheme.reset();
     currentTheme = &fallbackTheme;
     currentMetrics = &BaseMetrics::values;
-    currentType = CrossPointSettings::UI_THEME::CLASSIC;
+    currentType = CrossPointSettings::UI_THEME::CPY;
   } else {
     ownedTheme = std::move(nextTheme);
     currentTheme = ownedTheme.get();
@@ -152,14 +117,24 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
 const ThemeMetrics& UITheme::getMetrics() const {
   // Touch availability can flip after static construction, and the setting can
   // change while this screen is open, so cache against the effective policy.
+  // The density picker (SETTINGS.uiDensity) joins the key the same way: the
+  // theme's static values cannot follow a runtime setting, so the compact
+  // variant is applied into the cached copy on recompute.
   const bool showButtonHints = currentTheme->buttonHintsVisible();
-  if (!metricsValid || showButtonHints != metricsForButtonHints) {
+  const bool compactDensity = currentTheme->supportsCompactDensity() && SETTINGS.uiDensity != 0;
+  if (!metricsValid || showButtonHints != metricsForButtonHints || compactDensity != metricsForCompactDensity) {
     adjustedMetrics = *currentMetrics;
-    UiHighDpiProfile::apply(adjustedMetrics);
+    if (!currentTheme->metricsIncludeProfile()) {
+      UiHighDpiProfile::apply(adjustedMetrics);
+    }
     if (!showButtonHints) {
       adjustedMetrics.buttonHintsHeight = 0;
     }
+    if (compactDensity) {
+      currentTheme->applyCompactDensity(adjustedMetrics);
+    }
     metricsForButtonHints = showButtonHints;
+    metricsForCompactDensity = compactDensity;
     metricsValid = true;
   }
   return adjustedMetrics;
@@ -169,8 +144,7 @@ bool UITheme::showSelectionCursor() const {
 #ifdef CROSSPOINT_EMULATED
   return true;
 #else
-  return SelectionCursorPolicy::visible(currentType == CrossPointSettings::UI_THEME::INX, gpio.hasTouch(),
-                                        gpio.lastInputModality());
+  return SelectionCursorPolicy::visible(usesModernLayout(), gpio.hasTouch(), gpio.lastInputModality());
 #endif
 }
 
@@ -245,7 +219,8 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (filename.back() == '/') {
     return Folder;
   }
-  if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename)) {
+  if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+      FsHelpers::hasCbzExtension(filename) || FsHelpers::hasFb2Extension(filename)) {
     return Book;
   }
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {

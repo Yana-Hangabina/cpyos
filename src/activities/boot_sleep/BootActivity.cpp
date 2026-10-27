@@ -26,13 +26,18 @@ void BootActivity::onEnter() {
 
 void BootActivity::renderSplash() {
   GUI.drawSplash(renderer, tr(STR_BOOTING), CROSSPOINT_VERSION);
+  // Deliberately not pushed to the panel: the home screen follows within a few
+  // hundred milliseconds (measured 184 ms from Boot exit to the first home
+  // frame), so pushing the splash only adds a second full-screen flash at every
+  // boot.  The e-ink panel keeps the previous image meanwhile, which reads as a
+  // normal power-on.  PostOta still paints through requestUpdateAndWait().
 #if FREEINK_DEVICE_EEGO_A4
   // A4: the panel is being powered on for the first time here, and a FAST
   // refresh on a freshly powered panel doesn't establish the frame (observed:
   // splash never appears). Force the first paint to a full waveform.
   renderer.requestNextFullRefresh();
 #endif
-  renderer.displayBuffer();
+
 }
 
 void BootActivity::runPostOta() {

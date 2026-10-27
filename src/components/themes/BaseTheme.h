@@ -72,7 +72,9 @@ struct ThemeMetrics {
 
   int tabSpacing;
   int tabBarHeight;
-  int coverGridTabBarHeight = 72;
+  // Height reserved above the content for a themed main-tab page title band
+  // (CPY draws the duck + page title there). 0 = no band (INX and C3).
+  int mainTabTitleHeight = 0;
   // Selected-tab pill fills its equal-width slot (legacy RoundedRaff tabs)
   // instead of shrinking to hug the label (legacy Lyra tabs).
   bool tabPillFullSlot = false;
@@ -166,6 +168,7 @@ enum UIIcon {
 #ifdef ENABLE_CHINESE_VERSION
   ChineseChess,
   WeRead,
+  Jjwxc,
 #endif
   Minesweeper,
   Avatar,
@@ -312,8 +315,8 @@ class BaseTheme {
 
   // Component drawing methods
   int measureProgressBarHeight(const GfxRenderer& renderer, int barHeight, bool showPercentage = true) const;
-  int drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total,
-                      bool showPercentage = true) const;
+  virtual int drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total,
+                              bool showPercentage = true) const;
   static void drawCoverPlaceholder(const GfxRenderer& renderer, Rect rect);
   // Draws a pre-dithered cover thumb 1:1, centered and clipped to fill the
   // slot. Rescaling a dithered bitmap aliases badly, so overflow is cropped.
@@ -322,6 +325,11 @@ class BaseTheme {
                        bool showPercentage = true) const;  // Left aligned (reader mode)
   void drawBatteryRight(const GfxRenderer& renderer, Rect rect, bool showPercentage = true,
                         int numericFontId = STATUS_NUMERIC_FONT_ID) const;
+  // Reader status-bar battery: draws the indicator starting at (x, y) and returns
+  // the horizontal space it used, so the status lane can place the clock after it.
+  // Capsule-style themes override this to match their header chrome (CPY: same pill
+  // as the home header, percentage inside) instead of the classic outline + text.
+  virtual int drawStatusBarBattery(const GfxRenderer& renderer, int x, int y, bool showPercent) const;
   virtual void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const;
   void drawButtonHintsWithStyle(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4, bool upstreamStyle) const;
@@ -351,7 +359,44 @@ class BaseTheme {
                         const std::function<bool(int index)>& rowHeading = nullptr) const;
   virtual void drawMainTabBar(const GfxRenderer& renderer, Rect rect, MainTab selected) const;
   virtual void drawMainTabStatusBar(const GfxRenderer& renderer, Rect rect) const;
-  static void drawSplash(const GfxRenderer& renderer, const char* status, const char* version = nullptr);
+  // Themed title band above the content of a main-tab page (the rect comes
+  // from MainTabLayout::title; empty when no band is reserved). masthead draws
+  // the design's masthead strip (wordmark + date between hairlines) above the
+  // title row; only the home page's frame includes it.
+  virtual void drawMainTabTitle(const GfxRenderer& renderer, Rect rect, const char* title,
+                                bool masthead = false) const {
+    (void)renderer;
+    (void)rect;
+    (void)title;
+    (void)masthead;
+  }
+  // Extra band height the masthead strip needs on top of mainTabTitleHeight
+  // (home only); themes without a masthead reserve nothing.
+  virtual int mainTabMastheadHeight() const { return 0; }
+  // Main bottom-tab-bar height. The shared default was the only source the
+  // layout ever consulted — theme metrics.tabBarHeight covers the sub-tab
+  // strips instead — so CPY sizes its roomier bar through this hook.
+  virtual int mainTabBarHeight() const { return UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight : 56; }
+  // Empty-list placeholder: a centred message over the theme's own backdrop.
+  virtual void drawEmptyState(const GfxRenderer& renderer, Rect rect, const char* message) const;
+  // Scrim behind transient modals (option popups, slider dialogs) that float
+  // over the caller's retained frame. Default: none (retain the plain frame).
+  virtual void drawModalScrim(const GfxRenderer& renderer) const { (void)renderer; }
+  // Shared card surface for grids and dashboard tiles: a rounded outline ring
+  // (dither = idle, solid black = focused). Default: draw nothing (INX keeps
+  // the bare icon grid).
+  virtual void drawCardFrame(const GfxRenderer& renderer, Rect rect, bool focused) const {
+    (void)renderer;
+    (void)rect;
+    (void)focused;
+  }
+  virtual void drawSplash(const GfxRenderer& renderer, const char* status, const char* version = nullptr) const;
+  // Default sleep screen body (DARK/LIGHT modes); defaults to the splash.
+  // SleepActivity inverts the whole frame for DARK afterwards, so themes paint
+  // the light version here. bookTitle/readPercent carry the "currently
+  // reading" line some themes draw (empty title = no book to show).
+  virtual void drawSleepScreen(const GfxRenderer& renderer, const char* status, const char* bookTitle = nullptr,
+                               int readPercent = 0) const;
   // Also draws the wall clock opposite the battery when the user enabled
   // SETTINGS.clockShowInHeader and system time is valid. On touch boards a
   // tappable back button leads the band (see HeaderBackTapTarget); root
@@ -410,8 +455,11 @@ class BaseTheme {
                             const std::function<std::string(int index)>& buttonLabel,
                             const std::function<UIIcon(int index)>& rowIcon) const;
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
-  virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
-                               int selectedIndex) const;
+  // headline (may be null) is an optional wrapped body drawn between the title and
+  // the options; headlineHeight is its pre-measured band height (0 with no headline),
+  // supplied by the caller so the dialog geometry matches the option hit rects.
+  virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const char* headline, int headlineHeight,
+                               const std::vector<std::string>& options, int selectedIndex) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                             std::string title, const int paddingBottom = 0, const int textYOffset = 0,
@@ -422,6 +470,16 @@ class BaseTheme {
                              int contentStartX = 0, int contentWidth = 0) const;
   bool drawSelectionBackground(const GfxRenderer& renderer, Rect rect) const;
   virtual bool showsFileIcons() const { return false; }
+  // Themes whose CpyMetrics-style table already bakes UiHighDpiProfile and then
+  // layers post-profile overrides (tab bar, battery pill, keyboard keys). Such
+  // themes must NOT have the profile re-applied at getMetrics() time, or their
+  // overrides get clobbered on high-DPI boards.
+  virtual bool metricsIncludeProfile() const { return false; }
+  // UI density: themes that offer the compact row rhythm opt in here; the
+  // override rewrites the row-height fields of the (already profile-applied)
+  // metrics copy. Base/INX keep the setting inert.
+  virtual bool supportsCompactDensity() const { return false; }
+  virtual void applyCompactDensity(ThemeMetrics& metrics) const { (void)metrics; }
   // Thumb generation height for home covers; 0 means use metrics.homeCoverHeight.
   // Themes with slots wider than 0.6 aspect override this so covers still fill.
   virtual int homeCoverThumbHeight(const GfxRenderer&) const { return 0; }

@@ -3,6 +3,7 @@
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -552,6 +553,14 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
 void OtaUpdateActivity::runUpdateInstall() {
   LOG_DBG("OTA", "New update available, starting download...");
+  // A power loss mid-flash can brick a device with no BOOT/RESET button.
+  if (powerManager.getBatteryPercentage() < 20) {
+    LOG_ERR("OTA", "Update refused: battery below 20%%");
+    state = State::Failed;
+    failedDetail = tr(STR_UPDATE_LOW_BATTERY);
+    requestUpdate();
+    return;
+  }
   {
     RenderLock lock(*this);
     progressBytes = 0;

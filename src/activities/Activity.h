@@ -68,6 +68,16 @@ class Activity {
   virtual void selectMainTabContentEdge(MainTabContentEdge) {}
   bool usesMainTabBar() const;
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
+  // Debug-only serial hook; activities that own sheets override it.
+  virtual void debugOpenPanel(int) {}
+  virtual void debugSetTab(int) {}
+  virtual void debugDismissHint() {}
+  virtual void debugOpenSearch() {}
+  virtual void debugOpenSearchSample() {}
+  virtual void debugRequestSnapshot() {}
+  virtual void debugForceEmpty() {}
+  virtual void debugSetContentsFilter(int) {}
+  virtual void debugActivateContentsRow(int) {}
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes

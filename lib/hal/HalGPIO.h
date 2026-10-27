@@ -137,6 +137,11 @@ class HalGPIO {
   void suppressTouchContact();
   unsigned long lastTouchHeldMs() const;
   bool wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const;
+  // One-shot two-contact pinch/spread on release. `scale` is end separation
+  // over start separation (>1 = spread, <1 = pinch); the centre is normalized
+  // in the panel frame. Rotations and ambiguous contacts are rejected by the
+  // SDK, so this cannot also be reported as a swipe.
+  bool wasMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter) const;
   bool wasTouchActivity() const;
   InputModality lastInputModality() const { return inputModality.load(std::memory_order_relaxed); }
   bool wasInputModalityChanged() const { return inputModalityChanged; }

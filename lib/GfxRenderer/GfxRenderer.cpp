@@ -8,6 +8,7 @@
 #include <Logging.h>
 #include <MemoryManager.h>
 #include <MissingGlyph.h>
+#include <ResidentGlyphBitmap.h>
 #include <SdCardFont.h>
 #include <TtfEpdFont.h>
 #include <Utf8.h>
@@ -55,7 +56,26 @@ uint8_t* beginNativeGray(Display& display) {
   return nullptr;
 }
 template <typename Display>
-bool commitNativeGray(Display& display) {
+uint8_t* beginNativeGrayFrom1bpp(Display& display, const uint8_t* fb) {
+  if constexpr (requires { display.beginGrayscale16From1bpp(fb); }) return display.beginGrayscale16From1bpp(fb);
+  return nullptr;
+}
+template <typename Display>
+bool commitNativeGrayArea(Display& display, const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                          bool clean) {
+  if constexpr (requires { display.commitGrayscale16Area(fb, x, y, w, h, clean); })
+    return display.commitGrayscale16Area(fb, x, y, w, h, clean);
+  return false;
+}
+template <typename Display>
+bool commitNativeGrayAreas(Display& display, const freeink::GrayArea* areas, int count, bool clean) {
+  if constexpr (requires { display.commitGrayscale16Areas(areas, count, clean); })
+    return display.commitGrayscale16Areas(areas, count, clean);
+  return false;
+}
+template <typename Display>
+bool commitNativeGray(Display& display, bool clean) {
+  if constexpr (requires { display.commitGrayscale16(clean); }) return display.commitGrayscale16(clean);
   if constexpr (requires { display.commitGrayscale16(); }) return display.commitGrayscale16();
   return false;
 }
@@ -147,7 +167,11 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
   }
-  return &fontData->bitmap[glyph->dataOffset];
+  // The resident-bitmap fallback (with its null-base guard) lives in ResidentGlyphBitmap.h
+  // so a host test can exercise the exact code the renderer runs: an SD face in stub mode
+  // has bitmap == nullptr, and a missed overflow-ring lookup must report "no glyph" rather
+  // than compute &nullptr[dataOffset].
+  return residentGlyphBitmap(fontData, glyph);
 }
 
 void GfxRenderer::ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask) const {
@@ -376,6 +400,19 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   }
   return effectiveFontId;
 #endif
+}
+
+bool GfxRenderer::canRenderText(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') return true;
+  const auto family = fontMap.find(resolveTextFontId(fontId, text, style));
+  if (family == fontMap.end()) return false;
+  const char* cursor = text;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
+    bool usedReplacement = false;
+    if (family->second.getGlyph(cp, style, &usedReplacement) == nullptr || usedReplacement) return false;
+  }
+  return true;
 }
 
 void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter, const void* ctx,
@@ -1342,10 +1379,93 @@ void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const 
   // the mirroring applies. Only this path slows down, and only during the 16-level pass;
   // every other render path keeps the byte-level fill below.
   if (grayscale16Buffer != nullptr) {
-    const bool black = (C == Color::Black);
-    for (int py = ly0; py < ly1; ++py) {
-      for (int px = lx0; px < lx1; ++px) {
-        drawPixel(px, py, black);
+    // Map every fill colour to its real 4-bit level. Treating LightGray/DarkGray
+    // as "not black" painted them white, which is why the home dashboard's card
+    // and chart frames vanished once the home screen moved onto the 16-level
+    // canvas (their backgrounds are dithered grays).
+    int gray = 0;
+    if constexpr (C == Color::Black) {
+      gray = 0;
+    } else if constexpr (C == Color::White) {
+      gray = 255;
+    } else if constexpr (C == Color::LightGray) {
+      gray = 170;
+    } else if constexpr (C == Color::DarkGray) {
+      gray = 85;
+    } else {
+      return;
+    }
+
+    // Large fills (the dashboard cards, chart and tiles are most of the home
+    // page) must not call drawGrayscale16Pixel() once per pixel: that repeats
+    // the rotation, the clip and the B/W-proxy write for every pixel. Rotate the
+    // rect once, then write 4bpp nibbles and the 1-bit proxy row-wise. Rotation
+    // is rigid, so the physical bbox of the two corners is exactly the filled
+    // rect. The resulting image is identical to the per-pixel path.
+    int paX, paY, pbX, pbY;
+    rotateCoordinates(orientation, lx0, ly0, &paX, &paY, panelWidth, panelHeight);
+    rotateCoordinates(orientation, lx1 - 1, ly1 - 1, &pbX, &pbY, panelWidth, panelHeight);
+    int phyX0 = std::max(0, std::min(paX, pbX));
+    int phyX1 = std::min(panelWidth - 1, std::max(paX, pbX));
+    int phyY0 = std::max(0, std::min(paY, pbY));
+    int phyY1 = std::min(panelHeight - 1, std::max(paY, pbY));
+    if (phyX0 > phyX1 || phyY0 > phyY1) return;
+
+    const uint8_t level = static_cast<uint8_t>((static_cast<unsigned>(gray) + 8) / 17);
+    const uint8_t pair = static_cast<uint8_t>((level << 4) | level);
+    const int grayStride = panelWidth / 2;
+    const int fbStartByte = phyX0 >> 3;
+    const int fbEndByte = phyX1 >> 3;
+    const uint8_t fbHeadMask = static_cast<uint8_t>(0xFFu >> (phyX0 & 7));
+    const uint8_t fbTailMask = static_cast<uint8_t>(0xFFu << (7 - (phyX1 & 7)));
+    const bool proxyBlack = level < 8;
+
+    for (int py = phyY0; py <= phyY1; ++py) {
+      uint8_t* grow = grayscale16Buffer + static_cast<size_t>(py) * grayStride;
+      const int firstByte = phyX0 >> 1;
+      const int lastByte = phyX1 >> 1;
+      // 4bpp layout matches drawGrayscale16Pixel(): even x is the low nibble,
+      // odd x the high nibble.
+      if (firstByte == lastByte) {
+        const uint8_t mask =
+            (phyX0 != phyX1) ? 0xFF : ((phyX0 & 1) != 0 ? 0xF0 : 0x0F);
+        grow[firstByte] = static_cast<uint8_t>((grow[firstByte] & ~mask) | (pair & mask));
+      } else {
+        if ((phyX0 & 1) != 0) {
+          grow[firstByte] = static_cast<uint8_t>((grow[firstByte] & 0x0F) | (level << 4));
+        } else {
+          grow[firstByte] = pair;
+        }
+        if (lastByte > firstByte + 1) {
+          memset(grow + firstByte + 1, pair, static_cast<size_t>(lastByte - firstByte - 1));
+        }
+        if ((phyX1 & 1) != 0) {
+          grow[lastByte] = pair;
+        } else {
+          grow[lastByte] = static_cast<uint8_t>((grow[lastByte] & 0xF0) | level);
+        }
+      }
+
+      uint8_t* brow = frameBuffer + static_cast<size_t>(py) * panelWidthBytes;
+      if (fbStartByte == fbEndByte) {
+        const uint8_t mask = static_cast<uint8_t>(fbHeadMask & fbTailMask);
+        if (proxyBlack) {
+          brow[fbStartByte] &= static_cast<uint8_t>(~mask);
+        } else {
+          brow[fbStartByte] |= mask;
+        }
+      } else if (proxyBlack) {
+        brow[fbStartByte] &= static_cast<uint8_t>(~fbHeadMask);
+        if (fbEndByte > fbStartByte + 1) {
+          memset(brow + fbStartByte + 1, 0x00, static_cast<size_t>(fbEndByte - fbStartByte - 1));
+        }
+        brow[fbEndByte] &= static_cast<uint8_t>(~fbTailMask);
+      } else {
+        brow[fbStartByte] |= fbHeadMask;
+        if (fbEndByte > fbStartByte + 1) {
+          memset(brow + fbStartByte + 1, 0xFF, static_cast<size_t>(fbEndByte - fbStartByte - 1));
+        }
+        brow[fbEndByte] |= fbTailMask;
       }
     }
     return;
@@ -1727,6 +1847,15 @@ bool GfxRenderer::drawBitmapCropToFill(const Bitmap& bitmap, const int x, const 
   const int cropLeft = (scaledWidth - targetWidth) / 2;
   const int cropTop = (scaledHeight - targetHeight) / 2;
 
+  // On a 16-level canvas the cover can keep its continuous tones: drawBitmap-
+  // Grayscale16() reads Gray8 rows and writes 4-bit levels. 1-bit sources keep
+  // the run-based path below.
+  if (grayscale16Buffer != nullptr && !bitmap.is1Bit()) {
+    const float cropFX = scaledWidth > 0 ? (2.0f * cropLeft / scaledWidth) : 0.0f;
+    const float cropFY = scaledHeight > 0 ? (2.0f * cropTop / scaledHeight) : 0.0f;
+    return drawBitmapGrayscale16(bitmap, x, y, targetWidth, targetHeight, cropFX, cropFY);
+  }
+
   // Same bounded two-row working set as drawBitmap(); a scaled image buffer would exceed the RAM budget.
   const int outputRowSize = (sourceWidth + 3) / 4;
   const size_t scratchSize = static_cast<size_t>(outputRowSize) + bitmap.getRowBytes();
@@ -1788,11 +1917,99 @@ bool GfxRenderer::beginGrayscale16() {
   return true;
 }
 
-bool GfxRenderer::commitGrayscale16() const {
+bool GfxRenderer::beginGrayscale16FromFrameBuffer() {
+  if (grayscale16Buffer || _stripActive || !frameBuffer || getGrayscaleLevels() != 16) return false;
+  grayscale16Buffer = beginNativeGrayFrom1bpp(display, frameBuffer);
   if (!grayscale16Buffer) return false;
-  const bool committed = commitNativeGray(display);
+  setRenderMode(BW);
+  return true;
+}
+
+bool GfxRenderer::commitGrayscale16Area(int x, int y, int width, int height, const bool clean) const {
+  if (!grayscale16Buffer || width <= 0 || height <= 0) return false;
+
+  const int lx0 = std::max(0, x);
+  const int ly0 = std::max(0, y);
+  const int lx1 = std::min(getScreenWidth(), x + width);
+  const int ly1 = std::min(getScreenHeight(), y + height);
+  if (lx0 >= lx1 || ly0 >= ly1) return false;
+
+  int paX, paY, pbX, pbY;
+  rotateCoordinates(orientation, lx0, ly0, &paX, &paY, panelWidth, panelHeight);
+  rotateCoordinates(orientation, lx1 - 1, ly1 - 1, &pbX, &pbY, panelWidth, panelHeight);
+  const int phyX0 = std::max(0, std::min(paX, pbX));
+  const int phyY0 = std::max(0, std::min(paY, pbY));
+  const int phyX1 = std::min(panelWidth - 1, std::max(paX, pbX));
+  const int phyY1 = std::min(panelHeight - 1, std::max(paY, pbY));
+  if (phyX0 > phyX1 || phyY0 > phyY1) return false;
+
+  const bool committed =
+      commitNativeGrayArea(display, frameBuffer, static_cast<uint16_t>(phyX0), static_cast<uint16_t>(phyY0),
+                           static_cast<uint16_t>(phyX1 - phyX0 + 1), static_cast<uint16_t>(phyY1 - phyY0 + 1),
+                           clean);
   if (!committed) cancelNativeGray(display);
   grayscale16Buffer = nullptr;
+  if (committed) uiFastRefreshCount = 0;
+  return committed;
+}
+
+bool GfxRenderer::commitGrayscale16Areas(const GrayAreaRect* areas, const int count, const bool clean) const {
+  if (!grayscale16Buffer || areas == nullptr || count <= 0) return false;
+  constexpr int kMaxAreas = 12;
+  if (count > kMaxAreas) return false;
+
+  freeink::GrayArea physical[kMaxAreas];
+  int physicalCount = 0;
+  for (int i = 0; i < count; ++i) {
+    const GrayAreaRect& area = areas[i];
+    if (area.width <= 0 || area.height <= 0) continue;
+    const int lx0 = std::max(0, area.x);
+    const int ly0 = std::max(0, area.y);
+    const int lx1 = std::min(getScreenWidth(), area.x + area.width);
+    const int ly1 = std::min(getScreenHeight(), area.y + area.height);
+    if (lx0 >= lx1 || ly0 >= ly1) continue;
+
+    int paX, paY, pbX, pbY;
+    rotateCoordinates(orientation, lx0, ly0, &paX, &paY, panelWidth, panelHeight);
+    rotateCoordinates(orientation, lx1 - 1, ly1 - 1, &pbX, &pbY, panelWidth, panelHeight);
+    const int phyX0 = std::max(0, std::min(paX, pbX));
+    const int phyY0 = std::max(0, std::min(paY, pbY));
+    const int phyX1 = std::min(panelWidth - 1, std::max(paX, pbX));
+    const int phyY1 = std::min(panelHeight - 1, std::max(paY, pbY));
+    if (phyX0 > phyX1 || phyY0 > phyY1) continue;
+    physical[physicalCount++] = {static_cast<uint16_t>(phyX0), static_cast<uint16_t>(phyY0),
+                                 static_cast<uint16_t>(phyX1 - phyX0 + 1),
+                                 static_cast<uint16_t>(phyY1 - phyY0 + 1)};
+  }
+  if (physicalCount == 0) return false;
+
+  const bool committed = commitNativeGrayAreas(display, physical, physicalCount, clean);
+  if (!committed) cancelNativeGray(display);
+  grayscale16Buffer = nullptr;
+  if (committed) uiFastRefreshCount = 0;
+  return committed;
+}
+
+void GfxRenderer::requestFullRefreshNext() const {
+  nextRefreshOverridePending = true;
+  nextRefreshOverride = HalDisplay::FULL_REFRESH;
+  uiFastRefreshCount = 0;
+}
+
+bool GfxRenderer::commitGrayscale16(bool clean) const {
+  if (!grayscale16Buffer) return false;
+  const bool committed = commitNativeGray(display, clean);
+  if (!committed) cancelNativeGray(display);
+  grayscale16Buffer = nullptr;
+  if (committed) {
+    // A 16-level frame leaves midtones on the glass. The next 1-bit page's
+    // FAST/DU waveform cannot erase them, so a card, cover or anti-aliased
+    // glyph turns into a ghost as soon as the user leaves the page. Promote the
+    // next B/W presentation to a FULL GC16 sweep; the one-shot override is
+    // consumed by displayBuffer()/displayBufferAsync().
+    nextRefreshOverridePending = true;
+    nextRefreshOverride = HalDisplay::FULL_REFRESH;
+  }
   return committed;
 }
 
@@ -1819,6 +2036,9 @@ void GfxRenderer::drawGrayscale16Pixel(const int x, const int y, const uint8_t g
 
 bool GfxRenderer::drawBitmapGrayscale16(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
                                         const int maxHeight, const float cropX, const float cropY) const {
+  // Match drawBitmap(): never drive the long per-row source read while the font cache is
+  // mid-scan, so a cover draw cannot interleave with (or starve) a prewarm pass.
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return false;
   if (!grayscale16Buffer || !std::isfinite(cropX) || !std::isfinite(cropY) || cropX < 0 || cropX >= 1 || cropY < 0 ||
       cropY >= 1 || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0)
     return false;
@@ -2188,6 +2408,34 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
     effectiveRefreshMode = nextRefreshOverride;
     nextRefreshOverridePending = false;
   }
+#if FREEINK_DEVICE_READPICO
+  // This panel latches its source/gate driver state on the DU profile. FAST is
+  // therefore never a safe presentation mode here, for UI or reader pages.
+  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+    effectiveRefreshMode = HalDisplay::HALF_REFRESH;
+  }
+#endif
+  if (context == DisplayRefreshContext::Normal) {
+    // System UI pages must not use DU. The fast profile leaves a low-contrast
+    // horizontal smear that no later GC16 reliably removes, which is exactly
+    // the failure the reference reader documents for its 8-phase system-page
+    // DU experiment. Promote every UI FAST push to GL16 (the driver maps Half
+    // to the text-turn table) and run a true GC16 sweep periodically.
+    if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+      effectiveRefreshMode = HalDisplay::HALF_REFRESH;
+    }
+    if (effectiveRefreshMode == HalDisplay::HALF_REFRESH) {
+      if (uiFastRefreshCount < uiFullRefreshInterval) ++uiFastRefreshCount;
+      if (uiFastRefreshCount >= uiFullRefreshInterval) {
+        effectiveRefreshMode = HalDisplay::FULL_REFRESH;
+        uiFastRefreshCount = 0;
+      }
+    } else if (effectiveRefreshMode == HalDisplay::FULL_REFRESH) {
+      uiFastRefreshCount = 0;
+    }
+    LOG_DBG("GFX", "UI push mode=%u fastCount=%u", static_cast<unsigned>(effectiveRefreshMode),
+            static_cast<unsigned>(uiFastRefreshCount));
+  }
 #ifdef SIMULATOR
   (void)context;
   display.displayBuffer(effectiveRefreshMode, fadingFix);
@@ -2201,6 +2449,27 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, 
   if (nextRefreshOverridePending) {
     effectiveRefreshMode = nextRefreshOverride;
     nextRefreshOverridePending = false;
+  }
+#if FREEINK_DEVICE_READPICO
+  // This panel latches its source/gate driver state on the DU profile. FAST is
+  // therefore never a safe presentation mode here, for UI or reader pages.
+  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+    effectiveRefreshMode = HalDisplay::HALF_REFRESH;
+  }
+#endif
+  if (context == DisplayRefreshContext::Normal) {
+    if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+      effectiveRefreshMode = HalDisplay::HALF_REFRESH;
+    }
+    if (effectiveRefreshMode == HalDisplay::HALF_REFRESH) {
+      if (uiFastRefreshCount < uiFullRefreshInterval) ++uiFastRefreshCount;
+      if (uiFastRefreshCount >= uiFullRefreshInterval) {
+        effectiveRefreshMode = HalDisplay::FULL_REFRESH;
+        uiFastRefreshCount = 0;
+      }
+    } else if (effectiveRefreshMode == HalDisplay::FULL_REFRESH) {
+      uiFastRefreshCount = 0;
+    }
   }
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
@@ -2834,6 +3103,36 @@ bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDispla
 
 void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }
 
+void GfxRenderer::displayWindow(int x, int y, int w, int h, DisplayRefreshContext context) const {
+  if (w <= 0 || h <= 0) return;
+#if FREEINK_DEVICE_READPICO
+  // Partial-area scans latch this panel's source/gate driver state. Push the
+  // whole page through the normal differential GL16 path instead; the clock
+  // tick and popups still update, but no windowed scan ever reaches the glass.
+  // The caller's context is preserved so an excluded cadence (the reader's
+  // ContinuousReading clock) does not feed the periodic UI GC16 sweep.
+  (void)x;
+  (void)y;
+  (void)w;
+  (void)h;
+  displayBuffer(HalDisplay::HALF_REFRESH, context);
+  return;
+#endif
+  // x/y/w/h are PHYSICAL panel-memory coordinates (framebuffer row bytes), not
+  // logical screen coordinates: callers that scan the raw framebuffer (the
+  // reader's clock bbox) already hold physical coords, and the display layer
+  // wants them too. Callers starting from a logical rect rotate in first.
+  int x0 = x < 0 ? 0 : x;
+  int y0 = y < 0 ? 0 : y;
+  int x1 = x + w - 1;
+  int y1 = y + h - 1;
+  if (x1 >= panelWidth) x1 = panelWidth - 1;
+  if (y1 >= panelHeight) y1 = panelHeight - 1;
+  if (x1 < x0 || y1 < y0) return;
+  display.displayWindow(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0), static_cast<uint16_t>(x1 - x0 + 1),
+                        static_cast<uint16_t>(y1 - y0 + 1));
+}
+
 void GfxRenderer::preconditionGrayscale(int x, int y, int w, int h) const {
   if (w <= 0 || h <= 0) return;
   // Rotate the logical rect's opposite corners to physical panel coords; the
@@ -2907,6 +3206,14 @@ bool GfxRenderer::canUseTextTransition() const {
 
 void GfxRenderer::cancelGrayscale() const { ::cancelGrayscale(display); }
 
+void GfxRenderer::setPageTurnDirection(int direction) const {
+#ifdef SIMULATOR
+  (void)direction;
+#else
+  display.setPageTurnDirection(direction);
+#endif
+}
+
 void GfxRenderer::freeBwBufferChunks() {
   for (auto& bwBufferChunk : bwBufferChunks) {
     if (bwBufferChunk) {
@@ -2923,15 +3230,29 @@ void GfxRenderer::freeBwBufferChunks() {
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
 bool GfxRenderer::storeBwBuffer() {
+  // A nested snapshot must never free the page snapshot an outer overlay still
+  // owns: restoring the freed/overwritten frame later is what produced mixed
+  // pages and a differential baseline that no refresh could repair. Keep the
+  // first snapshot; every legitimate save/restore pair frees it before the
+  // next store.
+  bool allStored = !bwBufferChunks.empty();
+  for (const uint8_t* chunk : bwBufferChunks) {
+    if (chunk == nullptr) {
+      allStored = false;
+      break;
+    }
+  }
+  if (allStored) {
+    // A nested save/restore is legitimate (the page snapshot is still owned by
+    // the outer overlay). Reuse it silently; the previous ERR here read like a
+    // failure on every boot that resumed a reader page.
+    LOG_DBG("GFX", "BW buffer already stored; reusing the existing snapshot");
+    return true;
+  }
+  freeBwBufferChunks();
+
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
-    }
-
     const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));

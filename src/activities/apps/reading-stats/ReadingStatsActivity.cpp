@@ -483,7 +483,8 @@ void ReadingStatsActivity::render(RenderLock&&) {
       std::string title;
       std::string author;
       std::string coverPath;
-      if (FsHelpers::hasEpubExtension(bookPath)) {
+      if (FsHelpers::hasEpubExtension(bookPath) || FsHelpers::hasFb2Extension(bookPath) ||
+          FsHelpers::hasCbzExtension(bookPath)) {
         GfxRenderer::FrameBufferLoan loan(renderer);
         coverPath = BookCoverLoader::ensureFullCover(bookPath, &title, &author);
       } else {

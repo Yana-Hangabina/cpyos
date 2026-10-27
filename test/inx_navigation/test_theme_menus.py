@@ -2,7 +2,9 @@
 """Sync review check: production menus/tabs with fixed host metrics, not full pages.
 
 Requires the reviewed Reader 38280863 and pre-sync 593c8dbc Git objects fetched by
-the sync workflow; CI fetches full history for these fixed references.
+the sync workflow; CI fetches full history for these fixed references. Locally
+they can be pulled one by one with `git fetch origin <full-sha>` (the fetched
+objects persist in the clone, so one pull makes the test runnable from then on).
 FREEINK_SDK_ROOT selects the reviewed candidate; defaults to the pinned SDK.
 """
 import os
@@ -71,7 +73,7 @@ def menus(directory):
 #define FREEINK_CAP_BLE_HID_HOST 1
 #define FREEINK_DEVICE_MURPHY_M4 0
 #define FREEINK_DEVICE_X4CLASSIC classic
-bool inx=false, touch=false, pro=false, classic=false, dictionary=false, rtc=false;
+bool inx=false, cpy=false, touch=false, pro=false, classic=false, dictionary=false, rtc=false;
 '''
     for enum, values in [('StrId', ids), ('SettingAction', actions)]:
         code += f'enum class {enum} {{' + ','.join(values) + '};\n'
@@ -97,6 +99,9 @@ struct SettingInfo {
 struct DictionaryEntry {};
 namespace DictionaryRegistry { void discover(std::vector<DictionaryEntry>& entries) {if(dictionary) entries.emplace_back();} }
 struct Fonts { void refreshIfDirty() {} int registry() {return 0;} };
+// Both shipped themes are modern (hasMainTabs/predicates in UITheme); the
+// rebuildSettingsLists body consults the theme for the CPY-only guard.
+struct UITheme { static UITheme& getInstance(){static UITheme t;return t;} bool usesCpyLayout(){return cpy;} };
 bool upstream=false;
 std::vector<SettingInfo> getSettingsList(int*, std::vector<DictionaryEntry>*) {
  std::vector<SettingInfo> result;
@@ -114,7 +119,7 @@ struct SettingsActivity {
  std::vector<SettingInfo>*currentSettings=nullptr;
  int selectedCategoryIndex=0, settingsCount=0; bool dictionariesLoaded=true;
  struct { int value=0; void refreshIfDirty(){} int& registry(){return value;} } sdFontSystem;
- bool usesAccordion() {return inx;}
+ bool usesAccordion() {return inx||cpy;}
  void rebuildRowItems(){}
  void rebuildSettingsLists();
  void reference();
@@ -128,7 +133,8 @@ int main() {
   rtc=flags&32;
   SETTINGS.shortPwrBtn=(flags&8)?CrossPointSettings::FOOTNOTES:0;
   for (int theme=0; theme<8; ++theme) {
-   inx=theme==5; upstream=theme==7; SettingsActivity s;
+   // CPY is the only theme: every theme slot compiles the live CPY state.
+   inx=false; cpy=true; upstream=theme==7; SettingsActivity s;
    const auto before=SETTINGS;
    if (upstream) s.reference(); else s.rebuildSettingsLists();
    assert(SETTINGS==before);
@@ -165,16 +171,31 @@ int main() {
             reference = parsed[flags, 7, category]
             common = set(baseline) & set(reference)
             assert [x for x in baseline if x in common] == [x for x in reference if x in common], (flags, category, [x for x in baseline if x in common], [x for x in reference if x in common])
-            for theme in (1,2,3,4,6):
-                assert parsed[flags,theme,category] == baseline, (flags,theme,category)
-            inx_rows = parsed[flags,5,category]
-            assert set(baseline) <= set(inx_rows), (flags,category,'shared setting hidden in INX')
+            # CPY is the only theme and the settings model no longer branches
+            # on it: every theme slot must produce the same rows.
+            for theme in (1,2,3,4,5,6):
+                assert parsed[flags,theme,category] == baseline, (flags,theme,category, set(parsed[flags,theme,category])^set(baseline))
+            # The dead home-layout picker is the one row the tab path hides.
             for row in baseline:
-                assert not row.startswith(('STR_INX_RECENT_LAYOUT ', 'STR_INX_LIBRARY_LAYOUT ', 'STR_INX_APPS_LAYOUT '))
-            # Added entries retain their category, relative order and action binding in INX too.
-            extras = set(baseline) - set(reference)
-            assert [x for x in baseline if x in extras] == [x for x in inx_rows if x in extras]
-    print('Settings: 64 device/condition combinations × 7 themes; one Date & Time entry with or without RTC; shared entries/actions and retained upstream order pass')
+                assert not row.startswith('STR_INX_RECENT_LAYOUT '), (flags,category,'dead home-layout picker is back')
+            # Additions over the frozen upstream: the shelf/apps/tab-position
+            # pickers stay live, plus the CPY density picker. (UI_THEME exists
+            # only upstream -- it was the retired picker, so it is a removal,
+            # which the common-prefix comparison above already excludes.)
+            additions = set(baseline) - set(reference)
+            if category == 0:
+                # The project's own additions over the frozen upstream must be
+                # exactly these four; the two board-availability rows
+                # (button hints / standby shortcut) can differ by stub state.
+                assert {'STR_INX_LIBRARY_LAYOUT None', 'STR_INX_APPS_LAYOUT None',
+                        'STR_INX_TAB_POSITION None', 'STR_UI_DENSITY None'} <= additions, (flags, additions)
+                assert additions <= {'STR_INX_LIBRARY_LAYOUT None', 'STR_INX_APPS_LAYOUT None',
+                                     'STR_INX_TAB_POSITION None', 'STR_UI_DENSITY None',
+                                     'STR_SHOW_BUTTON_HINTS None', 'STR_STANDBY_TITLE None'}, (flags, additions)
+            # Other categories' additions over upstream are project history
+            # (reader rows, actions) -- the common-prefix comparison above is
+            # the sync guard; only the display pickers are this suite's charge.
+    print('Settings: 64 device/condition combinations x one CPY menu set (REGRESSIVE home-layout picker hidden; shelf/apps/tab-position/density additions; upstream order retained); one Date & Time entry with or without RTC pass')
 
 
 def actions(directory):
@@ -208,7 +229,7 @@ struct { bool light=false; bool present(){return light;} } Frontlight;
     code += '''struct MenuItem {MenuAction action; StrId labelId; bool operator==(const MenuItem&) const = default;};
 struct EpubReaderMenuActivity {
  static constexpr int MAX_MENU_ITEMS=32;
- void buildMenuItems(std::vector<MenuItem>&,bool,bool);
+ void buildMenuItems(std::vector<MenuItem>&,bool,bool,bool,bool);
  void reference(std::vector<MenuItem>&,bool,bool);
  void historical(std::vector<MenuItem>&,bool,bool);
 };
@@ -255,14 +276,14 @@ struct FileBrowserActivity {
     code += '\n'.join(methods)
     code += '''
 int main(){
- for(int flags=0;flags<8;++flags) for(bool isInx:{false,true}) {
+ for(int flags=0;flags<8;++flags) for(bool isInx:{false}) {
   inx=isInx; Frontlight.light=flags&1; EpubReaderMenuActivity a;
   std::vector<MenuItem> actual,expected;
-  a.buildMenuItems(actual,flags&2,flags&4);
+  a.buildMenuItems(actual,flags&2,flags&4,false,false);
   a.reference(expected,flags&2,flags&4);
   assert(actual==expected);
  }
- for(bool isInx:{false,true}) {
+ for(bool isInx:{false}) {
   inx=isInx;
   for(const char* entry:{"book.epub","folder/"}) {
    FileBrowserActivity a; a.files={entry};a.onRowLongPress(0);assert(a.editPopup.count==1);
@@ -305,11 +326,17 @@ struct UITheme {
  const Metrics& getMetrics(){return metrics;}
  bool hasMainTabs(){return @INX@;}
  bool usesClassicTabs(){return false;}
+ bool usesCpyLayout(){return !@INX@;}
 };
 struct UiTabListActivity {
  int selected=0, ring=0; int16_t tabPillMaxPad=0;
  static constexpr int ACTION_TAB=3, TOUCH_TAB_BAR_HEIGHT=60;
  struct {bool touch=false; bool hasTouch(){return touch;}} mappedInput;
+ // The capsule path stays off here (production gates it on the CPY theme and
+ // on subclasses opting in); the traces below pin the shared non-capsule tab
+ // geometry either way.
+ bool cpyCapsuleTabs() const { return false; }
+ bool cpyHideTabStrip() const { return false; }
  fui::TabIndicator tabIndicator(int){return fui::TabIndicator::None;}
  int tabCount(){return 4;} int activeTab(){return selected;} int ringPos(){return ring;}
  const char* tabLabel(int i){static const char* labels[]={"Display","Reader","Controls","System"};return labels[i];}
@@ -372,7 +399,7 @@ def main():
         actions(temp)
         touch_long_press(temp)
         compare(tabs(temp,None,False), tabs(temp,REF,False), 'Non-INX shared tab component vs fixed upstream')
-        compare(tabs(temp,None,True), tabs(temp,'9d02f498',True), 'INX tabs vs unchanged pre-sync source')
+        compare(tabs(temp,None,True), tabs(temp,'9d02f498',True), 'Main-tab chrome vs unchanged pre-sync source')
 
 
 if __name__ == '__main__':

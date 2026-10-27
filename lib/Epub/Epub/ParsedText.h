@@ -67,12 +67,18 @@ class ParsedText {
   BlockStyle blockStyle;
   uint8_t extraParagraphSpacing;  // 0=off, 1..5=0.5x/0.75x/1x/1.25x/1.5x line height
   uint8_t firstLineIndent;
+  int8_t firstLineIndentPx;  // fine adjustment (-12..+12 px) added to the resolved indent
+  // True when the reader's indent mode overrides the book (Indent/NoIndent), in
+  // which case a hand-typed paragraph indent (U+3000 pairs are the norm in
+  // Chinese web novels) is stripped so the reader's setting is the only one.
+  bool stripLeadingIndent;
   bool collectTouchLinks;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphIndentSpaces;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool firstLinePending;
+  bool paragraphStartPending = true;  // strips the leading hand-typed indent once
   bool isNaturalAlign;
   bool hasRtlWord;
   bool droppedWords = false;
@@ -114,10 +120,12 @@ class ParsedText {
   explicit ParsedText(const uint8_t extraParagraphSpacing, const uint8_t firstLineIndent,
                       const bool hyphenationEnabled = false, const bool focusReadingEnabled = false,
                       const BlockStyle& blockStyle = BlockStyle(), const bool collectTouchLinks = false,
-                      const uint8_t paragraphIndentSpaces = 3)
+                      const uint8_t paragraphIndentSpaces = 3, const int8_t firstLineIndentPx = 0)
       : blockStyle(blockStyle),
         extraParagraphSpacing(extraParagraphSpacing),
         firstLineIndent(firstLineIndent),
+        firstLineIndentPx(firstLineIndentPx),
+        stripLeadingIndent(firstLineIndent != FirstLineIndent::Auto),
         paragraphIndentSpaces(paragraphIndentSpaces),
         collectTouchLinks(collectTouchLinks),
         hyphenationEnabled(hyphenationEnabled),

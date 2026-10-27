@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
+#include <DeviceSecret.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -31,6 +32,7 @@
 
 #include "AchievementsStore.h"
 #include "BleInput.h"
+#include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
@@ -39,11 +41,33 @@
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UiCjkFallbacks.h"
+#include "Epub/hyphenation/HyphenationEmbedding.h"
+#if !defined(CROSSPOINT_EMBED_HYPHENATION)
+#include "Epub/hyphenation/HyphenationStore.h"
+#endif
+#if defined(CROSSPOINT_EXTERNAL_FONTS)
+#include "ExternalFontPackStorage.h"
+#endif
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/home/FindBooksActivity.h"
+#include "activities/reader/EpubReaderActivity.h"
+#include "activities/home/MyActivity.h"
+#include "activities/library/LibraryListActivity.h"
+#ifdef BOARD_HAS_PSRAM
+#include "activities/apps/jjwxc/JjwxcActivity.h"
+#endif
+#include "activities/home/ReaderRecoveryActivity.h"
+#if defined(CROSSPOINT_MUPDF)
+#include "activities/reader/PdfReaderActivity.h"
+#endif
+#include "activities/network/WifiSelectionActivity.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/settings/FontDownloadActivity.h"
+#include "activities/settings/SettingsActivity.h"
+#include "activities/settings/SettingsSearchActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #endif
@@ -71,6 +95,9 @@ SET_LOOP_TASK_STACK_SIZE(24 * 1024)
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
 #include <SoundFeedback.h>
 #endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+#include "BuzzerFeedback.h"
+#endif
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -85,6 +112,11 @@ static unsigned long lastX4ProPowerClickAt = 0;
 namespace {
 constexpr unsigned long X4PRO_POWER_DOUBLE_CLICK_MS = 500;
 constexpr unsigned long X4PRO_POWER_CLICK_MAX_HOLD_MS = 300;
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+static_assert(static_cast<uint8_t>(BuzzerFeedback::Pitch::Deep) == CrossPointSettings::BUZZER_PITCH_DEEP);
+static_assert(static_cast<uint8_t>(BuzzerFeedback::Pitch::Soft) == CrossPointSettings::BUZZER_PITCH_SOFT);
+static_assert(static_cast<uint8_t>(BuzzerFeedback::Pitch::Crisp) == CrossPointSettings::BUZZER_PITCH_CRISP);
+#endif
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
 static_assert(CrossPointSettings::SOUND_FEEDBACK_OFF == static_cast<uint8_t>(SoundFeedback::Level::Off));
 static_assert(CrossPointSettings::SOUND_FEEDBACK_LOW == static_cast<uint8_t>(SoundFeedback::Level::Low));
@@ -139,9 +171,59 @@ static bool wakePowerReleasePending = false;
 #include <builtinFonts/notosans_12_regular.h>
 #include <builtinFonts/notosans_cjk_14.h>
 #include <builtinFonts/notosans_cjk_16.h>
+#if !defined(CROSSPOINT_EXTERNAL_FONTS)
+#include <builtinFonts/notoserif_title_23.h>
 #endif
-EpdFont offlineReaderFont(&notosans_cjk_12);
+#endif
+
+#if defined(CROSSPOINT_EXTERNAL_FONTS)
+// Read Pico: the 12pt GB2312 face and the title serif are loaded from
+// /.crosspoint/font_pack.dat into PSRAM by setupDisplayAndFonts().  Keeping the
+// static EpdFontData here (not the pack buffer) means EpdFont's pointer stays
+// valid once the loader fills it.
+static EpdFontData externalCjk12Data;
+static const EpdFontData& cjk12Face() { return externalCjk12Data; }
+#else
+static const EpdFontData& cjk12Face() { return notosans_cjk_12; }
+#endif
+EpdFont offlineReaderFont(&cjk12Face());
 EpdFontFamily offlineReaderFontFamily(&offlineReaderFont);
+
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+// Embedded Song serif for page titles (~48px em): Noto Serif SC (OFL) subset
+// over lib/EpdFont/scripts/cn_title_chars.txt, rebuilt by
+// build-title-serif-font.sh. ReadPico only — the size does not fit C3.
+#if defined(CROSSPOINT_EXTERNAL_FONTS)
+static EpdFontData externalTitleData;
+static const EpdFontData& titleFace() { return externalTitleData; }
+#else
+static const EpdFontData& titleFace() { return notoserif_title; }
+#endif
+EpdFont titleSerifFont(&titleFace());
+EpdFontFamily titleSerifFamily(&titleSerifFont);
+#endif
+
+void useBuiltinFontFallback() {
+#if defined(CROSSPOINT_EXTERNAL_FONTS) && defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+  externalCjk12Data = notosans_cjk_14;
+  externalTitleData = notosans_cjk_14;
+#endif
+}
+
+void refreshExternalFontFaces() {
+#if defined(CROSSPOINT_EXTERNAL_FONTS)
+  EpdFontData extCjk12;
+  EpdFontData extTitle;
+  if (loadExternalFontPack(extCjk12, extTitle)) {
+    externalCjk12Data = extCjk12;
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+    externalTitleData = extTitle;
+#endif
+  } else {
+    useBuiltinFontFallback();
+  }
+#endif
+}
 
 // Large UI text keeps the upstream face; INX restores its historical fallback
 // through the theme reload hook; Ubuntu UI families are shared by all themes.
@@ -169,6 +251,12 @@ extern EpdFont ui12BoldFont;
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+// Size-matched CJK faces for the UI, with the wide 12pt face behind them.
+// The 14pt/16pt subsets carry only the i18n vocabulary (803 glyphs), so UI
+// copy keeps the size the theme was designed around; a string containing a
+// character outside that vocabulary falls through to the GB2312 12pt face
+// (6,879 glyphs) instead of drawing tofu. applyUiCjkFallbacks() wires the
+// chain, and SETTINGS.uiDensity picks this chain or the all-12pt compact one.
 EpdFontFamily cjk8FontFamily(&offlineReaderFont);
 EpdFont cjk14Font(&notosans_cjk_14);
 EpdFont cjk16Font(&notosans_cjk_16);
@@ -185,7 +273,7 @@ EpdFont cjk10Font(&notosans_cjk_10);
 EpdFontFamily cjk8FontFamily(&cjk8Font);
 EpdFontFamily cjk10FontFamily(&cjk10Font);
 #endif
-EpdFont cjk12Font(&notosans_cjk_12);
+EpdFont cjk12Font(&cjk12Face());
 EpdFontFamily cjk12FontFamily(&cjk12Font);
 
 // Chinese chess piece glyphs (subset CJK font, 14 characters at 16pt).
@@ -505,6 +593,9 @@ void enterDeepSleep(bool fromTimeout = false) {
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
   SoundFeedback::shutdown();
 #endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+  BuzzerFeedback::shutdown();
+#endif
   display.deepSleep();
 #if !FREEINK_DEVICE_EEGO_A4
   Storage.prepareForDeepSleep();
@@ -515,6 +606,18 @@ void enterDeepSleep(bool fromTimeout = false) {
 }
 
 bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false) {
+#if defined(CROSSPOINT_EXTERNAL_FONTS)
+  {
+    EpdFontData extCjk12;
+    EpdFontData extTitle;
+    if (loadExternalFontPack(extCjk12, extTitle)) {
+      externalCjk12Data = extCjk12;
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+      externalTitleData = extTitle;
+#endif
+    }
+  }
+#endif
 #if FREEINK_DEVICE_X4PRO
   // X4 Pro batches use SSD1677 or UC81xx. Resolve the controller before
   // display.begin(); C3 X3/X4 already do this once in HalGPIO::begin().
@@ -584,20 +687,19 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
 #endif
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   renderer.insertFont(UiHighDpiProfile::reader12FontId, offlineReaderFontFamily);
-  // Same-size Chinese UI first, then common Chinese and Ubuntu script coverage.
   renderer.insertFont(CJK_UI_14_FONT_ID, ui14FallbackFamily);
   renderer.insertFont(CJK_UI_16_FONT_ID, ui16FallbackFamily);
-  renderer.setFallbackFont(READER_STATUS_FONT_ID, CJK_UI_12_FONT_ID);
-  renderer.setFallbackFont(READER_ESTIMATE_FONT_ID, CJK_UI_14_FONT_ID);
-  renderer.setFallbackFont(SMALL_FONT_ID, CJK_UI_12_FONT_ID);
-  renderer.setFallbackFont(UI_10_FONT_ID, CJK_UI_14_FONT_ID);
-  renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_16_FONT_ID);
-  renderer.setFallbackFont(NOTOSANS_18_FONT_ID, CJK_UI_16_FONT_ID);
-  renderer.setFallbackFont(CONTROL_18_FONT_ID, CJK_UI_16_FONT_ID);
+  // The CJK size policy lives in one place: comfortable = size-matched 14/16pt
+  // for UI copy with the wide 12pt face behind, compact = all 12pt. Driven by
+  // SETTINGS.uiDensity, so there is no second "Chinese size" setting.
+  applyUiCjkFallbacks(renderer, SETTINGS.uiDensity != 0);
   renderer.insertFont(kRtlFontId, rtlFontFamily);
-  renderer.setFallbackFont(CJK_UI_14_FONT_ID, CJK_UI_12_FONT_ID);
-  renderer.setFallbackFont(CJK_UI_16_FONT_ID, CJK_UI_12_FONT_ID);
   renderer.setFallbackFont(CJK_UI_12_FONT_ID, kRtlFontId);
+  // Title serif: registered here so the whole-run fallback resolves too — a
+  // title outside the subset's coverage (non-CJK scripts) renders in the
+  // standard UI title face rather than dropping glyphs.
+  renderer.insertFont(NOTOSERIF_TITLE_FONT_ID, titleSerifFamily);
+  renderer.setFallbackFont(NOTOSERIF_TITLE_FONT_ID, UI_12_FONT_ID);
 #endif
   renderer.insertFont(CHINESE_CHESS_FONT_ID, chineseChessPieceFontFamily);
 
@@ -678,6 +780,8 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 #endif
 
 void setup() {
+  // Stage timing starts before the board bring-up it is meant to measure.
+  boottimings::begin();
   BoardConfig::holdPowerRails();
 
   // --- Read Pico boot order (read-pico.md 1.4) ------------------------------
@@ -722,6 +826,22 @@ void setup() {
 #endif
 
   HalSystem::begin();
+#if !defined(CROSSPOINT_EMBED_HYPHENATION)
+  // The hyphenation loader reads the data partition.  Warm every trie here, on
+  // the main task, before the PSRAM-stack render task exists; otherwise loading
+  // a TXT/PDF section trips esp_task_stack_is_sane_cache_disabled().
+  hyphenation::HyphenationStore::shared().preloadAll();
+#endif
+#if !defined(SIMULATOR)
+  {
+    // NVS is internal flash; a PSRAM-stack task cannot read it (IDF asserts).
+    // Warm the cached secret here, on the main task, before the library /
+    // thumbnail scan can reach BookKey -> deviceSecret from the render task.
+    // The first protected EPUB open otherwise reboot-loops at boot.
+    uint8_t warmSecret[32];
+    if (!deviceSecret(warmSecret)) LOG_ERR("DSEC", "device secret preload failed");
+  }
+#endif
   const bool otaPendingAtBoot = HalOtaSlot::runningImageState() == HalOtaSlot::RunningImageState::PendingVerify;
 
   // Read-and-clear so a panic later in setup() doesn't loop into silent reboot.
@@ -778,6 +898,7 @@ void setup() {
   // BoardReadPico::begin() already installed.
   halTiltSensor.begin();
   halClock.begin();
+  boottimings::mark(boottimings::Stage::Board);
 
   LOG_INF("MAIN", "Hardware detect: %s", BoardConfig::ACTIVE.name);
 
@@ -806,10 +927,16 @@ void setup() {
   // (read-pico.md B11), so a card that the expander misreads still mounts, and an
   // unreadable card lands here — the error screen below is the controlled path,
   // nothing aborts.
-  if (!Storage.begin()) {
+  const bool storageReady = Storage.begin();
+  boottimings::mark(boottimings::Stage::SdCard);
+  if (!storageReady) {
     LOG_ERR("MAIN", "SD card initialization failed");
+    // The SD write will fail, but checkPanic() also prints the report to the
+    // serial console; returning here without it lost the panic from the log.
+    HalSystem::checkPanic();
     const bool fontsReady = setupDisplayAndFonts(isSilentReboot);
-    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
+    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD,
+                                         "Card missing or unreadable. Reinsert it, then retry.", true);
     activityManager.requestUpdateAndWait();
     if (otaPendingAtBoot && fontsReady) {
       if (HalOtaSlot::confirmRunningImage()) {
@@ -844,6 +971,9 @@ void setup() {
   READING_STATS.loadFromFile();
   ACHIEVEMENTS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
+  // PSRAM targets rebuild the per-language offset tables here, before any UI
+  // calls tr(). No-op on targets that keep the tables in flash.
+  I18N.init();
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
@@ -852,6 +982,7 @@ void setup() {
   // Restore the monotonic clock floor before anything reads time() (event
   // timestamps, loan-expiry checks).
   trustedtime::init();
+  boottimings::mark(boottimings::Stage::Stores);
 
   // Brightness and warmth are always restored. A normal wake starts with the
   // light off unless Restore Light on Wake is enabled; silent maintenance
@@ -928,6 +1059,7 @@ void setup() {
 
   const bool fontsReady = setupDisplayAndFonts(resume != BootResume::Splash,
                                                snapshotTarget == SilentRebootTarget::ReaderPreloadChineseFont);
+  boottimings::mark(boottimings::Stage::Panel);
   const bool postOtaBoot = otaPendingAtBoot && fontsReady && activityManager.goToPostOtaBoot(!recoveryFirmwareMode);
 
   if (!postOtaBoot) {
@@ -958,6 +1090,9 @@ void setup() {
         activityManager.goToBoot();
         break;
     }
+    // "First frame requested" is the last thing setup() owes the user; the
+    // render task stamps the physical paint on top of it.
+    boottimings::mark(boottimings::Stage::Splash);
   }
 
   if (recoveryFirmwareMode) {
@@ -995,6 +1130,10 @@ void setup() {
     // through to the sleep-wake "resume reader" logic, which fires on stale
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
+  } else if (APP_STATE.readerActivityLoadCount > 0 && !APP_STATE.openEpubPath.empty()) {
+    // A previous boot died while opening this book (docs/07 D8). Say so and let
+    // the user choose, instead of the silent fall-through to Home below.
+    activityManager.replaceActivityWith<ReaderRecoveryActivity>();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
@@ -1092,6 +1231,27 @@ void loop() {
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
   SoundFeedback::update(SETTINGS.soundFeedbackLevel, gpio.physicalPressedMask());
 #endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+  BuzzerFeedback::update();
+  if (SETTINGS.buzzerFeedbackSource != CrossPointSettings::BUZZER_FEEDBACK_OFF) {
+    const bool screenCue = SETTINGS.buzzerFeedbackSource == CrossPointSettings::BUZZER_FEEDBACK_SCREEN ||
+                           SETTINGS.buzzerFeedbackSource == CrossPointSettings::BUZZER_FEEDBACK_BOTH;
+    const bool keysCue = SETTINGS.buzzerFeedbackSource == CrossPointSettings::BUZZER_FEEDBACK_KEYS ||
+                         SETTINGS.buzzerFeedbackSource == CrossPointSettings::BUZZER_FEEDBACK_BOTH;
+    float nx = 0.0f;
+    float ny = 0.0f;
+    bool cue = screenCue && gpio.wasTouchTap(nx, ny);
+    if (!cue && keysCue) {
+      // Read Pico's three capacitive zones surface as these logical buttons
+      // (HalGPIO.cpp); the touch panel and the zones are mutually exclusive.
+      cue = gpio.wasPressed(HalGPIO::BTN_UP) || gpio.wasPressed(HalGPIO::BTN_BACK) ||
+            gpio.wasPressed(HalGPIO::BTN_DOWN);
+    }
+    if (cue) {
+      BuzzerFeedback::cue(static_cast<BuzzerFeedback::Pitch>(SETTINGS.buzzerPitch), SETTINGS.buzzerStrength);
+    }
+  }
+#endif
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
@@ -1109,16 +1269,18 @@ void loop() {
     return;
   }
 
-  halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
+  halTiltSensor.update(SETTINGS.motionPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
   halClock.update();
 
   renderer.setFadingFix(SETTINGS.fadingFix);
+  renderer.setUiFullRefreshInterval(SETTINGS.getUiRefreshInterval());
 
   // The ROM console does not depend on Arduino USB CDC's connection state.
   if ((Serial || FREEINK_LOG_TRANSPORT == FREEINK_LOG_TRANSPORT_ROM_PRINTF) && millis() - lastMemPrint >= 10000) {
     const auto heap = HalMemory::getInternalHeap();
-    LOG_INF("MEM", "Free: %zu bytes, Total: %zu bytes, Min Free: %zu bytes, MaxAlloc: %zu bytes", heap.freeBytes,
-            heap.totalBytes, heap.minFreeBytes, heap.largestBlockBytes);
+    LOG_INF("MEM", "Free: %zu bytes, Total: %zu bytes, Min Free: %zu bytes, MaxAlloc: %zu bytes, RenderStkMin: %u bytes",
+            heap.freeBytes, heap.totalBytes, heap.minFreeBytes, heap.largestBlockBytes,
+            static_cast<unsigned>(activityManager.renderStackMinFreeBytes()));
 #ifdef BOARD_HAS_PSRAM
     const auto psram = HalMemory::getPsramHeap();
     LOG_INF("MEM", "PSRAM: Free: %zu bytes, Total: %zu bytes, Min Free: %zu bytes, MaxAlloc: %zu bytes",
@@ -1141,7 +1303,175 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+      } else if (cmd == "FIND") {
+        activityManager.pushActivity(std::make_unique<FindBooksActivity>(renderer, mappedInputManager));
+      } else if (cmd == "MY") {
+        activityManager.pushActivity(std::make_unique<MyActivity>(renderer, mappedInputManager));
+      } else if (cmd == "LIBRARY") {
+        activityManager.goToLibrary();
+      } else if (cmd == "HOME") {
+        activityManager.goHome();
+      } else if (cmd == "SEARCH") {
+        activityManager.pushActivity(std::make_unique<LibraryListActivity>(renderer, mappedInputManager));
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenSearch();
+      } else if (cmd == "SETSEARCH") {
+        activityManager.pushActivity(std::make_unique<SettingsSearchActivity>(
+            renderer, mappedInputManager, "\xE5\xAD\x97\xE4\xBD\x93"));
+      } else if (cmd == "SEARCHSAMPLE") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenSearchSample();
+      } else if (cmd == "EMPTY") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugForceEmpty();
+      } else if (cmd == "LIBSNAP") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugRequestSnapshot();
+      } else if (cmd == "LIBSEND") {
+        size_t snapSize = 0;
+        const uint8_t* snap = LibraryListActivity::debugSnapshotData(snapSize);
+        if (snap != nullptr && snapSize > 0) {
+          logSerial.printf("LIBSNAP_START:%u\n", static_cast<unsigned>(snapSize));
+          logSerial.write(snap, snapSize);
+          logSerial.printf("LIBSNAP_END\n");
+          LibraryListActivity::debugClearSnapshot();
+        } else {
+          logSerial.printf("LIBSNAP_EMPTY\n");
+        }
+      } else if (cmd == "HINTRESET") {
+        SETTINGS.readerGestureHintSeen = 0;
+        SETTINGS.saveToFile();
+      } else if (cmd == "HINT") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugDismissHint();
+      } else if (cmd.startsWith("TAB")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugSetTab(space > 0 ? cmd.substring(space + 1).toInt() : 0);
+        }
+      } else if (cmd.startsWith("TEXT")) {
+        activityManager.pushActivity(makeUniqueNoThrow<TextSettingsActivity>(
+            renderer, mappedInputManager, &sdFontSystem.registry(), TextSettingsActivity::Tab::Family));
+      } else if (cmd.startsWith("SETTINGS")) {
+        int category = 0;
+        const int space = cmd.indexOf(' ');
+        if (space > 0) category = cmd.substring(space + 1).toInt();
+        activityManager.pushActivity(
+            std::make_unique<SettingsActivity>(renderer, mappedInputManager, category, /*subpage=*/true));
+      } else if (cmd.startsWith("OPENROW")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugActivateContentsRow(space > 0 ? cmd.substring(space + 1).toInt() : 0);
+        }
+      } else if (cmd.startsWith("FILTER")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugSetContentsFilter(space > 0 ? cmd.substring(space + 1).toInt() : 1);
+        }
+      } else if (cmd.startsWith("PANEL")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
+        }
+      } else if (cmd.startsWith("READ")) {
+        String path = "/BOOKS/test.epub";
+        const int space = cmd.indexOf(' ');
+        if (space > 0) path = cmd.substring(space + 1);
+        activityManager.pushActivity(std::make_unique<EpubReaderActivity>(
+            renderer, mappedInputManager, std::string(path.c_str()), false));
+      } else if (cmd == "STATS") {
+        activityManager.goToReadingStatsMenu();
+      } else if (cmd == "TRANSFER") {
+        activityManager.goToFileTransfer();
+      } else if (cmd == "JJWXC") {
+        activityManager.goToJjwxc();
+      } else if (cmd.startsWith("DETAIL")) {
+#ifdef BOARD_HAS_PSRAM
+        const int space = cmd.indexOf(' ');
+        const String id = space > 0 ? cmd.substring(space + 1) : String();
+        if (id.isEmpty()) {
+          LOG_ERR("JJWXC", "serial CMD:DETAIL needs a novel id");
+        } else {
+          JjwxcActivity::requestDeepLink(id.c_str(), JjwxcActivity::DeepLinkAction::OpenBookDetail);
+          activityManager.goToJjwxc();
+        }
+#endif
+      } else if (cmd == "JJSEARCH") {
+#ifdef BOARD_HAS_PSRAM
+        JjwxcActivity::requestSearchDeepLink("\xE6\x88\x91");
+        activityManager.goToJjwxc();
+#endif
+      } else if (cmd == "WIFI") {
+        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false));
+      } else if (cmd == "SLEEP") {
+        activityManager.goToSleep(false);
       }
+#if defined(CROSSPOINT_MUPDF)
+      else if (cmd == "PDF") {
+        for (int i = 0; i <= 4; ++i) {
+          const std::string cache = "/.crosspoint/pdf_test/page_" + std::to_string(i) + ".bmp";
+          if (Storage.exists(cache.c_str())) Storage.remove(cache.c_str());
+        }
+        PdfReaderActivity::debugInitialPage = 0;
+        LOG_ERR("PDF", "serial CMD:PDF opening the test PDF");
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd == "PDFNEXT") {
+        auto* pdfActivity = static_cast<PdfReaderActivity*>(activityManager.currentActivityPtr());
+        if (pdfActivity) {
+          LOG_ERR("PDF", "serial CMD:PDFNEXT");
+          pdfActivity->pageTurn(true);
+          pdfActivity->requestUpdate();
+        }
+      } else if (cmd.startsWith("PDFNOTE")) {
+        int page = 0;
+        const int space = cmd.indexOf(' ');
+        if (space > 0) page = cmd.substring(space + 1).toInt() - 1;
+        if (page < 0) page = 0;
+        PdfReaderActivity::debugSeedNotePage = page;
+        PdfReaderActivity::debugInitialPage = page;
+        LOG_ERR("PDF", "serial CMD:PDFNOTE seeding a note on page %d", page + 1);
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd.startsWith("PDFHL")) {
+        int page = 0;
+        const int space = cmd.indexOf(' ');
+        if (space > 0) page = cmd.substring(space + 1).toInt() - 1;
+        if (page < 0) page = 0;
+        PdfReaderActivity::debugSeedHighlightPage = page;
+        PdfReaderActivity::debugInitialPage = page;
+        LOG_ERR("PDF", "serial CMD:PDFHL seeding a highlight on page %d", page + 1);
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd == "SELFTEST") {
+        PdfReaderActivity::debugSelfTest = true;
+        PdfReaderActivity::debugInitialPage = -1;
+        LOG_ERR("PDF", "serial CMD:SELFTEST walking every page");
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd == "REFLOW") {
+        PdfReaderActivity::debugReflowEnabled = true;
+        LOG_ERR("PDF", "serial CMD:REFLOW enabled for the next page render");
+      } else if (cmd == "PDFCACHE") {
+        // Rebuild the whole big-PDF page cache from page 1.  Debug-only: it
+        // drops the cache directory (meta/progress included) and leaves
+        // debugInitialPage at -1 so loop() does the background caching.
+        Storage.removeDir("/.crosspoint/pdf_test");
+        PdfReaderActivity::debugInitialPage = -1;
+        LOG_ERR("PDF", "serial CMD:PDFCACHE rebuilding the big-PDF cache");
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd.startsWith("PDFBIG")) {
+        // Optional 1-based page for a focused render test: "CMD:PDFBIG 68".
+        // The stale cache entry is removed so renderPage really re-renders it.
+        int page = 0;
+        const int space = cmd.indexOf(' ');
+        if (space > 0) page = cmd.substring(space + 1).toInt() - 1;
+        if (page < 0) page = 0;
+        PdfReaderActivity::debugInitialPage = page;
+        // Same debug-only cache path the PDF command uses (fnv of the book).
+        const std::string stale = "/.crosspoint/pdf_test/page_" + std::to_string(page) + ".bmp";
+        if (Storage.exists(stale.c_str())) Storage.remove(stale.c_str());
+        LOG_ERR("PDF", "serial CMD:PDFBIG opening big PDF at page %d", page + 1);
+        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      }
+#endif
     }
   }
 

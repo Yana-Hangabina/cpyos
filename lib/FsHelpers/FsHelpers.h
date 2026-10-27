@@ -67,6 +67,20 @@ inline bool hasTxtExtension(const String& fileName) {
 // Check for .md extension (case-insensitive)
 bool hasMarkdownExtension(std::string_view fileName);
 
+// CBZ comic archive and FictionBook 2.
+bool hasCbzExtension(std::string_view fileName);
+bool hasFb2Extension(std::string_view fileName);
+bool hasPdfExtension(std::string_view fileName);
+inline bool hasCbzExtension(const String& fileName) {
+  return hasCbzExtension(std::string_view{fileName.c_str(), fileName.length()});
+}
+inline bool hasFb2Extension(const String& fileName) {
+  return hasFb2Extension(std::string_view{fileName.c_str(), fileName.length()});
+}
+inline bool hasPdfExtension(const String& fileName) {
+  return hasPdfExtension(std::string_view{fileName.c_str(), fileName.length()});
+}
+
 bool hasReflowableBookExtension(std::string_view fileName);
 
 // Check for .css extension (case-insensitive)

@@ -65,6 +65,9 @@ class UiListActivity : public Activity, protected UiAppHost {
   virtual void drawChrome();
   // Button hints, drawn after the app renders. Default: Back/Select/Up/Down.
   virtual void drawFooter();
+  // Called after the UI canvas is complete and before displayBuffer(); debug
+  // snapshot hooks use it to copy what is about to be shown.
+  virtual void beforeDisplayHook() {}
 
   // --- helpers ---------------------------------------------------------------
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the

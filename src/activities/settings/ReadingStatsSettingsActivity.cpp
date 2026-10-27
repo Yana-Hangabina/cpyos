@@ -95,15 +95,8 @@ void ReadingStatsSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;
   props.valueInset = 8;
-  props.labelText = SETTINGS.uiTheme == CrossPointSettings::INX ? screen.theme().bodyText : screen.theme().smallText;
+  props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
-  if (SETTINGS.uiTheme == CrossPointSettings::INX) {
-    props.rowHeight = GUI.getListRowStep(false);
-    props.scrollIndicator = props.count > screen.contentRect().height / props.rowHeight;
-    props.labelText.maxLines = 1;
-    props.valueInset = 0;
-    props.valueText = screen.theme().bodyText;
-  }
   props.rowProvider = [](void*, uint16_t index, fui::ListItem& item) {
     item.label = I18N.get(MENU_NAMES[index]);
     switch (static_cast<MenuItem>(index)) {
@@ -124,13 +117,5 @@ void ReadingStatsSettingsActivity::buildScreen(UiScreen& screen) {
     }
   };
   syncListViewport(screen, props);
-  if (SETTINGS.uiTheme == CrossPointSettings::INX) {
-    // Preserve the legacy full-width INX rows; only the boolean control changes.
-    auto rect = screen.contentRect();
-    rect.x = 0;
-    rect.width = renderer.getScreenWidth();
-    fui::list(screen.frame(), rect, screen.resolveListProps(props));
-  } else {
-    screen.list(props);
-  }
+  screen.list(props);
 }

@@ -32,6 +32,11 @@ struct SdCardFontFamilyInfo {
   const SdCardFontFileInfo* findNearestSize(uint8_t pointSize, uint8_t style = 0) const;
   bool hasSize(uint8_t size) const;
   std::vector<uint8_t> availableSizes() const;
+  // Uppercase extension tag of the family's regular file — "TTF", "OTF" or
+  // "TTC" — so pickers label an .otf as OTF instead of calling every vector
+  // family a TTF. nullptr (caller falls back to the generic vector tag) for
+  // non-vector families or an unrecognized extension.
+  const char* formatTag() const;
 };
 
 class SdCardFontRegistry {

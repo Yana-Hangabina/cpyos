@@ -106,7 +106,7 @@ IDs 17 through 31 remain available.
 ### 4. Add the i18n key and icon
 
 - **i18n**: add `STR_MYAPP_TITLE: "My App"` to `lib/I18n/translations/english.yaml`. Other languages fall back to English; translate selectively. Then run `python scripts/gen_i18n.py lib/I18n/translations lib/I18n/` once locally (regenerated at build time too).
-- **Icon**: add `MyApp` to the `UIIcon` enum in `src/components/themes/BaseTheme.h` and add both 32×32 1-bit variants: the pre-rotated Lyra bitmap selected by `LyraTheme::iconForName(size==32)`, and the canonical-orientation bitmap selected by `InxAppIcons::get()`. No 24px bitmap is needed.
+- **Icon**: add `MyApp` to the `UIIcon` enum in `src/components/themes/BaseTheme.h` and add both 32×32 1-bit variants: the pre-rotated Lyra bitmap selected by `UpstreamStyleTheme::iconForName(size==32)`, and the canonical-orientation bitmap selected by `InxAppIcons::get()`. No 24px bitmap is needed.
 
 ---
 

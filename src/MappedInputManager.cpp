@@ -329,7 +329,7 @@ bool MappedInputManager::listItemFromPoint(const int x, const int y, int& index,
   const int row = (y - listTop) / rowStep;
   const int touched = pageStart + row;
   if (row < 0 || row >= pageItems || touched >= itemCount) return false;
-  if (SETTINGS.uiTheme != CrossPointSettings::INX) {
+  {
     const auto& metrics = UITheme::getInstance().getMetrics();
     const int gap = hasTouch() ? std::max(6, metrics.listRowGap) : metrics.listRowGap;
     if ((y - listTop) % rowStep >= rowStep - gap) return false;
@@ -425,6 +425,16 @@ MappedInputManager::SwipeDir MappedInputManager::wasSwipe() const {
   return SwipeDir::None;
 }
 
+bool MappedInputManager::wasSwipeGeometry(int& sx, int& sy, int& ex, int& ey) const {
+  return decodeSwipe(sx, sy, ex, ey);
+}
+
+bool MappedInputManager::wasPinch(float& scale) const {
+  float nxCenter = 0.0f;
+  float nyCenter = 0.0f;
+  return gpio.wasMultiTouchPinch(scale, nxCenter, nyCenter);
+}
+
 // Edge classification (which swipe counts as an edge gesture) lives in the
 // SDK; only the MEANING of each edge — back, menu, home, light panel, and the
 // home-key remap — is decided here.
@@ -434,9 +444,31 @@ bool MappedInputManager::wasEdgeSwipe(const freeink::ui::ScreenEdge edge) const 
   int ex = 0;
   int ey = 0;
   if (!decodeSwipe(sx, sy, ex, ey)) return false;
-  const bool hit = fui::edgeSwipe(edge, sx, sy, ex, ey, renderer.getScreenWidth(), renderer.getScreenHeight());
-  if (hit) rememberTouchHeldTime();
-  return hit;
+  // Edge bands and travel are tightened here rather than in the SDK so the
+  // change stays in project code: the SDK default anchors the side bands at
+  // 25 % of the width (171 px, ~14.6 mm) and accepted any travel away from the
+  // edge, so adjusting grip near the bezel popped the activity with a 5 mm
+  // twitch. 12 % keeps a comfortable thumb-entry band while requiring a
+  // deliberate 28 px (~2.4 mm) pull; the bottom Home band shrinks from 14 % to
+  // 8 % because it sits exactly where the thumb rests.
+  constexpr float kSideEdgeFrac = 0.12f;
+  constexpr float kTopEdgeFrac = freeink::ui::EDGE_SWIPE_TOP_BOTTOM_FRAC;
+  constexpr float kBottomEdgeFrac = 0.08f;
+  constexpr int kMinEdgeTravel = 28;
+  const float edgeFrac = (edge == freeink::ui::ScreenEdge::Left || edge == freeink::ui::ScreenEdge::Right)
+                             ? kSideEdgeFrac
+                             : (edge == freeink::ui::ScreenEdge::Bottom ? kBottomEdgeFrac : kTopEdgeFrac);
+  const bool hit = fui::edgeSwipe(edge, sx, sy, ex, ey, renderer.getScreenWidth(), renderer.getScreenHeight(),
+                                  edgeFrac);
+  if (!hit) return false;
+  const int dx = ex - sx;
+  const int dy = ey - sy;
+  const int travel = (edge == freeink::ui::ScreenEdge::Left || edge == freeink::ui::ScreenEdge::Right)
+                         ? (dx < 0 ? -dx : dx)
+                         : (dy < 0 ? -dy : dy);
+  if (travel < kMinEdgeTravel) return false;
+  rememberTouchHeldTime();
+  return true;
 }
 
 bool MappedInputManager::wasBackGesture() const {
@@ -487,7 +519,18 @@ bool MappedInputManager::wasMenuGesture() const { return wasTopEdgeDownSwipe(); 
 bool MappedInputManager::wasReaderMenuSwipeUp() const { return gpio.hasHomeKey() && wasBottomEdgeUpSwipe(); }
 
 bool MappedInputManager::wasHomeGesture() const {
-  return gpio.hasHomeKey() ? homeAction == HomeButtonAction::Home : wasBottomEdgeUpSwipe();
+  if (gpio.hasHomeKey()) return homeAction == HomeButtonAction::Home;
+  // The bottom-edge up-swipe doubles as a page-down scroll on long lists. The
+  // SDK's edge band is 14% of the screen (~170px here), which overlaps the
+  // natural start of a scroll and made comment/chapter lists exit Home
+  // mid-gesture. Keep the shortcut, but only from the last 48px so it has to
+  // be deliberate.
+  int sx = 0;
+  int sy = 0;
+  int ex = 0;
+  int ey = 0;
+  if (!decodeSwipe(sx, sy, ex, ey)) return false;
+  return sy >= renderer.getScreenHeight() - 48 && sy > ey;
 }
 
 bool MappedInputManager::wasLightPanelGesture() const {

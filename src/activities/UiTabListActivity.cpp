@@ -9,9 +9,6 @@
 
 namespace fui = freeink::ui;
 
-namespace {
-constexpr int16_t TOUCH_TAB_BAR_HEIGHT = 50;
-}
 
 UiTabListActivity::UiTabListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                                      const bool wantsTouchLongPress)
@@ -137,6 +134,9 @@ void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& pr
 }
 
 void UiTabListActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {
+  // The shelf folds its sort control into the chip row (a dropdown capsule),
+  // so the shared tab strip stays out of the layout entirely.
+  if (UITheme::getInstance().hasMainTabs() && cpyHideTabStrip() && UITheme::getInstance().usesCpyLayout()) return;
   if (UITheme::getInstance().hasMainTabs()) {
     const auto& metrics = UITheme::getInstance().getMetrics();
 
@@ -165,7 +165,16 @@ void UiTabListActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {
     // label-width shrink.
     const bool tabsFocused = ringPos() == 0;
     const bool mainTabs = UITheme::getInstance().hasMainTabs();
-    if (mainTabs) {
+    const bool capsuleTabs = mainTabs && cpyCapsuleTabs() && UITheme::getInstance().usesCpyLayout();
+    if (capsuleTabs) {
+      // The shelf-chip look (design frame 06): side-padded capsules in a
+      // taller band, idle = white with a hairline ring, selected = solid.
+      tabProps.text = screen.theme().bodyText;
+      tabProps.selectedText = tabProps.text;
+      tabProps.selectedText.bold = true;
+      tabProps.tabInset = fui::Insets{5, 18, 5, 18};
+      tabProps.contentInset = fui::Insets{0, 0, 0, 0};
+    } else if (mainTabs) {
       tabProps.text = screen.theme().bodyText;
       tabProps.selectedText = tabProps.text;
       tabProps.selectedText.bold = true;
@@ -187,17 +196,26 @@ void UiTabListActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {
     if (boldLabels) tabProps.text.bold = true;
     const int16_t tabLineHeight = screen.target().lineHeight(tabProps.text.font);
     const int16_t preferredTabHeight =
-        mappedInput.hasTouch() ? TOUCH_TAB_BAR_HEIGHT : static_cast<int16_t>(metrics.tabBarHeight);
+        mappedInput.hasTouch() ? static_cast<int16_t>(capsuleTabs ? 66 : TOUCH_TAB_BAR_HEIGHT)
+                               : static_cast<int16_t>(metrics.tabBarHeight);
     const int16_t tabBand = preferredTabHeight > tabLineHeight + 10 ? preferredTabHeight : tabLineHeight + 10;
     // Legacy Lyra two-state treatment: with the selection on the tab band, the
     // band fills gray and the active tab is a solid pill; with the selection
     // down in the list, the band is plain and the active tab keeps a gray box
     // with an underline. The 1px rule under the band is always there.
-    tabProps.divider = mainTabs;
+    tabProps.divider = mainTabs && !capsuleTabs;
     fui::StyleSet tabStyles;
     tabStyles.explicitlySet = true;
     tabStyles.normal.foreground = fui::Paint::solid(fui::Color::Black);
-    if (mainTabs) {
+    if (capsuleTabs) {
+      tabStyles.normal.background = fui::Paint::solid(fui::Color::White);
+      tabStyles.normal.border = fui::Paint::solid(fui::Color::Black);
+      tabStyles.normal.borderWidth = 1;
+      tabStyles.normal.radius = 28;
+      tabStyles.selected.background = fui::Paint::solid(fui::Color::Black);
+      tabStyles.selected.foreground = fui::Paint::solid(fui::Color::White);
+      tabStyles.selected.radius = 28;
+    } else if (mainTabs) {
       tabStyles.selected.background = fui::Paint::solid(fui::Color::Black);
       tabStyles.selected.foreground = fui::Paint::solid(fui::Color::White);
     } else if (tabsFocused) {

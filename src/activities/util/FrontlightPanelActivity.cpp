@@ -29,15 +29,16 @@ constexpr fui::ActionId ACTION_WARMTH_STEP = 5;
 constexpr fui::ActionId ACTION_TILE = 6;  // value = tile index
 
 // iOS-style geometry. The panel is a card hanging from the top of the screen:
-// a grabber, full-width slider pills, then a 2-column tile grid. The chrome
-// itself is fui::sheet / fui::sliderRow / fui::tileGrid; these constants only
-// size the bands, and computePanelBottom() mirrors them.
+// a grabber, full-width slider pills, then the quick-setting list rows. The
+// chrome itself is fui::sheet / fui::sliderRow / fui::list; these constants
+// only size the bands, and computePanelBottom() mirrors them.
 constexpr int16_t kPanelSideMargin = 16;
 constexpr int16_t kGrabberHeight = 5;     // fui::SheetProps default, mirrored here
 constexpr int16_t kSliderRowHeight = 56;  // the pill itself (finger-sized)
-constexpr int16_t kTileHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::buttonHeight : 84;
-constexpr int16_t kTileGap = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap : 16;
-constexpr int kTileCols = 2;
+// Design frame 17's .crow: 24px label + 14px padding with a hairline under
+// each row (~60px); the sheet is deliberately more compact than the settings
+// list, so these rows do NOT follow the density token.
+constexpr int16_t kTileRowHeight = 60;
 // One percent per press, on the -/+ buttons and on the physical Left/Right keys
 // alike (both repeat while held), so a level can be set exactly.
 constexpr int BRIGHTNESS_STEP = 1;
@@ -295,10 +296,18 @@ int FrontlightPanelActivity::computePanelBottom() const {
     }
     y += tokens.spaceSm;
   }
-  // Tiles are touch targets, so a buttons-only board gets no grid and the
+  // Rows are touch targets, so a buttons-only board gets no list and the
   // sheet is exactly the frontlight controls.
   const int tileCount = mappedInput.hasTouch() ? kTileCount : 0;
-  y += fui::tileGridHeight(static_cast<uint16_t>(tileCount), kTileCols, kTileHeight, kTileGap);
+  // The control-center rows render through the theme's list rhythm: the base
+  // row height plus the touch row padding the list adds on top (the resolved
+  // rows come out taller than the bare minimum, and an under-reserved sheet
+  // clipped the last row). CPY draws the design's compact .crow rows instead
+  // (frame 17), which bypasses the density token the way the mockup does.
+  const int rowBand = UITheme::getInstance().usesCpyLayout()
+                          ? kTileRowHeight
+                          : static_cast<int>(tokens.listMinRowHeight + tokens.listTouchRowPaddingY + 1);
+  y += static_cast<int>(tileCount) * rowBand;
   // The sheet's grabber band: content margin + grabber + air to the edge.
   // buildPanelScreen() feeds the same theme spacings into SheetProps.
   y += tokens.spaceLg + kGrabberHeight + tokens.spaceLg + tokens.spaceMd;
@@ -383,37 +392,51 @@ void FrontlightPanelActivity::buildPanelScreen(UiScreen& screen) {
     screen.spacer(theme.spaceSm);
   }
 
-  // Quick-setting tiles. Two columns of finger-sized cards; a tile whose
-  // setting is currently on draws filled (StateChecked -> selected style).
-  // Touch boards only — the tiles are touch targets.
+  // Quick-setting rows. Frame 17 draws them as list rows inside the sheet —
+  // switches for the toggles, the current mode as the row label, hairlines
+  // between — not as separate rounded tiles; the fui list brings the theme's
+  // row rhythm (and follows the density setting automatically). Touch boards
+  // only — the rows are touch targets.
   if (mappedInput.hasTouch()) {
     static constexpr StrId kOrientNames[4] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW,
                                               StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW};
-    // The orientation tile is labelled with just the current mode ("Portrait"):
-    // the mode names say what the tile is about on their own.
+    // The orientation row is labelled with just the current mode ("Portrait"):
+    // the mode names say what the row is about on their own.
     const char* orientLabel = I18N.get(kOrientNames[SETTINGS.orientation % 4]);
     const bool touchOn = SETTINGS.touchReaderControls != CrossPointSettings::TOUCH_READER_OFF;
 
-    const char* labels[kTileCount] = {tr(STR_NIGHT_MODE), tr(STR_FORCE_REFRESH), orientLabel, tr(STR_TOUCH_TOGGLE)};
-    const fui::State states[kTileCount] = {SETTINGS.screenInverted ? fui::StateChecked : fui::StateNormal,
-                                           fui::StateNormal, fui::StateNormal,
-                                           // Filled when touch reader controls are OFF — the non-default,
-                                           // attention-worthy state.
-                                           touchOn ? fui::StateNormal : fui::StateChecked};
-
+    listItems[0].label = tr(STR_NIGHT_MODE);
+    listItems[0].toggle = true;
+    listItems[0].toggleChecked = SETTINGS.screenInverted != 0;
+    listItems[1].label = tr(STR_FORCE_REFRESH);
+    listItems[1].toggle = false;
+    listItems[2].label = orientLabel;
+    listItems[2].toggle = false;
+    listItems[3].label = tr(STR_TOUCH_TOGGLE);
+    listItems[3].toggle = true;
+    listItems[3].toggleChecked = touchOn;
     for (int id = 0; id < kTileCount; ++id) {
-      gridItems[id].label = labels[id];
-      gridItems[id].value = static_cast<int16_t>(id);
-      gridItems[id].state = states[id];
-      gridItems[id].icon = id == 3 ? GUI.checkboxIcon(touchOn) : fui::BitmapRef{};
+      listItems[id].actionValue = static_cast<int16_t>(id);
     }
-    gridProps.items = gridItems;
-    gridProps.count = static_cast<uint16_t>(kTileCount);
-    gridProps.action = ACTION_TILE;
-    gridProps.tileHeight = kTileHeight;
-    gridProps.gap = kTileGap;
-    gridProps.iconOnRight = true;
-    screen.tileGrid(gridProps);
+    listProps.items = listItems;
+    listProps.count = static_cast<uint16_t>(kTileCount);
+    listProps.action = ACTION_TILE;
+    // Pin the row height to the same band the sheet reservation uses
+    // (computePanelBottom); letting the list resolve it from content made
+    // rows taller than reserved and clipped the last one. CPY pins the
+    // design's compact .crow height and gets the mockup's row hairlines;
+    // other themes keep the density token and their own separator style.
+    if (UITheme::getInstance().usesCpyLayout()) {
+      listProps.rowHeight = kTileRowHeight;
+      // The mockup's .crow rows stack edge to edge -- the hairline IS the
+      // separation, there is no gap band (and reserving one would clip the
+      // last row).
+      listProps.rowGap = 0;
+      listProps.separator = fui::SeparatorStyle::Solid;
+    } else {
+      listProps.rowHeight = uiThemeTokens(uiTarget, true).listMinRowHeight;
+    }
+    screen.list(listProps);
   }
 }
 
@@ -429,10 +452,17 @@ void FrontlightPanelActivity::render(RenderLock&&) {
   // flip the whole frame's polarity without the FULL waveform's blackout
   // flash. Any faint residue clears with the panel's dedicated refresh tile
   // or the next scheduled clean refresh.
+  //
+  // While a finger holds the slider, every drag frame repaints; routing those
+  // pushes as TransientUi keeps them out of the periodic GC16 sweep so a
+  // black/white flash cannot land mid-drag. A clean refresh still sweeps, and
+  // the release frame goes out Normal so any residue clears right after.
+  const auto context = (draggingSlider && !cleanRefreshPending) ? DisplayRefreshContext::TransientUi
+                                                                : DisplayRefreshContext::Normal;
 #if FREEINK_DEVICE_EEGO_A4
-  renderer.displayBuffer(cleanRefreshPending ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
+  renderer.displayBuffer(cleanRefreshPending ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH, context);
 #else
-  renderer.displayBuffer(cleanRefreshPending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  renderer.displayBuffer(cleanRefreshPending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH, context);
 #endif
   cleanRefreshPending = false;
 }

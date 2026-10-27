@@ -14,11 +14,16 @@
 #include <string_view>
 #include <vector>
 
+#include "LineBreakRules.h"
 #include "TokenBoundary.h"
 #include "hyphenation/HyphenationCommon.h"
 #include "hyphenation/Hyphenator.h"
 
 constexpr int MAX_COST = std::numeric_limits<int>::max();
+// Ceiling for the reader-level first-line indent (book CSS indent + the fine
+// px adjustment). Well under any realistic viewport width, but enough to keep
+// a corrupted setting from starving the first line.
+constexpr int kMaxFirstLineIndentPx = 240;
 
 namespace {
 
@@ -444,6 +449,35 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
                          const bool attachToPrevious, const uint32_t visibleTextOffset, const uint8_t linkId) {
   if (word.empty()) return;
 
+  // The reader's indent mode overrides the book, so a paragraph that starts with
+  // hand-typed spaces (U+3000 pairs are how most Chinese web novels indent) must
+  // not get BOTH that indent and the reader's. Strip the leading run once, on the
+  // paragraph's first non-empty word. Auto mode leaves the text untouched, which
+  // is what keeps a book's own typography intact.
+  if (stripLeadingIndent && paragraphStartPending) {
+    size_t skip = 0;
+    while (skip < word.size()) {
+      const auto c = static_cast<unsigned char>(word[skip]);
+      if (c == ' ' || c == '\t') {
+        ++skip;
+        continue;
+      }
+      if (c == 0xC2 && skip + 1 < word.size() && static_cast<unsigned char>(word[skip + 1]) == 0xA0) {
+        skip += 2;  // U+00A0 no-break space
+        continue;
+      }
+      if (c == 0xE3 && skip + 2 < word.size() && static_cast<unsigned char>(word[skip + 1]) == 0x80 &&
+          static_cast<unsigned char>(word[skip + 2]) == 0x80) {
+        skip += 3;  // U+3000 ideographic space
+        continue;
+      }
+      break;
+    }
+    if (skip > 0) word.erase(0, skip);
+    if (word.empty()) return;  // the whole word was indent: keep waiting
+    paragraphStartPending = false;
+  }
+
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
   // (a base letter followed by separate combining accents -- common for Vietnamese,
   // and used for many EPUB <h1> chapter headings) renders with the marks detached or
@@ -710,7 +744,7 @@ void ParsedText::ensureRubyCapacity() {
 }
 
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
-  if (!isFirstLine || !firstLinePending || !isNaturalAlign) {
+  if (!isFirstLine || !firstLinePending) {
     return 0;
   }
   // The reader-level first-line-indent control has three states:
@@ -723,20 +757,30 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   // Extra paragraph spacing never affects the indent, so turning it on no
   // longer wipes out a book's built-in first-line indent.
   if (firstLineIndent == FirstLineIndent::NoIndent) {
-    return 0;
+    return std::clamp<int>(firstLineIndentPx, 0, kMaxFirstLineIndentPx);
   }
   if (firstLineIndent == FirstLineIndent::Auto) {
-    return blockStyle.textIndentDefined ? blockStyle.textIndent : 0;
+    // Auto keeps the book's own indent, but only for naturally aligned blocks: a
+    // centred heading is already positioned and must not be pushed right.
+    if (!isNaturalAlign) return 0;
+    const int base = blockStyle.textIndentDefined ? blockStyle.textIndent : 0;
+    return std::clamp(base + static_cast<int>(firstLineIndentPx), 0, kMaxFirstLineIndentPx);
   }
   const int spaceIndent =
       scaleSpace(renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR), wordSpacingPercent) * paragraphIndentSpaces;
   const bool hasCjkText = std::any_of(words.begin(), words.end(), [this](const auto& word) {
     return containsCjkBreakableCodepoint(wordStore.view(word));
   });
-  if (!hasCjkText) return spaceIndent;
-
-  const int cjkAdvance = renderer.getTextAdvanceX(fontId, "我", EpdFontFamily::REGULAR);
-  return cjkAdvance > 0 ? cjkAdvance * 2 : spaceIndent;
+  int base = spaceIndent;
+  if (hasCjkText) {
+    const int cjkAdvance = renderer.getTextAdvanceX(fontId, "我", EpdFontFamily::REGULAR);
+    if (cjkAdvance > 0) base = cjkAdvance * 2;
+  }
+  // The fine adjustment is applied last so it composes with all three modes
+  // (Auto keeps the book's own indent but can still be nudged). Clamped to a
+  // sane band: negative resolves to flush, and an absurdly large value would
+  // starve the line breaker's first line.
+  return std::clamp(base + static_cast<int>(firstLineIndentPx), 0, kMaxFirstLineIndentPx);
 }
 // Consumes data to minimize memory usage
 bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
@@ -1102,13 +1146,27 @@ bool ParsedText::computeLineBreaks(const GfxRenderer& renderer, const int fontId
 
       currlen += wordWidths[j] + gap + (j == i ? extraStartOffset : 0);
 
-      if (currlen > effectivePageWidth) {
+      // Kinsoku hanging: a trailing sentence mark may overhang the right margin
+      // by half an em instead of being pushed to the next line. The glyph still
+      // draws at its normal position, so the overflow lands in the page margin.
+      const int hangingAllowance = LineBreakRules::hangableAllowance(lastCodepoint(wordAt(j)), wordWidths[j]);
+      if (currlen > effectivePageWidth + hangingAllowance) {
         break;
       }
 
       // A normal continuation is unbreakable. continues=true + noSpaceBefore=true is the compact
       // breakable-attachment state used after explicit hyphen characters.
       if (j + 1 < totalWordCount && !TokenBoundary::allowsBreak(continuesVec[j + 1], noSpaceBeforeVec[j + 1])) {
+        continue;
+      }
+
+      // Kinsoku prohibitions: never break before a closing mark, never break
+      // after an opening mark. `j == i` stays allowed so a paragraph that
+      // starts with such a mark still gets a line instead of falling through to
+      // the oversized-word fallback below.
+      if (j + 1 < totalWordCount && j > static_cast<size_t>(i) &&
+          (LineBreakRules::isLineStartForbidden(firstCodepoint(wordAt(j + 1))) ||
+           LineBreakRules::isLineEndForbidden(lastCodepoint(wordAt(j))))) {
         continue;
       }
 
@@ -1761,6 +1819,7 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
       LOG_ERR("PTX", "OOM: TextBlock arena allocation failed");
       return false;
     }
+    block->setVisibleOffset(lineVisibleOffset);
     return processLine(std::move(block), lineVisibleOffset);
   }
 
@@ -1784,5 +1843,6 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
     LOG_ERR("PTX", "OOM: TextBlock arena allocation failed");
     return false;
   }
+  block->setVisibleOffset(lineVisibleOffset);
   return processLine(std::move(block), lineVisibleOffset);
 }

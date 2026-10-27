@@ -20,6 +20,9 @@ class ReadingStatsMenuActivity final : public Activity {
 
  private:
   void openSelected();
+  void layoutCards(Rect out[4], int count) const;
+  int cardAt(int x, int y, const Rect* cards, int count) const;
+  void drawCard(const Rect& rect, int index, bool selected) const;
   ButtonNavigator buttonNavigator;
   int selected = 0;
 };

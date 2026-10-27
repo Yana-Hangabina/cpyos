@@ -240,7 +240,14 @@ AutomatonState decodeState(const EmbeddedAutomaton& automaton, size_t addr) {
     // The bottom nibble stores how many packed entries belong to this node.
     const size_t offset = (static_cast<size_t>(offsetHi) << 4) | (offsetLoLen >> 4);
     levelsLen = offsetLoLen & 0x0Fu;
-    if (offset + levelsLen > automaton.size) {
+    // The offset is an address in hypher's original address space, which started
+    // with the 4-byte root header the generator strips; `data + offset - 4` maps it
+    // back into this blob. Well-formed data therefore never has offset < 4, and a
+    // blob that does is corrupt -- but the subtraction is unsigned, so without this
+    // check it would wrap to a pointer far above the buffer and the reads below
+    // would be out of bounds. Reachable now that blobs can come from a user-writable
+    // card rather than from .rodata the firmware was built with.
+    if (offset < 4u || offset + levelsLen > automaton.size) {
       return AutomatonState{};
     }
     levelsPtr = automaton.data + offset - 4u;

@@ -125,7 +125,8 @@ void checkPanic() {
         LOG_ERR("SYS", "Failed to write complete crash report (%zu of %zu bytes)", written, panicInfo.size());
       }
     } else {
-      LOG_ERR("SYS", "Failed to open crash_report.txt for writing");
+      LOG_ERR("SYS", "Failed to open crash_report.txt for writing; panic follows on serial");
+      LOG_ERR("SYS", "%s", panicInfo.c_str());
     }
   }
 }

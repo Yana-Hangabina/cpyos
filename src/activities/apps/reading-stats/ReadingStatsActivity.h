@@ -10,7 +10,6 @@ class ReadingStatsActivity final : public Activity {
   int selectedIndex = 0;
   bool waitForConfirmRelease = false;
   bool waitForBackRelease = false;
-  bool mainTabEnabled = false;
   bool waitingForCoverRender = false;
   bool renderedCoverMissing = false;
   int renderedCoverView = -1;
@@ -23,13 +22,12 @@ class ReadingStatsActivity final : public Activity {
   void renderInx();
 
  public:
-  explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool mainTabEnabled = false)
-      : Activity("ReadingStats", renderer, mappedInput), mainTabEnabled(mainTabEnabled) {}
+  explicit ReadingStatsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("ReadingStats", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  MainTab mainTab() const override { return mainTabEnabled ? MainTab::Statistics : MainTab::None; }
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
 };

@@ -48,7 +48,7 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
             KOREADER_STORE.saveToFile();
           }
         },
-        tr(STR_KOREADER_USERNAME), KOREADER_STORE.getUsername(), 64, InputType::Text);
+        tr(STR_KOREADER_USERNAME), KOREADER_STORE.getUsername(), 64, InputType::Ascii);
   } else if (index == 1) {
     // Password
     startActivityForResultWith<KeyboardEntryActivity>(
@@ -59,7 +59,7 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
             KOREADER_STORE.saveToFile();
           }
         },
-        tr(STR_KOREADER_PASSWORD), KOREADER_STORE.getPassword(), 64, InputType::Text);
+        tr(STR_KOREADER_PASSWORD), KOREADER_STORE.getPassword(), 64, InputType::Ascii);
   } else if (index == 2) {
     // Sync Server URL - prefill with https:// if empty to save typing
     const std::string currentUrl = KOREADER_STORE.getServerUrl();
@@ -160,10 +160,8 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
-  if (SETTINGS.uiTheme != CrossPointSettings::INX) {
-    props.labelText = screen.theme().smallText;
-    props.labelText.maxLines = 2;
-  }
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
   syncListViewport(screen, props);
   screen.list(props);
 }

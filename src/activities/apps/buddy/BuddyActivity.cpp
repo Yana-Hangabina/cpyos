@@ -22,7 +22,13 @@
 namespace {
 
 constexpr uint32_t kRevealFrameHoldMs = 1500;
-constexpr uint32_t kIdleFrameHoldMs = 1500;
+// The pet's idle animation used to repaint the whole frame every 1.5 s for as
+// long as the activity stayed open. This panel is bistable, so a permanent
+// 1.5 s repaint is a permanent flicker/ghost source, not "animation": the
+// design rules say e-ink does not do blinking animation. Keep a slow idle
+// breath (one frame every 6 s) instead of stopping it outright -- the buddy is
+// the app's identity, and a still image would look frozen.
+constexpr uint32_t kIdleFrameHoldMs = 6000;
 constexpr int kSpriteRows = 5;
 constexpr int kCardBodyOffsetY = -10;
 constexpr int kIdleLiftPx = 2;

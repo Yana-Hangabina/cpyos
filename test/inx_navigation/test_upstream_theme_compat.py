@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Compare real theme bridges and SDK draw/hit traces with reviewed upstream.
+"""Compare the INX theme bridge's draw/hit traces with the pre-sync HEAD.
 
-Uses production candidate metrics and font IDs against the pinned upstream.
-This checks shared drawing/hit geometry; whole screens are tested in the simulator.
-Also compares the working INX bridge with HEAD, without changing its baseline.
+The earlier non-INX arm compared the retired Lyra-family themes against
+upstream; those themes and their metrics are gone, so this now checks only the
+working INX bridge against HEAD (its baseline is HEAD itself, unchanged).
+Requires an upstream SDK checkout only for its SDK sources and font IDs.
 """
 import argparse
 import os
@@ -37,7 +38,7 @@ def trace(sdk, reader_ref, metrics_ref, directory, inx=False):
         (directory / name).write_text(text)
     (directory / 'fontIds.h').write_text(source(metrics_ref, 'src/fontIds.h'))
     (directory / "themes/lyra").mkdir(parents=True)
-    (directory / "themes/lyra/LyraTheme.h").write_text("#pragma once\n")
+    (directory / "themes/upstream/UpstreamStyleTheme.h").write_text("#pragma once\n")
     (directory / "UiHighDpiProfile.h").write_text((ROOT / "src/components/UiHighDpiProfile.h").read_text())
     settings = '''#pragma once
 struct CrossPointSettings {
@@ -72,16 +73,10 @@ inline void hideFreeInkListFocus(freeink::ui::ThemeTokens&) {}
             metrics_type = metrics_type.replace('\n};', f'\n  {field}\n}};')
     profile = '#include "UiHighDpiProfile.h"\n'
     profile += re.search(r'namespace UiHighDpiProfile \{.*?namespace UiHighDpiProfile', (ROOT/'src/components/themes/BaseTheme.h').read_text(), re.S).group() + '\n'
-    metrics = [metric_namespace(metrics_ref, 'src/components/themes/lyra/LyraTheme.h', 'LyraMetrics')]
-    if inx:
-        metrics.append(metric_namespace(metrics_ref, 'src/components/themes/inx/InxTheme.h', 'InxMetrics'))
-        names = ['InxMetrics']
-    else:
-        metrics += [metric_namespace(metrics_ref, 'src/components/themes/BaseTheme.h', 'BaseMetrics'),
-                    metric_namespace(metrics_ref, 'src/components/themes/roundedraff/RoundedRaffTheme.h', 'RoundedRaffMetrics'),
-                    metric_namespace(metrics_ref, 'src/components/themes/lyra/Lyra3CoversTheme.h', 'Lyra3CoversMetrics')]
-        # Cover Grid uses Lyra metrics outside its dedicated home renderer.
-        names = ['BaseMetrics', 'LyraMetrics', 'RoundedRaffMetrics', 'Lyra3CoversMetrics', 'LyraMetrics']
+    assert inx, 'only the INX parity arm remains after the Lyra-family retirement'
+    metrics = [metric_namespace(metrics_ref, 'src/components/themes/upstream/UpstreamStyleTheme.h', 'UpstreamStyleMetrics'),
+               metric_namespace(metrics_ref, 'src/components/themes/upstream/UpstreamStyleTheme.h', 'InxMetrics')]
+    names = ['InxMetrics']
     (directory / 'UITheme.h').write_text('#pragma once\n#include "CrossPointSettings.h"\n' + metrics_type + '\n' + profile +
         '\n'.join(metrics) + '\ninline constexpr ThemeMetrics parityMetrics[] = {' +
         ', '.join(name + '::values' for name in names) + '''};
@@ -123,9 +118,6 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='theme-parity-', dir=os.environ.get('TMPDIR')) as tmp:
         tmp = Path(tmp)
-        compare(trace(args.sdk, None, None, tmp / 'candidate'),
-                trace(args.upstream_sdk, args.upstream_reader_ref, args.upstream_reader_ref, tmp / 'upstream'),
-                'Non-INX production metrics and SDK defaults')
         compare(trace(args.sdk, None, None, tmp / 'inx-current', inx=True),
                 trace(args.sdk, 'HEAD', 'HEAD', tmp / 'inx-before', inx=True),
                 'INX bridge against pre-sync HEAD')

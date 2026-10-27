@@ -17,7 +17,7 @@ class AppsMenuActivity final : public UiListActivity {
   ~AppsMenuActivity() override = default;
 
   void onEnter() override;
-  MainTab mainTab() const override { return MainTab::Apps; }
+  MainTab mainTab() const override { return MainTab::Settings; }
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
 
   static int getAppCount();

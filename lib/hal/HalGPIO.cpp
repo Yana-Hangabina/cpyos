@@ -409,6 +409,11 @@ bool HalGPIO::wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEn
   return inputMgr.wasSwipe(nxStart, nyStart, nxEnd, nyEnd);
 }
 
+bool HalGPIO::wasMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter) const {
+  unsigned long durationMs = 0;
+  return inputMgr.wasMultiTouchPinch(scale, nxCenter, nyCenter, durationMs);
+}
+
 bool HalGPIO::wasTouchActivity() const { return inputMgr.wasTouchActivity(); }
 
 void HalGPIO::clearTouchTapEvent() { inputMgr.clearTouchTapEvent(); }

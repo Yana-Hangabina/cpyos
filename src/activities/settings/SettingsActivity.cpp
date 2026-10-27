@@ -22,9 +22,15 @@
 #include "AppVisibilitySettingsActivity.h"
 #include "BluetoothSettingsActivity.h"
 #include "ButtonRemapActivity.h"
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+#include "BuzzerFeedback.h"
+#endif
 #include "ClearCacheActivity.h"
 #include "ClockSettingsActivity.h"
 #include "CrossPointSettings.h"
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+#include "components/icons/settings_icons.h"
+#endif
 #include "DictionaryDownloadActivity.h"
 #include "FontDownloadActivity.h"
 #include "HomeButtonSettingsActivity.h"
@@ -37,6 +43,8 @@
 #include "OtaUpdateActivity.h"
 #include "ReadingStatsSettingsActivity.h"
 #include "SdCardFontSystem.h"
+#include "ScreenRepairActivity.h"
+#include "UiCjkFallbacks.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
 #include "SilentRestart.h"
@@ -59,6 +67,10 @@
 namespace fui = freeink::ui;
 
 namespace {
+// Design frame 06: the group header (label + double rule) between the
+// capsule tabs and the card. drawChrome and the list spacer must agree.
+constexpr int16_t kCpyGroupHeaderH = 44;
+constexpr int16_t kCpyGroupSectionGap = 12;
 constexpr StrId OK_OPTION[] = {StrId::STR_OK_BUTTON};
 constexpr uint64_t BYTES_PER_TENTH_GB = 100000000ULL;
 
@@ -78,6 +90,123 @@ enum class AboutRow : uint8_t {
 };
 
 enum class StorageLoadState : uint8_t { Loading, Available, Unavailable };
+
+// Design frame 06 groups: each chip is a top-level section, and the rows
+// inside it are split into named sub-groups instead of repeating the chip's
+// own name. rank orders the groups inside a category; settings that do not
+// match any rule fall into "Other" so nothing can drop out of the list.
+struct SettingsGroup {
+  StrId label;
+  uint8_t rank;
+};
+
+SettingsGroup groupForSetting(const SettingInfo& setting) {
+  using CS = CrossPointSettings;
+  const auto ptr = setting.valuePtr;
+
+  switch (setting.action) {
+    case SettingAction::RemapFrontButtons:
+    case SettingAction::HomeButton:
+      return {StrId::STR_SET_GROUP_KEYS, 0};
+    case SettingAction::TextSettings:
+    case SettingAction::DownloadFonts:
+    case SettingAction::ManageDictionaries:
+      return {StrId::STR_SET_GROUP_FONTS_DICTS, 4};
+    case SettingAction::CustomiseStatusBar:
+    case SettingAction::ReadingStatsSettings:
+      return {StrId::STR_SET_GROUP_STATUS_STATS, 5};
+    case SettingAction::Network:
+    case SettingAction::KOReaderSync:
+    case SettingAction::OPDSBrowser:
+      return {StrId::STR_SET_GROUP_NETWORK_TRANSFER, 1};
+    case SettingAction::ClockSettings:
+    case SettingAction::Language:
+      return {StrId::STR_SET_GROUP_TIME_LANGUAGE, 4};
+    case SettingAction::AppVisibility:
+    case SettingAction::Apps:
+    case SettingAction::ClearCache:
+    case SettingAction::RestoreSystemSettings:
+    case SettingAction::CheckForUpdates:
+    case SettingAction::SdFirmwareUpdate:
+    case SettingAction::ScreenRepair:
+    case SettingAction::Plugins:
+    case SettingAction::KeyboardLayouts:
+      return {StrId::STR_SET_GROUP_APPS_MAINTENANCE, 3};
+    case SettingAction::About:
+      return {StrId::STR_ABOUT, 5};
+    case SettingAction::Bluetooth:
+      return {StrId::STR_SET_GROUP_OTHER, 2};
+    case SettingAction::None:
+      break;
+  }
+
+  // Display
+  if (ptr == &CS::sleepScreen || ptr == &CS::sleepScreenCoverMode || ptr == &CS::sleepScreenCoverFilter ||
+      ptr == &CS::quickResumeSleepScreen || ptr == &CS::standbyShortcutEnabled) {
+    return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
+  }
+  if (ptr == &CS::hideBatteryPercentage || ptr == &CS::refreshFrequency || ptr == &CS::fadingFix ||
+      ptr == &CS::showButtonHints || ptr == &CS::frontlightRestoreOnWake || ptr == &CS::screenInverted) {
+    return {StrId::STR_SET_GROUP_SCREEN_REFRESH, 1};
+  }
+  if (ptr == &CS::inxLibraryLayout || ptr == &CS::inxAppsLayout || ptr == &CS::inxTabPosition ||
+      ptr == &CS::uiDensity) {
+    return {StrId::STR_SET_GROUP_LAYOUT, 2};
+  }
+
+  // Reader
+  if (ptr == &CS::fontFamily || ptr == &CS::fakeBold || ptr == &CS::extraParagraphSpacing ||
+      ptr == &CS::firstLineIndent || ptr == &CS::paragraphIndentSpaces || ptr == &CS::textAntiAliasing ||
+      ptr == &CS::hyphenationEnabled) {
+    return {StrId::STR_SET_GROUP_TEXT_LAYOUT, 0};
+  }
+  if (ptr == &CS::focusReadingEnabled || ptr == &CS::readingBackgroundEnabled ||
+      ptr == &CS::readingGuideLineEnabled || ptr == &CS::readingGuideLineStyle ||
+      setting.signedValuePtr == &CS::readingGuideLineOffset) {
+    return {StrId::STR_SET_GROUP_READING_AIDS, 1};
+  }
+  if (ptr == &CS::pageTurnEffect || ptr == &CS::fastPageTurn || ptr == &CS::pageTurnDirection ||
+      ptr == &CS::orientation || ptr == &CS::readerMenuStyle) {
+    return {StrId::STR_SET_GROUP_PAGE_DIRECTION, 2};
+  }
+  if (ptr == &CS::imageRendering || ptr == &CS::imageScaling) {
+    return {StrId::STR_SET_GROUP_IMAGES, 3};
+  }
+
+  // Controls
+  if (ptr == &CS::sideButtonLayout || ptr == &CS::frontButtonFollowOrientation ||
+      ptr == &CS::longPressButtonBehavior || ptr == &CS::longPressMenuFunction || ptr == &CS::shortPwrBtn ||
+      ptr == &CS::pwrBtnFootnoteBack || ptr == &CS::doubleClickPwrLight) {
+    return {StrId::STR_SET_GROUP_KEYS, 0};
+  }
+  if (ptr == &CS::touchReaderControls || ptr == &CS::pageTurnGesture || ptr == &CS::previousPageGesture ||
+      ptr == &CS::showReaderMenu || ptr == &CS::backShortToFileBrowser ||
+      (setting.key != nullptr &&
+       (std::strcmp(setting.key, "tiltPageTurn") == 0 || std::strcmp(setting.key, "motionPageTurn") == 0))) {
+    return {StrId::STR_SET_GROUP_TOUCH_GESTURES, 1};
+  }
+
+  // System
+  if (ptr == &CS::sleepTimeoutMinutes
+#if CROSSPOINT_CAP_SOUND_FEEDBACK
+      || ptr == &CS::soundFeedbackLevel
+#endif
+#if FREEINK_CAP_HAPTIC
+      || ptr == &CS::hapticFeedbackLevel
+#endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+      || ptr == &CS::buzzerFeedbackSource || ptr == &CS::buzzerPitch || ptr == &CS::buzzerStrength
+#endif
+  ) {
+    return {StrId::STR_SET_GROUP_POWER_FEEDBACK, 0};
+  }
+  if (ptr == &CS::showHiddenFiles || ptr == &CS::libraryUseMetadata ||
+      ptr == &CS::removeReadBooksFromRecents || ptr == &CS::moveFinishedToReadFolder) {
+    return {StrId::STR_SET_GROUP_STORAGE_DATA, 2};
+  }
+
+  return {StrId::STR_SET_GROUP_OTHER, 9};
+}
 
 class InxAboutActivity final : public Activity {
  public:
@@ -268,15 +397,14 @@ class InxAboutActivity final : public Activity {
 };
 }  // namespace
 
-SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiTabListActivity("Settings", renderer, mappedInput) {}
+SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const int initialCategory,
+                                   const bool subpage)
+    : UiTabListActivity("Settings", renderer, mappedInput),
+      initialCategory_(std::clamp(initialCategory, 0, categoryCount - 1)),
+      subpage_(subpage) {}
 
 void SettingsActivity::selectMainTabContentEdge(const MainTabContentEdge edge) {
-  if (usesAccordion()) {
-    moveSelectionTo(MainTabs::contentEdgeIndex(edge, listCount()));
-    return;
-  }
-  moveRingTo(MainTabs::contentEdgeIndex(edge, settingsCount) + (settingsCount > 0 ? 1 : 0));
+  moveRingTo(edge == MainTabContentEdge::First ? firstSelectableRing() : lastSelectableRing());
 }
 
 void SettingsActivity::rebuildSettingsLists() {
@@ -290,20 +418,31 @@ void SettingsActivity::rebuildSettingsLists() {
   sdFontSystem.refreshIfDirty();
 
   std::vector<DictionaryEntry> dictionaries;
-  if (!usesAccordion() || dictionariesLoaded) DictionaryRegistry::discover(dictionaries);
+  DictionaryRegistry::discover(dictionaries);
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT || home_button::isSetting(setting.valuePtr)) continue;
-    if (!usesAccordion() && (setting.valuePtr == &CrossPointSettings::inxRecentLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxLibraryLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxAppsLayout ||
-                             setting.valuePtr == &CrossPointSettings::inxTabPosition)) {
+    // The shelf/apps/tab-position layouts stay live under CPY
+    // (LibraryListActivity::usesCoverGrid and the apps/tab layouts honour
+    // them); only the home-layout picker is dead -- CPY's home is a fixed
+    // dashboard. The pinned settings review encodes exactly this split.
+    if (setting.valuePtr == &CrossPointSettings::inxRecentLayout) {
       continue;
     }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       // The sunlight fading fix is a grayscale-waveform compensation that does
       // not apply on the X4 Pro / X4 Classic (plain OTP waveform, same panels).
       if (setting.valuePtr == &CrossPointSettings::fadingFix && (BoardConfig::isX4Pro() || FREEINK_DEVICE_X4CLASSIC)) {
+        continue;
+      }
+      // CPY's home is a fixed dashboard, so its recents-layout picker would be
+      // a dead control there; INX keeps the pickable variants.
+      if (setting.valuePtr == &CrossPointSettings::inxRecentLayout &&
+          UITheme::getInstance().usesCpyLayout()) {
+        continue;
+      }
+      // The density picker only drives the CPY row rhythm; INX has none.
+      if (setting.valuePtr == &CrossPointSettings::uiDensity && !UITheme::getInstance().usesCpyLayout()) {
         continue;
       }
       displaySettings.push_back(setting);
@@ -339,6 +478,7 @@ void SettingsActivity::rebuildSettingsLists() {
 #if FREEINK_CAP_BLE_HID_HOST
   controlsSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
 #endif
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_APPS_TITLE, SettingAction::Apps));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_APP_VISIBILITY, SettingAction::AppVisibility));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_DATE_AND_TIME, SettingAction::ClockSettings));
   if (BoardConfig::hasHomeKey()) {
@@ -371,15 +511,11 @@ void SettingsActivity::rebuildSettingsLists() {
   // UI but are intentionally absent from release assets in this sync.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_SCREEN_REPAIR, SettingAction::ScreenRepair));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_PLUGINS, SettingAction::Plugins));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
-  if (usesAccordion()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
-  } else {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  }
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.insert(readerSettings.begin() + 1,
@@ -414,14 +550,18 @@ void SettingsActivity::onEnter() {
   // Reset selection to first category (ring position 0, the tab bar, comes
   // from the base's per-tab nav reset)
   selectedCategoryIndex = 0;
-  expandedCategories = 0;
-  dictionariesLoaded = !usesAccordion();
   preserveQuickResumeTimeoutOn =
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
   syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
   rebuildSettingsLists();
+  // The My dashboard opens a specific category; consume it once so a later
+  // re-entry does not keep jumping back to it.
+  if (initialCategory_ != 0) {
+    selectCategory(initialCategory_);
+    initialCategory_ = 0;
+  }
 }
 
 void SettingsActivity::selectCategory(const int categoryIndex) {
@@ -450,48 +590,94 @@ void SettingsActivity::selectCategory(const int categoryIndex) {
 // list changes, never from buildScreen(), which only refreshes rowValues_
 // content and rowItems_[].value pointers in place.
 void SettingsActivity::rebuildRowItems() {
-  if (usesAccordion()) {
-    rebuildAccordionRows();
-    return;
-  }
   const auto& settings = *currentSettings;
   rowValues_.assign(settings.size(), std::string());
   rowItems_.clear();
-  rowItems_.reserve(settings.size());
-  for (size_t i = 0; i < settings.size(); i++) {
+  rowSettingIndex_.clear();
+  rowItems_.reserve(settings.size() + 6);
+  rowSettingIndex_.reserve(settings.size() + 6);
+
+  // Design frame 06: a section header per logical group, not one header that
+  // just repeats the chip above it. Grouping is applied here (display order
+  // only) so the shared setting list and its persistence order stay intact.
+  std::vector<uint16_t> order(settings.size());
+  for (uint16_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [&settings](const uint16_t left, const uint16_t right) {
+    return groupForSetting(settings[left]).rank < groupForSetting(settings[right]).rank;
+  });
+
+  const bool cpyIcons = UITheme::getInstance().usesCpyLayout();
+  StrId currentGroup = StrId::STR_NONE_OPT;
+  for (const uint16_t index : order) {
+    const SettingInfo& setting = settings[index];
+    const SettingsGroup group = groupForSetting(setting);
+    if (group.label != currentGroup) {
+      fui::ListItem header;
+      header.label = I18N.get(group.label);
+      header.isHeader = true;
+      header.actionValue = -1;
+      rowItems_.push_back(header);
+      rowSettingIndex_.push_back(-1);
+      currentGroup = group.label;
+    }
+
     fui::ListItem item;
-    item.label = I18N.get(settings[i].nameId);
-    item.actionValue = static_cast<int16_t>(i);
+    item.label = I18N.get(setting.nameId);
+    // actionValue is this row's index in rowItems_ (FreeInkUI reports it on a
+    // tap; UiTabListActivity turns it into ring = row + 1), NOT the setting
+    // index: group headers inserted above make the two diverge.
+    const auto row = static_cast<int16_t>(rowItems_.size());
+    item.actionValue = row;
+    // Design frame 06: every row carries a leading glyph; rows without a
+    // sensible match stay icon-less rather than wear a misleading one. Gated
+    // to the high-density profile so C3 does not pay the icon table's flash.
+    if (cpyIcons) {
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+      if (const freeink::Icon* icon = settings_icons::forSetting(setting.nameId)) {
+        item.icon = fui::bitmapFromIcon(*icon);
+      }
+#endif
+    }
     rowItems_.push_back(item);
+    rowSettingIndex_.push_back(static_cast<int16_t>(index));
   }
 }
 
-int SettingsActivity::listCount() const {
-  return usesAccordion() ? InxAccordionGeometry::visibleCount(accordionSettingCounts(), expandedCategories)
-                         : settingsCount;
+int SettingsActivity::settingIndexAtRow(const int row) const {
+  if (row < 0 || row >= static_cast<int>(rowSettingIndex_.size())) return -1;
+  return rowSettingIndex_[static_cast<size_t>(row)];
 }
 
-freeink::ui::ListNav& SettingsActivity::activeNav() { return usesAccordion() ? nav : UiTabListActivity::activeNav(); }
-
-void SettingsActivity::rebuildAccordionRows() {
-  const auto counts = accordionSettingCounts();
-  const int count = InxAccordionGeometry::visibleCount(counts, expandedCategories);
-  rowLabels_.resize(static_cast<size_t>(count));
-  rowValues_.resize(static_cast<size_t>(count));
-  rowItems_.clear();
-  rowItems_.reserve(static_cast<size_t>(count));
-  for (int index = 0; index < count; ++index) {
-    const auto row = InxAccordionGeometry::rowAt(counts, expandedCategories, index);
-    const bool category = row.isCategory();
-    rowLabels_[index] = category ? I18N.get(categoryNames[row.category])
-                                 : std::string("  ") + I18N.get(settingsForCategory(row.category)[row.setting].nameId);
-    fui::ListItem item;
-    item.label = rowLabels_[index].c_str();
-    item.actionValue = static_cast<int16_t>(index);
-    if (category) item.state = fui::StateEmphasized;
-    rowItems_.push_back(item);
+int SettingsActivity::firstSelectableRing() const {
+  for (size_t i = 0; i < rowSettingIndex_.size(); ++i) {
+    if (rowSettingIndex_[i] >= 0) return static_cast<int>(i) + 1;
   }
+  return 0;
 }
+
+int SettingsActivity::lastSelectableRing() const {
+  for (int i = static_cast<int>(rowSettingIndex_.size()) - 1; i >= 0; --i) {
+    if (rowSettingIndex_[static_cast<size_t>(i)] >= 0) return i + 1;
+  }
+  return 0;
+}
+
+int SettingsActivity::nextSelectableRing(const int from, const int direction) const {
+  const int ringSize = listCount() + 1;
+  if (ringSize <= 1) return from;
+  int ring = from;
+  for (int step = 0; step < ringSize; ++step) {
+    ring = direction > 0 ? ButtonNavigator::nextIndex(ring, ringSize)
+                         : ButtonNavigator::previousIndex(ring, ringSize);
+    if (ring == 0 || settingIndexAtRow(ring - 1) >= 0) return ring;
+  }
+  return from;
+}
+
+int SettingsActivity::listCount() const { return static_cast<int>(rowItems_.size()); }
+
+freeink::ui::ListNav& SettingsActivity::activeNav() { return UiTabListActivity::activeNav(); }
+
 
 void SettingsActivity::onTabAction(const int index) {
   if (optionPopup.isActive()) return;
@@ -504,15 +690,6 @@ void SettingsActivity::onTabAction(const int index) {
 
 void SettingsActivity::activateIndex(const int index) {
   if (optionPopup.isActive()) return;
-  if (usesAccordion()) {
-    const auto row = InxAccordionGeometry::rowAt(accordionSettingCounts(), expandedCategories, index);
-    if (row.isCategory())
-      toggleAccordionCategory(row.category);
-    else
-      toggleAccordionSetting(row.category, row.setting);
-    app.clearTapFlash();
-    return;
-  }
   (void)index;  // toggleCurrentSetting reads the ring position
   // Most rows repaint a different surface (popup, sub-activity, new value);
   // a lingering tap flash would gray an unrelated element.
@@ -527,14 +704,7 @@ void SettingsActivity::activateIndex(const int index) {
   }
 }
 
-void SettingsActivity::onRowAction(const fui::ActionEvent& event) {
-  if (!usesAccordion()) {
-    UiTabListActivity::onRowAction(event);
-    return;
-  }
-  nav.selected = event.value;
-  activateIndex(event.value);
-}
+void SettingsActivity::onRowAction(const fui::ActionEvent& event) { UiTabListActivity::onRowAction(event); }
 
 void SettingsActivity::onExit() {
   Activity::onExit();
@@ -542,32 +712,36 @@ void SettingsActivity::onExit() {
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
-void SettingsActivity::applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr) {
-  // Theme changes take effect immediately, on this screen — reload the theme
-  // and re-derive the app's tokens so the very next repaint is in the new look.
-  if (valuePtr != &CrossPointSettings::uiTheme) {
-    return;
-  }
-  RenderLock lock(*this);
-  UITheme::getInstance().reload();
-  expandedCategories = 0;
-  nav.reset();
-  rebuildSettingsLists();
-  // Re-derive the shared tokens for the new look; the gate stays closed until
-  // the repaint that rebuilds the interaction table in the new layout.
-  resetUi();
-}
 
 bool SettingsActivity::handleCustomInput() {
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
 void SettingsActivity::navigateButtons() {
-  if (usesAccordion()) {
-    UiListActivity::navigateButtons();
-    return;
+  if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
+      mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
+    navigationStartedOnTabs = ringPos() == 0;
   }
-  UiTabListActivity::navigateButtons();
+  // Section header rows are not selectable: step over them instead of letting
+  // Confirm land on a row that has no setting behind it.
+  buttonNavigator.onNextPress([this] { moveRingTo(nextSelectableRing(ringPos(), 1)); });
+  buttonNavigator.onPreviousPress([this] { moveRingTo(nextSelectableRing(ringPos(), -1)); });
+  buttonNavigator.onNextContinuous([this] {
+    if (navigationStartedOnTabs) {
+      activeNav().selected = 0;
+    } else if (ringPos() == 0 && listCount() > 0) {
+      activeNav().selected = firstSelectableRing();
+    }
+    stepTab(1);
+  });
+  buttonNavigator.onPreviousContinuous([this] {
+    if (navigationStartedOnTabs) {
+      activeNav().selected = 0;
+    } else if (ringPos() == 0 && listCount() > 0) {
+      activeNav().selected = firstSelectableRing();
+    }
+    stepTab(-1);
+  });
 }
 
 void SettingsActivity::stepTab(const int direction) {
@@ -577,31 +751,11 @@ void SettingsActivity::stepTab(const int direction) {
   selectedCategoryIndex = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
                                         : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
   selectCategory(selectedCategoryIndex);
-  activeNav().selected = onTabBar ? 0 : 1;
+  activeNav().selected = onTabBar ? 0 : firstSelectableRing();
   requestUpdate();
 }
 
 bool SettingsActivity::handleButtons() {
-  if (usesAccordion()) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      activateIndex(nav.selected);
-      return true;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      if (expandedCategories != 0) {
-        const auto row = InxAccordionGeometry::rowAt(accordionSettingCounts(), expandedCategories, nav.selected);
-        const uint8_t mask = row.category >= 0 ? static_cast<uint8_t>(uint8_t{1} << row.category) : 0;
-        expandedCategories =
-            (mask != 0 && (expandedCategories & mask) != 0) ? static_cast<uint8_t>(expandedCategories & ~mask) : 0;
-        rebuildAccordionRows();
-        nav.selected = std::min<int>(nav.selected, listCount() - 1);
-        nav.follow(listCount());
-        requestUpdate();
-      }
-      return true;
-    }
-    return false;
-  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (ringPos() == 0) {
       stepTab(1);
@@ -613,7 +767,12 @@ bool SettingsActivity::handleButtons() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (ringPos() > 0) {
+    if (subpage_) {
+      // A child page always leaves in one press (header arrow, Back key or
+      // edge gesture): it returns to My/Search, not Home.
+      SETTINGS.saveToFile();
+      finish();
+    } else if (ringPos() > 0) {
       activeNav().selected = 0;
       requestUpdate();
     } else {
@@ -626,61 +785,14 @@ bool SettingsActivity::handleButtons() {
   return false;
 }
 
-bool SettingsActivity::usesAccordion() const { return UITheme::getInstance().hasMainTabs(); }
 
-const std::vector<SettingInfo>& SettingsActivity::settingsForCategory(const int categoryIndex) const {
-  switch (categoryIndex) {
-    case 0:
-      return displaySettings;
-    case 1:
-      return readerSettings;
-    case 2:
-      return controlsSettings;
-    case 3:
-      return systemSettings;
-  }
-  return displaySettings;
-}
 
-std::array<int, SettingsActivity::categoryCount> SettingsActivity::accordionSettingCounts() const {
-  return {static_cast<int>(displaySettings.size()), static_cast<int>(readerSettings.size()),
-          static_cast<int>(controlsSettings.size()), static_cast<int>(systemSettings.size())};
-}
 
-void SettingsActivity::toggleAccordionCategory(const int categoryIndex) {
-  if (categoryIndex < 0 || categoryIndex >= categoryCount) return;
-  const uint8_t mask = static_cast<uint8_t>(uint8_t{1} << categoryIndex);
-  if (categoryIndex == 1 && !dictionariesLoaded && (expandedCategories & mask) == 0) {
-    dictionariesLoaded = true;
-    rebuildSettingsLists();
-  }
-  expandedCategories ^= mask;
-  rebuildAccordionRows();
-  nav.selected = InxAccordionGeometry::categoryRow(accordionSettingCounts(), expandedCategories, categoryIndex);
-  nav.follow(listCount());
-  requestUpdate();
-}
 
-void SettingsActivity::toggleAccordionSetting(const int categoryIndex, const int settingIndex) {
-  if (categoryIndex < 0 || categoryIndex >= categoryCount) return;
-  const auto& settings = settingsForCategory(categoryIndex);
-  if (settingIndex < 0 || settingIndex >= static_cast<int>(settings.size())) return;
-  selectedCategoryIndex = categoryIndex;
-  currentSettings = &settings;
-  settingsCount = static_cast<int>(settings.size());
-  tabNavs[static_cast<size_t>(categoryIndex)].selected = settingIndex + 1;
-  toggleCurrentSetting();
-  if (!usesAccordion()) return;
-  rebuildAccordionRows();
-  nav.selected =
-      InxAccordionGeometry::categoryRow(accordionSettingCounts(), expandedCategories, categoryIndex) + 1 + settingIndex;
-  nav.follow(listCount());
-  requestUpdate();
-}
 
 void SettingsActivity::toggleCurrentSetting() {
   mappedInput.resetHomeButtonInput();
-  int selectedSetting = ringPos() - 1;
+  const int selectedSetting = settingIndexAtRow(ringPos() - 1);
   if (selectedSetting < 0 || selectedSetting >= settingsCount) {
     return;
   }
@@ -694,6 +806,14 @@ void SettingsActivity::toggleCurrentSetting() {
     openSleepTimeoutPicker();
     return;
   }
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+  // A plain VALUE row only steps upward on confirm; open the shared slider
+  // (drag, -/+ buttons, held keys) so strength can also go down and be heard.
+  if (setting.valuePtr == &CrossPointSettings::buzzerStrength) {
+    openBuzzerStrengthPicker();
+    return;
+  }
+#endif
 
   if (setting.valuePtr == &CrossPointSettings::readingBackgroundEnabled) {
     openReadingBackgroundMenu();
@@ -713,21 +833,39 @@ void SettingsActivity::toggleCurrentSetting() {
           setting.nameId, enumLabels.data(), static_cast<int>(enumLabels.size()), currentValue,
           [this, valuePtr, sleepScreenChanged, quickResumeTimeoutChanged](int idx) {
             SETTINGS.*valuePtr = idx;
+            // Kept for the case uiDensity grows past two values; the two-value
+            // path above is what runs today.
+            if (valuePtr == &CrossPointSettings::uiDensity) applyUiCjkFallbacks(renderer, idx != 0);
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+            // Preview the sound the user just picked. The tap on the option row
+            // already emitted a cue with the old values, so preview() restarts
+            // instead of being swallowed by the minimum-gap window.
+            if (valuePtr == &CrossPointSettings::buzzerPitch) {
+              BuzzerFeedback::preview(static_cast<BuzzerFeedback::Pitch>(idx), SETTINGS.buzzerStrength);
+            } else if (valuePtr == &CrossPointSettings::buzzerFeedbackSource &&
+                       idx != CrossPointSettings::BUZZER_FEEDBACK_OFF) {
+              BuzzerFeedback::preview(static_cast<BuzzerFeedback::Pitch>(SETTINGS.buzzerPitch),
+                                      SETTINGS.buzzerStrength);
+            }
+#endif
 #if FREEINK_CAP_HAPTIC && !defined(SIMULATOR)
             if (valuePtr == &CrossPointSettings::hapticFeedbackLevel && idx == CrossPointSettings::HAPTIC_FEEDBACK_OFF)
               gpio.stopHapticFeedback();
 #endif
             syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
             SETTINGS.saveToFile();
-            if (valuePtr == &CrossPointSettings::uiTheme)
-              applyUiSettingChange(valuePtr);
-            else
-              rebuildSettingsLists();
+            rebuildSettingsLists();
           });
       requestUpdate();
       return;
     }
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(enumLabels.size());
+    // UI density also picks the Chinese glyph size: comfortable keeps the
+    // size-matched 14/16pt faces, compact uses the wide 12pt face. Re-wire the
+    // renderer fallbacks before the next frame is built.
+    if (setting.valuePtr == &CrossPointSettings::uiDensity) {
+      applyUiCjkFallbacks(renderer, SETTINGS.uiDensity != 0);
+    }
   } else if (setting.type == SettingType::ENUM && setting.valueGetter && setting.valueSetter) {
     const uint8_t totalValues = setting.enumStringValues.empty()
                                     ? static_cast<uint8_t>(setting.enumLabels().size())
@@ -801,6 +939,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ReadingStatsSettings:
         startActivityForResultWith<ReadingStatsSettingsActivity>(resultHandler);
         break;
+      case SettingAction::Apps:
+        activityManager.goToApps();
+        break;
       case SettingAction::AppVisibility:
         startActivityForResultWith<AppVisibilitySettingsActivity>(resultHandler);
         break;
@@ -852,6 +993,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::SdFirmwareUpdate:
         startActivityForResultWith<SdFirmwareUpdateActivity>(resultHandler);
         break;
+      case SettingAction::ScreenRepair:
+        startActivityForResultWith<ScreenRepairActivity>(resultHandler);
+        break;
       case SettingAction::DownloadFonts:
         releaseListsForMemoryHungryChild();
         if (!startActivityForResultWith<FontDownloadActivity>(resultHandler)) {
@@ -889,10 +1033,7 @@ void SettingsActivity::toggleCurrentSetting() {
         });
         break;
       case SettingAction::About:
-        if (usesAccordion())
-          startActivityForResultWith<InxAboutActivity>(resultHandler);
-        else
-          startActivityForResultWith<AboutActivity>(resultHandler);
+        startActivityForResultWith<AboutActivity>(resultHandler);
         break;
       case SettingAction::Plugins:
         startActivityForResultWith<PluginCatalogActivity>(resultHandler);
@@ -915,12 +1056,10 @@ void SettingsActivity::toggleCurrentSetting() {
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   SETTINGS.saveToFile();
-  if (changedValuePtr == &CrossPointSettings::uiTheme) {
-    applyUiSettingChange(changedValuePtr);
-  } else {
-    rebuildSettingsLists();
-    activeNav().selected = std::min(ringPos(), settingsCount);
-  }
+  rebuildSettingsLists();
+  // Ring positions include the group headers; settingsCount does not. Clamping
+  // to settingsCount snapped a row below a header back to an earlier setting.
+  activeNav().selected = std::min(ringPos(), listCount());
 }
 
 void SettingsActivity::confirmRestoreSystemSettings() {
@@ -980,7 +1119,6 @@ void SettingsActivity::releaseListsForMemoryHungryChild() {
   // leaves that heap to the child.
   std::vector<freeink::ui::ListItem>().swap(rowItems_);
   std::vector<std::string>().swap(rowValues_);
-  std::vector<std::string>().swap(rowLabels_);
   std::vector<SettingInfo>().swap(displaySettings);
   std::vector<SettingInfo>().swap(readerSettings);
   std::vector<SettingInfo>().swap(controlsSettings);
@@ -1015,6 +1153,33 @@ void SettingsActivity::openSleepTimeoutPicker() {
       CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1, 5,
       StrId::STR_SLEEP_TIMER_VALUE_FORMAT, false, StrId::STR_SLEEP_NEVER);
 }
+
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+void SettingsActivity::openBuzzerStrengthPicker() {
+  lastBuzzerPreviewMs_ = 0;
+  startActivityForResultWith<IntervalSelectionActivity>(
+      [this](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          const int value = std::get<IntervalResult>(result.data).value;
+          SETTINGS.buzzerStrength = static_cast<uint8_t>(std::clamp(value, 0, 100));
+          SETTINGS.saveToFile();
+          BuzzerFeedback::preview(static_cast<BuzzerFeedback::Pitch>(SETTINGS.buzzerPitch),
+                                  SETTINGS.buzzerStrength);
+        }
+        requestUpdate();
+      },
+      "BuzzerStrength", StrId::STR_BUZZER_STRENGTH, SETTINGS.buzzerStrength, 0, 100, 1, 5, StrId::STR_NONE_OPT,
+      false, StrId::STR_NONE_OPT, [this](const int value) {
+        // A held key or a fast drag changes the value every few tens of ms;
+        // preview at most every 120 ms so the coil does not chatter.
+        const unsigned long now = millis();
+        if (now - lastBuzzerPreviewMs_ < 120) return;
+        lastBuzzerPreviewMs_ = now;
+        BuzzerFeedback::preview(static_cast<BuzzerFeedback::Pitch>(SETTINGS.buzzerPitch),
+                                static_cast<uint8_t>(std::clamp(value, 0, 100)));
+      });
+}
+#endif
 
 void SettingsActivity::openReadingBackgroundMenu() {
   static constexpr StrId OPTIONS[] = {StrId::STR_STATE_OFF, StrId::STR_CUSTOM_IMAGE};
@@ -1065,10 +1230,10 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.
-    const uint8_t value = setting.valuePtr == &CrossPointSettings::uiTheme &&
-                                  SETTINGS.uiTheme == CrossPointSettings::COVER_GRID && !UITheme::supportsCoverGrid()
-                              ? CrossPointSettings::LYRA
-                              : SETTINGS.*(setting.valuePtr);
+    uint8_t value = SETTINGS.*(setting.valuePtr);
+    if (setting.valuePtr == &CrossPointSettings::uiTheme && value >= CrossPointSettings::UI_THEME_COUNT) {
+      value = CrossPointSettings::CPY;
+    }
     const auto enumLabels = setting.enumLabels();
     if (value >= enumLabels.size()) return "";
     return I18N.get(enumLabels[value]);
@@ -1099,6 +1264,35 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
   return "";
 }
 
+void SettingsActivity::buildTabBar(UiScreen& screen, const bool) {
+  // Same tab language as the My dashboard: plain text, 4 px underline on the
+  // active category, no black pill. The old capsule tabs made a subgroup look
+  // like a different app from the page that opened it.
+  const auto& tokens = screen.theme();
+  const fui::Rect band = screen.takeTop(72, 8).inset(fui::Insets{0, 40, 0, 40});
+  fui::Paint ink = fui::Paint::solid(fui::Color::Black);
+  int x = band.x;
+  const char* labels[4] = {I18N.get(StrId::STR_CAT_DISPLAY), I18N.get(StrId::STR_CAT_READER),
+                           I18N.get(StrId::STR_CAT_CONTROLS), I18N.get(StrId::STR_CAT_SYSTEM)};
+  for (int i = 0; i < 4; ++i) {
+    fui::TextStyle style = tokens.bodyText;
+    const bool active = i == selectedCategoryIndex;
+    style.bold = active;
+    const int16_t textW = screen.target().measureText(style.font, labels[i], style).width;
+    screen.target().text(fui::Rect{static_cast<int16_t>(x), band.y, textW, band.height}, labels[i], style);
+    if (active) {
+      const int16_t lineH = screen.target().lineHeight(style.font);
+      const int16_t underlineY = static_cast<int16_t>(band.y + (band.height + lineH) / 2 + 4);
+      screen.target().fill(fui::Rect{static_cast<int16_t>(x), underlineY, textW, 4}, ink, 2);
+    }
+    screen.frame().hit(fui::Rect{static_cast<int16_t>(x - 8), band.y, static_cast<int16_t>(textW + 16), band.height},
+                       ACTION_TAB, static_cast<int16_t>(i), fui::InputTouch);
+    x += textW + 36;
+  }
+  const int16_t ruleY = static_cast<int16_t>(band.bottom() - 1);
+  screen.target().fill(fui::Rect{40, ruleY, static_cast<int16_t>(renderer.getScreenWidth() - 80), 1}, ink);
+}
+
 void SettingsActivity::buildScreen(UiScreen& screen) {
   const auto applyCheckbox = [](const SettingInfo& setting, fui::ListItem& item) {
     item.toggle = false;
@@ -1112,60 +1306,47 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
     }
   };
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const bool boldChineseCategories = usesAccordion() && I18N.getLanguage() == Language::ZH_CN;
   const Rect content = pageContentRect();
+  // The list band spans the screen; the ROWS are inset 34 by rowInset so the
+  // scroll track can live in the 32px card margin instead of on the card's
+  // right border (device feedback, 2026-10-20).
+  const int16_t sideMargin = UITheme::getInstance().usesCpyLayout() ? 0 : content.x;
+  const int16_t rightMargin = UITheme::getInstance().usesCpyLayout()
+                                  ? 0
+                                  : static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width);
   screen.setContentMarginFromScreen(fui::Insets{
-      static_cast<int16_t>(content.y), static_cast<int16_t>(renderer.getScreenWidth() - content.x - content.width),
-      static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), static_cast<int16_t>(content.x)});
+      static_cast<int16_t>(content.y), rightMargin,
+      static_cast<int16_t>(renderer.getScreenHeight() - content.y - content.height), sideMargin});
 
-  if (usesAccordion()) {
-    const auto counts = accordionSettingCounts();
-    for (int i = 0; i < listCount(); ++i) {
-      const auto row = InxAccordionGeometry::rowAt(counts, expandedCategories, i);
-      rowValues_[i] = row.isCategory() ? ((expandedCategories & (uint8_t{1} << row.category)) != 0 ? "-" : "+")
-                                       : settingValueText(settingsForCategory(row.category)[row.setting]);
-      rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
-      rowItems_[i].toggle = false;
-      if (!row.isCategory()) applyCheckbox(settingsForCategory(row.category)[row.setting], rowItems_[i]);
-    }
-    fui::ListProps props;
-    props.items = rowItems_.data();
-    props.count = static_cast<uint16_t>(rowItems_.size());
-    props.action = ACTION_ROW;
-    props.inputMask = fui::InputTouch;
-    props.labelText = screen.theme().bodyText;
-    props.valueText = screen.theme().bodyText;
-    syncListViewport(screen, props);
-    if (!showMainTabContentSelection()) props.selectedIndex = -1;
-    if (boldChineseCategories) {
-      props.labelText.bold = false;
-      props.valueText.bold = false;
-    }
-    GfxRenderer::SyntheticBoldScope syntheticBold(renderer, boldChineseCategories
-                                                                ? CrossPointSettings::SYNTHETIC_BOLD_STANDARD
-                                                                : CrossPointSettings::SYNTHETIC_BOLD_OFF);
-    screen.list(props);
-    return;
-  }
 
   {
-    GfxRenderer::SyntheticBoldScope syntheticBold(renderer, boldChineseCategories
-                                                                ? CrossPointSettings::SYNTHETIC_BOLD_STANDARD
-                                                                : CrossPointSettings::SYNTHETIC_BOLD_OFF);
-    buildTabBar(screen, boldChineseCategories);
+    GfxRenderer::SyntheticBoldScope syntheticBold(renderer, CrossPointSettings::SYNTHETIC_BOLD_OFF);
+    buildTabBar(screen, false);
   }
 
-  // rowItems_ (label/actionValue) was built by rebuildRowItems() when the
-  // category was last selected/rebuilt; only the live value text needs
-  // refreshing here, by assigning into the existing rowValues_ strings (no
-  // vector growth) rather than building a new items/values vector on every
-  // render.
+  // rowItems_ (label/actionValue plus group headers) was built by
+  // rebuildRowItems() when the category was last selected/rebuilt; only the
+  // live value text needs refreshing here. Headers have no setting behind
+  // them, so every refresh goes through rowSettingIndex_.
   const auto& settings = *currentSettings;
-  for (size_t i = 0; i < settings.size(); i++) {
-    rowValues_[i] = settingValueText(settings[i]);
-    rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
-    rowItems_[i].toggle = false;
-    applyCheckbox(settings[i], rowItems_[i]);
+  const bool cpyRows = UITheme::getInstance().usesCpyLayout();
+  for (size_t r = 0; r < rowSettingIndex_.size(); ++r) {
+    const int settingIndex = rowSettingIndex_[r];
+    if (settingIndex < 0) continue;
+    const SettingInfo& setting = settings[static_cast<size_t>(settingIndex)];
+    rowValues_[static_cast<size_t>(settingIndex)] = settingValueText(setting);
+    rowItems_[r].toggle = false;
+    applyCheckbox(setting, rowItems_[r]);
+    // Design frame 06: picker rows end with a chevron. The SDK ListItem has
+    // no chevron slot, so the value string carries it; toggle rows keep the
+    // switch and no value (setCheckboxRow nulls it — the checkbox-row pin
+    // asserts exactly that). U+203A is the thin mark the mockup uses.
+    if (cpyRows && !rowItems_[r].toggle) {
+      std::string& value = rowValues_[static_cast<size_t>(settingIndex)];
+      value += value.empty() ? "\xE2\x80\xBA" : " \xE2\x80\xBA";
+    }
+    const std::string& value = rowValues_[static_cast<size_t>(settingIndex)];
+    rowItems_[r].value = rowItems_[r].toggle || value.empty() ? nullptr : value.c_str();
   }
 
   fui::ListProps props;
@@ -1180,7 +1361,55 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   // fails textStyleUnset and the list would substitute bodyText back); the
   // common fits-on-one-line case takes the renderer's fast path anyway.
   props.labelText = screen.theme().smallText;
-  props.labelText.maxLines = 2;
+  props.labelText.maxLines = 1;
+  // Fixed row rhythm so the per-group cards drawn in drawFooter can follow the
+  // list geometry exactly; the design's rows are single-line.
+  props.rowHeight = mappedInput.hasTouch() ? screen.theme().rowHeight
+                                           : static_cast<int16_t>(UITheme::getInstance().getMetrics().listRowHeight);
+  if (UITheme::getInstance().usesCpyLayout()) props.rowHeight = 80;
+  props.rowGap = 0;
+  // Section headers inside the card (design frame 06 .grp): a bold label with
+  // its own underline, airier than a row.
+  props.headerText = screen.theme().smallText;
+  props.headerText.bold = true;
+  props.headerRowHeight = kCpyGroupHeaderH;
+  props.sectionGap = kCpyGroupSectionGap;
+  if (UITheme::getInstance().usesCpyLayout()) {
+    // Design frame 06 row metrics: the card sits at margin 32 with a 2px ring
+    // and 24px row padding, so the row content runs [58, 626]. With the 34px
+    // content margin above, a 24px row inset reproduces that axis exactly
+    // (icons land at 58, the value/chevron flush at 626).
+    props.sidePadding = 24;
+    props.valueInset = 0;
+    props.iconSize = 40;
+    props.textGap = 18;
+    // Rows sit inside the 32px card ring; the track is pushed into that outer
+    // margin so it never rides the card's right border.
+    props.rowInset = 34;
+    props.scrollIndicatorInset = 6;
+    // Fill the last incomplete row slot with a clipped preview of the next
+    // setting instead of leaving an empty band above the tab bar. The preview
+    // is non-interactive; scrolling reveals the full row.
+    props.partialTrailingRow = true;
+    props.partialTrailingMinHeight = 24;
+    // Design frame 06: rows inside a group carry no dividers; the group card
+    // ring is drawn under them by drawChrome.
+    props.separator = fui::SeparatorStyle::None;
+    // Pill switch (design frame 06 .sw): 56x32 track, fully rounded, with a
+    // 24px round knob and a 2px ink outline. The SDK default is a square
+    // 38x18 track with square corners — the legacy CrossMux look.
+    props.toggleCheckbox = false;
+    props.toggleWidth = 56;
+    props.toggleHeight = 32;
+    props.toggleRadius = 16;
+    props.toggleKnobRadius = 12;
+    props.toggleKnobInset = 3;
+    props.toggleBorderWidth = 2;
+  }
+  const fui::Rect listBody = screen.body();
+  listTop_ = listBody.y;
+  listBottom_ = listBody.bottom();
+  listRowH_ = props.rowHeight;
   syncTabListViewport(screen, props);
   screen.list(props);
 }
@@ -1193,23 +1422,96 @@ void SettingsActivity::drawChrome() {
   // indicator; the rest of the screen renders through the app.
   // Version rides in the header's trailing label slot: the footer position
   // conflicts with button hints on non-touch devices.
-  drawPageHeader(Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
+  if (subpage_) {
+    // Child of My/Search: the theme draws the back circle; the category strip
+    // right below already names the active group, so the header stays quiet.
+    drawPageHeader(Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE));
+  } else {
+    drawPageHeader(Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
+                   CROSSPOINT_VERSION);
+  }
+
+  // The category name lives in the capsule above; the old second copy of it
+  // (a group label + double rule between the capsules and the card) is gone.
+  // Group names now live inside the list, one per sub-section.
 }
 
 void SettingsActivity::drawFooter() {
-  if (usesAccordion()) {
-    const auto labels = mainTabButtonLabels(tr(STR_BACK), tr(STR_TOGGLE), listCount() > 1);
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    return;
+  // The group card ring lives here, AFTER the fui list pass: the list's row
+  // background covered the ring's side strokes when drawn in drawChrome (the
+  // top/bottom arcs survived because they sit outside the rows' y-span — sim
+  // forensics, 2026-10-17). drawFooter runs before displayBuffer in the same
+  // frame, so nothing paints over it.
+  if (UITheme::getInstance().usesCpyLayout() && listRowH_ > 0 && listBottom_ > listTop_) {
+    const Rect content = pageContentRect();
+    constexpr int kCardMargin = 32;
+    const int rx = content.x + kCardMargin;
+    const int rw = content.width - kCardMargin * 2;
+    const int clipTop = listTop_;
+    const int clipBottom = listBottom_;
+    const GfxRenderer::ClipScope clip(renderer, content.x, clipTop, content.width, clipBottom - clipTop);
+    // Open ends: when a group continues past the viewport, its rounded end is
+    // pushed outside the clip so only the straight sides reach the edge. A
+    // closed bottom on every page made a long group look like a series of
+    // separate cards (device feedback, 2026-10-20).
+    const auto drawCard = [&](const int top, const int bottom, const bool roundTop, const bool roundBottom) {
+      const int y0 = std::max(top, clipTop);
+      const int y1 = std::min(bottom, clipBottom);
+      if (y1 - y0 < 4) return;
+      constexpr int kEndExtend = 24;  // > card radius; the arc lands outside the clip
+      const int drawTop = roundTop ? y0 : y0 - kEndExtend;
+      const int drawBottom = roundBottom ? y1 : y1 + kEndExtend;
+      renderer.drawRoundedRect(rx, drawTop, rw, drawBottom - drawTop, 2, 20, true);
+      const int sideTop = y0 + (roundTop ? 18 : 0);
+      const int sideBottom = y1 - (roundBottom ? 18 : 0);
+      if (sideBottom > sideTop) {
+        renderer.fillRect(rx, sideTop, 2, sideBottom - sideTop, true);
+        renderer.fillRect(rx + rw - 2, sideTop, 2, sideBottom - sideTop, true);
+      }
+    };
+    // Design frame 06: each group is its own rounded card. The list layout is
+    // deterministic here (fixed row height, no row gap), so replay its cursor
+    // from the viewport's top index and close a card at every next header.
+    int cursor = clipTop;
+    int groupStart = clipTop;
+    bool groupHasRow = false;
+    bool groupRoundTop = false;  // no visible header => the group began above
+    const int topIndex = activeNav().top;
+    const int count = static_cast<int>(rowItems_.size());
+    for (int i = topIndex; i < count; ++i) {
+      if (rowItems_[i].isHeader) {
+        if (groupHasRow) drawCard(groupStart, cursor, groupRoundTop, true);
+        groupHasRow = false;
+        if (i != topIndex) cursor += kCpyGroupSectionGap;
+        if (cursor + kCpyGroupHeaderH > clipBottom) break;
+        cursor += kCpyGroupHeaderH;
+        groupStart = cursor;
+        groupRoundTop = true;
+        continue;
+      }
+      if (cursor + listRowH_ > clipBottom) {
+        // A partial next row is still painted (partialTrailingRow): keep the
+        // group card open through it, including the first row after a header.
+        if (groupHasRow || groupRoundTop) drawCard(groupStart, clipBottom, groupRoundTop, false);
+        return;
+      }
+      if (!groupHasRow) groupHasRow = true;
+      cursor += listRowH_;
+    }
+    if (groupHasRow) drawCard(groupStart, cursor, groupRoundTop, true);
   }
+
   const int ring = ringPos();
+  const int settingIndex = settingIndexAtRow(ring - 1);
   const auto confirmLabel =
       (ring == 0) ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-                  : (ring > 0 && (*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP ? tr(STR_SELECT)
-                                                                                                 : tr(STR_TOGGLE));
+                  : (settingIndex >= 0 &&
+                             (*currentSettings)[static_cast<size_t>(settingIndex)].nameId == StrId::STR_TIME_TO_SLEEP
+                         ? tr(STR_SELECT)
+                         : tr(STR_TOGGLE));
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(subpage_ ? tr(STR_BACK) : tr(STR_HOME), confirmLabel, tr(STR_DIR_UP),
+                                            tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

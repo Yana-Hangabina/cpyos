@@ -136,10 +136,26 @@ jobs:
             --channel "${{ needs.prepare.outputs.channel }}" \
             --output "dist/${{ matrix.targetId }}"
           (cd "dist/${{ matrix.targetId }}" && sha256sum --check *-SHA256SUMS)
+      - name: Verify the package is the image this build produced
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_release_artifacts.py \
+            --target "${{ matrix.targetId }}" \
+            --firmware ".pio/build/${{ matrix.environment }}/firmware.bin" \
+            --dist "dist/${{ matrix.targetId }}" \
+            --release --no-data
+      - name: Build the browser flashing bundle
+        run: |
+          set -euo pipefail
+          python3 scripts/build_web_flasher.py "${{ matrix.targetId }}" \
+            --dist "dist/${{ matrix.targetId }}" \
+            --output "dist/web/${{ matrix.targetId }}"
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ needs.prepare.outputs.channel }}-${{ matrix.targetId }}
-          path: dist/${{ matrix.targetId }}
+          path: |
+            dist/${{ matrix.targetId }}
+            dist/web/${{ matrix.targetId }}
           if-no-files-found: error
           retention-days: 14
 

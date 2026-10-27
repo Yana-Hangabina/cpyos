@@ -133,6 +133,22 @@ its image-index magic, so a mismatch causes that chapter to be rebuilt when the
 user caches the book. Manual cache clearing remains the fallback for disposable
 legacy files.
 
+The JJWXC app follows the same rule with its own magics (`JXT1` per-chapter
+catalogue, `JXN1` per-novel metadata; see
+[../file-formats.md](../file-formats.md#jjwxc-cache)). Invalidation is
+per chapter: a record whose `remoteSize` no longer matches the server, or whose
+XHTML file has disappeared, drops back to `Missing` the next time the catalogue
+is fetched. There is no whole-book refresh flag, and an existing finished EPUB
+never triggers a re-pull; refreshing is an explicit user action. Because the
+finished EPUB keeps one fixed path while its contents grow, repackaging must
+drop that book's `epub_<hash>` reader cache — the path-keyed `book.bin` and
+`section.bin` carry no source size or modification time and would otherwise keep
+serving the previous pagination. Reading progress is carried across that drop
+only when the run purely appended chapters, and the app marks the library index
+dirty afterwards so the shelf re-walks the card. The pre-EPUB TXT products under
+`/.crosspoint/jjwxc/books/` are removed once, with their `txt_<hash>` caches,
+and are not migrated.
+
 **Example** (incrementing section format version):
 ```cpp
 // lib/Epub/Epub/Section.cpp

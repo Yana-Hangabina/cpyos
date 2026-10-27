@@ -344,8 +344,8 @@ def build_bundled(source_dir: Path, output_dir: Path, header_path: Path):
     total = 0
     ns = {'x': 'http://www.w3.org/1999/xhtml'}
     for language, symbol, filename in (
-        ('zh-CN', 'Chinese', 'CrossMux用户手册.epub'),
-        ('en', 'English', 'CrossMux User Guide.epub'),
+        ('zh-CN', 'Chinese', '脆皮鸭用户手册.epub'),
+        ('en', 'English', 'CPYOS User Guide.epub'),
     ):
         source = (source_dir / f'{language}.xhtml').read_text(encoding='utf-8')
         root = ET.fromstring(source)

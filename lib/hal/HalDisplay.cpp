@@ -106,6 +106,10 @@ EInkDisplay::RefreshContext convertRefreshContext(DisplayRefreshContext context)
       return EInkDisplay::RefreshContext::TextOnlyAntiAliasing;
     case DisplayRefreshContext::ImageReading:
       return EInkDisplay::RefreshContext::ImageReading;
+    case DisplayRefreshContext::TransientUi:
+      // Same waveform as Normal; the distinction lives only in GfxRenderer's
+      // sweep counter, which skips TransientUi pushes.
+      return EInkDisplay::RefreshContext::Normal;
   }
   return EInkDisplay::RefreshContext::Normal;
 }
@@ -155,6 +159,8 @@ void HalDisplay::deepSleep() { einkDisplay.deepSleep(); }
 
 uint8_t* HalDisplay::getFrameBuffer() const { return einkDisplay.getFrameBuffer(); }
 
+void HalDisplay::syncFrameBufferFromActive() { einkDisplay.syncWriteBufferFromActive(); }
+
 uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisplay.lendBuildStorage(sizeOut); }
 
 void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
@@ -197,6 +203,10 @@ void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.
 
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
 
+void HalDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
+  einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
+}
+
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
                                        yStart, numRows);
@@ -218,12 +228,25 @@ void HalDisplay::cancelGrayscale() {
   einkDisplay.beginDisplayWork();
 }
 
+void HalDisplay::setPageTurnDirection(int direction) { einkDisplay.setPageTurnDirection(direction); }
+
 uint16_t HalDisplay::getDisplayWidth() const { return einkDisplay.getDisplayWidth(); }
 
 uint16_t HalDisplay::getDisplayHeight() const { return einkDisplay.getDisplayHeight(); }
 uint8_t HalDisplay::getGrayscaleLevels() const { return einkDisplay.getGrayscaleLevels(); }
 uint8_t* HalDisplay::beginGrayscale16() { return einkDisplay.beginGrayscale16(); }
-bool HalDisplay::commitGrayscale16() { return einkDisplay.commitGrayscale16(); }
+uint8_t* HalDisplay::beginGrayscale16From1bpp(const uint8_t* fb) {
+  return einkDisplay.beginGrayscale16From1bpp(fb);
+}
+bool HalDisplay::commitGrayscale16(bool clean) { return einkDisplay.commitGrayscale16(clean); }
+bool HalDisplay::commitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                                       bool clean) {
+  (void)bwProxy;
+  return einkDisplay.commitGrayscale16Area(x, y, w, h, clean);
+}
+bool HalDisplay::commitGrayscale16Areas(const freeink::GrayArea* areas, int count, bool clean) {
+  return einkDisplay.commitGrayscale16Areas(areas, count, clean);
+}
 void HalDisplay::cancelGrayscale16() { einkDisplay.cancelGrayscale16(); }
 
 uint16_t HalDisplay::getDisplayWidthBytes() const { return einkDisplay.getDisplayWidthBytes(); }

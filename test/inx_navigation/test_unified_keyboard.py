@@ -17,7 +17,7 @@ def method(name):
     return re.search(r'^[^\n]*KeyboardEntryActivity::' + name + r'\(.*?\n}', source, re.M | re.S).group()
 
 
-names = ('currentLayout', 'selectedKey', 'selectedLogicalIndex', 'clampSelection',
+names = ('currentLayout', 'baseLayout', 'globeLogicalIndex', 'selectedKey', 'selectedLogicalIndex', 'clampSelection',
          'moveSelectionRow', 'moveSelectionCol', 'syncSelectionToValue', 'utf8Prev',
          'insertUtf8', 'backspaceUtf8', 'activateValue', 'clearAllOrAltOnSelected', 'keyboardRect', 'keyboardKeysRect', 'inputStartY', 'inputLineCount',
          'utf8Next', 'measureRange', 'lineBreakEnd', 'inputWindowStart')
@@ -38,12 +38,9 @@ def metrics_code(ref=None):
     code += (ROOT/'src/components/UiHighDpiProfile.h').read_text().replace('#pragma once', '')
     code += re.search(r'namespace UiHighDpiProfile \{.*?namespace UiHighDpiProfile', (ROOT/'src/components/themes/BaseTheme.h').read_text(), re.S).group() + '\n'
     for path, name in [('src/components/themes/BaseTheme.h','Base'),
-                       ('src/components/themes/lyra/LyraTheme.h','Lyra'),
-                       ('src/components/themes/lyra/Lyra3CoversTheme.h','Lyra3Covers'),
-                       ('src/components/themes/lyra/LyraCarouselTheme.h','LyraCarousel'),
-                       ('src/components/themes/roundedraff/RoundedRaffTheme.h','RoundedRaff'),
-                       ('src/components/themes/inx/InxTheme.h','Inx')]:
-        text = read(path) if name not in ('Inx','LyraCarousel') else (ROOT/path).read_text()
+                       ('src/components/themes/upstream/UpstreamStyleTheme.h','UpstreamStyle'),
+                       ('src/components/themes/cpy/CpyTheme.h','Cpy')]:
+        text = read(path) if name != 'Cpy' else (ROOT/path).read_text()
         start = text.index(f'namespace {name}Metrics {{')
         end = text.index('\nclass ', start)
         code += text[start:end] + '\n'
@@ -66,8 +63,8 @@ void tracePrintf(const char* format, ...) {
 namespace fui = freeink::ui;
 enum class InputType { Text, Password, Url };
 struct CrossPointSettings {
-  enum class UI_THEME { CLASSIC, LYRA, LYRA_3_COVERS, ROUNDEDRAFF, LYRA_CAROUSEL, INX };
-  UI_THEME uiTheme = UI_THEME::CLASSIC;
+  enum class UI_THEME { INX, CPY, UI_THEME_COUNT };
+  UI_THEME uiTheme = UI_THEME::CPY;
   uint16_t keyboardLayouts = 0x1ff;
 } SETTINGS;
 enum class Language { EN, FR, DE, ES, RU, UK, BE, KK, HE, AR };
@@ -89,11 +86,12 @@ struct Renderer {
 } renderer;
 struct UITheme {
   static UITheme& getInstance() { static UITheme value; return value; }
+  bool usesModernLayout() const { return true; }
   const ThemeMetrics& getMetrics() const {
+    // CPY is the only theme; it bakes the high-DPI profile into its values.
     static ThemeMetrics metrics;
-    const ThemeMetrics* all[]={&BaseMetrics::values,&LyraMetrics::values,&Lyra3CoversMetrics::values,
-      &RoundedRaffMetrics::values,&LyraCarouselMetrics::values,&InxMetrics::values,&LyraMetrics::values};
-    metrics=*all[int(SETTINGS.uiTheme)]; UiHighDpiProfile::apply(metrics); return metrics;
+    metrics = CpyMetrics::values;
+    return metrics;
   }
   Rect getScreenSafeArea(const Renderer& r) const {
     // Actual ReadPico 5/5/8/5 board insets, rotated with the display.
@@ -136,10 +134,51 @@ struct MappedInputManager {
   bool isPressed(Button) const { return held; }
   unsigned long getHeldTime() const { return time; }
 };
+namespace pinyin {
+inline constexpr size_t kImeRawMax=48, kImeCandidateCap=24, kImeTextMax=96;
+struct ImeCandidate { char text[96]={}; char roman[49]={}; size_t consume=0; };
+struct ImeResult { ImeCandidate items[24]; size_t count=0; bool hasMore=false; };
+class PinyinIme {
+ public:
+  const ImeResult& result() const { return result_; }
+ private:
+  ImeResult result_;
+};
+}
 struct KeyboardEntryActivity {
   fui::KeyboardLayoutId layoutId=fui::KeyboardLayoutId::QwertyEn;
   InputType inputType=InputType::Text;
   bool shifted=false, symbols=false, showLangKey=true, urlPanel=false, cursorMode=false;
+  // Chinese-entry state referenced by the extracted layout/activation code.
+  // Scenes keep chineseAvailable/chineseMode false, so the IME branches never
+  // run: the members and glue below only exist to make the extracted
+  // production bodies compile.
+  bool chineseAvailable=false, chineseMode=false, imeActive=false;
+  fui::KeyboardLayoutId layoutBeforeChinese=fui::KeyboardLayoutId::QwertyEn;
+  static constexpr int16_t CHINESE_KEY=-5;
+  mutable fui::KeyboardLayout chineseLayout_{};
+  mutable fui::KeyboardRow chineseRowCache_[6]={};
+  mutable fui::KeyboardKey chineseKeyCache_[8]={};
+  mutable const fui::KeyboardLayout* chineseBaseCache=nullptr;
+  std::string composition;
+  pinyin::PinyinIme ime;
+  size_t candidateSkip=0;
+  struct StripLayout {
+    fui::Rect strip{}, compose{}, prev{}, next{};
+    const char* composeText=nullptr;
+    static constexpr size_t MAX_CELLS=8;
+    fui::Rect cells[MAX_CELLS];
+    size_t cellItem[MAX_CELLS]={};
+    size_t cellCount=0;
+  };
+  void layoutStrip(StripLayout&) const {}
+  void drawStrip(const StripLayout&) {}
+  bool requestCandidates(size_t) { return false; }
+  void refreshCandidates() {}
+  bool commitCandidateAt(size_t) { return false; }
+  void pageCandidates(int,size_t) {}
+  bool handleStripTap(int,int) { return false; }
+  void setChineseMode(bool) {}
   bool interactionsReady=false;
   bool confirmHeld=false, confirmLongHandled=false, hintVisible=false, passwordVisible=false, togglePos=false;
   int selRow=0, selCol=0, delPressCount=0;
@@ -188,7 +227,7 @@ int main() {
     renderer.touch=touch;
     for (auto type : {InputType::Text,InputType::Password,InputType::Url})
       for (const auto& language : keyboard_layouts::ALL) for (int flags=0; flags<16; ++flags,++scene)
-        for (int theme=0; theme<7; ++theme) {
+        for (int theme=0; theme<2; ++theme) {
           SETTINGS.uiTheme=static_cast<CrossPointSettings::UI_THEME>(theme);
           KeyboardEntryActivity kb;
           kb.inputType=type; kb.layoutId=language.id;
@@ -224,7 +263,7 @@ int main() {
     for(int line=0;line<edit.inputLineCount();++line) end=edit.lineBreakEnd(longText,end,100);
     assert(!UiHighDpiProfile::enabled || (size_t(start)<=cursor && cursor<=size_t(end)));
   }
-  for (int theme=0; theme<7; ++theme) {
+  for (int theme=0; theme<2; ++theme) {
     SETTINGS.uiTheme=static_cast<CrossPointSettings::UI_THEME>(theme);
     KeyboardEntryActivity kb;
     for (const auto& language : keyboard_layouts::ALL) {
@@ -281,20 +320,8 @@ with tempfile.TemporaryDirectory(prefix='unified-keyboard-', dir=os.environ.get(
     high=run_harness(harness,tmp,'readpico',True)
     for scenes in (regular,high):
         for (scene,theme), (keys,draw) in scenes.items():
+            # Key tables are metrics-independent: every shipped theme renders the
+            # same keys. Draw geometry is theme-specific and self-checked inside
+            # the harness (published hit rectangles must match the painted keys).
             assert scenes[scene,0][0]==keys, ('key tables',scene,theme)
-            # INX chrome retains its own metrics; regular keyboard geometry is Lyra.
-            if theme==5: assert scenes[scene,1][1]==draw, ('INX geometry',scene)
-    # Build the fixed upstream with its own production metrics and keyboard code.
-    ref=os.environ.get('FREEINK_UPSTREAM_READER_REF','38280863a50988683c2c63ccd7096e872a48c411')
-    upstream=subprocess.check_output(['git','show',ref+':src/activities/util/KeyboardEntryActivity.cpp'],cwd=ROOT,text=True)
-    code=harness.replace(metrics_code(),metrics_code(ref))
-    for name in names:
-        match=re.search(r'^[^\n]*KeyboardEntryActivity::'+name+r'\(.*?\n}',upstream,re.M|re.S)
-        if match: code=code.replace(method(name),match.group())
-    upstream_render=upstream[upstream.index('  interactions.beginPublishCycle();'):upstream.index('  interactionsReady = true;')]
-    code=code.replace(render,upstream_render)
-    reference=run_harness(code,tmp,'upstream')
-    for (scene,theme),trace in regular.items():
-        if theme!=5: assert reference[scene,theme]==trace, ('fixed upstream',scene,theme)
-    print(f'{len(regular)//7} X3/X4 and {len(high)//7} ReadPico scenarios across 7 real theme metrics; four orientations, input layers, hit boundaries and one-shot holds passed')
-    print('6 non-INX themes match fixed upstream; regular INX keys match Lyra. High-DPI geometry checked separately.')
+    print(f'{len(regular)} X3/X4 and {len(high)} ReadPico CPY scenarios; four orientations, input layers, hit boundaries and one-shot holds passed')

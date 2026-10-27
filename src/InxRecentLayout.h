@@ -5,7 +5,7 @@
 
 #include "components/themes/BaseTheme.h"
 
-enum class InxRecentLayout : uint8_t { Flow, Grid, List, Icons, Cover, Count };
+enum class InxRecentLayout : uint8_t { Flow, Grid, List, Icons, Cover, Dashboard, Count };
 
 namespace InxRecentGeometry {
 inline constexpr int footerReservedHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::statusHeight : 40;
@@ -33,6 +33,7 @@ constexpr int itemsPerPage(const InxRecentLayout layout) {
   switch (layout) {
     case InxRecentLayout::Flow:
     case InxRecentLayout::Cover:
+    case InxRecentLayout::Dashboard:
       return 1;
     case InxRecentLayout::Grid:
       return 4;
@@ -75,6 +76,9 @@ inline int indexFromPoint(const Rect& content, const int x, const int y, const i
     case InxRecentLayout::Flow:
     case InxRecentLayout::Cover:
       return std::clamp(selected, 0, count - 1);
+    // The dashboard lays its own slots out; this generic hit-test does not
+    // know them (the activity routes dashboard input separately).
+    case InxRecentLayout::Dashboard:
     case InxRecentLayout::Count:
       return -1;
   }

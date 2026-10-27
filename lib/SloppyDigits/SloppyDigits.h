@@ -58,6 +58,9 @@ void rollStyle(uint32_t seed, Style& out);
 void prepareSeeds(uint32_t seed, const Style& style, Seeds& out);
 
 // Newlines split rows; other non-digit characters are ignored.
-void draw(GfxRenderer& renderer, const Style& style, const Seeds& seeds, const char* digits, Bounds bounds);
+// const renderer: every draw call the engine makes is const (it only strokes
+// lines into the framebuffer), so const-context callers like the theme's
+// sleep screen can use it without a const_cast.
+void draw(const GfxRenderer& renderer, const Style& style, const Seeds& seeds, const char* digits, Bounds bounds);
 
 }  // namespace sloppy
