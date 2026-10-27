@@ -5817,6 +5817,10 @@ void EpubReaderActivity::renderStatusBar() const {
 void EpubReaderActivity::refreshStatusBarClockIfDue() {
   if (!section || !epub) return;
   if (!SETTINGS.statusBarSpec().showsClock()) return;
+  // "On page turn" is the default: the clock is already painted from the current
+  // time on every page render. A minute tick costs a full-page GL16 scan here
+  // (displayWindow has no partial-area path on this panel), so it is opt-in.
+  if (SETTINGS.statusBarClockUpdate != CrossPointSettings::STATUS_BAR_CLOCK_UPDATE_MINUTE) return;
   if (renderer.isInverted()) return;
   // A reading background paints under the bar; clearing the strip would erase it.
   if (SETTINGS.readingBackgroundEnabled) return;
