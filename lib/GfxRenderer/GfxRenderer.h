@@ -283,6 +283,9 @@ class GfxRenderer {
   void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
                      DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
+  // Idle power hook (Read Pico: drop the panel HV rails after 8 s without a
+  // frame). Call only while holding the render lock and with no frame queued.
+  void idlePowerTick(uint32_t nowMs) const { display.idlePowerTick(nowMs); }
   // Force the next displayBuffer() to use `mode`, overriding its argument once.
   void requestNextRefresh(const HalDisplay::RefreshMode mode) const {
     nextRefreshOverride = mode;

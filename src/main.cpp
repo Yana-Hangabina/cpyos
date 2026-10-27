@@ -29,6 +29,7 @@
 #include <builtinFonts/all.h>
 
 #include <cstring>
+#include <fcntl.h>
 
 #include "AchievementsStore.h"
 #include "BleInput.h"
@@ -539,6 +540,63 @@ static void deliverSleepPluginEvents() {
   }
 }
 
+namespace {
+
+HalFile g_battLog;
+unsigned long g_battLogNext = 0;
+unsigned long g_battLogUntil = 0;
+constexpr unsigned long kBattLogIntervalMs = 60000;
+
+void batteryLogStop() {
+  if (g_battLog) {
+    g_battLog.flush();
+    g_battLog.close();
+  }
+  g_battLogNext = 0;
+  g_battLogUntil = 0;
+}
+
+bool batteryLogStart(const unsigned minutes) {
+  batteryLogStop();
+  if (minutes == 0) return true;
+  g_battLog = Storage.open("/.crosspoint/battlog.txt", O_WRONLY | O_CREAT | O_APPEND);
+  if (!g_battLog) {
+    LOG_ERR("BATT", "cannot open /.crosspoint/battlog.txt");
+    return false;
+  }
+  char header[96];
+  const int n = snprintf(header, sizeof(header), "# cpyos battlog boot_ms=%lu interval_ms=%lu\n", millis(),
+                         kBattLogIntervalMs);
+  g_battLog.write(reinterpret_cast<const uint8_t*>(header), static_cast<size_t>(n));
+  g_battLog.flush();
+  g_battLogNext = millis();
+  g_battLogUntil = millis() + minutes * 60000UL;
+  return true;
+}
+
+void batteryLogService() {
+  if (!g_battLog) return;
+  const unsigned long now = millis();
+  if (static_cast<long>(now - g_battLogNext) < 0) return;
+  if (static_cast<long>(now - g_battLogUntil) >= 0) {
+    batteryLogStop();
+    return;
+  }
+  const auto battery = powerManager.readBatteryTelemetry();
+  char line[176];
+  const int n = snprintf(line, sizeof(line), "%lu,mv=%u,soc=%u,chg=%u,usb=%d,cpu=%u,wifi=%d,wstatus=%d,reader=%d\n",
+                         now, static_cast<unsigned>(battery.millivolts), static_cast<unsigned>(battery.socPermille),
+                         static_cast<unsigned>(battery.chargeState), gpio.isUsbConnected() ? 1 : 0,
+                         getCpuFrequencyMhz(), static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
+                         activityManager.isReaderActivity() ? 1 : 0);
+  g_battLog.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
+  g_battLog.flush();
+  logSerial.printf("[BATT] %s", line);
+  g_battLogNext += kBattLogIntervalMs;
+}
+
+}  // namespace
+
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   bleinput::stop();
@@ -599,6 +657,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   BuzzerFeedback::shutdown();
 #endif
   display.deepSleep();
+  batteryLogStop();
 #if !FREEINK_DEVICE_EEGO_A4
   Storage.prepareForDeepSleep();
 #endif
@@ -1295,6 +1354,8 @@ void loop() {
     lastMemPrint = millis();
   }
 
+  batteryLogService();
+
   // Handle incoming serial commands,
   // nb: we use logSerial from logging to avoid deprecation warnings
   if (logSerial.available() > 0) {
@@ -1308,6 +1369,25 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+      } else if (cmd == "BATT") {
+        const auto b = powerManager.readBatteryTelemetry();
+        logSerial.printf("BATT valid=%d mv=%u soc=%u chg=%u usb=%d cpu=%u reader=%d\n", b.valid ? 1 : 0,
+                         static_cast<unsigned>(b.millivolts), static_cast<unsigned>(b.socPermille),
+                         static_cast<unsigned>(b.chargeState), gpio.isUsbConnected() ? 1 : 0, getCpuFrequencyMhz(),
+                         activityManager.isReaderActivity() ? 1 : 0);
+      } else if (cmd == "NET") {
+        logSerial.printf("NET mode=%d status=%d cpu=%u usb=%d reader=%d\n", static_cast<int>(WiFi.getMode()),
+                         static_cast<int>(WiFi.status()), getCpuFrequencyMhz(), gpio.isUsbConnected() ? 1 : 0,
+                         activityManager.isReaderActivity() ? 1 : 0);
+      } else if (cmd.startsWith("BATTLOG")) {
+        const int minutes = cmd.length() > 7 ? cmd.substring(7).toInt() : 30;
+        if (minutes <= 0) {
+          batteryLogStop();
+          logSerial.printf("BATTLOG stopped\n");
+        } else {
+          const bool ok = batteryLogStart(static_cast<unsigned>(minutes));
+          logSerial.printf("BATTLOG %s for %d min\n", ok ? "started" : "failed", minutes);
+        }
       } else if (cmd == "FIND") {
         activityManager.pushActivity(std::make_unique<FindBooksActivity>(renderer, mappedInputManager));
       } else if (cmd == "MY") {
@@ -1402,7 +1482,12 @@ void loop() {
         activityManager.goToJjwxc();
 #endif
       } else if (cmd == "WIFI") {
-        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false));
+        activityManager.pushActivity(
+            std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, /*keepRadioOnExit=*/false));
+      } else if (cmd == "STANDBY") {
+        activityManager.goToReaderStandby();
+      } else if (cmd == "WAKE") {
+        activityManager.debugWakeStandby();
       } else if (cmd == "SLEEP") {
         activityManager.goToSleep(false);
       } else if (cmd == "OTAPROBE") {
@@ -1655,6 +1740,17 @@ void loop() {
   }
 #endif
 
+  // Reader power-key standby: a short press shows the clock and light-sleeps;
+  // the next press wakes this same reader. Long holds still reach deep sleep
+  // through the block above, and the release that woke the device is filtered
+  // by wakePowerReleasePending.
+  if (activityManager.isReaderForeground() && !wakePowerReleasePending && millis() >= allowSleepAt &&
+      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
+    LOG_DBG("MAIN", "Reader power short press -> standby");
+    activityManager.goToReaderStandby();
+    return;
+  }
+
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
   if (mappedInputManager.homeButtonAction() == HomeButtonAction::ToggleFrontlight) {
     toggleFrontlight();
@@ -1726,6 +1822,9 @@ void loop() {
       return;
     }
     skipLoopDelay = activityManager.skipLoopDelay();
+    // rpr's rails_idle_check: after 8 s without a frame the panel driver drops
+    // the HV rails. Runs under the render lock, so it can never race a scan.
+    if (!skipLoopDelay) renderer.idlePowerTick(millis());
   }
 
   // Add delay at the end of the loop to prevent tight spinning
