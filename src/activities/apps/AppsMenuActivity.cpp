@@ -22,6 +22,39 @@ namespace {
 using appVisibility::appBit;
 using appVisibility::AppId;
 
+
+namespace AppsGrid {
+inline constexpr int columns = 4;
+inline constexpr int rows = 3;
+inline constexpr int itemsPerPage = columns * rows;
+
+constexpr int pageStart(const int selected, const int itemCount) {
+  if (selected < 0 || itemCount <= 0) return 0;
+  const int clamped = selected < itemCount ? selected : itemCount - 1;
+  return clamped / itemsPerPage * itemsPerPage;
+}
+
+constexpr Rect cellBounds(const int slot, const int width, const int height) {
+  constexpr int inset = UiHighDpiProfile::enabled ? 6 : 4;
+  const int column = slot % columns;
+  const int row = slot / columns;
+  const int left = column * width / columns;
+  const int top = row * height / rows;
+  return Rect{left + inset, top + inset, (column + 1) * width / columns - left - inset * 2,
+              (row + 1) * height / rows - top - inset * 2};
+}
+
+constexpr int indexFromPoint(const int x, const int y, const int width, const int height, const int start,
+                             const int itemCount) {
+  if (x < 0 || y < 0 || x >= width || y >= height || width <= 0 || height <= 0) return -1;
+  for (int slot = 0; slot < itemsPerPage && start + slot < itemCount; ++slot) {
+    const Rect cell = cellBounds(slot, width, height);
+    if (x >= cell.x && x < cell.x + cell.width && y >= cell.y && y < cell.y + cell.height) return start + slot;
+  }
+  return -1;
+}
+}  // namespace AppsGrid
+
 struct AppEntry {
   AppId id;
   StrId titleId;
@@ -34,6 +67,12 @@ constexpr AppEntry kAppEntries[] = {
     {AppId::OpdsBrowser, StrId::STR_OPDS_BROWSER, UIIcon::Opds, &ActivityManager::goToBrowser},
 #ifdef ENABLE_CHINESE_VERSION
     {AppId::WeRead, StrId::STR_WEREAD_TITLE, UIIcon::WeRead, &ActivityManager::goToWeRead},
+#ifdef BOARD_HAS_PSRAM
+    // Requires PSRAM: the catalogue scratch buffer and the chapter/shelf vectors
+    // are far larger than the C3's ~380 KB internal-RAM budget, and a failed
+    // allocation aborts under -fno-exceptions rather than degrading.
+    {AppId::Jjwxc, StrId::STR_JJWXC_TITLE, UIIcon::Jjwxc, &ActivityManager::goToJjwxc},
+#endif
 #endif
     {AppId::AirPage, StrId::STR_AIRPAGE_TITLE, UIIcon::AirPage, &ActivityManager::goToAirPage},
     {AppId::ReadingStats, StrId::STR_READING_STATS, UIIcon::ReadingStats, &ActivityManager::goToReadingStatsMenu},
@@ -174,8 +213,8 @@ Rect AppsMenuActivity::appContentRect() const {
 
 int AppsMenuActivity::iconIndexFromPoint(const int x, const int y) const {
   const Rect content = appContentRect();
-  return InxGridGeometry::indexFromPoint(x - content.x, y - content.y, content.width, content.height,
-                                         InxGridGeometry::pageStart(nav.selected, getVisibleAppCount()),
+  return AppsGrid::indexFromPoint(x - content.x, y - content.y, content.width, content.height,
+                                         AppsGrid::pageStart(nav.selected, getVisibleAppCount()),
                                          getVisibleAppCount());
 }
 
@@ -214,12 +253,12 @@ bool AppsMenuActivity::handleCustomInput() {
   }
   const auto swipe = mappedInput.wasSwipe();
   if (swipe == MappedInputManager::SwipeDir::Up) {
-    nav.selected = ButtonNavigator::nextPageIndex(nav.selected, visibleCount, InxGridGeometry::itemsPerPage);
+    nav.selected = ButtonNavigator::nextPageIndex(nav.selected, visibleCount, AppsGrid::itemsPerPage);
     requestUpdate();
     return true;
   }
   if (swipe == MappedInputManager::SwipeDir::Down) {
-    nav.selected = ButtonNavigator::previousPageIndex(nav.selected, visibleCount, InxGridGeometry::itemsPerPage);
+    nav.selected = ButtonNavigator::previousPageIndex(nav.selected, visibleCount, AppsGrid::itemsPerPage);
     requestUpdate();
     return true;
   }
@@ -227,30 +266,46 @@ bool AppsMenuActivity::handleCustomInput() {
 }
 
 void AppsMenuActivity::drawIconGrid(const Rect& rect, const int visibleCount, const bool showSelection) const {
-  const int start = InxGridGeometry::pageStart(nav.selected, visibleCount);
+  const int start = AppsGrid::pageStart(nav.selected, visibleCount);
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
 
-  for (int slot = 0; slot < InxGridGeometry::itemsPerPage && start + slot < visibleCount; ++slot) {
+  for (int slot = 0; slot < AppsGrid::itemsPerPage && start + slot < visibleCount; ++slot) {
     const int visibleIndex = start + slot;
     const int appIndex = getAppIndexForVisibleIndex(visibleIndex);
     if (appIndex < 0) continue;
-    const auto bounds = InxGridGeometry::cellBounds(slot, rect.width, rect.height);
-    const Rect cell{rect.x + bounds.x, rect.y + bounds.y, bounds.width, bounds.height};
+    const auto bounds = AppsGrid::cellBounds(slot, rect.width, rect.height);
+    // Frame 05 draws the app cards with 20px between them; the shared grid
+    // geometry insets 6 per side, so the CPY card look adds 4 more per side
+    // (the touch target keeps the full cell; only the painted card shrinks).
+    const bool cpyTiles = UITheme::getInstance().usesCpyLayout();
+    Rect cell{rect.x + bounds.x, rect.y + bounds.y, bounds.width, bounds.height};
+    if (cpyTiles) {
+      cell.x += 4;
+      cell.y += 4;
+      cell.width -= 8;
+      cell.height -= 8;
+    }
     const int iconScale = cell.height >= InxAppIcons::size * 2 + lineHeight + 18 ? 2 : 1;
     const int iconSize = InxAppIcons::size * iconScale;
     const bool isSelected = showSelection && visibleIndex == nav.selected;
-    if (isSelected) renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
+    // CPY tiles are cards on a white grid (focus = solid ring, contents stay
+    // black); INX keeps its full-cell inversion.
+    if (cpyTiles) {
+      GUI.drawCardFrame(renderer, cell, isSelected);
+    } else if (isSelected) {
+      renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
+    }
 
     const int iconX = cell.x + (cell.width - iconSize) / 2;
-    const int iconY = cell.y + std::max(5, (cell.height - iconSize - lineHeight - 8) / 2);
-    InxAppIcons::draw(renderer, kAppEntries[appIndex].icon, iconX, iconY, iconScale, isSelected);
+    const int iconY = cell.y + std::max(5, (cell.height - iconSize - lineHeight - 14) / 2);
+    InxAppIcons::draw(renderer, kAppEntries[appIndex].icon, iconX, iconY, iconScale, isSelected && !cpyTiles);
     const std::string label =
         renderer.truncatedText(UI_10_FONT_ID, I18N.get(kAppEntries[appIndex].titleId), std::max(1, cell.width - 8));
     const int labelX = cell.x + (cell.width - renderer.getTextWidth(UI_10_FONT_ID, label.c_str())) / 2;
-    renderer.drawText(UI_10_FONT_ID, labelX, iconY + iconSize + 8, label.c_str(), !isSelected);
+    renderer.drawText(UI_10_FONT_ID, labelX, iconY + iconSize + 14, label.c_str(), cpyTiles || !isSelected);
   }
 
-  GUI.drawSideScrollBar(renderer, rect, visibleCount, start, InxGridGeometry::itemsPerPage);
+  GUI.drawSideScrollBar(renderer, rect, visibleCount, start, AppsGrid::itemsPerPage);
 }
 
 void AppsMenuActivity::buildScreen(UiScreen& screen) {

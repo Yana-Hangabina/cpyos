@@ -27,6 +27,7 @@
 #ifdef ENABLE_CHINESE_VERSION
 #include "ChineseCalendarFace.h"
 #endif
+#include "DuckSleepFace.h"
 #include "SloppyClockFace.h"
 #include "StandbyTime.h"
 #include "WifiCredentialStore.h"
@@ -52,6 +53,9 @@ struct FaceEntry {
   bool (*isAvailable)(int sw, int sh);
 };
 constexpr FaceEntry kFaces[] = {
+    // The CPY default face leads the rotation.
+    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<DuckSleepFace>(); },
+     [](int, int) { return true; }},
     {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<SloppyClockFace>(); },
      [](int, int) { return true; }},
 #ifdef ENABLE_CHINESE_VERSION
@@ -378,7 +382,16 @@ void StandbyActivity::processFaceTick(const bool waitForUpdate) {
       break;
     case StandbyFace::TickResult::RedrawWithGhostCleanup:
 #if CROSSPOINT_EMULATED == 0
+#if FREEINK_DEVICE_READPICO
+      // The face's own ~10-minute cleanup signal. Standby ticks present as
+      // TransientUi (calm -- no GC16 flash every minute at the bedside), so this
+      // is the only residue cleanup a standby face gets on this panel. Make it a
+      // real GC16 sweep; it used to fall through to nothing here (the HALF request
+      // below is Xteink-only), which left the calm face ghosting unbounded.
+      renderer.requestNextRefresh(HalDisplay::FULL_REFRESH);
+#else
       if (gpio.isXteinkDevice()) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
+#endif
 #endif
       break;
   }
@@ -569,7 +582,9 @@ void StandbyActivity::render(RenderLock&&) {
 
   if (mode_ != DisplayMode::Normal) {
     if (inverseMode_) renderer.invertScreen();
-    renderer.displayBuffer();
+    // TransientUi: a calm bedside face must not flash GC16 on the periodic sweep.
+    // The face's ~10-minute RedrawWithGhostCleanup signal arms the cleanup FULL.
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
     // Opt-in faces (老黄历) get a 4-level gray LUT enhancement layered on the BW
     // image. Only fires in Immersive — Normal-mode navigation needs the
     // ~300-500ms FAST_REFRESH and can't afford the ~2s gray LUT. inverseMode_
@@ -578,27 +593,29 @@ void StandbyActivity::render(RenderLock&&) {
     return;
   }
 
-  // Top-center face title (or sync state). Small font, no chrome container,
-  // no separator line — Apple Standby-style minimal overlay.
-  if (clockValid) {
-    UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, overlayTop,
-                              I18n::getInstance().get(currentFace_->titleId()));
-  }
+  // No face-name label: the face itself is the label, and "鸭睡水波" above a
+  // clock read as clutter on the device (user feedback, 2026-10-16). The
+  // battery stays; the unsynced warning above still covers the !clockValid
+  // case.
 
-  // Top-right battery icon (no percentage text). Reuses BaseTheme::drawBatteryRight.
-  constexpr int kBatW = 16;
-  constexpr int kBatH = 12;
-  GUI.drawBatteryRight(renderer, Rect{sw - viewRight - kBatW - metrics.contentSidePadding, overlayTop, kBatW, kBatH},
-                       /*showPercentage=*/false);
+  // Top-right battery (no percentage text). It used to be the legacy 16x12
+  // outline -- ~1.4 mm at 297 ppi and the only place in the UI where the
+  // battery was not the capsule. Use the same capsule as the status bars;
+  // the width comes from the theme metrics so both densities match.
+  GUI.drawStatusBarBattery(renderer, sw - viewRight - metrics.batteryWidth - metrics.contentSidePadding, overlayTop,
+                           /*showPercent=*/false);
 
   const uint8_t availFaces = countAvailableFaces(sw, sh);
   const uint8_t curRank = rankOfAvailableFace(sw, sh, faceIndex_);
   drawFaceDots(renderer, sw, sh, availFaces, curRank);
 
-  // Standby stays on FAST_REFRESH end-to-end — no full/half waveform flashes.
-  // We accept some long-term ghosting in exchange for a calm, non-blinking face.
+  // Calm, non-blinking face: standby ticks present as TransientUi. On Read Pico
+  // every push is a full-page differential scan, and a Normal push would join the
+  // periodic GC16 sweep and flash the face every few minutes. Instead the face's
+  // own ~10-minute RedrawWithGhostCleanup signal (processFaceTick) arms a GC16
+  // that bounds the residue, so the per-minute ticks stay calm and clean.
   if (inverseMode_) renderer.invertScreen();
-  renderer.displayBuffer();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
 // Two extra renders (LSB then MSB) into scratch buffers, composited with the BW

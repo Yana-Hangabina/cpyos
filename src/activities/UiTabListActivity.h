@@ -25,6 +25,19 @@ class UiTabListActivity : public UiListActivity {
   static constexpr freeink::ui::ActionId ACTION_TAB = ACTION_USER;
   static constexpr freeink::ui::ActionId ACTION_TAB_USER = ACTION_USER + 1;
 
+  // Height of the fui sort-tab strip in touch layouts. Shared here because
+  // subclasses that paint under the strip (LibraryListActivity's empty-state
+  // backdrop) must reserve the exact same band.
+  static constexpr int16_t TOUCH_TAB_BAR_HEIGHT = 50;
+
+  // CPY: render the tabs as side-padded capsules (the shelf chip language,
+  // design frame 06) instead of full-slot pills. Settings opts in.
+  virtual bool cpyCapsuleTabs() const { return false; }
+
+  // CPY: drop the fui tab strip entirely — the shelf now carries its sort in
+  // a dropdown capsule on the chip row (one control row instead of two).
+  virtual bool cpyHideTabStrip() const { return false; }
+
   UiTabListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                     bool wantsTouchLongPress = false);
 
@@ -58,7 +71,7 @@ class UiTabListActivity : public UiListActivity {
   // --- screen helpers --------------------------------------------------------
   // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs
   // full-slot RoundedRaff), Lyra focused band wash, always-on divider.
-  void buildTabBar(UiScreen& screen, bool boldLabels = false);
+  virtual void buildTabBar(UiScreen& screen, bool boldLabels = false);
   // Ring-aware counterpart of syncListViewport: measures rows, applies the
   // one-shot follow to the remembered row, clamps, and writes
   // props.selectedIndex = ring - 1.

@@ -7,7 +7,9 @@
 #include <builtinFonts/notosans_8_regular.h>
 #include <builtinFonts/notosans_cjk_8.h>
 #include <builtinFonts/notosans_cjk_10.h>
+#ifndef CROSSPOINT_EXTERNAL_FONTS
 #include <builtinFonts/notosans_cjk_12.h>
+#endif
 #include <builtinFonts/ubuntu_10_bold.h>
 #include <builtinFonts/ubuntu_10_regular.h>
 #include <builtinFonts/ubuntu_12_bold.h>

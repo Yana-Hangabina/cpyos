@@ -72,6 +72,10 @@ class MappedInputManager {
   // the long-press opened. The SDK owns that latch and self-clears it once the
   // contact ends.
   bool wasScreenLongPress(int& x, int& y) const;
+  // Swallow the rest of the current contact (its hold and release edge) without
+  // consuming a long-press event. The reader uses this when its own, longer hold
+  // timer opens a selection: the lift must not also page-turn.
+  void suppressScreenTouch() const { gpio.suppressTouchContact(); }
   bool isScreenTouchHeld(int& x, int& y) const;
   // Raw release edge, also true when the contact ended in a swipe or drag-off
   // (which wasScreenTapped never reports). InputSnapshot builders forward it
@@ -96,6 +100,14 @@ class MappedInputManager {
   RowTouch colTouch(int& col, int left, int colStep, int colCount, int yStart, int yEnd, int colWidth = 0) const;
 
   SwipeDir wasSwipe() const;
+  // Raw swipe endpoints in logical screen pixels. False when there is no
+  // pending swipe. Lets a screen distinguish "swipe from the sheet grabber"
+  // from an ordinary list scroll.
+  bool wasSwipeGeometry(int& sx, int& sy, int& ex, int& ey) const;
+  // One-shot two-finger pinch/spread. `scale` > 1 means spread (zoom in), < 1
+  // means pinch. The reader maps it onto one font-size step; there is no
+  // continuous zoom (an e-ink panel reflows, it cannot scale a page).
+  bool wasPinch(float& scale) const;
   // Back = left-to-right swipe anchored at the left edge. Public so swipe-mode
   // page turns (reader) can exclude it from a plain SwipeDir::Right.
   bool wasBackGesture() const;

@@ -11,6 +11,7 @@
 #include "InxItemLayout.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "components/UiAppHelpers.h"
 
 // Modal option picker drawn over the current screen (no clear) via
@@ -213,8 +214,32 @@ class OptionPopup {
 
     if (!upstreamStyle && UITheme::getInstance().hasMainTabs()) {
       const int optionCount = static_cast<int>(ownedStrings.size());
-      const auto layout = InxOptionGeometry::layout(UITheme::getInstance().getScreenSafeArea(renderer, true, false),
-                                                    optionCount, selectedIndex);
+      const Rect bounds = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+      // Measure the wrapped body band once, with the same font / width / line cap
+      // CpyTheme::drawOptionPopup draws with (the shared InxOptionGeometry::headline*
+      // constants), then hand the SAME height to both the layout below (option hit
+      // rects) and drawOptionPopup (panel + rows), so the two can never disagree. A
+      // plain menu has no body: headlineBand is 0 and the geometry is byte-identical
+      // to before.
+      // showMessage() dialogs carry their body in `message`, not `headline`, and the
+      // CPY panel draws only one wrapped body band, so fold the two into a single
+      // effective body. They are mutually exclusive: show() clears `message` (via
+      // finishShow) and showMessage() clears `headline` (via show). Without this fold
+      // a message dialog (reader load-failure, JJWXC save-scope hint) renders no
+      // explanatory text on CPY at all -- only its title and options.
+      const std::string& bodyStr = !headline.empty() ? headline : message;
+      const char* headlineStr = bodyStr.empty() ? nullptr : bodyStr.c_str();
+      int headlineBand = 0;
+      if (headlineStr != nullptr) {
+        const int bodyWidth = InxOptionGeometry::panelWidth(bounds) - InxOptionGeometry::headlineInnerPad * 2;
+        const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+        const auto lines = renderer.wrappedText(UI_10_FONT_ID, headlineStr, bodyWidth,
+                                                InxOptionGeometry::headlineMaxLines, EpdFontFamily::REGULAR);
+        if (!lines.empty() && lineH > 0) {
+          headlineBand = static_cast<int>(lines.size()) * lineH + InxOptionGeometry::headlineGap;
+        }
+      }
+      const auto layout = InxOptionGeometry::layout(bounds, optionCount, selectedIndex, headlineBand);
       visibleOptionRows = layout.rows;
       const auto& panel = layout.panel;
       frame.hit(fui::Rect{static_cast<int16_t>(panel.x), static_cast<int16_t>(panel.y),
@@ -226,7 +251,7 @@ class OptionPopup {
                             static_cast<int16_t>(row.height)},
                   ACTION_OPTION, static_cast<int16_t>(layout.first + slot), fui::InputTouch);
       }
-      GUI.drawOptionPopup(renderer, title.c_str(), ownedStrings, selectedIndex);
+      GUI.drawOptionPopup(renderer, title.c_str(), headlineStr, headlineBand, ownedStrings, selectedIndex);
       interactions.publish();
       uiReady = true;
       return;

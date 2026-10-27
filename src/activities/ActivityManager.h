@@ -91,11 +91,19 @@ class ActivityManager {
 
   void begin();
   void loop();
+  // Smallest free stack (bytes) the render task has ever had. The vector-font
+  // layout/rasterization chain is the deepest stack user in the firmware
+  // (CFF's cf2_interpT2CharString frame alone is ~16 KB); the periodic memory
+  // log prints this so a creeping regression is visible before it canaries.
+  uint32_t renderStackMinFreeBytes() const;
   void cancelIdleRender() { idleRenderGeneration.fetch_add(1, std::memory_order_relaxed); }
   bool idleRenderCancelled(uint32_t generation) const {
     return generation != idleRenderGeneration.load(std::memory_order_relaxed) || isSwitchPending() ||
            requestedUpdate.load();
   }
+  // Snapshot for work started inside render(): a later input cancels it through
+  // the same generation/requestedUpdate checks as the idle pass.
+  uint32_t idleRenderGenerationNow() const { return idleRenderGeneration.load(std::memory_order_relaxed); }
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
@@ -118,6 +126,7 @@ class ActivityManager {
   void goToJoinNetwork();  // File Transfer straight into Join Network (post heap-defrag reboot)
   void goToUsbDrive();
   void goToSettings();
+  void goToMy();
   void goToUglyAvatar();
   void goToReadingStatsMenu();
   void goToReadingStats();
@@ -132,9 +141,11 @@ class ActivityManager {
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
   bool goToPostOtaBoot(bool allowAutoPreload);
-  void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
+  void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
+                             std::string detail = {}, bool retryable = false);
   void goToCrashReport();
   void goToApps();
+  void goToFindBooks();
   void goToSudoku();
   void goToSokoban();
   void goToGomoku();
@@ -151,12 +162,22 @@ class ActivityManager {
 #endif
 #ifdef ENABLE_CHINESE_VERSION
   void goToWeRead();
+#ifdef BOARD_HAS_PSRAM
+  void goToJjwxc();
+#endif
 #endif
   void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE);
   MainTabFocus getMainTabFocus() const { return mainTabFocus; }
 
   // This will move current activity to stack instead of deleting it
   void pushActivity(std::unique_ptr<Activity>&& activity);
+
+  // Debug/serial-test accessor; does not transfer ownership.
+  Activity* currentActivityPtr() const { return currentActivity.get(); }
+
+  // True when this activity was pushed as a child. A child's Back must pop to
+  // its parent; only a replaced root may fall back to the app grid.
+  bool hasParentActivity() const { return !stackActivities.empty(); }
 
   // Remove the currentActivity, returning the last one on stack
   // Note: if popActivity() on last activity on the stack, we will goHome()

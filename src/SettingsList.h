@@ -57,7 +57,10 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
     // appending a marker cannot change the stored value.
     std::transform(families.begin(), families.end(), std::back_inserter(s.enumStringValues),
                    [](const SdCardFontFamilyInfo& f) {
-                     return f.vector ? f.name + "  " + I18N.get(StrId::STR_VECTOR_FONT_TAG) : f.name;
+                     // Tag follows the file's real extension (TTF/OTF/TTC); the
+                     // generic vector tag is only a fallback. An .otf is not a TTF.
+                     const char* tag = f.formatTag();
+                     return f.vector ? f.name + "  " + (tag ? tag : I18N.get(StrId::STR_VECTOR_FONT_TAG)) : f.name;
                    });
   } else {
     s.enumValues = std::move(enumValues);
@@ -197,15 +200,6 @@ inline std::vector<StrId> buildLongPressMenuValues() {
   return {VALUES, VALUES + count};
 }
 
-inline std::vector<StrId> homeThemeValues() {
-  static constexpr StrId VALUES[] = {StrId::STR_THEME_CLASSIC,       StrId::STR_THEME_LYRA,
-                                     StrId::STR_THEME_LYRA_EXTENDED, StrId::STR_THEME_ROUNDEDRAFF,
-                                     StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_INX,
-                                     StrId::STR_THEME_COVER_GRID};
-  const size_t count = UITheme::supportsCoverGrid() ? std::size(VALUES) : std::size(VALUES) - 1;
-  return {VALUES, VALUES + count};
-}
-
 // Shared settings list used by both the device settings UI and the web settings API.
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
@@ -242,6 +236,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #if FREEINK_CAP_WARMLIGHT
                                   + 1
 #endif
+#if FREEINK_DEVICE_READPICO
+                                  + 1
+#endif
         ;
     // ponytail: Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
     v.reserve(entryCount);
@@ -266,11 +263,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
-                          {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
-                           StrId::STR_PAGES_30, StrId::STR_NEVER},
-                          "refreshFrequency", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme, homeThemeValues(), "uiTheme",
-                          StrId::STR_CAT_DISPLAY),
+                          {StrId::STR_REFRESH_CLEAR, StrId::STR_REFRESH_STANDARD, StrId::STR_REFRESH_RELAXED,
+                           StrId::STR_NEVER},
+                          "refreshProfile", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_INX_RECENT_LAYOUT, &CrossPointSettings::inxRecentLayout,
@@ -284,6 +279,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_LAYOUT_ICONS, StrId::STR_LAYOUT_LIST}, "inxAppsLayout", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_INX_TAB_POSITION, &CrossPointSettings::inxTabPosition,
                           {StrId::STR_TOP, StrId::STR_BOTTOM}, "inxTabPosition", StrId::STR_CAT_DISPLAY),
+    });
+    v.insert(v.end(), {
+        // CPY-only row rhythm; hidden under INX in rebuildSettingsLists.
+        SettingInfo::Enum(StrId::STR_UI_DENSITY, &CrossPointSettings::uiDensity,
+                          {StrId::STR_DENSITY_COMFORTABLE, StrId::STR_DENSITY_COMPACT}, "uiDensity",
+                          StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
@@ -340,6 +341,27 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                             StrId::STR_CAT_READER)
             .withTextSettings(),
     });
+#if FREEINK_DEVICE_READPICO
+    // 水波纹翻页是 Read Pico epdiy LCD 路径的能力（EpdiyLcd/src/e0470_page_turn）；
+    // 其余面板没有这个引擎，条目整个不出现，避免"选了没反应"。
+    // / The water-ripple turn is a capability of Read Pico's epdiy LCD path
+    // (EpdiyLcd/src/e0470_page_turn); other panels lack the engine, so the entry
+    // is absent entirely rather than inert.
+    //
+    // Deliberately NOT .withTextSettings(): that flag hides an entry from the main
+    // Settings list (SettingsActivity skips inTextSettings rows) and shows it only in
+    // the in-reader text-settings screen, which is right for per-book typography like
+    // font size but wrong here. This is a device capability the user sets once, and
+    // two people looking for it in the Settings menu and the reader category both
+    // failed to find it while it lived behind that flag.
+    v.insert(v.end(), {
+        SettingInfo::Enum(StrId::STR_PAGE_TURN_EFFECT, &CrossPointSettings::pageTurnEffect,
+                          {StrId::STR_TURN_EFFECT_DIRECT, StrId::STR_TURN_EFFECT_WATER}, "pageTurnEffect",
+                          StrId::STR_CAT_READER),
+        SettingInfo::Toggle(StrId::STR_FAST_PAGE_TURN, &CrossPointSettings::fastPageTurn, "fastPageTurn",
+                            StrId::STR_CAT_READER),
+    });
+#endif
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_FAKE_BOLD, &CrossPointSettings::fakeBold,
                           {StrId::STR_STATE_OFF, StrId::STR_FAKE_BOLD_LIGHT, StrId::STR_FAKE_BOLD_STANDARD,
@@ -463,10 +485,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
 #endif
-        // Erased below unless the QMI8658 IMU is present (X3).
-        SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
-                          {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED}, "tiltPageTurn",
-                          StrId::STR_CAT_CONTROLS),
+        // Erased below unless an IMU is present.
+        SettingInfo::Enum(StrId::STR_MOTION_PAGE_TURN, &CrossPointSettings::motionPageTurn,
+                          {StrId::STR_STATE_OFF, StrId::STR_MOTION_TILT, StrId::STR_MOTION_TILT_REVERSED,
+                           StrId::STR_MOTION_SHAKE, StrId::STR_MOTION_SHAKE_REVERSED},
+                          "motionPageTurn", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
     });
@@ -493,6 +516,17 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_STATE_OFF, StrId::STR_SOUND_FEEDBACK_LOW, StrId::STR_SOUND_FEEDBACK_MEDIUM,
                            StrId::STR_SOUND_FEEDBACK_HIGH},
                           "hapticFeedbackLevel", StrId::STR_CAT_SYSTEM),
+#endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+        SettingInfo::Enum(StrId::STR_BUZZER_FEEDBACK, &CrossPointSettings::buzzerFeedbackSource,
+                          {StrId::STR_STATE_OFF, StrId::STR_BUZZER_SOURCE_KEYS, StrId::STR_BUZZER_SOURCE_SCREEN,
+                           StrId::STR_BUZZER_SOURCE_BOTH},
+                          "buzzerFeedbackSource", StrId::STR_CAT_SYSTEM),
+        SettingInfo::Enum(StrId::STR_BUZZER_PITCH, &CrossPointSettings::buzzerPitch,
+                          {StrId::STR_BUZZER_THEME_DEEP, StrId::STR_BUZZER_THEME_SOFT, StrId::STR_BUZZER_THEME_CRISP},
+                          "buzzerPitch", StrId::STR_CAT_SYSTEM),
+        SettingInfo::Value(StrId::STR_BUZZER_STRENGTH, &CrossPointSettings::buzzerStrength, {0, 100, 1},
+                           "buzzerStrength", StrId::STR_CAT_SYSTEM),
 #endif
     });
     v.insert(v.end(), {
@@ -645,8 +679,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     };
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
-    // Tilt page turn needs the QMI8658 IMU (X3).
-    if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_TILT_PAGE_TURN);
+    // Motion page turn needs an IMU.
+    if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_MOTION_PAGE_TURN);
     return v;
   }();
 

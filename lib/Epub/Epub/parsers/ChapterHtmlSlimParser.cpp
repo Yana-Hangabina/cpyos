@@ -411,6 +411,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       }
 
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
+      currentBlockParagraphIndex = activeParagraphIndex;
 
       flushPendingAnchor();
       return;
@@ -423,6 +424,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       const auto style = currentTextBlock->getBlockStyle();
       currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(blockStyle, BlockStyle::CombineAxis::Vertical));
       listItemBulletOnly = false;
+      currentBlockParagraphIndex = activeParagraphIndex;
       flushPendingAnchor();
       return;
     }
@@ -436,7 +438,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   if (hasFailed()) return;
   currentTextBlock =
       makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, firstLineIndent, hyphenationEnabled, focusReadingEnabled,
-                                    blockStyle, collectTouchLinks, paragraphIndentSpaces);
+                                    blockStyle, collectTouchLinks, paragraphIndentSpaces, firstLineIndentPx);
   if (!currentTextBlock) {
     LOG_ERR("EHP", "OOM: ParsedText (%u bytes)", static_cast<unsigned>(sizeof(ParsedText)));
     failAllocation("page layout");
@@ -444,6 +446,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
+  currentBlockParagraphIndex = activeParagraphIndex;
 }
 
 void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
@@ -636,6 +639,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
     if (!tableRowCells[column]->layoutAndExtractLines(
             renderer, fontId, textWidth,
             [this, &lines](std::unique_ptr<TextBlock> line, const uint32_t offset) {
+              line->setParagraphIndex(currentBlockParagraphIndex);
               const size_t lineIndex = lines.size();
               lines.push_back(std::move(line));
               if (tableLineVisibleOffsets.size() <= lineIndex) {
@@ -747,6 +751,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   if (strcmp(name, "p") == 0) {
     self->xpathParagraphIndex++;
+    self->activeParagraphIndex = self->xpathParagraphIndex;
   }
   if (strcmp(name, "li") == 0) {
     self->xpathListItemIndex++;
@@ -938,7 +943,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
     self->currentTextBlock = makeUniqueNoThrow<ParsedText>(
         self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled, self->focusReadingEnabled,
-        tableCellBlockStyle, self->collectTouchLinks, self->paragraphIndentSpaces);
+        tableCellBlockStyle, self->collectTouchLinks, self->paragraphIndentSpaces, self->firstLineIndentPx);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: table cell");
       self->failAllocation("table cell");
@@ -1660,7 +1665,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
     self->currentTextBlock = makeUniqueNoThrow<ParsedText>(
         self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled, self->focusReadingEnabled,
-        flowStyle, self->collectTouchLinks, self->paragraphIndentSpaces);
+        flowStyle, self->collectTouchLinks, self->paragraphIndentSpaces, self->firstLineIndentPx);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block for character data");
       self->failAllocation("text block for character data");
@@ -1859,6 +1864,7 @@ void ChapterHtmlSlimParser::softFlushTextBlock() {
   if (!currentTextBlock->layoutAndExtractLines(
           renderer, fontId, width,
           [this](std::unique_ptr<TextBlock> line, const uint32_t offset) {
+            line->setParagraphIndex(currentBlockParagraphIndex);
             return addLineToPage(std::move(line), offset);
           },
           false, characterSpacing, wordSpacingPercent)) {
@@ -1886,6 +1892,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (!self->checkMemory()) return;
+  if (strcmp(name, "p") == 0) self->activeParagraphIndex = 0xFFFF;
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
   }
@@ -2045,7 +2052,7 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
     self->currentTextBlock = makeUniqueNoThrow<ParsedText>(
         self->extraParagraphSpacing, self->firstLineIndent, self->hyphenationEnabled, self->focusReadingEnabled,
-        flowStyle, self->collectTouchLinks, self->paragraphIndentSpaces);
+        flowStyle, self->collectTouchLinks, self->paragraphIndentSpaces, self->firstLineIndentPx);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block after table");
       self->failAllocation("text block after table");
@@ -2424,6 +2431,7 @@ void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock->layoutAndExtractLines(
           renderer, fontId, effectiveWidth,
           [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
+            textBlock->setParagraphIndex(currentBlockParagraphIndex);
             return addLineToPage(std::move(textBlock), offset);
           },
           true, characterSpacing, wordSpacingPercent)) {

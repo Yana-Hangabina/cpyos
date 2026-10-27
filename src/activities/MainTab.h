@@ -8,22 +8,26 @@
 #include "components/Rect.h"
 #include "components/UiHighDpiProfile.h"
 
-enum class MainTab : uint8_t { None, Recent, Library, Apps, Settings, Statistics };
+enum class MainTab : uint8_t { None, Recent, Library, Apps, Settings };
 enum class MainTabFocus : uint8_t { Tabs, Content };
 enum class MainTabContentEdge : uint8_t { First, Last };
 
 struct MainTabLayout {
   Rect tabBar;
   Rect statusBar;
+  Rect title;  // empty unless a title band is reserved (bottom tabs only)
   Rect content;
 };
 
 namespace MainTabs {
 inline constexpr int controlGap = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap : 6;
-inline constexpr int statusBarHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::statusHeight : 28;
+// refreshed UI: the status row and the page title are one 80 px mast. The classic
+// status strip is retired on high-DPI builds; the mast draws the page title on
+// the left and clock/date/battery on the right. Low-DPI themes keep the strip.
+inline constexpr int statusBarHeight = UiHighDpiProfile::enabled ? 0 : 28;
 inline constexpr int bottomBarHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight : 56;
-inline constexpr std::array<MainTab, 5> values = {MainTab::Recent, MainTab::Library, MainTab::Apps, MainTab::Settings,
-                                                  MainTab::Statistics};
+inline constexpr std::array<MainTab, 4> values = {MainTab::Recent, MainTab::Library, MainTab::Apps,
+                                                  MainTab::Settings};
 
 constexpr int indexOf(const MainTab tab) {
   const auto found = std::find(values.begin(), values.end(), tab);
@@ -63,15 +67,18 @@ constexpr bool showsStatusBar(const bool usesMainTabs, const bool hasTouch, cons
 }
 
 constexpr MainTabLayout layout(const Rect& safeArea, const int topPadding, const int tabHeight, const bool tabsAtBottom,
-                               const int statusHeight = 0) {
+                               const int statusHeight = 0, const int titleHeight = 0) {
   const int top = safeArea.y + topPadding;
   const int bottom = safeArea.y + safeArea.height;
   const int status = tabsAtBottom ? statusHeight : 0;
   const int gap = status > 0 ? controlGap : 0;
+  const int title = tabsAtBottom ? titleHeight : 0;
+  const int titleTop = top + status + gap;
   const int tabTop = tabsAtBottom ? bottom - tabHeight : top;
-  const int contentTop = tabsAtBottom ? top + status + gap : top + tabHeight;
+  const int contentTop = tabsAtBottom ? titleTop + title : top + tabHeight;
   const int contentBottom = tabsAtBottom ? tabTop - gap : bottom;
   return {Rect{safeArea.x, tabTop, safeArea.width, tabHeight}, Rect{safeArea.x, top, safeArea.width, status},
+          Rect{safeArea.x, titleTop, safeArea.width, title},
           Rect{safeArea.x, contentTop, safeArea.width, std::max(0, contentBottom - contentTop)}};
 }
 

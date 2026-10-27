@@ -76,9 +76,22 @@ struct FilePathResult {
   std::string path;
 };
 
+// Returned by the JJWXC app when it was opened from the reader's maintenance
+// menu and finished on its own. The reader uses it to decide whether to
+// reopen its own chapter list.
+struct JjwxcReaderResult {
+  enum class Action : uint8_t { None, CurrentChapter, ChapterList, ChapterCached, ChapterPurchased };
+  Action action = Action::None;
+  bool completed = false;
+  uint32_t chapterId = 0;
+  bool readable = false;
+  bool openChapter = false;
+};
+
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
                                    IntervalResult, ChapterRangeResult, PageResult, TxtOffsetResult,
-                                   ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+                                   ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
+                                   JjwxcReaderResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

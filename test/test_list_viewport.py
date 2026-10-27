@@ -21,11 +21,14 @@ struct UiScreen {
     nav.syncToProps({0, 0, 200, height}, 20, 0, count, props, offset);
   }
 };
+struct CrossPointSettings { enum UI_THEME { INX }; };
+struct SettingsStore { CrossPointSettings::UI_THEME uiTheme = CrossPointSettings::INX; } SETTINGS;
 struct UiListActivity {
   fui::ListNav nav;
   int count = 16;
   fui::ListNav& activeNav() { return nav; }
   int listCount() const { return count; }
+  bool usesUpstreamStyle() { return false; }
   void syncListViewport(UiScreen&, fui::ListProps&, int = 0);
 };
 """ + method + r"""

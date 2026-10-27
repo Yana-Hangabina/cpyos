@@ -1,0 +1,149 @@
+name: CPYOS Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing semver tag to rebuild and republish, e.g. 0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cpyos-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out the release tag
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag $VERSION is not a semver release (expected X.Y.Z)"
+            exit 1
+          fi
+          git fetch --tags --force
+          git rev-parse --verify "refs/tags/$VERSION^{commit}" >/dev/null
+          git checkout --detach "refs/tags/$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Validate version and release notes
+        run: |
+          set -euo pipefail
+          configured="$(python3 -c 'import configparser; c=configparser.ConfigParser(); c.read("platformio.ini"); print(c["crosspoint"]["version"])')"
+          if [ "$VERSION" != "$configured" ]; then
+            echo "::error::tag $VERSION does not match platformio.ini version $configured"
+            exit 1
+          fi
+          test -f "docs/releases/$VERSION.md" || { echo "::error::missing docs/releases/$VERSION.md"; exit 1; }
+          test -f "docs/releases/$VERSION.ota.json" || { echo "::error::missing docs/releases/$VERSION.ota.json"; exit 1; }
+          git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: |
+          set -euo pipefail
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -U pioarduino==6.2.0
+
+      - name: Prepare the pioarduino platform
+        run: python3 scripts/patch_pioarduino_cache.py --prepare-platform
+
+      - name: Apply the freeink-sdk patches
+        run: |
+          set -euo pipefail
+          bash patches/freeink-sdk/apply.sh
+          bash patches/freeink-sdk-cff/apply.sh
+
+      - name: Mark the expected SDK patch as clean for versioning
+        run: |
+          set -euo pipefail
+          # The two patches are part of the release recipe, not accidental local
+          # edits. PlatformIO stamps esp_app_desc.version with
+          # `git describe --dirty`; assume-unchanged keeps that expected
+          # submodule dirtiness out of the version string, so the image is
+          # stamped with the tag rather than `-dirty`. A genuinely dirty parent
+          # tree is still rejected by verify_release_artifacts.py.
+          git update-index --assume-unchanged freeink-sdk
+
+      - name: Build Read Pico
+        run: pio run -e readpico
+
+      - name: Generate data packs
+        run: |
+          set -euo pipefail
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ --strip-unused
+          python3 scripts/build_web_pack.py
+          python3 scripts/generate_hyphenation_db.py
+          python3 -m pip download pypinyin==0.55.0 --no-deps --dest /tmp/pypinyin-wheel
+          python3 scripts/generate_pinyin_db.py /tmp/pypinyin-wheel/*.whl
+          python3 scripts/generate_data_manifest.py
+
+      - name: Verify the image and data manifest
+        run: python3 scripts/verify_release_artifacts.py --release
+
+      - name: Assemble the release bundle
+        run: |
+          set -euo pipefail
+          python3 scripts/build_cpyos_release.py \
+            --version "$VERSION" \
+            --notes-json "docs/releases/$VERSION.ota.json"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cpyos-release-${{ env.VERSION }}
+          path: dist/cpyos/${{ env.VERSION }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find "dist/cpyos/$VERSION" -maxdepth 1 -type f -print | sort)
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" \
+              --title "脆皮鸭 CPYOS $VERSION" \
+              --notes-file "docs/releases/$VERSION.md" --latest
+          else
+            gh release create "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+              --title "脆皮鸭 CPYOS $VERSION" \
+              --notes-file "docs/releases/$VERSION.md" --latest
+          fi
+
+      - name: Assemble the Pages artifact
+        run: |
+          set -euo pipefail
+          python3 scripts/build_cpyos_site.py \
+            --release-dir "dist/cpyos/$VERSION" \
+            --output _site
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

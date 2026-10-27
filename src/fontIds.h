@@ -14,6 +14,7 @@
 #define SMALL_FONT_ID (1465627787)
 #define CHINESE_CHESS_FONT_ID (1005290636)
 #define CONTROL_18_FONT_ID (29318789)
+#define NOTOSERIF_TITLE_FONT_ID (-1094390662)
 
 // Font ID 0 is reserved as the "not found" sentinel.
 // Guard against any hash accidentally producing 0.
@@ -30,3 +31,4 @@ static_assert(UI_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(CHINESE_CHESS_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(CONTROL_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSERIF_TITLE_FONT_ID != 0, "Font ID collision with sentinel");

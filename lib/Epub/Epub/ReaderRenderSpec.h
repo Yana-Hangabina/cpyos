@@ -22,6 +22,9 @@ struct ReaderRenderSpec {
   // paragraphs keep their indent even when extra paragraph spacing is
   // enabled.
   uint8_t firstLineIndent = FirstLineIndent::Auto;
+  // Fine adjustment (-12..+12 px) added on top of firstLineIndent by the
+  // layout engine. Part of the cache key so changing it rebuilds sections.
+  int8_t firstLineIndentPx = 0;
   uint8_t paragraphIndentSpaces = 3;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
@@ -33,15 +36,19 @@ struct ReaderRenderSpec {
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
   bool collectTouchLinks = false;
+  // Chinese vertical layout (columns top-to-bottom, columns right-to-left). Part
+  // of the cache key: switching it must rebuild every section, otherwise cached
+  // pagination would be read with the other writing mode's semantics.
+  uint8_t verticalText = 0;
 
   bool operator==(const ReaderRenderSpec& other) const {
     return fontId == other.fontId && lineCompression == other.lineCompression &&
            extraParagraphSpacing == other.extraParagraphSpacing && firstLineIndent == other.firstLineIndent &&
-           paragraphIndentSpaces == other.paragraphIndentSpaces && characterSpacing == other.characterSpacing &&
+           firstLineIndentPx == other.firstLineIndentPx && paragraphIndentSpaces == other.paragraphIndentSpaces && characterSpacing == other.characterSpacing &&
            wordSpacingPercent == other.wordSpacingPercent && paragraphAlignment == other.paragraphAlignment &&
            viewportWidth == other.viewportWidth && viewportHeight == other.viewportHeight &&
            hyphenationEnabled == other.hyphenationEnabled && embeddedStyle == other.embeddedStyle &&
            imageRendering == other.imageRendering && focusReadingEnabled == other.focusReadingEnabled &&
-           collectTouchLinks == other.collectTouchLinks;
+           collectTouchLinks == other.collectTouchLinks && verticalText == other.verticalText;
   }
 };

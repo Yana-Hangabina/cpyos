@@ -73,6 +73,9 @@ class ContentOpfParser final : public Print {
   std::string guideCoverPageHref;  // Guide reference with type="cover" or "cover-page" (points to XHTML wrapper)
   std::string textReferenceHref;
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
+  // Font files declared in the manifest (A5: EPUB-embedded fonts). Absolute zip
+  // paths, same normalisation as cssFiles.
+  std::vector<std::string> fontFiles;
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
                             BookMetadataCache* cache, const bool metadataOnly = false)

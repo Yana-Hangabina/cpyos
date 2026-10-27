@@ -51,6 +51,7 @@ class ChapterHtmlSlimParser {
   float lineCompression;
   uint8_t extraParagraphSpacing;  // 0=off, 1..5=0.5x/0.75x/1x/1.25x/1.5x line height
   uint8_t firstLineIndent;
+  int8_t firstLineIndentPx = 0;  // fine adjustment added to the resolved indent
   uint8_t paragraphIndentSpaces = 3;
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
@@ -130,6 +131,12 @@ class ChapterHtmlSlimParser {
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
+  // The <p> currently being read, and the index latched onto the text block that
+  // will be laid out later. endElement() clears activeIndex at </p>, but the block
+  // is only extracted on the next block start (or at finish), so the lines must
+  // use the latched value -- using active there stamped every line 0xFFFF.
+  uint16_t activeParagraphIndex = 0xFFFF;
+  uint16_t currentBlockParagraphIndex = 0xFFFF;
   // Canonical reading-position counter: zero-based Unicode codepoints in visible
   // <body> text. Token offsets flow through line breaking so every completed page
   // records the first source character it renders.
@@ -200,7 +207,8 @@ class ChapterHtmlSlimParser {
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const float lineCompression, const uint8_t extraParagraphSpacing, const uint8_t firstLineIndent,
-      const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
+      const int8_t firstLineIndentPx, const uint8_t paragraphAlignment, const uint16_t viewportWidth,
+      const uint16_t viewportHeight,
       const bool hyphenationEnabled, const bool focusReadingEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
@@ -215,6 +223,7 @@ class ChapterHtmlSlimParser {
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
         firstLineIndent(firstLineIndent),
+        firstLineIndentPx(firstLineIndentPx),
         paragraphAlignment(paragraphAlignment),
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight),

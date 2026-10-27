@@ -12,8 +12,8 @@
 #include "components/SubpageLayout.h"
 #include "components/icons/inx_apps.h"
 #include "components/themes/BaseTheme.h"
-#include "components/themes/inx/InxTheme.h"
-#include "components/themes/roundedraff/RoundedRaffTheme.h"
+#include "components/themes/cpy/CpyTheme.h"
+#include "components/themes/upstream/UpstreamStyleTheme.h"
 
 namespace {
 using DrawListMethod = void (BaseTheme::*)(const GfxRenderer&, Rect, int, int, const std::function<std::string(int)>&,
@@ -28,7 +28,8 @@ static_assert(std::is_same_v<decltype(&BaseTheme::drawList), DrawListMethod>);
 static_assert(std::is_same_v<decltype(&BaseTheme::drawButtonMenu), DrawButtonMenuMethod>);
 static_assert(!BaseMetrics::values.homeShowRecentBookTitle);
 static_assert(!InxMetrics::values.homeShowRecentBookTitle);
-static_assert(RoundedRaffMetrics::values.topPadding == 13);
+static_assert(CpyMetrics::values.batteryWidth == 46);
+static_assert(CpyMetrics::values.batteryHeight == 26);
 
 constexpr uint32_t iconHash(const InxAppIcons::Icon& icon) {
   uint32_t hash = 2166136261u;
@@ -44,15 +45,15 @@ constexpr bool isSolid(const InxAppIcons::Icon& icon, const uint8_t value) {
 }
 }  // namespace
 
-TEST(InxNavigation, WrapsAcrossFiveTabs) {
-  EXPECT_EQ(MainTabs::adjacent(MainTab::Recent, -1), MainTab::Statistics);
-  EXPECT_EQ(MainTabs::adjacent(MainTab::Statistics, 1), MainTab::Recent);
+TEST(InxNavigation, WrapsAcrossFourTabs) {
+  EXPECT_EQ(MainTabs::adjacent(MainTab::Recent, -1), MainTab::Settings);
+  EXPECT_EQ(MainTabs::adjacent(MainTab::Settings, 1), MainTab::Recent);
   EXPECT_EQ(MainTabs::adjacent(MainTab::Library, 1), MainTab::Apps);
   EXPECT_EQ(MainTabs::fromX(50, 500), MainTab::Recent);
   EXPECT_EQ(MainTabs::fromX(150, 500), MainTab::Library);
   EXPECT_EQ(MainTabs::fromX(250, 500), MainTab::Apps);
-  EXPECT_EQ(MainTabs::fromX(350, 500), MainTab::Settings);
-  EXPECT_EQ(MainTabs::fromX(450, 500), MainTab::Statistics);
+  EXPECT_EQ(MainTabs::fromX(350, 500), MainTab::Apps);
+  EXPECT_EQ(MainTabs::fromX(450, 500), MainTab::Settings);
   EXPECT_EQ(MainTabs::fromX(500, 500), MainTab::None);
   EXPECT_EQ(MainTabs::backTarget(MainTab::Apps), MainTab::Recent);
   EXPECT_EQ(MainTabs::backTarget(MainTab::Recent), MainTab::None);

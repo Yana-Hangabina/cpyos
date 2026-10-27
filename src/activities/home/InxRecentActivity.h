@@ -48,10 +48,8 @@ class InxRecentActivity final : public Activity {
   int selected = 0;
   int thumbnailHeight = 0;
 
-  InxRecentLayout layout() const;
   Rect contentRect() const;
   const ReadingBookStats* statsAt(int index) const;
-  int indexFromPoint(int x, int y) const;
   void openSelected();
   void setThumbnailHeight(int displayHeight);
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
@@ -63,12 +61,46 @@ class InxRecentActivity final : public Activity {
 #endif
   bool drawBookCover(int bookIndex, const Rect& bounds);
   bool prepareNextMissingCover();
+  // One progress push while covers are generated, then a single final push:
+  // the old code pushed a full refresh per missing cover (N covers = N scans).
+  bool coverProgressPushed_ = false;
+  // When the current cover-loading pass started (0 = not started). Bounds how long
+  // the previous screen may stay up before one progress push is allowed, so a slow
+  // generator cannot leave a stale page on the panel indefinitely.
+  uint32_t coverLoadingSinceMs_ = 0;
 
-  void drawFlow(const Rect& content);
-  void drawGrid(const Rect& content);
-  void drawList(const Rect& content);
-  void drawIcons(const Rect& content);
-  void drawCover(const Rect& content);
+
+  // refreshed UI home (design frame 01): one large continue card, a 140 px reading
+  // strip with the week bars, the three most recent covers, and the update row.
+  // Ring slots: 0 continue, 1 today, 2..4 recent books, 5 sync.
+  struct DashLayout {
+    Rect firstCard;
+    Rect todayCard;
+    Rect recentCard;
+    Rect recentBooks[3];
+    Rect recentAll;
+    Rect syncRow;
+  };
+  static constexpr int kDashSlots = 7;
+
+  // Chapter counts read once on entry for the continue card and the three
+  // recent covers. Local EPUBs keep total == 0 (unknown) so the UI omits the
+  // count instead of inventing one.
+  struct CachedChapterInfo {
+    uint32_t cached = 0;
+    uint32_t total = 0;
+  };
+  std::array<CachedChapterInfo, 4> chapterInfo_{};
+  CachedChapterInfo readChapterInfo(const RecentBook& book) const;
+  bool syncRowVisible() const;
+  DashLayout dashboardLayout(const Rect& content) const;
+  int dashboardIndexFromPoint(int x, int y) const;
+  void loopDashboard();
+  void dashboardActivate(int index);
+  void drawDashboard(const Rect& content, bool drawCoverArt);
+  Rect dashboardCoverRect(const Rect& content) const;
+  void checkJjwxcUpdates();
+  bool syncInFlight_ = false;
 
  public:
   explicit InxRecentActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

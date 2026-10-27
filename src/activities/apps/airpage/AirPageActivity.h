@@ -52,6 +52,8 @@ class AirPageActivity final : public Activity, private UiAppHost {
     Refresh,
     SetWallpaper,
     OpenImageMenu,
+    ToggleMode,
+    ToggleWallpaper,
   };
 
   bool processImageDisplayResult();
@@ -89,6 +91,19 @@ class AirPageActivity final : public Activity, private UiAppHost {
 
   void renderQr(const Rect& viewport);
   void renderStatus(const Rect& viewport, const char* msg);
+  // CPY frame 30: the pairing card, its status lines, and the three inline
+  // rows (mode / auto-wallpaper / history) computed once and shared by the
+  // paint pass and the touch registration.
+  struct CpyMainLayout {
+    Rect card;
+    Rect qr;
+    int textX = 0;
+    int textWidth = 0;
+    int statusTop = 0;
+    Rect rows[3];
+  };
+  CpyMainLayout cpyMainLayout() const;
+  void drawCpyMainRows(const CpyMainLayout& layout) const;
   Rect contentViewport() const;
   const char* noticeText() const;
   const char* connectionText() const;

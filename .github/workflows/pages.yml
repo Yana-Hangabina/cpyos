@@ -1,0 +1,58 @@
+name: CPYOS Pages
+
+on:
+  push:
+    branches: [cpyos]
+    paths:
+      - 'site/**'
+      - 'scripts/build_cpyos_site.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cpyos-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download the latest release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -n "$tag" ]; then
+            echo "Using release $tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release --clobber
+            mkdir -p release/ota
+            cp release/readpico-ota.json release/ota/readpico.json
+            python3 scripts/build_cpyos_site.py --release-dir release --output _site
+          else
+            echo "No release yet; publishing the static site only"
+            cp -R site _site
+            touch _site/.nojekyll
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

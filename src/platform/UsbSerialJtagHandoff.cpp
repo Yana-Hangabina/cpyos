@@ -86,8 +86,36 @@ void handoffUsbOtgToSerialJtag() {
   }
 }
 
+void prepareUsbOtgHandoff() {
+  // Entry-side mirror of handoffUsbOtgToSerialJtag(): detach the hardware
+  // Serial/JTAG peripheral from the shared internal PHY so the Arduino TinyUSB
+  // stack (USB.begin() -> esp32-hal-tinyusb.c usb_new_phy(USB_PHY_CTRL_OTG, INT))
+  // can own it for the U-disk. IDF's usb_phy manager never sees the ROM console's
+  // PHY claim (its fsls_phy slot stays NULL and reports FREE), so there is no
+  // handle to release -- the physical detach below is what actually frees it.
+  Serial.end();
+
+  // Force a host-visible detach before the PHY changes hands: drive D+/D- low
+  // so the PC enumerates a fresh device once TinyUSB drives the bus.
+  pinMode(USB_INT_PHY0_DM_GPIO_NUM, OUTPUT_OPEN_DRAIN);
+  pinMode(USB_INT_PHY0_DP_GPIO_NUM, OUTPUT_OPEN_DRAIN);
+  digitalWrite(USB_INT_PHY0_DM_GPIO_NUM, LOW);
+  digitalWrite(USB_INT_PHY0_DP_GPIO_NUM, LOW);
+  delay(20);
+
+  // Detach the Serial/JTAG USB PHY: mask its interrupts and clear both the pad
+  // enable and the PHY select, so the internal PHY is no longer driven by this
+  // peripheral. TinyUSB's usb_new_phy() then claims it for the OTG controller.
+  // The console stays down until handoffUsbOtgToSerialJtag() + reboot.
+  usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
+  usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
+  CLEAR_PERI_REG_MASK(USB_SERIAL_JTAG_CONF0_REG, USB_SERIAL_JTAG_PHY_SEL | USB_SERIAL_JTAG_USB_PAD_ENABLE);
+}
+
 #else
 
 void handoffUsbOtgToSerialJtag() {}
+
+void prepareUsbOtgHandoff() {}
 
 #endif

@@ -43,9 +43,11 @@ class TextSettingsActivity final : public UiTabListActivity {
     CharacterSpacing,
     ParaSpacing,
     FirstLineIndent,
+    IndentAdjust,
     ParaIndentation,
     Alignment,
     ScreenMargin,
+    VerticalText,
     Count
   };
   enum class StyleRow {
@@ -71,6 +73,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   int activeTab() const override { return static_cast<int>(tab_); }
   const char* tabLabel(int index) const override;
   void buildScreen(UiScreen& screen) override;
+  void buildTabBar(UiScreen& screen, bool boldLabels = false) override;
   void activateIndex(int index) override;
   void onTabAction(int index) override;
   void stepTab(int direction) override { switchTab(direction); }
@@ -142,8 +145,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   const SdCardFontRegistry* registry_;
   OptionPopup optionPopup_;
   std::vector<FontEntry> fonts_;
-  std::vector<SizeEntry> sizes_;
-  textsettings::PreviewLayout previewLayout_;  // cached preview line layout; relaid only on setting/geometry change
+  std::vector<SizeEntry> sizes_;  textsettings::PreviewLayout previewLayout_;  // cached preview line layout; relaid only on setting/geometry change
 
   Tab tab_;
   int currentFamilyIndex_ = 0;
@@ -159,6 +161,11 @@ class TextSettingsActivity final : public UiTabListActivity {
   int bottomReserved = 0;
   int usableHeight = 0;
   int previewHeight = 0;
+  // List band of the last build, used by drawFooter() to close the CPY group
+  // card under the rows (the same pass/geometry contract as SettingsActivity).
+  int16_t listTop_ = 0;
+  int16_t listBottom_ = 0;
+  int16_t listRowH_ = 0;
   std::atomic<FontLoadState> fontLoadState_{FontLoadState::Idle};
   std::atomic<size_t> preloadCompleted_{0};
   std::atomic<size_t> preloadTotal_{1};

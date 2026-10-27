@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -10,11 +11,12 @@
 
 // Web server activity states
 enum class WebServerActivityState {
-  MODE_SELECTION,  // Showing NetworkModeSelectionActivity (Join / Calibre / Hotspot)
-  WIFI_SELECTION,  // WifiSelectionActivity is active
-  AP_STARTING,     // Starting Access Point mode
-  SERVER_RUNNING,  // Web server is running and handling requests
-  SHUTTING_DOWN    // Shutting down server and WiFi
+  TRANSFER_PAGE,     // refreshed UI frame 14: current network + web transfer + rows
+  MODE_SELECTION,    // Showing NetworkModeSelectionActivity (Join / Calibre / Hotspot)
+  WIFI_SELECTION,    // WifiSelectionActivity is active
+  AP_STARTING,       // Starting Access Point mode
+  SERVER_RUNNING,    // Web server is running and handling requests
+  SHUTTING_DOWN      // Shutting down server and WiFi
 };
 
 /**
@@ -22,13 +24,16 @@ enum class WebServerActivityState {
  * built-in file-transfer web server.
  *
  * Shared lifecycle:
+ *  - Show the transfer page: the current network (only when really connected),
+ *    the web URL/QR (only while the server runs), and rows for network mode,
+ *    saved networks and Bluetooth.
  *  - Connect WiFi (STA or AP), with mDNS for crosspoint.local resolution.
  *  - Construct CrossPointWebServer and run handleClient() from loop().
  *  - On Back, shut down WiFi and reboot via silentRestart() to release the
  *    networking stack cleanly.
  */
 class CrossPointWebServerActivity final : public Activity {
-  WebServerActivityState state = WebServerActivityState::MODE_SELECTION;
+  WebServerActivityState state = WebServerActivityState::TRANSFER_PAGE;
 
   // Network mode
   NetworkMode networkMode = NetworkMode::JOIN_NETWORK;
@@ -58,8 +63,26 @@ class CrossPointWebServerActivity final : public Activity {
   // Cached signal-strength bracket (0..4) for the WiFi indicator.
   int lastWifiBars = 0;
 
-  void renderServerRunning() const;
-  void renderWifiIndicator(int subHeaderTop) const;
+  // Saved credentials shown as "N" on the saved-networks row. Loaded on enter.
+  size_t savedNetworkCount = 0;
+
+  // Frame 14 geometry, written by renderTransferPage() and read by the
+  // loop-task hit test (same source of truth for drawing and touch).
+  Rect modeRow_{};
+  Rect savedRow_{};
+  Rect bluetoothRow_{};
+  bool bluetoothRowVisible_ = false;
+
+  void renderTransferPage();
+  void renderStartingHotspot() const;
+  void openModeSelection();
+  void openSavedNetworks();
+  void openBluetooth();
+  // Leaving the page for a destination that changes the network: stop the
+  // server/WiFi first so two network owners never run at once.
+  void stopNetworkingForNavigation();
+  void handleTransferPageInput();
+
   const char* headerTitle() const;
 
   void onNetworkModeSelected(NetworkMode mode);

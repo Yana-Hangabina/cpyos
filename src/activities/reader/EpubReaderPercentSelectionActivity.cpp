@@ -187,5 +187,9 @@ void EpubReaderPercentSelectionActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHintsWithStyle(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
 
-  renderer.displayBuffer();
+  // While the percent slider is held, every drag frame repaints; TransientUi
+  // keeps those pushes out of the periodic GC16 sweep so a black/white flash
+  // cannot land mid-drag. The release frame goes out Normal and sweeps residue.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH,
+                         draggingSlider ? DisplayRefreshContext::TransientUi : DisplayRefreshContext::Normal);
 }

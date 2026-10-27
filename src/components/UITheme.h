@@ -8,8 +8,6 @@
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
 
-class CoverGridHomeUi;
-
 class UITheme {
   // Static instance
   static UITheme instance;
@@ -22,8 +20,13 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const;
   const BaseTheme& getTheme() const { return *currentTheme; }
-  bool usesClassicTabs() const { return currentType == CrossPointSettings::UI_THEME::CLASSIC; }
-  bool hasMainTabs() const { return currentType == CrossPointSettings::UI_THEME::INX; }
+  // Themes that drive the modern shell (main tabs, theme-metric row geometry,
+  // FreeInkUI theme tokens). INX retires once CPY has proven itself.
+  bool usesModernLayout() const { return true; }
+  bool hasMainTabs() const { return usesModernLayout(); }
+  // CPY-specific page shapes that are not user-selectable layouts (the home
+  // dashboard replaces the InxRecent layout setting).
+  bool usesCpyLayout() const { return currentType == CrossPointSettings::UI_THEME::CPY; }
   bool showSelectionCursor() const;
   Rect getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints = false,
                          bool hasSideButtonHints = false);
@@ -34,9 +37,6 @@ class UITheme {
                                       int maxLines, bool black = true,
                                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
-  static bool supportsCoverGrid();
-  static bool hasCoverGridHome();
-  static void drawCoverGridHome(CoverGridHomeUi& home);
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
@@ -52,10 +52,11 @@ class UITheme {
   const ThemeMetrics* currentMetrics = &BaseMetrics::values;
   std::unique_ptr<BaseTheme> ownedTheme;
   BaseTheme* currentTheme = &fallbackTheme;
-  CrossPointSettings::UI_THEME currentType = CrossPointSettings::UI_THEME::CLASSIC;
+  CrossPointSettings::UI_THEME currentType = CrossPointSettings::UI_THEME::CPY;
   mutable ThemeMetrics adjustedMetrics;
   mutable bool metricsValid = false;
   mutable bool metricsForButtonHints = false;
+  mutable bool metricsForCompactDensity = false;
 };
 
 // Helper macro to access current theme

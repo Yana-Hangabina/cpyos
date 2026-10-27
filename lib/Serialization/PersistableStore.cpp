@@ -36,31 +36,51 @@ bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& 
     return false;
   }
 
-  if (Storage.exists(targetPath.c_str()) && !Storage.remove(targetPath.c_str())) {
-    Storage.remove(tempPath.c_str());
-    LOG_ERR("PERSIST", "Failed to replace %s", targetPath.c_str());
-    return false;
+  // Never remove-then-rename: a power loss between the two loses the whole file.
+  // Rename the old file aside (atomic), move the temp into place, then drop the
+  // backup. At every instant either the old or the new file is complete, and
+  // readDocFromFile falls back to the backup if the primary is missing.
+  const std::string backupPath = targetPath + ".bak";
+  if (Storage.exists(targetPath.c_str())) {
+    Storage.remove(backupPath.c_str());
+    if (!Storage.rename(targetPath.c_str(), backupPath.c_str())) {
+      Storage.remove(tempPath.c_str());
+      LOG_ERR("PERSIST", "Failed to back up %s", targetPath.c_str());
+      return false;
+    }
   }
   if (!Storage.rename(tempPath.c_str(), targetPath.c_str())) {
+    // Put the previous file back so the next boot still has settings.
+    Storage.rename(backupPath.c_str(), targetPath.c_str());
     Storage.remove(tempPath.c_str());
     LOG_ERR("PERSIST", "Failed to rename temp file for %s", targetPath.c_str());
     return false;
   }
+  Storage.remove(backupPath.c_str());
   return true;
 }
 
 bool PersistableStoreBase::readDocFromFile(const char* path, JsonDocument& doc) {
+  const char* readPath = path;
+  std::string backupPath;
   if (!Storage.exists(path)) {
-    return false;  // Expected on first boot — not an error.
+    // Missing primary usually means the write was interrupted between the two
+    // renames; the backup still holds the previous complete document.
+    backupPath = std::string(path) + ".bak";
+    if (!Storage.exists(backupPath.c_str())) {
+      return false;  // Expected on first boot — not an error.
+    }
+    LOG_ERR("PERSIST", "Primary %s missing; reading backup", path);
+    readPath = backupPath.c_str();
   }
-  String json = Storage.readFile(path);
+  String json = Storage.readFile(readPath);
   if (json.isEmpty()) {
-    LOG_ERR("PERSIST", "Failed to read %s (empty)", path);
+    LOG_ERR("PERSIST", "Failed to read %s (empty)", readPath);
     return false;
   }
   auto error = deserializeJson(doc, json);
   if (error) {
-    LOG_ERR("PERSIST", "JSON parse error in %s: %s", path, error.c_str());
+    LOG_ERR("PERSIST", "JSON parse error in %s: %s", readPath, error.c_str());
     return false;
   }
   return true;

@@ -10,6 +10,8 @@ class EpubReaderChapterSelectionActivity final : public UiListActivity {
   std::shared_ptr<Epub> epub;
   int currentSpineIndex = 0;
   int currentTocIndex = -1;
+  // JJWXC catalogs carry bare titles; prefix the 1-based ordinal for display.
+  bool showOrdinals = false;
 
   // Windowed row buffers: TOC entries are SD-backed (BookMetadataCache LUT
   // reads), so only the rows around the viewport are materialized. A
@@ -39,6 +41,6 @@ class EpubReaderChapterSelectionActivity final : public UiListActivity {
  public:
   explicit EpubReaderChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                               const std::shared_ptr<Epub>& epub, int currentSpineIndex,
-                                              int currentTocIndex = -1);
+                                              int currentTocIndex = -1, bool showOrdinals = false);
   void onEnter() override;
 };

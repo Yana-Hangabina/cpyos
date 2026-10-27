@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <Memory.h>
+
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
@@ -79,6 +81,50 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
 
   // Cached MAC address string for display
   std::string cachedMacAddress;
+
+  // v5 sheet mode: the whole state machine is drawn as a bottom sheet over the
+  // screen that launched it. Only touch + the high-DPI profile use it; other
+  // targets keep the full-screen layouts below.
+  bool sheetMode_ = false;
+
+  // Sheet layout shared by the render task and the loop-task hit tests. Every
+  // rect is derived from the renderer size and the current state, so the two
+  // tasks always agree on where the rows and buttons are.
+  struct SheetGeom {
+    Rect sheet{};
+    Rect header{};
+    Rect legend{};
+    Rect rows{};
+    Rect footer{};
+    Rect btn1{};
+    Rect btn2{};
+    Rect btn3{};
+    int16_t rowHeight = 0;
+    int16_t visibleRows = 0;
+    bool valid() const { return sheet.height > 0 && rowHeight > 0; }
+  };
+  SheetGeom sheetGeom() const;
+  bool isSheetState() const;
+  void renderSheet();
+  void handleSheetInput();
+  void cancelSheet();
+  void enterConnectedState();
+  void leaveConnectedState(bool connected);
+
+  // The page underneath the sheet: a one-shot capture of the framebuffer taken
+  // in onEnter(), before this activity paints. It is the real previous screen,
+  // never a mocked page; when PSRAM/unavailable the sheet falls back to white.
+  memory::ByteBuffer backdrop_;
+  size_t backdropBytes_ = 0;
+  bool backdropValid_ = false;
+  void captureBackdrop();
+
+  // CONNECTED sheet: auto-continue countdown.
+  unsigned long connectedAtMs_ = 0;
+  // onComplete() must be idempotent: the CONNECTED hold and a Confirm can race.
+  bool completed_ = false;
+  bool connectedHalfTicked_ = false;
+  int lastWifiStatus_ = 0;
 
   // Whether network was connected using a saved password (skip save prompt)
   bool usedSavedPassword = false;

@@ -61,10 +61,13 @@ MainTabLayout Activity::mainTabLayout() const {
     safe.height = std::max(0, safeBottom - safe.y);
   }
   return MainTabs::layout(safe, metrics.topPadding,
-                          tabsAtBottom                ? MainTabs::bottomBarHeight
+                          tabsAtBottom ? theme.getTheme().mainTabBarHeight()
                           : UiHighDpiProfile::enabled ? UiHighDpiProfile::navigationHeight
                                                       : metrics.headerHeight,
-                          tabsAtBottom, showStatus ? MainTabs::statusBarHeight : 0);
+                          tabsAtBottom, showStatus ? MainTabs::statusBarHeight : 0,
+                          metrics.mainTabTitleHeight + (mainTab() == MainTab::Recent
+                                                            ? UITheme::getInstance().getTheme().mainTabMastheadHeight()
+                                                            : 0));
 }
 
 Rect Activity::pageContentRect() const {
@@ -77,6 +80,7 @@ Rect Activity::pageContentRect() const {
 void Activity::drawPageHeader(const Rect& rect, const char* title, const char* subtitle) const {
   if (usesMainTabBar()) {
     const MainTabLayout layout = mainTabLayout();
+    if (layout.title.height > 0) GUI.drawMainTabTitle(renderer, layout.title, title, mainTab() == MainTab::Recent);
     GUI.drawMainTabBar(renderer, layout.tabBar, mainTab());
     if (layout.statusBar.height > 0) GUI.drawMainTabStatusBar(renderer, layout.statusBar);
   } else {

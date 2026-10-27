@@ -4,6 +4,7 @@
 #include <HalSystem.h>
 #include <I18n.h>
 
+#include "BootTimings.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -13,6 +14,14 @@ void CrashActivity::onEnter() {
   panicMessage = HalSystem::getPanicInfo(false);
   if (panicMessage.empty()) {
     panicMessage = tr(STR_CRASH_NO_REASON);
+  }
+
+  // docs/07 D2: when the boot that panicked never reached its first frame, the
+  // record it left behind names the stage it died in - the one fact the panic
+  // reason and the stack dump cannot give.
+  char trail[48];
+  if (boottimings::incompletePrevious(trail, sizeof(trail)) > 0) {
+    bootTrailMessage = std::string(tr(STR_CRASH_BOOT_STAGE)) + " " + trail;
   }
 
   requestUpdateAndWait();
@@ -55,6 +64,15 @@ void CrashActivity::render(RenderLock&&) {
   for (const auto& line : panicLines) {
     renderer.drawText(UI_10_FONT_ID, x, y, line.c_str());
     y += lineHeight;
+  }
+
+  if (!bootTrailMessage.empty()) {
+    y += metrics.verticalSpacing;
+    auto trailLines = renderer.wrappedText(UI_10_FONT_ID, bootTrailMessage.c_str(), contentWidth, 3);
+    for (const auto& line : trailLines) {
+      renderer.drawText(UI_10_FONT_ID, x, y, line.c_str(), true, EpdFontFamily::BOLD);
+      y += lineHeight;
+    }
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");

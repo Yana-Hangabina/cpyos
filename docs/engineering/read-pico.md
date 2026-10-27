@@ -5,7 +5,13 @@ The confirmed 4.7-inch UI is documented in [high-dpi-ui-profile.md](high-dpi-ui-
 ## Current implementation — 2026-09-30
 
 Read Pico uses the SDK's **epdiy LCD_CAM + GDMA + RMT** backend for the
-E0470A01 1216×684 raw parallel panel. The earlier Lovyan i80 experiment and
+E0470A01 1216×684 raw parallel panel. Panel scans can be deferred so page turns
+overlap the next page's layout; the contract, the paths that stay synchronous and
+the revert switch are in [async-push.md](async-push.md). That overlap is
+currently disabled in the shipping Read Pico driver because the deferred-state
+path participated in a panel-latch defect; the full investigation, the rejected
+waveform variants and the final blocking-36-phase configuration are recorded in
+[read-pico-refresh-stability.md](read-pico-refresh-stability.md). The earlier Lovyan i80 experiment and
 converted waveforms have been removed. `ReadPicoPower.cpp` retains the board's
 rail timing and factory-PMU VCOM handling; neither calibration nor scan timing
 was retuned in this review. Reader text keeps its existing four-tone
@@ -1408,8 +1414,8 @@ The repo's [`partitions.csv`](../../partitions.csv) and the board's factory
 | `nvs` | 0x9000, 0x5000 (20 KB) | 0x9000, 0x5000 (20 KB) |
 | `phy_init` | — | 0xE000, 0x1000 (4 KB) |
 | `otadata` | 0xE000, 0x2000 (8 KB) | — |
-| app slot(s) | `app0` 0x10000 **0x640000 (6.25 MB)** + `app1` 0x650000 6.25 MB | `factory` 0x10000 **0x200000 (2 MB)** |
-| data | `spiffs` 0xc90000, 0x360000 (3.375 MB); `coredump` 0xFF0000, 0x10000 | `spiffs` 5 MB |
+| app slot(s) | `app0` 0x10000 **0x730000 (7.19 MB)** + `app1` 0x740000 7.19 MB (`partitions_readpico.csv`, grown for MuPDF; the shared `partitions.csv` still serves the C3 targets at 6.25 MB) | `factory` 0x10000 **0x200000 (2 MB)** |
+| data | `spiffs` 0xe70000, 0x180000 (1.5 MB); `coredump` 0xFF0000, 0x10000 | `spiffs` 5 MB |
 
 Consequences:
 

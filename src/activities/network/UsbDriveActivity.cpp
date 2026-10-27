@@ -10,6 +10,7 @@
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "components/UITheme.h"
+#include "platform/UsbSerialJtagHandoff.h"
 
 namespace fui = freeink::ui;
 
@@ -21,6 +22,10 @@ void UsbDriveActivity::onEnter() {
 
   // Show the safety instructions before giving the raw SD card to the USB host.
   requestUpdateAndWait();
+  // Detach the hardware Serial/JTAG console from the shared USB PHY before the
+  // Arduino TinyUSB stack claims it. From here until the exit reboot the serial
+  // console is down on purpose; a failed start is recovered by the same reboot.
+  prepareUsbOtgHandoff();
   if (!Storage.beginUsbDrive()) {
     LOG_ERR("USB", "Unable to start USB Drive");
     preparing = false;

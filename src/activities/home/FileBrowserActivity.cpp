@@ -2,6 +2,7 @@
 
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
@@ -97,6 +98,10 @@ void FileBrowserActivity::loadFiles() {
         case Mode::Books:
           if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
               FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
+              FsHelpers::hasCbzExtension(filename) || FsHelpers::hasFb2Extension(filename) ||
+#if defined(CROSSPOINT_MUPDF)
+              FsHelpers::hasPdfExtension(filename) ||
+#endif
               FsHelpers::hasImageExtension(filename)) {
             files.emplace_back(filename);
           }
@@ -786,8 +791,13 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   }
 
   if (files.empty()) {
-    screen.centeredText(mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND),
-                        screen.theme().bodyText);
+    // Books mode paints the placeholder in render(): the theme's
+    // drawEmptyState adds the CPY duck backdrop under the message, which a
+    // plain centred-text component cannot do. Pickers keep the stock text.
+    if (mode != Mode::Books) {
+      screen.centeredText(mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND),
+                          screen.theme().bodyText);
+    }
     return;
   }
 
@@ -866,6 +876,19 @@ void FileBrowserActivity::drawFooter() {
 void FileBrowserActivity::render(RenderLock&& lock) {
   if (editPopup.processRender(renderer, mappedInput)) return;
   UiListActivity::render(std::move(lock));
+  // Empty Books view: the frame drew the chrome and the bottom path band and
+  // left the middle blank, so the backdrop + message land on top with one
+  // more half refresh. The band spans what the old centred-text placeholder
+  // used (below the content spacer, above the path band), so both themes
+  // keep the message where it was.
+  if (mode == Mode::Books && files.empty() && !editPopup.isActive()) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    Rect band = pageContentRect();
+    band.y += metrics.verticalSpacing;
+    band.height = std::max(0, band.height - metrics.verticalSpacing * 2 - renderer.getLineHeight(SMALL_FONT_ID));
+    GUI.drawEmptyState(renderer, band, tr(STR_NO_FILES_FOUND));
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

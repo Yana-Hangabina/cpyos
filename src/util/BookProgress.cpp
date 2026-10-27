@@ -1,6 +1,8 @@
 #include "BookProgress.h"
 
+#include <Cbz.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -12,6 +14,22 @@
 namespace {
 uint32_t readLe32(const uint8_t* p) {
   return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+
+int readReflowableProgress(Epub& epub) {
+  if (epub.getSpineItemsCount() <= 0 || epub.getBookSize() == 0) return -1;
+  HalFile file;
+  if (!Storage.openFileForRead("HOME", epub.getCachePath() + "/progress.bin", file)) return -1;
+  uint8_t data[10]{};
+  const int size = file.read(data, sizeof(data));
+  if (size != 4 && size != 6 && size != 10) return -1;
+  const int spine = data[0] | (data[1] << 8);
+  const int page = data[2] | (data[3] << 8);
+  const int total = size >= 6 ? data[4] | (data[5] << 8) : 0;
+  if (spine == epub.getSpineItemsCount()) return 100;
+  if (spine > epub.getSpineItemsCount()) return -1;
+  const float fraction = total > 0 && page != UINT16_MAX ? std::clamp(float(page) / total, 0.0f, 1.0f) : 0;
+  return std::clamp(static_cast<int>(epub.calculateProgress(spine, fraction) * 100 + 0.5f), 0, 100);
 }
 }  // namespace
 
@@ -25,18 +43,18 @@ int loadBookProgress(const std::string& path) {
       return -1;
     }
     if (!epub->load(false, true)) return -1;
-    HalFile file;
-    if (!Storage.openFileForRead("HOME", epub->getCachePath() + "/progress.bin", file)) return -1;
-    const int size = file.read(data, sizeof(data));
-    if (size != 4 && size != 6 && size != 10) return -1;
-    const int spine = data[0] | (data[1] << 8);
-    const int page = data[2] | (data[3] << 8);
-    const int total = size >= 6 ? data[4] | (data[5] << 8) : 0;
-    if (epub->getSpineItemsCount() <= 0 || epub->getBookSize() == 0) return -1;
-    if (spine == epub->getSpineItemsCount()) return 100;
-    if (spine > epub->getSpineItemsCount()) return -1;
-    const float fraction = total > 0 && page != UINT16_MAX ? std::clamp(float(page) / total, 0.0f, 1.0f) : 0;
-    return std::clamp(static_cast<int>(epub->calculateProgress(spine, fraction) * 100 + 0.5f), 0, 100);
+    return readReflowableProgress(*epub);
+  }
+  if (FsHelpers::hasFb2Extension(path)) {
+    const Fb2 fb2(path, "/.crosspoint");
+    if (!Storage.exists(fb2.getEpubPath().c_str())) return -1;
+    auto epub = makeUniqueNoThrow<Epub>(fb2.getEpubPath(), path, "/.crosspoint");
+    if (!epub) {
+      LOG_ERR("HOME", "OOM: FB2 progress metadata");
+      return -1;
+    }
+    if (!epub->load(false, true)) return -1;
+    return readReflowableProgress(*epub);
   }
   if (FsHelpers::hasXtcExtension(path)) {
     auto xtc = makeUniqueNoThrow<Xtc>(path, "/.crosspoint");
@@ -52,6 +70,22 @@ int loadBookProgress(const std::string& path) {
     if (xtc->getPageCount() == 0) return -1;
     if (page >= xtc->getPageCount()) return 100;
     return xtc->calculateProgress(page);
+  }
+  if (FsHelpers::hasCbzExtension(path)) {
+    auto cbz = makeUniqueNoThrow<Cbz>(path, "/.crosspoint");
+    if (!cbz) {
+      LOG_ERR("HOME", "OOM: CBZ progress metadata");
+      return -1;
+    }
+    if (!cbz->load()) return -1;
+    HalFile file;
+    if (!Storage.openFileForRead("HOME", cbz->getCachePath() + "/progress.bin", file) || file.read(data, 4) != 4)
+      return -1;
+    const uint32_t page = readLe32(data);
+    const int pageCount = cbz->getPageCount();
+    if (pageCount == 0) return -1;
+    if (page >= static_cast<uint32_t>(pageCount)) return 100;
+    return static_cast<int>((page + 1) * 100 / pageCount);
   }
   return -1;
 }

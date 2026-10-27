@@ -20,6 +20,27 @@ const SdCardFontFileInfo* SdCardFontFamilyInfo::findFile(uint8_t size, uint8_t s
   return nullptr;
 }
 
+const char* SdCardFontFamilyInfo::formatTag() const {
+  if (!vector) return nullptr;
+  // The regular-role file speaks for the family (a folder family may pair
+  // Regular.otf with Bold.ttf; the picker labels the family once).
+  const SdCardFontFileInfo* regular = nullptr;
+  for (const auto& f : files) {
+    if (f.style == 0) {
+      regular = &f;
+      break;
+    }
+  }
+  if (!regular && !files.empty()) regular = &files.front();
+  if (!regular) return nullptr;
+  const char* dot = strrchr(regular->path.c_str(), '.');
+  if (!dot) return nullptr;
+  if (strcasecmp(dot, ".ttf") == 0) return "TTF";
+  if (strcasecmp(dot, ".otf") == 0) return "OTF";
+  if (strcasecmp(dot, ".ttc") == 0) return "TTC";
+  return nullptr;
+}
+
 const SdCardFontFileInfo* SdCardFontFamilyInfo::findNearestSize(const uint8_t pointSize, const uint8_t style) const {
   // The reader stores an actual point size, so an exact match is the norm and
   // falls out of the delta search below (delta 0). The search only matters when

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
-<head><title>CrossMux User Guide</title></head>
+<head><title>CPYOS User Guide</title></head>
 <body>
 <h2>1. Getting Started</h2>
-<p>The CrossMux Quick User Guide covers the essentials of your first reading session. CrossMux is lightweight reading firmware for ESP32-based e-ink devices, primarily for EPUB, TXT, and other books.</p>
+<p>The CPYOS Quick User Guide covers the essentials of your first reading session. CPYOS is lightweight reading firmware for ESP32-based e-ink devices, primarily for EPUB, TXT, and other books.</p>
 <p>To get started:</p>
 <p>1. Insert the SD card and turn on the device.</p>
 <p>2. Choose the interface language.</p>
@@ -11,7 +11,7 @@
 <p>4. Open a book from Library or Browse Files.</p>
 <p>5. Adjust the font, font size, and sleep timeout in Settings.</p>
 <blockquote><p>Do not casually delete <code>/.crosspoint/</code> from the SD card. It stores reading progress, caches, and some settings.</p></blockquote>
-<p>Official website: https://crossmux.com/</p>
+<p>Official website: https://yana-hangabina.github.io/cpyos/</p>
 <h2>2. Basic Controls</h2>
 <p>Button positions and counts vary by device. Follow the on-screen hints and your current button mapping:</p>
 <ul>
@@ -24,7 +24,7 @@
 </ul>
 <p>Some devices allow button remapping under Settings &gt; Controls. Touch-capable devices also let you tap on-screen controls.</p>
 <h2>3. Reading Books</h2>
-<p>CrossMux can browse EPUB, TXT, XTC / XTCH, and image files such as BMP and JPEG. Available formats and controls may vary by device.</p>
+<p>CPYOS can browse EPUB, TXT, XTC / XTCH, and image files such as BMP and JPEG. Available formats and controls may vary by device.</p>
 <p>While reading, use the mapped page controls to turn pages. Press Confirm to open the reader menu and Back to close it or return.</p>
 <p>The reader menu may provide chapters, bookmarks, dictionary lookup, auto page turn, orientation, position jump, and screenshots. Check your device's menu for available options.</p>
 <p>The first opening of an EPUB may take longer while pagination data is generated. Later opens are usually faster.</p>
@@ -52,11 +52,11 @@
 <li>Choose a suitable sleep timeout.</li>
 </ul>
 <h2>9. Firmware Updates</h2>
-<p>Only install CrossMux firmware intended for your exact device model. Update information is available at:</p>
+<p>Only install CPYOS firmware intended for your exact device model. Update information is available at:</p>
 <ul>
-<li>Website: https://crossmux.com/</li>
-<li>GitHub: https://github.com/0x1abin/crossmux</li>
-<li>Releases: https://github.com/0x1abin/crossmux/releases</li>
+<li>Website: https://yana-hangabina.github.io/cpyos/</li>
+<li>GitHub: https://github.com/Yana-Hangabina/cpyos</li>
+<li>Releases: https://github.com/Yana-Hangabina/cpyos/releases</li>
 </ul>
 <p>On devices that support OTA updates, open Settings &gt; System &gt; Check for updates. Do not disconnect power, remove the SD card, or force-reset during an update.</p>
 <h2>10. Troubleshooting</h2>
@@ -65,7 +65,7 @@
 <p>2. Delete this book's cache and reopen it.</p>
 <p>3. Copy the EPUB again.</p>
 <p>4. Convert the EPUB again with Calibre.</p>
-<p>5. Install a matching CrossMux firmware update.</p>
+<p>5. Install a matching CPYOS firmware update.</p>
 <h3>Missing Chinese Characters</h3>
 <p>Install a <code>.cpfont</code> font containing the required Chinese characters, select it, and reopen the book.</p>
 <h3>Wi-Fi Network Not Found</h3>
@@ -79,6 +79,6 @@
 <li>Do not casually delete <code>/.crosspoint/</code>.</li>
 <li>Do not flash firmware intended for another device model.</li>
 </ul>
-<p>For more information: https://crossmux.com/</p>
+<p>For more information: https://yana-hangabina.github.io/cpyos/</p>
 </body>
 </html>

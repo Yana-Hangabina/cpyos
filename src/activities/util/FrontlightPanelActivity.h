@@ -35,19 +35,19 @@ class FrontlightPanelActivity final : public Activity, private UiAppHost {
   uint8_t touchModeRestore = CrossPointSettings::TOUCH_READER_ON;
   int panelBottom = 0;
 
-  // Quick-setting tiles, in grid order (2 columns): night mode, refresh,
-  // orientation, touch. Fixed set — shown on touch boards, absent elsewhere.
+  // Quick-setting rows, in list order: night mode, refresh, orientation,
+  // touch. Fixed set — shown on touch boards, absent elsewhere.
   static constexpr int kTileCount = 4;
 
-  // fui::SliderRowProps and fui::TileGridProps embed a 324-byte fui::StyleSet,
+  // fui::SliderRowProps and fui::ListProps embed a 324-byte fui::StyleSet,
   // so the props the render path fills in live here instead of on the stack
   // (AGENTS.md: locals stay under 256 bytes). The components take them by
   // const reference and draw immediately, so one instance per call site is
   // enough — every field either is reassigned on each use or keeps its
   // constructed default.
   freeink::ui::SliderRowProps rowProps;
-  freeink::ui::TileGridProps gridProps;
-  freeink::ui::TileGridItem gridItems[kTileCount];
+  freeink::ui::ListProps listProps;
+  freeink::ui::ListItem listItems[kTileCount];
 
   static void panelScreen(UiScreen& screen, void* user);
   static void onBrightnessEvent(const freeink::ui::ActionEvent& event, void* user);

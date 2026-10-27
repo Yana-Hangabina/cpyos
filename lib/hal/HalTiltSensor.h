@@ -3,13 +3,15 @@
 #include <Arduino.h>
 #include <Imu.h>
 
+#include "ShakePageTurnGate.h"
+
 // TODO: Move enums into new header and share with CrossPointSettings.h
 namespace CrossPointOrientation {
 enum Value : uint8_t { PORTRAIT = 0, LANDSCAPE_CW = 1, INVERTED = 2, LANDSCAPE_CCW = 3 };
 }
 
-namespace CrossPointTiltPageTurn {
-enum Value : uint8_t { TILT_OFF = 0, TILT_NORMAL = 1, TILT_INVERTED = 2 };
+namespace CrossPointMotionPageTurn {
+enum Value : uint8_t { OFF = 0, TILT = 1, TILT_REVERSED = 2, SHAKE = 3, SHAKE_REVERSED = 4 };
 }
 
 class HalTiltSensor;
@@ -19,9 +21,9 @@ class HalTiltSensor {
   bool _available = false;
   mutable Imu _sdkImu;
 
-  // Tilt gesture state machine
-  bool _tiltForwardEvent = false;  // Consumed by wasTiltedForward()
-  bool _tiltBackEvent = false;     // Consumed by wasTiltedBack()
+  // Motion gesture state machine
+  bool _motionForwardEvent = false;  // Consumed by wasMotionForward()
+  bool _motionBackEvent = false;     // Consumed by wasMotionBack()
   bool _hadActivity = false;       // Non-consuming flag for sleep timer
   bool _inTilt = false;            // Currently tilted past threshold
   bool _isAwake = false;           // Tracks power state
@@ -52,12 +54,15 @@ class HalTiltSensor {
   bool _accelOnly = false;
   float _lastTiltG = 0.0f;  // Previous gravity-component sample, for the rate
   unsigned long _lastTiltGMs = 0;
-  CrossPointTiltPageTurn::Value _accelMode = CrossPointTiltPageTurn::TILT_OFF;
+  CrossPointMotionPageTurn::Value _motionMode = CrossPointMotionPageTurn::OFF;
   CrossPointOrientation::Value _accelOrientation = CrossPointOrientation::PORTRAIT;
   bool _accelReading = false;
 
-  bool readGyro(float& gx, float& gy, float& gz) const;
-  bool readAccel(float& ax, float& ay, float& az) const;
+  // Shake page-turn gate (kiikoread book_policy.h): independent of the tilt gesture
+  // and fed from the same accelerometer samples.
+  ShakePageTurnGate _shakeGate;
+
+  int feedShake(const Imu::Sample& sample, const uint8_t motionMode, const uint8_t orientation, const unsigned long now);
 
  public:
   // Call after BoardConfig has selected the active device.
@@ -72,16 +77,18 @@ class HalTiltSensor {
   // True if an IMU is present on this device
   bool isAvailable() const { return _available; }
 
-  // Poll the accelerometer and update tilt gesture state.
-  void update(const uint8_t mode, const uint8_t orientation, const bool inReader);
+  // Poll the IMU and update the motion page-turn gesture state.
+  // `motionMode` is CrossPointMotionPageTurn::Value, `orientation`
+  // CrossPointOrientation::Value.
+  void update(const uint8_t motionMode, const uint8_t orientation, const bool inReader);
 
-  // Returns true once per tilt-forward gesture (next page direction).
+  // Returns true once per forward motion gesture (next page direction).
   // Consumed on read — subsequent calls return false until next gesture.
-  bool wasTiltedForward();
+  bool wasMotionForward();
 
-  // Returns true once per tilt-back gesture (previous page direction).
+  // Returns true once per backward motion gesture (previous page direction).
   // Consumed on read.
-  bool wasTiltedBack();
+  bool wasMotionBack();
 
   // Non-consuming: true if any tilt activity occurred since last call.
   // Used to reset the auto-sleep inactivity timer.

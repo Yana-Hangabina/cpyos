@@ -9,10 +9,9 @@ namespace {
 
 // Map the sensor's in-plane axes to the forward/back tilt convention, which is the
 // gyro's: portrait tilts about X and uses `primary`, landscape about Y and uses
-// `secondary`, and TILT_INVERTED flips the sign. Accelerometer boards pass the
-// perpendicular axis as `primary`/`secondary` (see the call site).
-float tiltAxisFor(const uint8_t mode, const uint8_t orientation, const float primary, const float secondary) {
-  const bool inverted = mode == CrossPointTiltPageTurn::TILT_INVERTED;
+// `secondary`, and the reversed motion mode flips the sign. Accelerometer boards pass
+// the perpendicular axis as `primary`/`secondary` (see the call site).
+float tiltAxisFor(const bool inverted, const uint8_t orientation, const float primary, const float secondary) {
   switch (orientation) {
     case CrossPointOrientation::PORTRAIT:
       return inverted ? -primary : primary;
@@ -27,25 +26,38 @@ float tiltAxisFor(const uint8_t mode, const uint8_t orientation, const float pri
   }
 }
 
+// The shake gate is written against screen axes (horizontal = the direction a
+// page turns). The board frame rotates with the reader orientation, so map the
+// accelerometer sample onto horizontal/vertical/normal before feeding it.
+// Only the horizontal sign matters for the direction; the other two are
+// consumed as magnitudes.
+void screenAxesFor(const uint8_t orientation, const Imu::Sample& sample, float& horizontal, float& vertical,
+                   float& normal) {
+  normal = sample.az;
+  switch (orientation) {
+    case CrossPointOrientation::INVERTED:
+      horizontal = -sample.ax;
+      vertical = -sample.ay;
+      break;
+    case CrossPointOrientation::LANDSCAPE_CW:
+      horizontal = -sample.ay;
+      vertical = sample.ax;
+      break;
+    case CrossPointOrientation::LANDSCAPE_CCW:
+      horizontal = sample.ay;
+      vertical = -sample.ax;
+      break;
+    case CrossPointOrientation::PORTRAIT:
+    default:
+      horizontal = sample.ax;
+      vertical = sample.ay;
+      break;
+  }
+}
+
+int mgFromG(const float g) { return static_cast<int>(lroundf(g * 1000.0f)); }
+
 }  // namespace
-
-bool HalTiltSensor::readGyro(float& gx, float& gy, float& gz) const {
-  Imu::Sample sample;
-  if (!_sdkImu.read(sample)) return false;
-  gx = sample.gx;
-  gy = sample.gy;
-  gz = sample.gz;
-  return true;
-}
-
-bool HalTiltSensor::readAccel(float& ax, float& ay, float& az) const {
-  Imu::Sample sample;
-  if (!_sdkImu.read(sample)) return false;
-  ax = sample.ax;
-  ay = sample.ay;
-  az = sample.az;
-  return true;
-}
 
 void HalTiltSensor::begin() {
   _available = _sdkImu.begin();
@@ -114,18 +126,25 @@ bool HalTiltSensor::deepSleep() {
   return true;
 }
 
-void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const bool inReader) {
+void HalTiltSensor::update(const uint8_t motionMode, const uint8_t orientation, const bool inReader) {
   if (!_available) {
     return;
   }
 
-  const bool shouldBeAwake = mode != CrossPointTiltPageTurn::TILT_OFF && inReader;
-  if (_accelOnly && (mode != _accelMode || orientation != _accelOrientation || shouldBeAwake != _accelReading)) {
-    _accelMode = static_cast<CrossPointTiltPageTurn::Value>(mode);
+  const bool tiltMode = motionMode == CrossPointMotionPageTurn::TILT ||
+                        motionMode == CrossPointMotionPageTurn::TILT_REVERSED;
+  const bool shakeMode = motionMode == CrossPointMotionPageTurn::SHAKE ||
+                         motionMode == CrossPointMotionPageTurn::SHAKE_REVERSED;
+  const bool tiltActive = tiltMode && inReader;
+  const bool shakeActive = shakeMode && inReader;
+  const bool shouldBeAwake = tiltActive || shakeActive;
+  if (motionMode != _motionMode || orientation != _accelOrientation || shouldBeAwake != _accelReading) {
+    _motionMode = static_cast<CrossPointMotionPageTurn::Value>(motionMode);
     _accelOrientation = static_cast<CrossPointOrientation::Value>(orientation);
     _accelReading = shouldBeAwake;
     _lastTiltGMs = 0;
     _inTilt = false;
+    _shakeGate.reset();
     clearPendingEvents();
   }
   if (shouldBeAwake && !_isAwake) {
@@ -153,6 +172,29 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   }
   _lastPollMs = now;
 
+  Imu::Sample sample;
+  if (!_sdkImu.read(sample)) {
+    _lastTiltGMs = 0;
+    return;
+  }
+
+  if (shakeActive) {
+    const int shake = feedShake(sample, motionMode, orientation, now);
+    if (shake > 0) {
+      _motionForwardEvent = true;
+      _hadActivity = true;
+      LOG_INF("GYR", "Shake trigger: forward");
+    } else if (shake < 0) {
+      _motionBackEvent = true;
+      _hadActivity = true;
+      LOG_INF("GYR", "Shake trigger: backward");
+    }
+  }
+
+  if (!tiltActive) {
+    return;
+  }
+
   // Gyro boards read an angular rate directly; accelerometer boards differentiate the
   // gravity component, so the two arrive here in different units and against thresholds
   // converted from the same 270 dps. See RATE_THRESHOLD_GPS in the header.
@@ -160,11 +202,6 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   float rateThreshold;
   float neutralRate;
   if (_accelOnly) {
-    float ax, ay, az;
-    if (!readAccel(ax, ay, az)) {
-      _lastTiltGMs = 0;
-      return;
-    }
     // The gyro measures angular rate ABOUT the tilt axis; the accelerometer measures the
     // gravity component ALONG the axis perpendicular to it. The gesture is a LEFT/RIGHT
     // sway, so in portrait the device rolls about its up/down axis and gravity swings
@@ -174,24 +211,21 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
     // The sign is flipped because the accelerometer's gravity swing runs opposite to the
     // gyro's rotation rate for the same physical sway; flipping here rather than inside
     // tiltAxisFor() leaves the gyro boards' convention exactly as it was.
-    const float sample = -tiltAxisFor(mode, orientation, ax, ay);
+    const float tiltSample = -tiltAxisFor(motionMode == CrossPointMotionPageTurn::TILT_REVERSED, orientation,
+                                          sample.ax, sample.ay);
     if (_lastTiltGMs == 0) {
-      _lastTiltG = sample;
+      _lastTiltG = tiltSample;
       _lastTiltGMs = now;
       return;
     }
-    tiltAxis = (sample - _lastTiltG) * 1000.0f / static_cast<float>(now - _lastTiltGMs);
-    _lastTiltG = sample;
+    tiltAxis = (tiltSample - _lastTiltG) * 1000.0f / static_cast<float>(now - _lastTiltGMs);
+    _lastTiltG = tiltSample;
     _lastTiltGMs = now;
     rateThreshold = RATE_THRESHOLD_GPS;
     neutralRate = NEUTRAL_RATE_GPS;
   } else {
-    float gx, gy, gz;
-    if (!readGyro(gx, gy, gz)) {
-      return;
-    }
     // On the X3 PCB: X axis = left/right in portrait, Y axis = left/right in landscape.
-    tiltAxis = tiltAxisFor(mode, orientation, gx, gy);
+    tiltAxis = tiltAxisFor(motionMode == CrossPointMotionPageTurn::TILT_REVERSED, orientation, sample.gx, sample.gy);
     rateThreshold = RATE_THRESHOLD_DPS;
     neutralRate = NEUTRAL_RATE_DPS;
   }
@@ -205,13 +239,13 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
     // Check for new tilt gesture (with cooldown)
     if ((now - _lastTiltMs) >= COOLDOWN_MS) {
       if (tiltAxis > rateThreshold) {
-        _tiltForwardEvent = true;
+        _motionForwardEvent = true;
         _hadActivity = true;
         _inTilt = true;
         _lastTiltMs = now;
         LOG_INF("GYR", "Forward Trigger=(%.1f) %s", tiltAxis, _accelOnly ? "g/s" : "dps");
       } else if (tiltAxis < -rateThreshold) {
-        _tiltBackEvent = true;
+        _motionBackEvent = true;
         _hadActivity = true;
         _inTilt = true;
         _lastTiltMs = now;
@@ -221,15 +255,26 @@ void HalTiltSensor::update(const uint8_t mode, const uint8_t orientation, const 
   }
 }
 
-bool HalTiltSensor::wasTiltedForward() {
-  const bool val = _tiltForwardEvent;
-  _tiltForwardEvent = false;
+int HalTiltSensor::feedShake(const Imu::Sample& sample, const uint8_t motionMode, const uint8_t orientation,
+                             const unsigned long now) {
+  float horizontal;
+  float vertical;
+  float normal;
+  screenAxesFor(orientation, sample, horizontal, vertical, normal);
+  const bool inverted = motionMode == CrossPointMotionPageTurn::SHAKE_REVERSED;
+  const int x = mgFromG(inverted ? -horizontal : horizontal);
+  return _shakeGate.feed(x, mgFromG(vertical), mgFromG(normal), static_cast<uint32_t>(now));
+}
+
+bool HalTiltSensor::wasMotionForward() {
+  const bool val = _motionForwardEvent;
+  _motionForwardEvent = false;
   return val;
 }
 
-bool HalTiltSensor::wasTiltedBack() {
-  const bool val = _tiltBackEvent;
-  _tiltBackEvent = false;
+bool HalTiltSensor::wasMotionBack() {
+  const bool val = _motionBackEvent;
+  _motionBackEvent = false;
   return val;
 }
 
@@ -240,8 +285,9 @@ bool HalTiltSensor::hadActivity() {
 }
 
 void HalTiltSensor::clearPendingEvents() {
-  _tiltForwardEvent = false;
-  _tiltBackEvent = false;
+  _motionForwardEvent = false;
+  _motionBackEvent = false;
   _hadActivity = false;
+  _shakeGate.reset();
   // Intentionally preserve _inTilt so a held tilt doesn't retrigger on next poll
 }

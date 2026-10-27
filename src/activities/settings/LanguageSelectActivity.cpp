@@ -37,8 +37,14 @@ void LanguageSelectActivity::onEnter() {
   // finishes the activity immediately on selection.
   for (int i = 0; i < totalItems; ++i) {
     fui::ListItem item;
-    item.label = I18N.getLanguageName(static_cast<Language>(SORTED_LANGUAGE_INDICES[i]));
-    if (SORTED_LANGUAGE_INDICES[i] == selectedLang) {
+    const auto language = static_cast<Language>(SORTED_LANGUAGE_INDICES[i]);
+    item.label = I18N.getLanguageName(language);
+    // A packed language whose blob is not in the data partition falls back to
+    // English at runtime. Say so here instead of letting the user pick it and
+    // silently get English; the stored choice is never rewritten for them.
+    if (!I18n::isLanguagePackAvailable(language)) {
+      item.value = tr(STR_NOT_AVAILABLE);
+    } else if (SORTED_LANGUAGE_INDICES[i] == selectedLang) {
       item.value = tr(STR_SELECTED);
     }
     item.actionValue = static_cast<int16_t>(i);
@@ -54,6 +60,15 @@ void LanguageSelectActivity::activateIndex(const int index) {
   app.clearTapFlash();
   nav.selected = index;
   const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
+
+  // The row already reads "Not available"; refusing the selection keeps a
+  // known-unusable language out of settings.json. It is not a permanent state:
+  // flash the pack and the same row becomes selectable again.
+  if (!I18n::isLanguagePackAvailable(static_cast<Language>(langIndex))) {
+    LOG_ERR("LANG", "language row %d has no usable string pack; selection refused", index);
+    requestUpdate();
+    return;
+  }
 
   const uint8_t previousLanguage = SETTINGS.language;
   const auto previousContentProfile = SETTINGS.contentProfile;
@@ -134,10 +149,8 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
   props.count = static_cast<uint16_t>(totalItems);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
-  if (SETTINGS.uiTheme != CrossPointSettings::INX) {
-    props.labelText = screen.theme().smallText;
-    props.labelText.maxLines = 2;
-  }
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
   syncListViewport(screen, props);
   screen.list(props);
 }

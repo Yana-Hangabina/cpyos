@@ -55,7 +55,7 @@ def main():
         placement = sleep[sleep.index('HalDisplay::GrayscaleMode sleepGrayscaleMode('):sleep.index('// Kept separate')]
         placement += sleep[sleep.index('struct BitmapPlacement {'):sleep.index('struct OverlayBmpInfo {')]
         placement += sleep[sleep.index('BitmapPlacement calculateBitmapPlacement('):sleep.index('bool parseOverlayBmpHeader(')]
-        custom = sleep[sleep.index('void SleepActivity::renderCustomSleepScreen()'):sleep.index('// Sleep screens paint')]
+        custom = sleep[sleep.index('void SleepActivity::renderCustomSleepScreen()'):sleep.index('void SleepActivity::renderDefaultSleepScreen()')]
         bitmap_sleep = sleep[sleep.index('void SleepActivity::renderBitmapSleepScreen('):sleep.index('bool SleepActivity::renderSleepOverlayFile(')]
         probe = """#include <cmath>
     #include <Logging.h>

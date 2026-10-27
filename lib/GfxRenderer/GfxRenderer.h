@@ -98,6 +98,14 @@ class GfxRenderer {
   // reading-stats screens) without threading the mode through every render path.
   mutable bool nextRefreshOverridePending = false;
   mutable HalDisplay::RefreshMode nextRefreshOverride = HalDisplay::FAST_REFRESH;
+  // UI pages run differential GL16, never DU. Even GL16 leaves a little
+  // residue over a long chain, so promote every Nth UI push to a FULL GC16
+  // sweep. ContinuousReading is excluded: the reader owns its cadence.
+  // N defaults to the historical constant; src injects the user's refresh
+  // frequency setting via setUiFullRefreshInterval (bounded, never disabled).
+  static constexpr uint8_t kUiFastRefreshInterval = 6;
+  mutable uint8_t uiFullRefreshInterval = kUiFastRefreshInterval;
+  mutable uint8_t uiFastRefreshCount = 0;
   std::vector<uint8_t*> bwBufferChunks;
   std::map<int, EpdFontFamily> fontMap;
   // Mutable because ensureSdCardFontReady() is const (called from layout code
@@ -258,6 +266,9 @@ class GfxRenderer {
 
   // Fading fix control
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
+  // Interval is clamped: a FULL on every push would make system UI unusable,
+  // and the periodic sweep must never be turned off entirely on GL16 panels.
+  void setUiFullRefreshInterval(const uint8_t interval) { uiFullRefreshInterval = interval < 2 ? 2 : interval; }
 
   // Screen ops
   int getScreenWidth() const;
@@ -425,6 +436,11 @@ class GfxRenderer {
   enum class TextMeasureMode { Layout, Rendered };
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                    BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+  /// True when every codepoint in `text` gets a real glyph from the face
+  /// drawText would pick (the same fallback chain, including SD fonts) rather
+  /// than the missing-glyph outline. Callers use it to avoid offering text
+  /// that would draw as tofu.
+  bool canRenderText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
@@ -466,6 +482,17 @@ class GfxRenderer {
   // frame is displayed and before the grayscale planes are written.
   void preconditionGrayscale() const;
   void preconditionGrayscale(int x, int y, int w, int h) const;
+  // Refresh only the rect [x, x+w) x [y, y+h) in PHYSICAL panel-memory coords
+  // (framebuffer row bytes), not logical screen coords. Callers starting from a
+  // logical rect rotate it in first. Panels without a windowed push fall back to
+  // a full-frame Fast refresh, so callers may use it unconditionally. Used for
+  // the reader's per-minute clock tick, where only the status strip changed and
+  // the body must not re-drive. On Read Pico the area scan is unsafe, so this
+  // degrades to a full-page differential push; `context` still governs whether
+  // that push joins the periodic GC16 sweep (the clock passes ContinuousReading
+  // so an idle read never flashes mid-page).
+  void displayWindow(int x, int y, int w, int h,
+                     DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   // Display the framebuffer as the base frame for a grayscale overlay that
   // follows (X3: OEM differential base waveform; others: plain display with
   // `fallback`).
@@ -490,6 +517,11 @@ class GfxRenderer {
   bool supportsContinuousImageReading() const;
   bool canUseTextTransition() const;
   void cancelGrayscale() const;
+
+  // Water-ripple page turn request (Read Pico only; no-op elsewhere and in the
+  // simulator). >0 forward, <0 backward, 0 off; consumed by the next presented
+  // frame. Call right before the commit of an ordinary sequential page turn.
+  void setPageTurnDirection(int direction) const;
   bool storeBwBuffer();  // Returns true if buffer was stored successfully
   // Restore and free the stored buffer. resyncPanelBaseline rewrites the
   // controller's differential baseline to the restored frame — correct after
@@ -541,7 +573,26 @@ class GfxRenderer {
   uint16_t getDisplayHeight() const { return panelHeight; }
   uint8_t getGrayscaleLevels() const;
   bool beginGrayscale16();
-  bool commitGrayscale16() const;
+  // Start a 16-level pass without clearing the current 1bpp page, so fast UI
+  // stays on screen and only a rectangle is redrawn with native grays.
+  bool beginGrayscale16FromFrameBuffer();
+  // clean=true commits through a full GC16 sweep (periodic/manual clean).
+  bool commitGrayscale16(bool clean = false) const;
+  // Commit one logical-coordinate rectangle of the native gray front, then
+  // force the next full B/W page through GC16 to clear those midtones.
+  bool commitGrayscale16Area(int x, int y, int width, int height, bool clean = false) const;
+  struct GrayAreaRect {
+    int x;
+    int y;
+    int width;
+    int height;
+  };
+  // Commit several logical rectangles from the same native gray front in one
+  // panel pass. Falls back to false when the driver cannot batch them.
+  bool commitGrayscale16Areas(const GrayAreaRect* areas, int count, bool clean = false) const;
+  // Schedule one GC16 sweep for the next B/W presentation. Used when an
+  // activity that left native-gray pixels on the glass is being replaced.
+  void requestFullRefreshNext() const;
   void cancelGrayscale16() const;
   bool isGrayscale16Active() const { return grayscale16Buffer != nullptr; }
   void drawGrayscale16Pixel(int x, int y, uint8_t gray) const;

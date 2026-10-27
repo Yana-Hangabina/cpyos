@@ -14,6 +14,7 @@
 #include <cstring>
 #include <vector>
 
+#include "Epub/FontManifest.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
@@ -79,8 +80,23 @@ bool convertOverrideCover(const Epub& epub, const std::string& outputPath, const
 }
 }  // namespace
 
-Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-  cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
+Epub::Epub(std::string filepath, const std::string& cacheDir)
+    : Epub(std::move(filepath), std::string(), cacheDir) {}
+
+Epub::Epub(std::string filepath, std::string sourcePath, const std::string& cacheDir)
+    : filepath(std::move(filepath)), sourcePath(sourcePath.empty() ? this->filepath : std::move(sourcePath)) {
+  // Hash size and mtime too: a different book copied over the same path must not
+  // reuse the old book.bin/sections. If the file cannot be opened yet, keep the
+  // path-only key; the load path reports the failure anyway.
+  uint64_t bytes = 0;
+  uint32_t stamp = 0;
+  HalFile probe;
+  if (Storage.openFileForRead("EBP", this->filepath, probe)) {
+    bytes = probe.fileSize();
+    stamp = probe.modificationTime();
+  }
+  const std::string key = this->filepath + ":" + std::to_string(bytes) + ":" + std::to_string(stamp);
+  cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(key));
 }
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile, ZipFile* sharedZip) const {
@@ -225,6 +241,10 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
     cssFiles = opfParser.cssFiles;
   }
 
+  if (!opfParser.fontFiles.empty()) {
+    embeddedFonts = opfParser.fontFiles;
+  }
+
   LOG_DBG("EBP", "Successfully parsed content.opf");
   return true;
 }
@@ -296,6 +316,20 @@ bool Epub::parseTocNavFile() const {
 
   LOG_DBG("EBP", "Parsed TOC nav items");
   return true;
+}
+
+void Epub::discoverEmbeddedFontsFromZip() {
+  if (!embeddedFonts.empty()) return;
+  ZipFile zf(filepath);
+  if (!zf.enumerateFilePaths([&](std::string_view filePath) {
+        if (embeddedFonts.size() >= 8) return;
+        if (!epubfont::hasFontExtension(filePath)) return;
+        if (std::find(embeddedFonts.begin(), embeddedFonts.end(), std::string(filePath)) != embeddedFonts.end()) return;
+        LOG_DBG("EBP", "Discovered font in the package: %.*s", static_cast<int>(filePath.size()), filePath.data());
+        embeddedFonts.emplace_back(filePath);
+      })) {
+    LOG_ERR("EBP", "Failed to enumerate ZIP file paths for embedded-font discovery");
+  }
 }
 
 void Epub::discoverCssFilesFromZip() {
@@ -846,8 +880,12 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
       });
 }
 
-std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
-std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
+// "_g2": Gray2 (4-tone) thumbnails. The suffix keeps a 1-bit BMP cached by an
+// older firmware from being served as if it were grayscale.
+std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT]_g2.bmp"; }
+std::string Epub::getThumbBmpPath(int height) const {
+  return cachePath + "/thumb_" + std::to_string(height) + "_g2.bmp";
+}
 
 bool Epub::generateThumbBmp(int height) const {
   // Already generated, return true
@@ -897,10 +935,10 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   if (convertOverrideCover(
           *this, outputPath, "thumbnail",
           [targetWidth, height](HalFile& source, HalFile& output) {
-            return JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(source, output, targetWidth, height);
+            return JpegToBmpConverter::jpegFileToBmpStreamWithSize(source, output, targetWidth, height);
           },
           [targetWidth, height](HalFile& source, HalFile& output) {
-            return PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(source, output, targetWidth, height);
+            return PngToBmpConverter::pngFileToBmpStreamWithSize(source, output, targetWidth, height);
           })) {
     return true;
   }

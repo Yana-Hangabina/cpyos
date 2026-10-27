@@ -28,6 +28,31 @@ Rect sleepCoverActionRect(const GfxRenderer& renderer) {
               renderer.getScreenHeight() - metrics.contentSidePadding - metrics.menuRowHeight,
               renderer.getScreenWidth() - metrics.contentSidePadding * 2, metrics.menuRowHeight);
 }
+
+// CPY viewer chrome (design: 圆底返回钮 / 角落页码 / 翻页按钮常显). Shared by
+// the render passes and the touch routing so the two cannot drift.
+constexpr int kCpyChromeInset = 32;
+constexpr int kCpyBackSize = 48;
+constexpr int kCpyPagerSize = 56;
+
+Rect cpyBackRect(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return Rect(kCpyChromeInset, metrics.topPadding + 8, kCpyBackSize, kCpyBackSize);
+}
+
+Rect cpyPagerPrevRect(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return Rect(kCpyChromeInset, renderer.getScreenHeight() - metrics.contentSidePadding - metrics.menuRowHeight - 16 -
+                                   kCpyPagerSize,
+              kCpyPagerSize, kCpyPagerSize);
+}
+
+Rect cpyPagerNextRect(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return Rect(renderer.getScreenWidth() - kCpyChromeInset - kCpyPagerSize,
+              renderer.getScreenHeight() - metrics.contentSidePadding - metrics.menuRowHeight - 16 - kCpyPagerSize,
+              kCpyPagerSize, kCpyPagerSize);
+}
 }  // namespace
 
 ImageViewerActivity::ImageViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
@@ -163,6 +188,7 @@ void ImageViewerActivity::onEnter() {
 
       // Draw UI hints on the base layer
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      if (UITheme::getInstance().usesCpyLayout()) drawCpyChrome(hasPrevious, hasNext);
       if (mappedInput.hasTouch()) {
         GUI.drawActionButton(renderer, sleepCoverActionRect(renderer), tr(STR_SET_SLEEP_COVER));
       }
@@ -184,6 +210,7 @@ void ImageViewerActivity::onEnter() {
             break;
           }
           GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+          if (UITheme::getInstance().usesCpyLayout()) drawCpyChrome(hasPrevious, hasNext);
           if (mappedInput.hasTouch())
             GUI.drawActionButton(renderer, sleepCoverActionRect(renderer), tr(STR_SET_SLEEP_COVER));
           if (mode == GfxRenderer::GRAYSCALE_LSB) {
@@ -204,6 +231,7 @@ void ImageViewerActivity::onEnter() {
           planesReady = false;
         }
         GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+        if (UITheme::getInstance().usesCpyLayout()) drawCpyChrome(hasPrevious, hasNext);
         renderer.cleanupGrayscaleWithFrameBuffer();
         imageReady = planesReady;
         if (!planesReady) renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -228,6 +256,53 @@ void ImageViewerActivity::onEnter() {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
+}
+
+void ImageViewerActivity::drawCpyChrome(const bool hasPrevious, const bool hasNext) const {
+  // Touch-only chrome: on keyed boards the button hints already carry these.
+  if (!mappedInput.hasTouch()) return;
+
+  // Round back button top-left (the round back language every CPY subpage
+  // header uses).
+  const Rect back = cpyBackRect(renderer);
+  renderer.drawRoundedRect(back.x, back.y, back.width, back.height, 2, back.height / 2, true);
+  {
+    const int cx = back.x + back.width / 2;
+    const int cy = back.y + back.height / 2;
+    renderer.drawLine(cx + 5, cy - 9, cx - 4, cy, 3, true);
+    renderer.drawLine(cx - 4, cy, cx + 5, cy + 9, 3, true);
+  }
+
+  // Corner page number when there are siblings to page through.
+  if (siblingImages.size() > 1 && currentImageIndex >= 0) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d/%d", currentImageIndex + 1, static_cast<int>(siblingImages.size()));
+    const int width = renderer.getTextWidth(UI_10_FONT_ID, buf);
+    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+    renderer.drawText(UI_10_FONT_ID, renderer.getScreenWidth() - kCpyChromeInset - width,
+                      back.y + (back.height - lineHeight) / 2, buf);
+  }
+
+  // Always-on pager buttons at the bottom corners; a side with nowhere to go
+  // draws nothing (the design's persistent buttons exist so touch never has
+  // to swipe, not to fake a disabled state).
+  const auto drawChevron = [this](const Rect& box, const bool pointsLeft) {
+    const int cx = box.x + box.width / 2;
+    const int cy = box.y + box.height / 2;
+    const int dx = pointsLeft ? -5 : 5;
+    renderer.drawLine(cx - dx, cy - 11, cx + dx, cy, 3, true);
+    renderer.drawLine(cx + dx, cy, cx - dx, cy + 11, 3, true);
+  };
+  if (hasPrevious) {
+    const Rect p = cpyPagerPrevRect(renderer);
+    renderer.drawRoundedRect(p.x, p.y, p.width, p.height, 2, 14, true);
+    drawChevron(p, true);
+  }
+  if (hasNext) {
+    const Rect p = cpyPagerNextRect(renderer);
+    renderer.drawRoundedRect(p.x, p.y, p.width, p.height, 2, 14, true);
+    drawChevron(p, false);
   }
 }
 
@@ -371,6 +446,33 @@ void ImageViewerActivity::loop() {
                                  sleepCoverAction.height)) {
       showSleepCoverOptions();
       return;
+    }
+
+    // CPY chrome taps: the round back button leaves to the browser exactly
+    // like the Back key, and the persistent pager buttons step siblings.
+    if (imageReady && UITheme::getInstance().usesCpyLayout()) {
+      const Rect back = cpyBackRect(renderer);
+      if (mappedInput.wasTapInRect(back.x, back.y, back.width, back.height)) {
+        activityManager.goToFileBrowser(filePath);
+        return;
+      }
+      const bool hasPrevious = siblingImages.size() > 1 && currentImageIndex > 0;
+      const bool hasNext = siblingImages.size() > 1 && currentImageIndex != -1 &&
+                           currentImageIndex < static_cast<int>(siblingImages.size()) - 1;
+      if (hasPrevious) {
+        const Rect p = cpyPagerPrevRect(renderer);
+        if (mappedInput.wasTapInRect(p.x, p.y, p.width, p.height)) {
+          openSibling(-1);
+          return;
+        }
+      }
+      if (hasNext) {
+        const Rect p = cpyPagerNextRect(renderer);
+        if (mappedInput.wasTapInRect(p.x, p.y, p.width, p.height)) {
+          openSibling(1);
+          return;
+        }
+      }
     }
   }
 

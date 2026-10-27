@@ -314,8 +314,9 @@ bool Txt::buildChapterIndex(txt_encoding::Encoding& encoding, uint8_t* scratch, 
       if (lineTooLong || lineLength == 0) return true;
 
       size_t utf8Length = lineLength;
-      if (encoding == txt_encoding::Encoding::Gbk) {
-        const auto converted = txt_encoding::transcodeGbkInPlace(lineBuffer, lineLength, lineCapacity, true);
+      if (encoding == txt_encoding::Encoding::Gbk || encoding == txt_encoding::Encoding::Utf16Le ||
+          encoding == txt_encoding::Encoding::Utf16Be) {
+        const auto converted = txt_encoding::transcodeInPlace(lineBuffer, lineLength, lineCapacity, true, encoding);
         if (converted.rawLength == 0 || converted.utf8Length == 0) return true;
         utf8Length = converted.utf8Length;
       } else {

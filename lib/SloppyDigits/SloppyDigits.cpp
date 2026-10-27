@@ -162,7 +162,7 @@ inline void drawStrokeSegment(const GfxRenderer& renderer, int x0, int y0, int x
 }
 
 // ── Glyph drawing ───────────────────────────────────────────────────────────
-void drawGlyph(GfxRenderer& renderer, const Glyph& glyph, const PointSeed* seeds, uint8_t seedCount, float wobble,
+void drawGlyph(const GfxRenderer& renderer, const Glyph& glyph, const PointSeed* seeds, uint8_t seedCount, float wobble,
                int strokeWidth, const DigitParams& tx) {
   if (glyph.cmdCount == 0) return;
 
@@ -247,7 +247,7 @@ void prepareSeeds(uint32_t seed, const Style& style, Seeds& out) {
   }
 }
 
-void draw(GfxRenderer& renderer, const Style& style, const Seeds& seeds, const char* digitsText, Bounds viewport) {
+void draw(const GfxRenderer& renderer, const Style& style, const Seeds& seeds, const char* digitsText, Bounds viewport) {
   if (!digitsText || viewport.width <= 0 || viewport.height <= 0) return;
   const Alphabet& alpha = getAlphabet(style.alphabet);
 

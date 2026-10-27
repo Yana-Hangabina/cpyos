@@ -111,10 +111,20 @@ void UiListActivity::navigateButtons() {
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const int selectionOffset) {
-  if (usesUpstreamStyle() || SETTINGS.uiTheme != CrossPointSettings::INX) {
-    props.toggleCheckbox = true;
+  // Design §3.3 defines one switch: a 56x32 capsule with a 24 px knob. Sub-pages
+  // used a 28x28 square checkbox while the settings home drew the capsule, so
+  // the same on/off concept changed shape one level down. A caller that asked
+  // for a checkbox on purpose (KeyboardLayouts' single-choice list) keeps the
+  // 28x28 square; every real boolean row gets the capsule.
+  if (props.toggleCheckbox) {
     props.toggleWidth = 28;
     props.toggleHeight = 28;
+  } else {
+    props.toggleWidth = 56;
+    props.toggleHeight = 32;
+    props.toggleRadius = 16;
+    props.toggleKnobRadius = 12;
+    props.toggleKnobInset = 4;
   }
   props.partialTrailingRow = true;
   auto& n = activeNav();
@@ -169,5 +179,6 @@ void UiListActivity::render(RenderLock&&) {
     renderUi();
   }
   drawFooter();
+  beforeDisplayHook();
   renderer.displayBuffer();
 }

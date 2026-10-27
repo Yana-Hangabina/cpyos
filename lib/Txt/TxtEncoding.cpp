@@ -71,37 +71,123 @@ bool isStrictGbk(const uint8_t* data, const size_t length, const bool finalChunk
   return true;
 }
 
+#endif
+
+// UTF-8 encoding helpers shared by the GBK and UTF-16 converters. Kept outside
+// the ENABLE_CHINESE_VERSION guard so BOM-marked UTF-16 text still decodes in
+// builds without the GBK table; 4-byte output covers surrogate pairs.
 size_t utf8EncodedLength(const uint32_t codepoint) {
   if (codepoint < 0x80) return 1;
   if (codepoint < 0x800) return 2;
-  return 3;
+  if (codepoint < 0x10000) return 3;
+  return 4;
 }
 
 size_t appendUtf8(const uint32_t codepoint, uint8_t* output) {
-  if (utf8EncodedLength(codepoint) == 1) {
-    output[0] = static_cast<uint8_t>(codepoint);
-    return 1;
+  const size_t length = utf8EncodedLength(codepoint);
+  switch (length) {
+    case 1:
+      output[0] = static_cast<uint8_t>(codepoint);
+      break;
+    case 2:
+      output[0] = static_cast<uint8_t>(0xC0 | (codepoint >> 6));
+      output[1] = static_cast<uint8_t>(0x80 | (codepoint & 0x3F));
+      break;
+    case 3:
+      output[0] = static_cast<uint8_t>(0xE0 | (codepoint >> 12));
+      output[1] = static_cast<uint8_t>(0x80 | ((codepoint >> 6) & 0x3F));
+      output[2] = static_cast<uint8_t>(0x80 | (codepoint & 0x3F));
+      break;
+    default:
+      output[0] = static_cast<uint8_t>(0xF0 | (codepoint >> 18));
+      output[1] = static_cast<uint8_t>(0x80 | ((codepoint >> 12) & 0x3F));
+      output[2] = static_cast<uint8_t>(0x80 | ((codepoint >> 6) & 0x3F));
+      output[3] = static_cast<uint8_t>(0x80 | (codepoint & 0x3F));
+      break;
   }
-  if (utf8EncodedLength(codepoint) == 2) {
-    output[0] = static_cast<uint8_t>(0xC0 | (codepoint >> 6));
-    output[1] = static_cast<uint8_t>(0x80 | (codepoint & 0x3F));
-    return 2;
-  }
-  output[0] = static_cast<uint8_t>(0xE0 | (codepoint >> 12));
-  output[1] = static_cast<uint8_t>(0x80 | ((codepoint >> 6) & 0x3F));
-  output[2] = static_cast<uint8_t>(0x80 | (codepoint & 0x3F));
-  return 3;
+  return length;
 }
-#endif
+
+uint16_t readUtf16Unit(const uint8_t* bytes, const bool bigEndian) {
+  return bigEndian ? static_cast<uint16_t>((bytes[0] << 8) | bytes[1])
+                   : static_cast<uint16_t>(bytes[0] | (bytes[1] << 8));
+}
+
+// Converts BOM-marked UTF-16 to UTF-8 in place. The write pass runs backwards
+// from the end of the source region because CJK expands 2 -> 3 bytes, so a
+// forward pass would overwrite bytes it has not read yet. A trailing lone high
+// surrogate (split read) is left unconsumed so the caller can re-feed it.
+TranscodeResult transcodeUtf16InPlace(uint8_t* buffer, const size_t rawLength, const size_t capacity,
+                                      const bool finalChunk, const bool bigEndian) {
+  (void)finalChunk;
+  if (!buffer || rawLength < 2 || rawLength >= capacity) return {0, 0};
+  size_t start = 0;
+  if (readUtf16Unit(buffer, bigEndian) == 0xFEFF) {
+    start = 2;
+  }
+
+  size_t pos = start;
+  size_t utf8Length = 0;
+  size_t lastComplete = start;
+  while (pos + 1 < rawLength) {
+    const uint16_t unit = readUtf16Unit(buffer + pos, bigEndian);
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      if (pos + 3 >= rawLength) break;  // low surrogate not buffered yet
+      const uint16_t low = readUtf16Unit(buffer + pos + 2, bigEndian);
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        const uint32_t codepoint =
+            0x10000 + ((static_cast<uint32_t>(unit) - 0xD800) << 10) + (static_cast<uint32_t>(low) - 0xDC00);
+        utf8Length += utf8EncodedLength(codepoint);
+        pos += 4;
+        lastComplete = pos;
+        continue;
+      }
+    }
+    utf8Length += utf8EncodedLength(unit);
+    pos += 2;
+    lastComplete = pos;
+  }
+
+  const size_t sourceLength = lastComplete;
+  if (sourceLength == start) return {0, 0};
+  if (sourceLength + utf8Length >= capacity) return {0, 0};
+
+  size_t src = sourceLength;
+  size_t out = sourceLength + utf8Length;
+  while (src > start) {
+    size_t unitStart = src - 2;
+    uint32_t codepoint = readUtf16Unit(buffer + unitStart, bigEndian);
+    if (codepoint >= 0xDC00 && codepoint <= 0xDFFF && unitStart >= start + 2) {
+      const uint16_t high = readUtf16Unit(buffer + unitStart - 2, bigEndian);
+      if (high >= 0xD800 && high <= 0xDBFF) {
+        unitStart -= 2;
+        codepoint = 0x10000 + ((static_cast<uint32_t>(high) - 0xD800) << 10) + (codepoint - 0xDC00);
+      }
+    }
+    out -= utf8EncodedLength(codepoint);
+    appendUtf8(codepoint, buffer + out);
+    src = unitStart;
+  }
+
+  std::memmove(buffer, buffer + sourceLength, utf8Length);
+  buffer[utf8Length] = '\0';
+  return {sourceLength, utf8Length};
+}
 
 }  // namespace
 
-bool isSerializedValueValid(const uint8_t value) { return value <= static_cast<uint8_t>(Encoding::Gbk); }
+bool isSerializedValueValid(const uint8_t value) {
+  return value <= static_cast<uint8_t>(Encoding::Utf16Be);
+}
 
 bool isSupported(const Encoding encoding) {
   switch (encoding) {
     case Encoding::Unknown:
     case Encoding::Utf8:
+      return true;
+    // UTF-16 (BOM-marked) needs no lookup table, so every build can decode it.
+    case Encoding::Utf16Le:
+    case Encoding::Utf16Be:
       return true;
     case Encoding::Gbk:
 #ifdef ENABLE_CHINESE_VERSION
@@ -114,6 +200,15 @@ bool isSupported(const Encoding encoding) {
 }
 
 Encoding detect(const uint8_t* data, const size_t length, const bool finalChunk) {
+  // UTF-16 is accepted only when a BOM is present. Without one there is no
+  // reliable signature: CJK UTF-16LE text is e.g. `XX 4E`, which has no zero
+  // bytes, so a heuristic would mis-detect GBK content and produce mojibake.
+  // Every mainstream "save as Unicode" path (Windows Notepad included) writes
+  // the BOM, so this covers the real-world cases without guessing.
+  if (data && length >= 2) {
+    if (data[0] == 0xFF && data[1] == 0xFE) return Encoding::Utf16Le;
+    if (data[0] == 0xFE && data[1] == 0xFF) return Encoding::Utf16Be;
+  }
 #ifndef ENABLE_CHINESE_VERSION
   (void)data;
   (void)length;
@@ -194,8 +289,23 @@ TranscodeResult transcodeGbkInPlace(uint8_t* buffer, size_t rawLength, const siz
 #endif
 }
 
-size_t gbkSourceLength(const uint8_t* utf8, const size_t utf8Length) {
-  size_t sourceLength = 0;
+TranscodeResult transcodeInPlace(uint8_t* buffer, const size_t rawLength, const size_t capacity,
+                                 const bool finalChunk, const Encoding encoding) {
+  switch (encoding) {
+    case Encoding::Gbk:
+      return transcodeGbkInPlace(buffer, rawLength, capacity, finalChunk);
+    case Encoding::Utf16Le:
+      return transcodeUtf16InPlace(buffer, rawLength, capacity, finalChunk, /*bigEndian=*/false);
+    case Encoding::Utf16Be:
+      return transcodeUtf16InPlace(buffer, rawLength, capacity, finalChunk, /*bigEndian=*/true);
+    default:
+      return {0, 0};
+  }
+}
+
+size_t encodeUtf8(const uint32_t codepoint, uint8_t* output) { return appendUtf8(codepoint, output); }
+
+size_t gbkSourceLength(const uint8_t* utf8, const size_t utf8Length) {  size_t sourceLength = 0;
   size_t pos = 0;
   while (pos < utf8Length) {
     const size_t sequenceLength = std::max<size_t>(utf8SequenceLength(utf8[pos]), 1);

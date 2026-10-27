@@ -10,7 +10,6 @@
 #include "AppVisibility.h"
 #include "BleKeyMapping.h"
 #include "InxItemLayout.h"
-#include "InxRecentLayout.h"
 #include "components/UiHighDpiProfile.h"
 #include "util/ReadingGuideLine.h"
 
@@ -140,6 +139,26 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SOUND_FEEDBACK_LEVEL_COUNT
   };
 
+  // Which input surfaces emit the short buzzer click. The two sources are
+  // physically distinct on Read Pico: the CST836U screen and the three
+  // capacitive key zones below it.
+  enum BUZZER_FEEDBACK_SOURCE {
+    BUZZER_FEEDBACK_OFF = 0,
+    BUZZER_FEEDBACK_KEYS = 1,
+    BUZZER_FEEDBACK_SCREEN = 2,
+    BUZZER_FEEDBACK_BOTH = 3,
+    BUZZER_FEEDBACK_SOURCE_COUNT
+  };
+
+  // Pitch of the PWM tones used in the upper half of the strength range. The
+  // lower half is a single full-current pulse and has no pitch (a click).
+  enum BUZZER_FEEDBACK_PITCH {
+    BUZZER_PITCH_DEEP = 0,
+    BUZZER_PITCH_SOFT = 1,
+    BUZZER_PITCH_CRISP = 2,
+    BUZZER_PITCH_COUNT
+  };
+
   // Front button hardware identifiers (for remapping)
   enum FRONT_BUTTON_HARDWARE {
     FRONT_HW_BACK = 0,
@@ -201,14 +220,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SLEEP_TIMEOUT_COUNT
   };
 
-  // E-ink refresh frequency (pages between full refreshes).
+  // E-ink refresh tiers. Named tiers replace the legacy numeric page counts;
+  // each tier maps to its own reader page cadence (getRefreshFrequency) and
+  // system-UI push interval (getUiRefreshInterval). Stored under the
+  // "refreshProfile" key; legacy numeric "refreshFrequency" values migrate in
+  // fromJson.
   enum REFRESH_FREQUENCY {
-    REFRESH_1 = 0,
-    REFRESH_5 = 1,
-    REFRESH_10 = 2,
-    REFRESH_15 = 3,
-    REFRESH_30 = 4,
-    REFRESH_NEVER = 5,
+    REFRESH_CLEAR = 0,     // reader: full refresh every page; UI: every 2nd push
+    REFRESH_STANDARD = 1,  // reader: every 15 pages; UI: every 6th push (historic defaults)
+    REFRESH_RELAXED = 2,   // reader: every 30 pages; UI: every 10th push
+    REFRESH_NEVER = 3,     // reader: no periodic full refresh; UI: every 16th push
     REFRESH_FREQUENCY_COUNT
   };
 
@@ -248,16 +269,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 
-  // UI Theme
-  enum UI_THEME {
-    CLASSIC = 0,
-    LYRA = 1,
-    LYRA_3_COVERS = 2,
-    ROUNDEDRAFF = 3,
-    LYRA_CAROUSEL = 4,
-    INX = 5,
-    COVER_GRID = 6
-  };
+  // UI Theme. Renumbered 2026-10-16 when Lyra / Lyra 3-Covers / RoundedRaff /
+  // Lyra Carousel / Cover Grid were removed. Legacy stored values >= COUNT
+  // (including the old INX=5) clamp to CPY on load, so every device lands on
+  // the new default theme; INX stays selectable until it is retired.
+  enum UI_THEME { CPY = 0, UI_THEME_COUNT };
   enum INX_TAB_POSITION { INX_TAB_TOP = 0, INX_TAB_BOTTOM = 1, INX_TAB_POSITION_COUNT };
 
   // Image rendering in EPUB reader
@@ -268,7 +284,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // painted over the page.
   enum READER_MENU_STYLE { READER_MENU_LIST = 0, READER_MENU_TOOLBAR = 1, READER_MENU_STYLE_COUNT };
 
-  enum TILT_PAGE_TURN { TILT_OFF = 0, TILT_NORMAL = 1, TILT_NVERTED = 2, TILT_PAGE_TURN_COUNT };
+  // Motion-based page turning: one setting carries both the action (tilt or
+  // shake) and its direction, so the controls list has a single entry.
+  enum MOTION_PAGE_TURN {
+    MOTION_OFF = 0,
+    MOTION_TILT = 1,
+    MOTION_TILT_REVERSED = 2,
+    MOTION_SHAKE = 3,
+    MOTION_SHAKE_REVERSED = 4,
+    MOTION_PAGE_TURN_COUNT
+  };
 
   enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
 
@@ -348,6 +373,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // with two CJK characters / three Latin spaces; NoIndent forces flush.
   // Independent of extraParagraphSpacing.
   uint8_t firstLineIndent = 0;
+  // Fine adjustment applied on top of the first-line indent above, in pixels
+  // (-12..+12, even steps). Zero keeps the resolved indent untouched. Lets the
+  // user nudge the indent without switching away from Auto (which respects the
+  // book's own CSS text-indent) to Indent (two CJK characters).
+  int8_t firstLineIndentPx = 0;
+  // 0 = horizontal (default), 1 = Chinese vertical layout. Part of the section
+  // cache key (see ReaderRenderSpec::verticalText).
+  uint8_t verticalText = 0;
   // Index into the timezone table (src/util/Timezones.cpp, append-only).
   // 255 = never chosen; falls back to the legacy UTC offset, then UTC.
   uint8_t clockTimezone = 255;
@@ -408,7 +441,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
   // E-ink refresh frequency (default 15 pages)
-  uint8_t refreshFrequency = REFRESH_15;
+  uint8_t refreshFrequency = REFRESH_STANDARD;
+  // 翻页效果（仅 Read Pico 提供入口）：0 = 直接刷新，1 = 水波纹错相揭页。
+  // / Page turn effect (Read Pico only): 0 = instant refresh, 1 = water-ripple reveal.
+  uint8_t pageTurnEffect = 0;
+  // Read Pico only: draw the page in B/W only and push it with the single-phase
+  // DU waveform. Turns become near-instant at the cost of text anti-aliasing and
+  // more ghosting (the scheduled GC16 clean still runs).
+  uint8_t fastPageTurn = 0;
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
@@ -432,10 +472,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Defaults to Disabled so shortcut-based bookmark toggling remains opt-in.
   uint8_t longPressMenuFunction = LP_MENU_DISABLED;
   // UI Theme
-  uint8_t uiTheme = INX;
+  uint8_t uiTheme = CPY;
+  // CPY row rhythm: 0 = comfortable, 1 = compact (more rows per screen; the
+  // chrome — title band, tab bar, keyboard — keeps its size). INX ignores it.
+  uint8_t uiDensity = 0;
   // Show front-button hints along the bottom edge on non-touch devices.
   uint8_t showButtonHints = 1;
-  uint8_t inxRecentLayout = static_cast<uint8_t>(InxRecentLayout::Flow);
+  // Dead storage: the INX layout variants are retired, but the field stays
+  // at its index so every later stored setting keeps its position.
+  uint8_t inxRecentLayout = 0;
   uint8_t inxLibraryLayout = static_cast<uint8_t>(InxItemLayout::Icons);
   uint8_t inxAppsLayout = static_cast<uint8_t>(InxItemLayout::Icons);
   uint8_t inxTabPosition = BoardConfig::hasTouch() ? INX_TAB_BOTTOM : INX_TAB_TOP;
@@ -470,6 +515,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 #if FREEINK_CAP_HAPTIC
   uint8_t hapticFeedbackLevel = HAPTIC_FEEDBACK_MEDIUM;
 #endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+  // On by default: strength 5 is a 35 us click, and the whole point of the
+  // feature is feedback the user does not have to discover.
+  uint8_t buzzerFeedbackSource = BUZZER_FEEDBACK_BOTH;
+  uint8_t buzzerPitch = BUZZER_PITCH_SOFT;
+  // 0-50 = single pulse 5-300 us; 51-100 = PWM tone at buzzerPitch, 10-30%
+  // duty. One continuous control instead of a list of presets.
+  uint8_t buzzerStrength = 5;
+#endif
   // Show the title and author read from inside each book rather than its
   // filename. Users can disable this to make index rebuilds skip EPUB parsing.
   uint8_t libraryUseMetadata = 1;
@@ -486,13 +540,19 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t buddyClaimed = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
-  // Tilt-based page turning (X3 only — requires QMI8658 IMU)
-  uint8_t tiltPageTurn = TILT_OFF;
+  // Motion-based page turning (tilt or shake); needs an IMU.
+  uint8_t motionPageTurn = MOTION_OFF;
   // Master reader-touch toggle on boards with a touch controller.
   uint8_t touchReaderControls = TOUCH_READER_ON;
+  // One-shot first-run map of the reader's tap zones. Persisted so it appears
+  // exactly once per device; there is deliberately no "show again" entry.
+  uint8_t readerGestureHintSeen = 0;
   // Which gestures turn the page in each direction (PAGE_TURN_GESTURE).
-  uint8_t pageTurnGesture = SWIPE_ONLY;
-  uint8_t previousPageGesture = SWIPE_ONLY;
+  // Default to tap-or-swipe: a plain tap on the left/right third is the most
+  // discoverable page turn on a touch panel. Users who mis-tap can switch
+  // either direction back to swipe-only in the reader settings.
+  uint8_t pageTurnGesture = TAP_AND_SWIPE;
+  uint8_t previousPageGesture = TAP_AND_SWIPE;
   // 翻页方向：左右对调阅读器的点击区与滑动方向，给左手握持的用户。0 = 正常，
   // 1 = 对调（点左边翻下一页、往右滑翻下一页）。
   //
@@ -556,6 +616,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint16_t getPowerButtonDuration() const {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
+
+  // Transient per-book font override (A5: an EPUB-embedded font). Deliberately
+  // NOT persisted and NOT written by toJson/fromJson: the reader sets it when it
+  // opens a book that carries a loadable embedded font and clears it on exit, so
+  // it never leaks into another book or into settings editors. 0 = use the
+  // configured font. Honoured by getReaderFontId(), so every consumer
+  // (readerRenderSpec, dictionaries, footnotes) follows it with one assignment.
+  int readerFontOverrideId = 0;
+
   int getReaderFontId() const;
 
   // Drop the SD font selection and fall back to the built-in family. Legacy
@@ -618,6 +687,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;
+  // Number of system-UI pushes between periodic FULL GC16 sweeps, derived from
+  // the same refreshFrequency setting (bounded mapping; never disabled).
+  uint8_t getUiRefreshInterval() const;
   // Daily reading goal in milliseconds, derived from dailyGoalTarget.
   uint64_t getDailyGoalMs() const;
 };

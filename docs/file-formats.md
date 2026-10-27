@@ -714,6 +714,176 @@ no marker and remain compatible through the approximate fallback.
 Manual progress sync refreshes only an old or invalid TOC; an existing
 `/WeRead/*.epub` is retained.
 
+## JJWXC cache
+
+The Simplified Chinese build keeps the JJWXC (晋江文学城) app's private data below
+`/.crosspoint/jjwxc/`. One novel produces exactly one finished EPUB at
+`/JJWXC/<sanitized title>-<sanitized novelId>.epub`, rebuilt from every chapter
+currently cached. The finished file lives outside `.crosspoint` on purpose:
+`LibraryBuilder` skips every directory entry whose name starts with `.`
+(`isHiddenOrSidecar`), so nothing below `.crosspoint` can reach the shelf, and
+`RecentBooksStore` keys on the path, so a per-chapter output path would make one
+novel appear as many books.
+
+Both indexes below start with the same 12-byte little-endian header WeRead uses:
+`uint32 magic`, `uint16 version`, `uint16 recordSize`, `uint32 recordCount`.
+Version is `1`. Writers go through `.part` plus atomic replacement, and readers
+reject a wrong magic, version, record size, or a file shorter than
+`12 + recordSize * recordCount`. Records are fixed-size and padding-free, so they
+are written and read verbatim; a future layout change must use a new magic and
+update this section.
+
+- `credentials` is the existing device-bound obfuscation envelope (eFuse MAC XOR,
+  then Base64) holding the token, identifiers, nickname and readerId on separate
+  lines. It is obfuscation, not encryption. This file is the *session*: logging out
+  removes it.
+- `account` is the same envelope holding three lines — the save scope as a decimal
+  digit (`1` account only, `2` account and password), the login name, and the
+  password (empty unless the scope is `2`). It is the *login shortcut*, deliberately
+  a separate file so that logging out can clear the session and keep the shortcut.
+  A scope of `0` is never written; `saveAccount()` removes the file instead. Bounds:
+  login name and password are truncated to 64 bytes each, the decoded blob to 192
+  and the stored one to 512. Like `credentials`, this is obfuscation and **not
+  encryption** — the device has to be able to read its own password back, so anyone
+  holding the device can too. It is only written at all when the user picked "save
+  account and password" at login, and only after the server accepted that login.
+- `autobuy` is **obsolete and no longer read**. Older builds stored one decimal digit
+  and a newline here (`0` ask, `1` allow auto-purchase, `2` stop at the first
+  unpurchased chapter), unobfuscated like `disclaimer`. The policy it held gated a
+  purchase the device cannot make: an unpurchased VIP chapter is fetched over WAP,
+  which answers `302 -> /buy/<novelId>/<chapterId>` and buys nothing. The policy, its
+  consent dialog and this file's reader are gone; a card that still holds the file is
+  simply ignored, and nothing cleans it up. The one protection that was real survives
+  in code rather than on the card — see `jjwxc::refusalEndsRun()` in
+  `lib/JjwxcApi/src/JjwxcProtocol.h`, which ends a cache run only for a purchase
+  refusal that arrived over the App API path, where requesting a chapter really does
+  run the account's server-side auto-subscription.
+- `disclaimer` records that the user accepted the JJWXC disclaimer. Any non-empty
+  file counts as accepted; logging out preserves it.
+- `<novelId>/toc.bin` is `JXT1` (`0x3154584A`), one 116-byte record per remote
+  chapter in remote order:
+
+  | Offset | Size | Field |
+  |---|---|---|
+  | 0 | 4 | `uint32 chapterId` |
+  | 4 | 96 | `char title[96]`, NUL-terminated UTF-8 |
+  | 100 | 4 | `uint32 remoteSize` — server-reported chapter size |
+  | 104 | 1 | `uint8 state` — 0 Missing, 1 Cached, 2 Unpurchased, 3 Locked |
+  | 105 | 1 | `uint8 isVip` — 0 free, 2 VIP (`ChapterEntry::isVip`) |
+  | 106 | 2 | `uint8 reserved[2]`, zero |
+  | 108 | 4 | `uint32 localBytes` — size of the cached XHTML |
+  | 112 | 4 | `uint32 savedAt` — unix seconds of the last successful fetch |
+
+  The index is rewritten whenever the catalogue is fetched, merging the previous
+  state in by a single forward walk over ascending `chapterId`s. A record whose
+  `remoteSize` no longer matches the server, or whose XHTML file has gone missing,
+  is downgraded to `Missing`; that is the per-chapter invalidation. `Unpurchased`
+  and `Locked` are remembered so a whole-book cache does not ask the server about
+  a chapter this account cannot read again. There is no whole-book "refreshing"
+  flag: an existing EPUB never triggers a re-pull, and refreshing is an explicit
+  user action that ignores the remembered state.
+- `<novelId>/novel.bin` is `JXN1` (`0x314E584A`), a header plus exactly one
+  368-byte record: `char novelId[16]`, `char title[96]`, `char author[48]`,
+  `char coverUrl[192]`, `uint32 remoteChapterCount`, `uint32 cachedChapterCount`,
+  `uint32 savedAt`, `uint32 packagedChapterCount`. It is what the "Downloaded" list
+  and the generated OPF read while offline, and what the finished EPUB's filename is
+  derived from. When a server-side rename changes that filename, the new record is
+  committed first and the previous EPUB is removed only once the new one exists,
+  so a novel never owns two artefacts and never ends up with none.
+
+  The two counts are **not** interchangeable. `cachedChapterCount` is records whose
+  state is `Cached` — chapters with a real body, i.e. readable offline.
+  `packagedChapterCount` is records whose state is not `Missing` — everything the
+  EPUB contains, which also counts the "[本章未购买]" stubs. Every user-facing
+  "cached N" number must use the first; using the second is what made a book of 114
+  real chapters and 72 purchase stubs report itself as fully cached.
+
+  The last field was `uint8 reserved[4]` before the split and was always written
+  zero, so a zero there next to a non-zero `cachedChapterCount` identifies an older
+  record. `loadNovel()` reads such a record as
+  `packagedChapterCount = cachedChapterCount`, which is optimistic (stubs counted as
+  readable) but matches what the older firmware displayed; the next `saveNovel()` —
+  which every cache run and every catalogue refresh does — replaces both with the
+  real split. The record size and magic are unchanged, so no version bump was needed.
+- `updates.bin` is `JXU1` (`0x3155584A`), the same 12-byte header plus one 32-byte
+  record per book on the **account's online shelf**, written by the app after a
+  successful, unfiltered walk of `GET /my/fav` and never written by anything else:
+
+  | Offset | Size | Field |
+  |---|---|---|
+  | 0 | 16 | `char novelId[16]`, NUL-terminated |
+  | 16 | 4 | `uint32 lastChapterId` — the remote catalogue's last chapter |
+  | 20 | 4 | `uint32 chapterCount` — the remote catalogue's chapter total |
+  | 24 | 4 | `uint32 fetchedAt` — unix seconds of the walk that produced the row |
+  | 28 | 1 | `uint8 renewStatus`, the shelf page's own "has updates" flag |
+  | 29 | 3 | `uint8 reserved[3]`, zero |
+
+  It exists so that the three surfaces that ask "is this book behind?" — the
+  library shelf, the home continue card and the reader's end-of-book pill — can
+  answer with the radio off. Those readers open `<novelId>/toc.bin` for the local
+  side and compare `recordCount`/last `chapterId` against this row; the snapshot
+  itself carries no local state, so it survives a book being re-cached. A row
+  that is missing (never synced, or added to the account on another device) means
+  **unknown**, never "up to date", and no surface may render the two the same way.
+  The file is capped at 300 rows; a filtered favourites view is never written
+  here, because then "3 new" would mean "3 of the ones in this folder".
+- `<novelId>/chapters/<chapterId>.xhtml` is the chapter-level cache. The App API
+  returns clean prose, so the document is only an XML declaration, a `<title>` and
+  an `<h1>` carrying the chapter name, then one `<p>` per newline-delimited
+  paragraph with `&`, `<` and `>` escaped and other control characters dropped.
+  There are no images, no footnotes and none of WeRead's `<!--wr-co:N-->`
+  source-offset markers, because JJWXC has no progress mapping to serve. A chapter
+  the account cannot read holds a stub composed from that chapter's own title plus
+  a fixed localised note; each chapter is streamed into its own `.part` file that
+  is discarded whole on failure, so a rejected response can never leave another
+  chapter's text behind. In the EPUB nav a stub's title carries a localised
+  `（未购买）`/`（已锁定）` suffix, because the table of contents is the only place
+  the shape of the book is visible before a chapter is opened and found to be empty.
+- `<novelId>/cover.source.jpg` is the validated JPEG or PNG downloaded from
+  `NovelInfo::coverUrl`. It is embedded as the EPUB's `cover-image` under an entry
+  named after the bytes' actual type, because the EPUB loader picks its decoder
+  from the href's extension. A failed download is not fatal and leaves the file
+  absent.
+- `<novelId>/cover.thumb.bmp` is a derived 200x280 BMP the book-detail page draws,
+  converted from `cover.source.jpg` by the same JPEG/PNG converter the EPUB and
+  WeRead thumbnails use. It is a cache in the strict sense: nothing but that page
+  reads it, deleting it costs one regeneration, and a fresh `cover.source.jpg`
+  removes it so the picture cannot outlive the art it was built from. Written via
+  `cover.thumb.bmp.part` and an atomic replace. The BMP is the standard
+  `BmpHeader` + palette + rows layout `Bitmap` reads; the size is a compile-time
+  constant rather than part of the name because the page asks for exactly that size,
+  which is what lets `drawBitmap()` blit it 1:1 instead of rescaling it a second
+  time.
+- Transient siblings, all removed before a job writes and after it finishes:
+  `toc.bin.part`, `novel.bin.part`, `content.part`, `nav.part`, `central.part`,
+  `book.epub.part`, `cover.source.jpg.part`, `cover.thumb.bmp.part`,
+  `chapters/*.xhtml.part` and any
+  `.bak` left by an interrupted atomic replace. `central.part` holds the ZIP
+  central directory while the store-only archive is assembled, which is what keeps
+  the packager's RAM cost at its 4 KiB copy buffer.
+- The generated EPUB is store-only (no compression) and contains `mimetype`,
+  `META-INF/container.xml`, `OEBPS/content.opf`, `OEBPS/nav.xhtml`,
+  `OEBPS/styles.css` (`p{text-indent:2em}`), the optional `OEBPS/cover.jpg` or
+  `OEBPS/cover.png`, and `OEBPS/ch%06u.xhtml` per included chapter, where `%06u`
+  is the zero-based toc ordinal. Chapters whose state is `Missing`, or whose file
+  has disappeared, are omitted from the manifest, the nav and the spine together,
+  so a gap in the middle of a novel yields a shorter book rather than a dangling
+  reference. `dc:language` is `zh-CN` and `dc:identifier` is `jjwxc-<novelId>`.
+  The archive is validated as a ZIP before it replaces the finished path.
+- Because `book.bin` and `section.bin` are keyed on the book path alone and carry
+  no source size or modification time, a repackage must drop the reader cache at
+  `/.crosspoint/epub_<hash(path)>` or the reader would keep serving the previous
+  pagination. When a run only appended chapters after the last one already in the
+  book, `progress.bin` is carried across that drop unchanged: no existing spine
+  index or page count moved. Any other run — a refresh, or filling a gap in the
+  middle — starts the reader at the beginning. Generating or replacing the EPUB
+  also marks the library index dirty so the shelf re-walks the card.
+- `/.crosspoint/jjwxc/books/` held the pre-EPUB TXT products
+  (`<novelId>.txt`, `<novelId>.meta`, `preview-<novelId>-<chapterId>.txt`). It is
+  removed once, with the `txt_<hash>` reader caches built for those files, on the
+  first entry to a firmware that writes EPUBs. The removal is idempotent, is not
+  migrated, and a failure never blocks the app from starting.
+
 ## Reading background cache
 
 `/.crosspoint/background/reading_bg.bin` stores a versioned 1-bit framebuffer

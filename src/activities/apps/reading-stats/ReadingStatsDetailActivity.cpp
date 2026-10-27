@@ -1,7 +1,9 @@
 #include "ReadingStatsDetailActivity.h"
 
 #include <Bitmap.h>
+#include <Cbz.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -169,6 +171,15 @@ std::string findFastCoverPath(const ReadingBookStats& book) {
   } else if (FsHelpers::hasXtcExtension(book.path)) {
     Xtc xtc(book.path, "/.crosspoint");
     resolved = resolveStoredCoverPath(xtc.getCoverBmpPath());
+  } else if (FsHelpers::hasCbzExtension(book.path)) {
+    Cbz cbz(book.path, "/.crosspoint");
+    resolved = resolveStoredCoverPath(cbz.getCoverBmpPath());
+  } else if (FsHelpers::hasFb2Extension(book.path)) {
+    const Fb2 fb2(book.path, "/.crosspoint");
+    if (Storage.exists(fb2.getEpubPath().c_str())) {
+      Epub epub(fb2.getEpubPath(), "/.crosspoint");
+      resolved = resolveStoredCoverPath(epub.getCoverBmpPath());
+    }
   } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
     Txt txt(book.path, "/.crosspoint");
     resolved = resolveStoredCoverPath(txt.getCoverBmpPath());
@@ -567,7 +578,8 @@ void ReadingStatsDetailActivity::render(RenderLock&&) {
     coverLoadPending = false;
     if (const auto* pendingBook = findBook(bookPath)) {
       std::string resolvedCoverPath;
-      if (FsHelpers::hasEpubExtension(pendingBook->path)) {
+      if (FsHelpers::hasEpubExtension(pendingBook->path) || FsHelpers::hasFb2Extension(pendingBook->path) ||
+          FsHelpers::hasCbzExtension(pendingBook->path)) {
         GfxRenderer::FrameBufferLoan loan(renderer);
         resolvedCoverPath = ensureCoverPath(*pendingBook);
       } else {

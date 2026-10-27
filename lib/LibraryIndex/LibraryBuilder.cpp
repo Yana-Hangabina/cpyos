@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <BufferedFile.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -187,7 +188,12 @@ void clearLibraryIndexDirty() {
 
 bool isBookName(const std::string& name) {
   return FsHelpers::checkFileExtension(name, ".epub") || FsHelpers::checkFileExtension(name, ".txt") ||
-         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc");
+         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc") ||
+         FsHelpers::checkFileExtension(name, ".cbz") || FsHelpers::checkFileExtension(name, ".fb2")
+#if defined(CROSSPOINT_MUPDF)
+         || FsHelpers::checkFileExtension(name, ".pdf")
+#endif
+      ;
 }
 
 // macOS AppleDouble sidecars and hidden entries. The file browser already hides
@@ -305,7 +311,9 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   entry.pathHash = clixPathHash(fullPath.data(), fullPath.size());
   const int priorIndex = findPrior(st, entry.pathHash);
 
-  const bool extractionExpected = st.readMetadata && FsHelpers::hasEpubExtension(name);
+  const bool isEpubName = FsHelpers::hasEpubExtension(name);
+  const bool isFb2Name = FsHelpers::hasFb2Extension(name);
+  const bool extractionExpected = st.readMetadata && (isEpubName || isFb2Name);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -345,9 +353,15 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
   // builds spine, TOC, CSS, cover, or section caches during the library walk.
   if (!reuseMetadata && extractionExpected) {
     st.stats->parsed++;
-    Epub epub(fullPath, CACHE_DIR);
     std::string bookTitle;
-    if (epub.loadMetadata(bookTitle, author)) {
+    bool extracted = false;
+    if (isEpubName) {
+      Epub epub(fullPath, CACHE_DIR);
+      extracted = epub.loadMetadata(bookTitle, author);
+    } else {
+      extracted = Fb2::probeMetadata(fullPath, bookTitle, author);
+    }
+    if (extracted) {
       entry.record.metadataStatus = CLIX_METADATA_EXTRACTED;
       if (!bookTitle.empty()) {
         title = std::move(bookTitle);

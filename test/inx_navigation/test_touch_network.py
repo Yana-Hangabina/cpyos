@@ -196,7 +196,7 @@ struct GfxRenderer {
  void drawText(int font,int x,int y,const char* text,bool=true,EpdFontFamily::Style style=EpdFontFamily::REGULAR) {
   draws.push_back({{x,y,getTextWidth(font,text,style),getLineHeight(font)},text,font,style});
  }
- std::vector<std::string> wrappedText(int font,const char* text,int width,int lines,EpdFontFamily::Style)const {
+ std::vector<std::string> wrappedText(int font,const char* text,int width,int lines,EpdFontFamily::Style=EpdFontFamily::REGULAR)const {
   const size_t length=std::max(1,width/(getLineHeight(font)/3));std::string rest=text;
   std::vector<std::string> result;
   while(!rest.empty() && static_cast<int>(result.size())<lines) {
@@ -212,12 +212,16 @@ struct UITheme {
  ThemeMetrics metrics{10,84,40,16,20};
  static UITheme& getInstance(){static UITheme theme;return theme;}
  const ThemeMetrics& getMetrics()const{return metrics;}
+ // The fixture pins the INX look: the CPY branches (duck band, wave bar)
+ // must still COMPILE against the stubs, and are skipped at runtime.
+ bool usesCpyLayout()const{return false;}
  Rect getScreenSafeArea(const GfxRenderer& r,bool,bool)const{return {5,8,r.width-13,r.height-13};}
  static void drawCenteredText(GfxRenderer&,Rect,int,int,const char*,bool=true,EpdFontFamily::Style=EpdFontFamily::REGULAR);
  static void drawCenteredWrappedText(GfxRenderer&,Rect,int,const char*,int,bool=true,EpdFontFamily::Style=EpdFontFamily::REGULAR,
                                     TextVerticalAlignment=TextVerticalAlignment::CENTER);
 };
-struct Gui {int hints=0;void drawButtonHints(GfxRenderer&,const char*,const char*,const char*,const char*){++hints;}} GUI;
+struct Gui {int hints=0;int progressBars=0;void drawButtonHints(GfxRenderer&,const char*,const char*,const char*,const char*){++hints;}
+  int drawProgressBar(const GfxRenderer&,Rect,size_t,size_t,bool=false){++progressBars;return 0;}} GUI;
 struct MappedInput {
  bool touch=true;bool hasTouch()const{return touch;}
  struct Labels {const char* btn1;const char* btn2;const char* btn3;const char* btn4;};

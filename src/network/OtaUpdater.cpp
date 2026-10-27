@@ -62,15 +62,10 @@ static_assert(releaseUrlCapacity < 256);
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
   channel = requestedChannel;
-  char releaseUrl[releaseUrlCapacity];
+#ifndef CPYOS_OTA_MANIFEST_URL
   const char* channelQuery = channel == Channel::Nightly ? "&channel=nightly" : "";
-  const int releaseUrlLength =
-      snprintf(releaseUrl, sizeof(releaseUrl), CrossMuxEndpoints::OTA_MANIFEST_FORMAT, CrossMuxEndpoints::host(),
-               CrossMuxEndpoints::otaVariant(), channelQuery, HalSystem::getDeviceModel());
-  if (releaseUrlLength < 0 || static_cast<size_t>(releaseUrlLength) >= sizeof(releaseUrl)) {
-    LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
-    return INTERNAL_UPDATE_ERROR;
-  }
+  const char* const primaryHost = CrossMuxEndpoints::host();
+#endif
   LOG_DBG("OTA", "Checking %s channel (current: %s)", channel == Channel::Nightly ? "nightly" : "stable",
           CROSSPOINT_VERSION);
 
@@ -85,10 +80,51 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     LOG_ERR("OTA", "OOM: release parser (%zu bytes)", sizeof(ReleaseJsonParser));
     return INTERNAL_UPDATE_ERROR;
   }
-  const bool ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
+  // docs/07 F3: one host is a single point of failure, so a transport failure
+  // falls back to the other region's host once. Both serve the same manifest
+  // shape and the same firmware asset, and the download URL is taken from
+  // whichever manifest answered. Only the fetch is retried: a manifest that
+  // arrived but does not parse is a server contract problem the other host
+  // would answer identically.
+  bool ok = false;
+#ifdef CPYOS_OTA_MANIFEST_URL
+  // One static manifest, served by the project's GitHub Pages site. Both the
+  // stable and nightly selectors point at the same CPYOS release; isUpdateNewer
+  // compares its semver tag rather than treating it as a nightly SHA.
+  char releaseUrl[releaseUrlCapacity];
+  const int releaseUrlLength = snprintf(releaseUrl, sizeof(releaseUrl), "%s", CrossMuxEndpoints::CPYOS_OTA_URL);
+  if (releaseUrlLength < 0 || static_cast<size_t>(releaseUrlLength) >= sizeof(releaseUrl)) {
+    LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
+    return INTERNAL_UPDATE_ERROR;
+  }
+  ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
     releaseParser->feed(reinterpret_cast<const char*>(data), len);
     return true;
   });
+#else
+  for (size_t attempt = 0; attempt < 2 && !ok; attempt++) {
+    const char* const host = attempt == 0 ? primaryHost : CrossMuxEndpoints::alternateHost();
+    if (host == nullptr || std::strcmp(host, primaryHost) == 0) break;
+    char releaseUrl[releaseUrlCapacity];
+    const int releaseUrlLength = snprintf(releaseUrl, sizeof(releaseUrl), CrossMuxEndpoints::OTA_MANIFEST_FORMAT, host,
+                                          CrossMuxEndpoints::otaVariant(), channelQuery, HalSystem::getDeviceModel());
+    if (releaseUrlLength < 0 || static_cast<size_t>(releaseUrlLength) >= sizeof(releaseUrl)) {
+      LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
+      return INTERNAL_UPDATE_ERROR;
+    }
+    if (attempt > 0) {
+      // The first attempt may have streamed half a document before the transport
+      // died; start the parser and the note slots over.
+      releaseParser->reset();
+      for (auto& note : releaseNotes) note.fill('\0');
+      LOG_INF("OTA", "Release check via %s failed; retrying via %s", primaryHost, host);
+    }
+    ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
+      releaseParser->feed(reinterpret_cast<const char*>(data), len);
+      return true;
+    });
+  }
+#endif
   if (!ok) {
     LOG_ERR("OTA", "Release check fetch failed");
     return HTTP_ERROR;
@@ -132,7 +168,13 @@ bool OtaUpdater::isUpdateNewer() const {
     case Channel::Stable:
       break;
     case Channel::Nightly:
+#ifdef CPYOS_OTA_MANIFEST_URL
+      // CPYOS publishes one semver release manifest for both selectors. Treating
+      // its tag as a nightly SHA would make every check look like an update.
+      break;
+#else
       return !isSameNightlyBuild(CROSSPOINT_VERSION, latestVersion);
+#endif
   }
   if (latestVersion == CROSSPOINT_VERSION) return false;
 
@@ -264,6 +306,16 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "Firmware install failed (%s)", flashOk ? "download" : "flash write");
     esp_ota_abort(otaHandle);
     return flashOk ? HTTP_ERROR : INTERNAL_UPDATE_ERROR;
+  }
+
+  // esp_ota_end() only verifies the image against its own embedded hash. A
+  // complete image of a different build (swapped server, different release)
+  // would pass that. The manifest's size is the one external fact we have:
+  // refuse a transfer that did not deliver exactly that many bytes.
+  if (otaSize > 0 && processedSize != otaSize) {
+    LOG_ERR("OTA", "Firmware size mismatch: got %zu, manifest %zu", processedSize, otaSize);
+    esp_ota_abort(otaHandle);
+    return INTERNAL_UPDATE_ERROR;
   }
 
   esp_err = esp_ota_end(otaHandle);  // verifies the written image

@@ -47,7 +47,11 @@ constexpr int thumbnailHeightForCropFill(const int displayHeight) {
 
 namespace InxGridGeometry {
 inline constexpr int columns = 3;
-inline constexpr int rows = 4;
+// Design frame 05 is a 3x3 tile grid. It used to be 3x4; the extra row made
+// every tile shorter than the mockup and put twelve icons on a screen that the
+// design gives nine. Both the apps menu and the file browser's icon layout
+// share this geometry, so the page step and the hit test follow automatically.
+inline constexpr int rows = 3;
 inline constexpr int itemsPerPage = columns * rows;
 
 constexpr InxItemLayout layoutFrom(const uint8_t value) {
@@ -99,6 +103,14 @@ inline constexpr int visibleRowLimit = 5;
 inline constexpr int rowHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::buttonHeight : 62;
 inline constexpr int headerHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::buttonHeight : 62;
 
+// Wrapped-headline (dialog body) band metrics. OptionPopup measures the band with
+// these and CpyTheme::drawOptionPopup draws with them, so the option hit rects and
+// the painted rows can never drift apart. Both sides must wrap with UI_10_FONT_ID
+// at (panelWidth - 2*headlineInnerPad) capped to headlineMaxLines.
+inline constexpr int headlineInnerPad = 28;
+inline constexpr int headlineMaxLines = 3;
+inline constexpr int headlineGap = 16;  // vertical padding added around the wrapped body
+
 constexpr int visibleRows(const int optionCount) {
   return optionCount < visibleRowLimit ? (optionCount > 0 ? optionCount : 0) : visibleRowLimit;
 }
@@ -115,21 +127,34 @@ struct Layout {
   Rect panel;
   int rows;
   int first;
+  // Height of the optional wrapped headline (dialog body) band that sits between
+  // the title and the first option. 0 for plain menus, so their geometry is
+  // byte-identical to before. OptionPopup computes it once and passes the same
+  // value to both this layout (hit rects) and CpyTheme::drawOptionPopup (drawing)
+  // so the two can never disagree about where the options sit.
+  int headlineHeight = 0;
 
   Rect optionRect(const int slot) const {
-    return Rect{panel.x + 2, panel.y + headerHeight + slot * rowHeight + 3, panel.width - 4, rowHeight - 6};
+    return Rect{panel.x + 2, panel.y + headerHeight + headlineHeight + slot * rowHeight + 3, panel.width - 4,
+                rowHeight - 6};
   }
 };
 
-inline Layout layout(const Rect bounds, const int optionCount, const int selected) {
-  const int availableRows = std::max(1, (bounds.height - headerHeight) / rowHeight);
+// Panel width is independent of the headline, so callers can measure the wrapped
+// headline against it before asking for the full layout.
+inline int panelWidth(const Rect bounds) {
+  return std::max(1, std::min(bounds.width - 24, UiHighDpiProfile::enabled ? 608 : 360));
+}
+
+inline Layout layout(const Rect bounds, const int optionCount, const int selected, const int headlineHeight = 0) {
+  const int availableRows = std::max(1, (bounds.height - headerHeight - headlineHeight) / rowHeight);
   const int rows = std::min(visibleRows(optionCount), availableRows);
-  const int width = std::max(1, std::min(bounds.width - 24, UiHighDpiProfile::enabled ? 608 : 360));
-  const int height = headerHeight + rows * rowHeight;
+  const int width = panelWidth(bounds);
+  const int height = headerHeight + headlineHeight + rows * rowHeight;
   const int first = std::clamp(selected - rows / 2, 0, std::max(0, optionCount - rows));
   return {
       Rect{bounds.x + (bounds.width - width) / 2, bounds.y + std::max(0, (bounds.height - height) / 2), width, height},
-      rows, first};
+      rows, first, headlineHeight};
 }
 }  // namespace InxOptionGeometry
 

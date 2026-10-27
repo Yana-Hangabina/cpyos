@@ -1,0 +1,25 @@
+# Read Pico (ESP32-S3, 16 MiB) partition table. Every [env:readpico*] inherits it
+# through `board_build.partitions` in [readpico_hardware].
+#
+# Separate from the shared partitions.csv on purpose: that one is also flashed to
+# the X3/X4 (ESP32-C3) targets, which this project cannot test, and giving them a
+# 7.19 MiB app slot is a release-profile change of its own.
+#
+# Why the slots grew: the MuPDF reader (docs/07 G2) adds ~1.70 MB of code, so each
+# OTA slot is 0x730000 (7.19 MiB) instead of 6.25 MiB and the data partition
+# shrinks to 0x180000 (1.5 MiB). That still holds the three blobs this board keeps
+# on the partition -- pinyin 349,500 B, hyphen 351,756 B, language pack ~337 KB --
+# plus the web asset pack at 0x56000 (in the gap before the reserved factory
+# bytes), with ~183 KB of tail space after the language pack. The language pack
+# is deliberately last because it is the blob that grows -- every new i18n key
+# adds ~230 bytes across the 33 packed languages. build/data_manifest.txt is
+# generated from this file and refuses layouts that overlap, run past the end, or
+# touch the twelve reserved factory bytes at partition offset 0x80000.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x730000,
+app1,     app,  ota_1,   0x740000,0x730000,
+spiffs,   data, spiffs,  0xe70000,0x180000,
+coredump, data, coredump,0xFF0000,0x10000,

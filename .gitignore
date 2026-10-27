@@ -1,5 +1,7 @@
 .pio
 /.platformio
+/dist
+/_site
 .idea
 .DS_Store
 .vscode

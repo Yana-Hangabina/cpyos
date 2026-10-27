@@ -14,6 +14,12 @@ target_include_directories(HyphenationEvaluationTest PRIVATE
 
 target_compile_definitions(HyphenationEvaluationTest PRIVATE
   HYPHENATION_RESOURCES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/resources"
+  # This test asserts per-language F1 thresholds, so it needs the tries in the
+  # binary. The firmware's PSRAM builds load them from /hyphen.dat instead (see
+  # lib/Epub/Epub/hyphenation/HyphenationEmbedding.h); without this define the
+  # registry would hand back nullptr for every language and the thresholds would
+  # measure nothing.
+  CROSSPOINT_EMBED_HYPHENATION
 )
 
 target_link_libraries(HyphenationEvaluationTest PRIVATE

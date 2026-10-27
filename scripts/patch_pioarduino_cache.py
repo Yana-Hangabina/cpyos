@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import shutil
 import sys
 from pathlib import Path
 
@@ -60,6 +61,32 @@ requested = env.GetProjectOption("custom_sdkconfig", "")
 board = env.BoardConfig()
 mcu = board.get("build.mcu", "esp32")
 chip_variant = board.get("build.chip_variant", "").lower() or mcu
+
+# Supply the arduino_tinyusb include dirs when the platform's own plumbing
+# loses them: with a custom sdkconfig cached for a DIFFERENT environment, a
+# run can end up recompiling (or cache-restoring) the Arduino core through a
+# compile line that no longer carries these dirs, and esp32-hal-tinyusb.c
+# fails on `#include <tusb.h>`. Re-adding them is idempotent (duplicate -I)
+# and only applies on chips whose libs package actually ships the component.
+libs_dir = platform.get_package_dir("framework-arduinoespressif32-libs")
+if libs_dir:
+    tinyusb_base = Path(libs_dir) / chip_variant / "include" / "arduino_tinyusb"
+    for tinyusb_dir in (tinyusb_base / "tinyusb" / "src", tinyusb_base / "include"):
+        if tinyusb_dir.is_dir():
+            env.Append(CPPPATH=[str(tinyusb_dir)])
+            env.Append(BUILD_FLAGS=["-I" + str(tinyusb_dir)])
+
+    # The per-chip sdkconfig.orig doubles as the "libs carry a custom
+    # configuration" marker and is MOVED onto sdkconfig whenever the cached
+    # request changes; a run that dies in between (or two environments with
+    # different requests alternating) can leave it missing, which sends the
+    # core build down a flag-less path. Self-heal: with sdkconfig present but
+    # orig missing, orig is a copy of sdkconfig either way.
+    chip_dir = Path(libs_dir) / chip_variant
+    if (chip_dir / "sdkconfig").is_file() and not (chip_dir / "sdkconfig.orig").is_file():
+        shutil.copy2(chip_dir / "sdkconfig", chip_dir / "sdkconfig.orig")
+        print(f"Restored missing {chip_dir.name}/sdkconfig.orig")
+
 component_spec = importlib.util.spec_from_file_location(
     "crosspoint_pio_components", builder.with_name("component_manager.py")
 )
@@ -96,7 +123,11 @@ if original_sdkconfig.is_file():
             print(f"Restored cached Arduino framework for {mcu}")
     elif requested.strip():
         # Recompile only this chip from its original template after config changes.
+        # Restore the marker immediately: the platform checks for its existence
+        # later in this SAME run, and dropping it turned every core compile into
+        # the prebuilt-flag path (missing arduino_tinyusb include dirs).
         original_sdkconfig.replace(target_sdkconfig)
+        shutil.copy2(target_sdkconfig, original_sdkconfig)
     # A prebuilt target must retain sdkconfig.orig: PlatformIO uses it to
     # reinstall the original libraries, not just their configuration header.
 
@@ -110,14 +141,10 @@ if rebuild:
         BUILD_UNFLAGS=[flag for flag in env.get("BUILD_UNFLAGS", []) if flag != "-fno-lto"],
     )
 
-if rebuild and not board.get("build.esp-idf.sdkconfig_path", ""):
-    # Resolved Kconfig values override sdkconfig.defaults, even across SDK upgrades.
-    # Only reset the generated file for this environment; explicit paths are user-owned.
-    resolved = Path(env.subst("$PROJECT_DIR")) / f"sdkconfig.{env.subst('$PIOENV')}"
-    if resolved.is_file() and "# Automatically generated file. DO NOT EDIT." in (
-        resolved.read_text(encoding="utf-8").splitlines()[:5]
-    ):
-        resolved.unlink()
-        print(f"Reset generated SDK configuration: {resolved.name}")
+# The generated sdkconfig.<env> is NOT deleted on a request change: the
+# deletion raced the parallel ninja targets (ldgen could read a sdkconfig that
+# had just been removed, before the reconfigure regenerated it). The upstream
+# password-marker check in sdkconfig.defaults (written below) already forces a
+# reconfigure when the request really changed, without the race.
 
 request_file.write_text(cache_request + "\n", encoding="utf-8")

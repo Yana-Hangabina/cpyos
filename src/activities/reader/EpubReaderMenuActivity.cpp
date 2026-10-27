@@ -10,21 +10,22 @@
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
-#include "components/themes/lyra/LyraTheme.h"
+#include "components/themes/upstream/UpstreamStyleTheme.h"
 
 namespace fui = freeink::ui;
 
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool hasBookmarks)
+                                               const bool hasFootnotes, const bool hasBookmarks, const bool isJjwxc,
+                                               const bool isPdf)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput, false, true),
       title(title),
       pendingOrientation(currentOrientation),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {
-  buildMenuItems(menuItems, hasFootnotes, hasBookmarks);
+  buildMenuItems(menuItems, hasFootnotes, hasBookmarks, isJjwxc, isPdf);
   buildMenuRowItems();
 }
 
@@ -40,9 +41,24 @@ void EpubReaderMenuActivity::buildMenuRowItems() {
   }
 }
 
-void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks) {
+void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks,
+                                            const bool isJjwxc, const bool isPdf) {
   items.clear();
   items.reserve(MAX_MENU_ITEMS);
+  if (isPdf) {
+    // A PDF has pages, not chapters: keep the same menu chrome but only the
+    // actions that make sense for a fixed-layout document.
+    items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
+    items.push_back({MenuAction::GO_TO_PAGE, StrId::STR_GO_TO_PAGE});
+    items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
+    items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+    items.push_back({MenuAction::PDF_PAGE_NOTE, StrId::STR_PDF_PAGE_NOTE});
+    items.push_back({MenuAction::PDF_HIGHLIGHT_SCREEN, StrId::STR_PDF_HIGHLIGHT});
+    items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+    items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
+    items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+    return;
+  }
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -62,7 +78,29 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
   items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
   items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
   items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
-  items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
+  // A JJWXC book's cloud is 晋江's own progress, not KOReader's. Pointing the
+  // row at KOReader there opened a service the book has no account on.
+  if (isJjwxc) {
+    items.push_back({MenuAction::JJWXC_CLOUD_PROGRESS, StrId::STR_JJWXC_CLOUD_PROGRESS});
+  } else {
+    items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
+  }
+  // JJWXC maintenance lives in the toolbar Contents panel (a fixed strip above
+  // the chapter list), but THIS activity is the classic list menu -- the
+  // toolbar style never opens it. Keep the two update rows here so switching
+  // menu styles does not silently remove the only way to update the catalogue.
+  // The toolbar More panel filters these two rows out again (buildMoreActions).
+  if (isJjwxc) {
+    items.push_back({MenuAction::JJWXC_UPDATE_CURRENT, StrId::STR_JJWXC_UPDATE_CURRENT});
+    items.push_back({MenuAction::JJWXC_UPDATE_LIST, StrId::STR_JJWXC_UPDATE_LIST});
+    items.push_back({MenuAction::JJWXC_BOOK_DETAIL, StrId::STR_JJWXC_BOOK_INFO});
+  }
+  // This clears CrossMux's derived pagination cache for THIS EPUB (and returns
+  // home). It is independent of the JJWXC download: a JJWXC book is also an
+  // EPUB, so the action belongs in its menu too. The old "delete book cache"
+  // wording made users think it would delete the downloaded novel; the label
+  // now names what it actually clears. Deleting the JJWXC download itself lives
+  // in the app's BookDetail page ("删除本地缓存").
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
   items.push_back({MenuAction::TEXT_SETTINGS, StrId::STR_TEXT_SETTINGS});
 }

@@ -100,6 +100,7 @@ class NightlyTargetTest(unittest.TestCase):
             'environments': {'nightly': 'readpico_nightly'},
             'supportedChannels': ['nightly'],
             'fullInstall': True,
+            'partitionsCsv': 'partitions_readpico.csv',
         })
         for flavor in nightly_targets.FLAVOR_TOKENS:
             self.assertEqual(nightly_targets.environment_for('readpico', 'nightly', flavor), 'readpico_nightly')
@@ -203,7 +204,8 @@ class NightlyTargetTest(unittest.TestCase):
                     return 'a' * (7 if '--short=7' in args else 40)
 
                 with (
-                    mock.patch.object(package_nightly_target, 'verify_partition_csv'),
+                    mock.patch.object(package_nightly_target, 'verify_partition_csv',
+                                       return_value={'otadata': (0xE000, 0x2000), 'app0': (0x10000, 0x640000), 'app1': (0x650000, 0x640000)}),
                     mock.patch.object(package_nightly_target, 'find_boot_app0', return_value=boot_app0),
                     mock.patch.object(package_nightly_target, 'git_value', side_effect=git_value),
                 ):
@@ -252,7 +254,8 @@ class NightlyTargetTest(unittest.TestCase):
                 return 'a' * (7 if '--short=7' in args else 40)
 
             with (
-                mock.patch.object(package_nightly_target, 'verify_partition_csv'),
+                mock.patch.object(package_nightly_target, 'verify_partition_csv',
+                                   return_value={'otadata': (0xE000, 0x2000), 'app0': (0x10000, 0x640000), 'app1': (0x650000, 0x640000)}),
                 mock.patch.object(package_nightly_target, 'git_value', side_effect=git_value),
             ):
                 package_nightly_target.package_target(root, 'xteink_x4', 'stable', output)

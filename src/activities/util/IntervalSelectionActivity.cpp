@@ -26,7 +26,8 @@ IntervalSelectionActivity::IntervalSelectionActivity(GfxRenderer& renderer, Mapp
                                                      const int initialValue, const int minValue, const int maxValue,
                                                      const int smallStep, const int largeStep,
                                                      const StrId valueFormatId, const bool readerActivity,
-                                                     const StrId maxBoundaryLabelId)
+                                                     const StrId maxBoundaryLabelId,
+                                                     std::function<void(int)> valueChanged)
     : Activity(activityName, renderer, mappedInput),
       UiAppHost(renderer),
       titleId(titleId),
@@ -37,7 +38,8 @@ IntervalSelectionActivity::IntervalSelectionActivity(GfxRenderer& renderer, Mapp
       maxValue(maxValue),
       smallStep(smallStep),
       largeStep(largeStep),
-      readerActivity(readerActivity) {}
+      readerActivity(readerActivity),
+      valueChanged(std::move(valueChanged)) {}
 
 int IntervalSelectionActivity::clampedValue(const int candidate) const {
   return std::clamp(candidate, minValue, maxValue);
@@ -56,6 +58,7 @@ void IntervalSelectionActivity::onEnter() {
 
 void IntervalSelectionActivity::adjustValue(const int delta) {
   value = clampedValue(value + delta);
+  if (valueChanged) valueChanged(value);
   requestUpdate();
 }
 
@@ -63,6 +66,7 @@ void IntervalSelectionActivity::setValue(const int candidate) {
   const int clamped = clampedValue(candidate);
   if (clamped == value) return;
   value = clamped;
+  if (valueChanged) valueChanged(value);
   requestUpdate();
 }
 
@@ -209,9 +213,11 @@ void IntervalSelectionActivity::buildIntervalScreen(UiScreen& screen) {
 }
 
 void IntervalSelectionActivity::render(RenderLock&&) {
-  // No clearScreen: the dialog is a popup — it dims the frame it opened over
-  // and draws the card on top. Everything renders through the app so the
-  // interactive elements register touch hit rects.
+  // No clearScreen: the dialog is a popup over the caller's retained frame.
+  // The theme decides whether that frame gets a scrim first (CPY draws a light
+  // dither; INX keeps the plain frame). Everything renders through the app so
+  // the interactive elements register touch hit rects.
+  GUI.drawModalScrim(renderer);
   renderUi();
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");

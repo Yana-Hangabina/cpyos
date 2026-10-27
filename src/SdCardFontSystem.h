@@ -29,6 +29,14 @@ inline constexpr int CJK_UI_16_FONT_ID = 0x434A4B10;
 inline constexpr int READER_STATUS_FONT_ID = 0x52534208;
 inline constexpr int READER_ESTIMATE_FONT_ID = 0x5253420A;
 
+#if CROSSPOINT_VECTOR_FONTS
+// Renderer font id for a vector family at a point size, using the SD font
+// system's FNV-1a family-id scheme. Exposed (under a distinct name, since the
+// implementation lives in an anonymous namespace) so the reader can register an
+// EPUB-embedded face under a non-colliding id.
+int readerVectorFontId(const char* familyName, uint8_t pointSize);
+#endif
+
 /// Facade that owns the SD card font registry, manager, and resolver logic.
 /// Hides implementation details behind a single begin() + ensureLoaded() API.
 class SdCardFontSystem {

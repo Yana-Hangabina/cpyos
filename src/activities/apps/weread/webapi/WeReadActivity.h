@@ -22,6 +22,11 @@ class WeReadActivity final : public Activity {
   void render(RenderLock&&) override;
   bool preventAutoSleep() override;
 
+  // Find-page shortcut: land on the Manage (account) tab. Signed-out visitors
+  // still get the QR page, which is the honest entry point for them.
+  enum class Shortcut : uint8_t { None, Manage };
+  static void requestShortcut(Shortcut shortcut);
+
  private:
   enum class State : uint8_t {
     Disclaimer,
@@ -66,6 +71,7 @@ class WeReadActivity final : public Activity {
   WeReadClient::Operation operation_;
   std::vector<TabInfo> mainTabs_;
   mutable HalFile shelfFile_;
+  static Shortcut pendingShortcut_;
   std::atomic<State> state_{State::Disclaimer};
   std::atomic<WeReadClient::Operation::ProgressStage> progressStage_{WeReadClient::Operation::ProgressStage::Chapters};
   std::atomic<uint32_t> progressCompleted_{0};

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 
+#include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "apps/2048/Game2048Activity.h"
@@ -25,6 +26,9 @@
 #include "apps/chinese-chess/ChineseChessMenuActivity.h"
 #endif
 #ifdef ENABLE_CHINESE_VERSION
+#ifdef BOARD_HAS_PSRAM
+#include "apps/jjwxc/JjwxcActivity.h"
+#endif
 #include "apps/weread/WeReadActivity.h"
 #endif
 #include "apps/gomoku/GomokuMenuActivity.h"
@@ -41,6 +45,8 @@
 #include "components/HeaderBackTapTarget.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
+#include "home/FindBooksActivity.h"
+#include "home/MyActivity.h"
 #include "home/HomeActivity.h"
 #include "home/InxRecentActivity.h"
 #include "home/RecentBooksActivity.h"
@@ -72,18 +78,65 @@ void ActivityManager::begin() {
   // (~3.5KB on Xtensa) with the scan converter's FT_RENDER_POOL_SIZE (4KB)
   // stack-resident band pool on top — a measured ~8KB peak that trips the
   // canary on an 8KB stack. Vector-font boards all have PSRAM-class RAM.
-  constexpr uint32_t renderTaskStackBytes = 16384;
+  //
+  // 32K is required for .otf (CFF) faces: the Adobe Type 2 interpreter's
+  // cf2_interpT2CharString reserves a SINGLE 16,128-byte stack frame (measured
+  // via `entry a1, 0x3f00` in the linked image; it is dominated by the three
+  // CF2_HintMapRecs embedded in CF2_GlyphPathRec, edge[CF2_MAX_HINT_EDGES] =
+  // 192 hint recs each). That frame alone is larger than the old 16K stack, so
+  // any CFF glyph faulted during a section build overflowed — observed on
+  // device as "Stack canary watchpoint triggered (ActivityManager)" (name
+  // truncated from ActivityManagerRender) right after [ERS] section build.
+  // The on-device watermark after real reading measured 9,740 B free
+  // (~23 KB peak). The TT bytecode interpreter has no such frame, which is
+  // why TTF never hit this. Do not shrink before re-measuring with a CFF face.
+  //
+  // The stack lives in PSRAM, not internal RAM: reserving 32 KB internally
+  // starved the network — with an internal 32K stack the file-transfer web
+  // server came up with internal free=6,700 B and DMA largest=36 B and could
+  // not serve a client. The render task is safe for a PSRAM stack (internal
+  // flash must never be written from a PSRAM stack: writing it disables the
+  // cache the stack lives in): its chains touch SD only — settings, reading
+  // stats and reader progress all live under /.crosspoint/ on SD, while every
+  // internal-flash writer is boot-time, a settings-screen flow on the loop
+  // task (OTA, SD firmware flash), the loop-task font flash-preload (which
+  // vector families skip anyway), or the SNTP callback. The task is never
+  // deleted, so no vTaskDeleteWithCaps pairing is needed. Same discipline as
+  // the JJWXC job task (see its comments).
+  // NOTE: xTaskCreatePinnedToCoreWithCaps's usStackDepth is in WORDS on this
+  // core despite the header saying bytes (measured on the JJWXC task: 12*1024
+  // words -> 48 KB); divide by sizeof(StackType_t) so 32 KB stays 32 KB.
+  // PDF's MuPDF image/zlib path is deeper than the EPUB CFF path; 32 KB was
+  // enough for CFF but crashed in fz_new_pixmap_from_page.  64 KB costs 32 KB of
+  // PSRAM and covers both.
+  constexpr uint32_t renderTaskStackBytes = 64 * 1024;
+  const BaseType_t created = xTaskCreatePinnedToCoreWithCaps(
+      &renderTaskTrampoline, "ActivityManagerRender", renderTaskStackBytes / sizeof(StackType_t), this, 1,
+      &renderTaskHandle, renderTaskCore, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (created != pdPASS) {
+    // Practically unreachable (PSRAM boards have MBs free) but never silent:
+    // fall back to an internal stack so the panel still gets a render thread.
+    LOG_ERR("ACT", "PSRAM render stack refused (%d); falling back to internal RAM", static_cast<int>(created));
+    xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender", renderTaskStackBytes, this, 1,
+                            &renderTaskHandle, renderTaskCore);
+  } else {
+    LOG_INF("ACT", "render task stack in PSRAM (%u bytes)", static_cast<unsigned>(renderTaskStackBytes));
+  }
+  assert(renderTaskHandle != nullptr && "Failed to create render task");
 #else
-  constexpr uint32_t renderTaskStackBytes = 8192;
-#endif
   xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender",
-                          renderTaskStackBytes,  // Stack size
+                          8192,                  // Stack size
                           this,                  // Parameters
                           1,                     // Priority
                           &renderTaskHandle,     // Task handle
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
+#endif
+}
+
+uint32_t ActivityManager::renderStackMinFreeBytes() const {
+  return renderTaskHandle ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(renderTaskHandle)) : 0;
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -109,6 +162,9 @@ void ActivityManager::renderTaskLoop() {
         idleGeneration = idleRenderGeneration.load(std::memory_order_relaxed);
         display.setInverted(SETTINGS.screenInverted != 0);
         currentActivity->render(std::move(lock));
+        // Freezes the boot-stage record the first time a frame lands on the panel
+        // (docs/07 D2). Every later frame costs one flag test.
+        boottimings::markFirstPaint();
         if (delayMs != 0) waitTicks = pdMS_TO_TICKS(delayMs);
       } else if (!idleRenderCancelled(idleGeneration)) {
         currentActivity->renderIdle(idleGeneration);
@@ -486,6 +542,8 @@ void ActivityManager::goToUsbDrive() {
 #endif
 }
 
+void ActivityManager::goToMy() { replaceActivityWith<MyActivity>(); }
+
 void ActivityManager::goToSettings() { replaceActivityWith<SettingsActivity>(); }
 
 void ActivityManager::goToUglyAvatar() { replaceActivityWith<UglyAvatarActivity>(); }
@@ -503,16 +561,20 @@ void ActivityManager::goToMainTab(const MainTab tab) {
       goToInxRecent();
       return;
     case MainTab::Library:
-      goToFileBrowser();
+      // The unified index shelf took this slot once it grew the main-tab
+      // chrome (band/bar/status + band-derived content margins). That chrome
+      // is CPY's; INX keeps opening the file browser exactly as before.
+      if (UITheme::getInstance().usesCpyLayout()) {
+        goToLibrary();
+      } else {
+        goToFileBrowser();
+      }
       return;
     case MainTab::Settings:
-      goToSettings();
-      return;
-    case MainTab::Statistics:
-      goToReadingStats();
+      goToMy();
       return;
     case MainTab::Apps:
-      goToApps();
+      goToFindBooks();
       return;
     case MainTab::None:
       return;
@@ -567,15 +629,17 @@ bool ActivityManager::goToPostOtaBoot(bool allowAutoPreload) {
   return replaceActivityWith<BootActivity>(BootActivity::Mode::PostOta, allowAutoPreload);
 }
 
-void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::Style style) {
-  replaceActivityWith<FullScreenMessageActivity>(std::move(message), style);
+void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::Style style, std::string detail,
+                                            const bool retryable) {
+  replaceActivityWith<FullScreenMessageActivity>(std::move(message), style, HalDisplay::FAST_REFRESH,
+                                                 std::move(detail), retryable);
 }
 
 void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
   if (!CrossPointSettings::requiresOnboarding(SETTINGS.onboardingVersion)) {
     UserGuide::installIfPending(static_cast<Language>(SETTINGS.language) == Language::ZH_CN);
   }
-  if (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX) {
+  if (UITheme::getInstance().usesModernLayout()) {
     mainTabFocus = MainTabFocus::Tabs;
     mainTabEntryReleasePending = false;
     goToInxRecent();
@@ -601,9 +665,11 @@ void ActivityManager::goToCrashReport() { replaceActivityWith<CrashActivity>(); 
 
 void ActivityManager::goToApps() { replaceActivityWith<AppsMenuActivity>(); }
 
+void ActivityManager::goToFindBooks() { replaceActivityWith<FindBooksActivity>(); }
+
 void ActivityManager::goToReadingStatsMenu() { replaceActivityWith<ReadingStatsMenuActivity>(); }
 
-void ActivityManager::goToReadingStats() { replaceActivityWith<ReadingStatsActivity>(true); }
+void ActivityManager::goToReadingStats() { replaceActivityWith<ReadingStatsActivity>(); }
 
 void ActivityManager::goToSudoku() { replaceActivityWith<SudokuMenuActivity>(); }
 
@@ -633,6 +699,9 @@ void ActivityManager::goToChineseChess() { replaceActivityWith<ChineseChessMenuA
 
 #ifdef ENABLE_CHINESE_VERSION
 void ActivityManager::goToWeRead() { replaceActivityWith<WeReadActivity>(); }
+#ifdef BOARD_HAS_PSRAM
+void ActivityManager::goToJjwxc() { replaceActivityWith<JjwxcActivity>(); }
+#endif
 #endif
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {

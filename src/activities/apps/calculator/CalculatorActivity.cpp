@@ -229,21 +229,31 @@ void CalculatorActivity::render(RenderLock&&) {
   const CalculatorLayout layout = layoutFor(renderer);
   GUI.drawHeader(renderer, layout.header, tr(STR_CALCULATOR_TITLE));
 
+  // CPY (frame 31): the readout sits in a card like every other surface, and
+  // "=" keeps the mockup's inverted accent. INX keeps the bare readout.
+  const bool cpy = UITheme::getInstance().usesCpyLayout();
+  if (cpy) GUI.drawCardFrame(renderer, layout.display, false);
+
   {
+    const int pad = cpy ? 16 : 0;
+    const int contentX = layout.display.x + pad;
+    const int contentWidth = std::max(1, layout.display.width - pad * 2);
     const GfxRenderer::ClipScope clip(renderer, layout.display.x, layout.display.y, layout.display.width,
                                       layout.display.height);
+    // CPY (frame 31): expression in the small UI face over the big result;
+    // INX keeps the historical display face for both.
+    const int expressionFontId = cpy ? UI_12_FONT_ID : calculator::DISPLAY_FONT_ID;
     const char* expression = state_.expressionText();
-    const int expressionWidth = renderer.getTextWidth(calculator::DISPLAY_FONT_ID, expression);
-    const int expressionY = layout.display.y + sectionSpacing;
-    renderer.drawText(calculator::DISPLAY_FONT_ID, layout.display.x + layout.display.width - expressionWidth,
-                      expressionY, expression);
+    const int expressionWidth = renderer.getTextWidth(expressionFontId, expression);
+    const int expressionY = layout.display.y + sectionSpacing + (cpy ? 4 : 0);
+    renderer.drawText(expressionFontId, contentX + contentWidth - expressionWidth, expressionY, expression);
 
     const int resultFontId = state_.hasError() ? UI_12_FONT_ID : calculator::DISPLAY_FONT_ID;
     const char* result = state_.hasError() ? tr(STR_CALCULATOR_ERROR) : state_.resultText();
     const int resultWidth = renderer.getTextWidth(resultFontId, result, EpdFontFamily::BOLD);
     const int resultLineHeight = renderer.getLineHeight(resultFontId);
     const int resultY = layout.display.y + layout.display.height - resultLineHeight - sectionSpacing;
-    renderer.drawText(resultFontId, layout.display.x + layout.display.width - resultWidth, resultY, result, true,
+    renderer.drawText(resultFontId, contentX + contentWidth - resultWidth, resultY, result, true,
                       EpdFontFamily::BOLD);
   }
 
@@ -253,8 +263,18 @@ void CalculatorActivity::render(RenderLock&&) {
     const Rect key = keyRect(layout, index);
     const int radius = std::min(metrics.optionPopupSelectionRadius, std::min(key.width, key.height) / 2);
     bool foregroundBlack = true;
-    if (index == selected_) foregroundBlack = GUI.drawSelectionBackground(renderer, key);
+    if (index == selected_) {
+      foregroundBlack = GUI.drawSelectionBackground(renderer, key);
+    } else if (kKeys[index] == calculator::Key::Equals && cpy) {
+      // Design: the equals key is the accent -- filled black like a primary
+      // pill. Selection on it is marked with an inset white ring below.
+      renderer.fillRoundedRect(key.x, key.y, key.width, key.height, radius, Color::Black);
+      foregroundBlack = false;
+    }
     renderer.drawRoundedRect(key.x, key.y, key.width, key.height, 1, radius, true);
+    if (index == selected_ && kKeys[index] == calculator::Key::Equals && cpy) {
+      renderer.drawRoundedRect(key.x + 4, key.y + 4, key.width - 8, key.height - 8, 2, radius, false);
+    }
 
     if (kKeys[index] == calculator::Key::Backspace) {
       drawBackspaceIcon(renderer, key, foregroundBlack);

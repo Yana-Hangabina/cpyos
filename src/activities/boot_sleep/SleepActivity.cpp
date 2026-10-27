@@ -1,7 +1,9 @@
 #include "SleepActivity.h"
 
 #include <BitmapHelpers.h>
+#include <Cbz.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
@@ -23,6 +25,8 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "activities/reader/ReaderUtils.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -550,12 +554,19 @@ void SleepActivity::onEnter() {
     GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
   }
 
-  // 睡前先把面板洗白，再让各路径照常用 HALF 画睡眠画面 —— 仅 Read Pico。
+  // 睡前先把面板洗成已知全白，再让各路径画睡眠画面 —— 仅 Read Pico。
   //
-  // HALF 是单趟波形，擦不掉已经存在的墨，而睡眠画面全部用 HALF 画，所以阅读器留下的残影
-  // 会透到睡眠图上。这里清空帧缓冲再用一趟 FULL（GC16，36 相完整波形）把它推上去：每个
-  // 像素从它的实际残留态被强行驱动到白，不做差分跳过。全白是关键 —— 只推"旧页"那一帧的话，
-  // 面板上已积累的残留不在差分的比较范围里，洗不掉。
+  // 睡眠画面会整段休眠期间留在屏上、唤醒时还要再用，所以给它一个干净的基准很重要。
+  // 注意：在 Read Pico 上 HALF 并不是"单趟、擦不掉旧墨"的波形 —— 它映射成 GL16 整屏重写
+  // （EpdiyLcdDriver.cpp），每一行都按像素的实际状态重画。但一趟 GL16 重写并不能像周期性
+  // GC16 全刷那样彻底清掉长 GL16 链累积下来的残影。这里清空帧缓冲再用一趟 FULL（GC16，
+  // 36 相完整波形）把面板驱动到全白，给长寿命的睡眠图一个已知基准。全白是关键：只推"旧页"
+  // 那一帧清不掉屏上已积累的残留，因为那些残留不在差分比较的范围里。
+  //
+  // 另外要如实说明：HALF 推送本来就会被 UI 全刷计数器周期性提升为 FULL（GfxRenderer.cpp），
+  // 而下面 default 分支的睡眠图自己也请求 FULL，所以这趟洗白不是路径上唯一的 GC16。它对
+  // "本来就推 FULL"的分支是否多余，是一个悬而未决的问题，留待实机 A/B 浸泡测试再定，
+  // 本轮不改波形行为。
   //
   // 顺序必须在提示之后：全刷会把提示一起刷掉。但上面 drawPopup() 自己已经 displayBuffer()
   // 过一次，所以这里不再推提示 —— 早先那版多推了一趟 HALF，是对同一个提示的重复刷新，
@@ -566,14 +577,23 @@ void SleepActivity::onEnter() {
   //
   // 先只开在 Read Pico：目前只有这块面板做过实机验证（普通睡眠画面、Quick Resume、
   // Transparent、夜间模式），其它面板等验收后再扩大范围。
-  // / Wash the panel white before the sleep screens paint -- Read Pico only.
+  // / Wash the panel to a known-white baseline before the sleep screens paint -- Read Pico only.
   //
-  // HALF is a single-pass waveform and cannot erase ink that is already there, and every sleep
-  // screen paints with HALF, so whatever the reader left behind shows through. Clearing the
-  // framebuffer and pushing it with FULL (GC16, a 36-phase complete waveform) drives every
-  // pixel from wherever it actually sits to white with no difference skip. The white field is
-  // the point: pushing the old page alone is not enough, because ghosting already on the panel
-  // is not part of that comparison.
+  // The sleep image stays on the glass for the whole sleep and is shown again at wake, so it
+  // deserves a clean baseline. Note that on Read Pico HALF is NOT a "single-pass, cannot erase
+  // ink" waveform -- it maps to a GL16 full rewrite (EpdiyLcdDriver.cpp) that repaints every
+  // line from each pixel's actual state. But one GL16 repaint does not fully clear the residue
+  // a long GL16 chain accumulates the way a periodic GC16 sweep does. Clearing the framebuffer
+  // and pushing it with FULL (GC16, a 36-phase complete waveform) drives the panel to white and
+  // gives the long-lived sleep image a known baseline. The white field is the point: pushing the
+  // old page alone would not remove ghosting already on the panel, because that residue is not
+  // part of a difference comparison.
+  //
+  // To be accurate: HALF pushes are already promoted to FULL periodically by the UI sweep
+  // counter (GfxRenderer.cpp), and the default sleep branch below requests FULL itself, so this
+  // wash is not the only GC16 on the path. Whether it is redundant for the branches that already
+  // push FULL is an open question, deferred pending a device A/B soak; this revision does not
+  // change the waveform behaviour.
   //
   // It has to come after the popup, since the wash takes the popup with it -- and drawPopup()
   // has already pushed it through displayBuffer(), so no extra popup pass belongs here. An
@@ -654,19 +674,34 @@ void SleepActivity::renderCustomSleepScreen() const {
   renderDefaultSleepScreen();
 }
 
-// Sleep screens paint with a single HALF refresh (stock parity): the OEM X4
-// firmware's only clean refresh in normal operation is the single-pass 0xD7
-// sequence, used once for the sleep image. It never runs the multi-flash GC
-// waveform (0xF7) that FULL_REFRESH selects (#2471's blinking complaint).
+// The default (duck) sleep screen paints with a FULL refresh: a HALF push
+// leaves the previous page ghosting through the mostly-empty face, which the
+// device review flagged immediately (user feedback, 2026-10-16). The bitmap
+// sleep screens below keep their own HALF/parity choices.
 void SleepActivity::renderDefaultSleepScreen() const {
-  GUI.drawSplash(renderer, tr(STR_SLEEPING));
+  // "正在读" line for the CPY sleep face: the same sources the home dashboard's
+  // continue card uses; absent gracefully when nothing is known (fresh card,
+  // or sleeping from the reader before home ever loaded).
+  const char* bookTitle = nullptr;
+  int readPercent = 0;
+  {
+    const auto& books = RECENT_BOOKS.getBooks();
+    if (!books.empty()) {
+      const RecentBook& book = books.front();
+      bookTitle = book.title.empty() ? book.path.c_str() : book.title.c_str();
+      if (const ReadingBookStats* stats = READING_STATS.findMatchingBookForPath(book.path, book.title, book.author)) {
+        readPercent = static_cast<int>(stats->lastProgressPercent);
+      }
+    }
+  }
+  GUI.drawSleepScreen(renderer, tr(STR_SLEEPING), bookTitle, readPercent);
 
   // Make sleep screen dark unless light is selected in settings
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
     renderer.invertScreen();
   }
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool preserveBackground,
@@ -888,6 +923,28 @@ void SleepActivity::renderCoverSleepScreen() const {
     }
 
     coverBmpPath = lastXtc.getCoverBmpPath();
+  } else if (FsHelpers::hasCbzExtension(APP_STATE.openEpubPath)) {
+    Cbz lastCbz(APP_STATE.openEpubPath, "/.crosspoint");
+    if (!lastCbz.load()) {
+      LOG_ERR("SLP", "Failed to load last CBZ");
+      return (this->*renderNoCoverSleepScreen)();
+    }
+    if (!lastCbz.generateCoverBmp()) {
+      LOG_ERR("SLP", "Failed to generate CBZ cover bmp");
+      return (this->*renderNoCoverSleepScreen)();
+    }
+    coverBmpPath = lastCbz.getCoverBmpPath();
+  } else if (FsHelpers::hasFb2Extension(APP_STATE.openEpubPath)) {
+    const Fb2 lastFb2(APP_STATE.openEpubPath, "/.crosspoint");
+    if (!Storage.exists(lastFb2.getEpubPath().c_str())) {
+      return (this->*renderNoCoverSleepScreen)();
+    }
+    Epub lastEpub(lastFb2.getEpubPath(), "/.crosspoint");
+    if (!lastEpub.load(true, true) || !lastEpub.generateCoverBmp(cropped, originalThresholds)) {
+      LOG_ERR("SLP", "Failed to generate FB2 cover bmp");
+      return (this->*renderNoCoverSleepScreen)();
+    }
+    coverBmpPath = lastEpub.getCoverBmpPath(cropped, originalThresholds);
   } else if (FsHelpers::hasReflowableBookExtension(APP_STATE.openEpubPath)) {
     // Handle EPUB, TXT, or Markdown file
     Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");

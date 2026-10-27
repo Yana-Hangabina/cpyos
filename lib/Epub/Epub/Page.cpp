@@ -55,7 +55,35 @@ bool Page::addLink(const char* href, const int16_t x, const int16_t y, const int
   return true;
 }
 
+void Page::setVertical(const bool on, const int viewportWidth, const int colWidth) {
+  if (!on) {
+    for (auto& element : elements) {
+      if (element->getTag() == TAG_PageLine) {
+        static_cast<PageLine*>(element.get())->setVertical(false, 0, 0);
+      }
+    }
+    return;
+  }
+  // A page with an image keeps the horizontal layout: image blocks are positioned
+  // in a horizontal band and would land outside their column otherwise.
+  for (const auto& element : elements) {
+    if (element->getTag() == TAG_PageImage) return;
+  }
+  for (auto& element : elements) {
+    if (element->getTag() == TAG_PageLine) {
+      static_cast<PageLine*>(element.get())->setVertical(true, viewportWidth, colWidth);
+    }
+  }
+}
+
 void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  if (verticalMode) {
+    const int colW = verticalColW > 0 ? verticalColW : renderer.getLineHeight(fontId);
+    const int col = colW > 0 ? yPos / colW : 0;
+    const int colX = xOffset + verticalWidth - (col + 1) * colW;
+    block->renderVertical(renderer, fontId, colX, yOffset, colW);
+    return;
+  }
   block->render(renderer, fontId, xPos + xOffset, yPos + yOffset);
 }
 

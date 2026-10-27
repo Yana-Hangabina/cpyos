@@ -181,6 +181,9 @@ add_test(NAME InxSettingControls COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test
 
 add_test(NAME SettingsApiKeys COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/settings_api/test_settings_api_keys.py)
 
+add_test(NAME SettingsRowMapping
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/settings_rows/test_settings_row_mapping.py)
+
 add_test(NAME HalTiltGestures
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/hal_tilt/test_hal_tilt.py)
 

@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>脆皮鸭 CPYOS · Read Pico 中文阅读系统</title>
+<meta name="description" content="脆皮鸭 CPYOS 是面向 Read Pico（小纸 Pico）墨水屏的原生阅读系统：新版界面、晋江文学城、微信读书、中文输入、水波纹翻页与设备 OTA。">
+<meta name="theme-color" content="#f4f1e9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f0f0d" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="脆皮鸭 CPYOS">
+<meta property="og:description" content="把晋江、微信读书和一座纸面书架，装进 4.7 英寸墨水屏。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://yana-hangabina.github.io/cpyos/">
+<meta property="og:image" content="https://yana-hangabina.github.io/cpyos/assets/og.png">
+<link rel="icon" href="./assets/duck.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./styles.css">
+<script>
+  try {
+    var saved = localStorage.getItem('cpyos-theme');
+    if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
+  } catch (error) {}
+</script>
+<script type="module"
+        src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"
+        integrity="sha384-f+fR3K1mnKB2tVps4hdEh+qJvLgH2bKw81Yn+eNE3+gE8YpqocjkxQON4k19I3e/"
+        crossorigin="anonymous"></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<svg aria-hidden="true" style="display:none">
+  <symbol id="duck" viewBox="0 0 64 48">
+    <path d="M9 30c0-7 6-12 14-12 5 0 9 2 12 6h9l8 3-8 3h-5c-2 5-7 8-13 8H16c-4 0-7-3-7-8Z"/>
+    <circle cx="35" cy="13" r="8"/>
+    <path d="M42 12h11l-5 4h-6Z"/>
+    <circle cx="37" cy="11" r="1.4" fill="var(--paper)"/>
+  </symbol>
+  <symbol id="ripple" viewBox="0 0 240 60">
+    <path d="M2 30c30-16 58 16 88 0s58 16 88 0 44 10 60 5" fill="none" stroke="currentColor" stroke-width="1.3"/>
+    <path d="M22 42c24-11 46 11 70 0s46 11 70 0 40 7 52 4" fill="none" stroke="currentColor" stroke-width="1"/>
+    <path d="M48 52c20-8 38 8 58 0s38 8 58 0 30 4 40 2" fill="none" stroke="currentColor" stroke-width=".8" opacity=".65"/>
+  </symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg aria-hidden="true"><use href="#duck"/></svg>
+      脆皮鸭 <small>CPYOS</small>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#screens">界面</a>
+      <a href="#install">刷机</a>
+      <a href="#credits">致谢</a>
+      <a class="gh" href="https://github.com/Yana-Hangabina/cpyos">GitHub</a>
+      <button class="theme" id="theme-toggle" type="button" aria-label="切换主题" title="自动 / 浅色 / 深色">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4.2"/>
+          <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/>
+        </svg>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap">
+      <div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.1.0</span></span><span class="dot"></span><span>Open source</span></div>
+        <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
+        <p class="lede">把晋江、微信读书和一座<em>纸面书架</em>，装进 4.7 英寸墨水屏。</p>
+        <p class="en-lede">A reading-first e-ink system for the MindReset Read Pico. Native JJWXC and WeRead clients, Chinese input, a refreshed UI, water-ripple page turns and device OTA — built on CrossMux.</p>
+        <div class="cta">
+          <a class="btn solid" href="#install">网页刷机 <small>FLASH</small></a>
+          <a class="btn" href="#features">看看功能 <small>FEATURES</small></a>
+        </div>
+      </div>
+      <div class="device-stage" aria-hidden="true">
+        <div class="waterline"></div>
+        <svg class="ripple"><use href="#ripple"/></svg>
+        <div class="device">
+          <div class="mock-screen mock-hero-screen">
+            <div class="mock-status"><span class="mock-logo">脆皮鸭</span><span>10/26</span></div>
+            <div class="mock-hero">
+              <span class="mock-kicker">上次读到</span>
+              <b>继续阅读</b>
+              <span class="mock-sub">已缓存 · 42%</span>
+              <span class="mock-bar"><i style="width:42%"></i></span>
+            </div>
+            <div class="mock-grid"><span></span><span></span><span></span></div>
+            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
+          </div>
+          <div class="cap"><span>CPYOS / HOME</span><span>684 × 1216</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">01 / FEATURES</div>
+        <h2 id="features-title">不是把手机 App 缩小，<br>而是重新排一遍。<span>WHAT WE ADDED TO CROSSMUX</span></h2>
+      </div>
+      <div class="features">
+        <article class="feature reveal">
+          <div class="idx">01</div>
+          <div>
+            <h3>新版界面 / Refreshed UI</h3>
+            <p>首页只留下真正要看的东西：上次读到、最近阅读、近 7 天阅读和晋江更新。书架、找书、我的共用同一条水线与底部导航。</p>
+            <div class="tags"><span>HOME</span><span>LIBRARY</span><span>FIND</span><span>SETTINGS</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">02</div>
+          <div>
+            <h3>晋江文学城原生客户端</h3>
+            <p>书架、发现、书籍与作者搜索、高级搜索、收藏夹、章节购买、段评点赞与回复、阅读进度同步。免费章走 App API，VIP 章走完整 WAP 解密链。</p>
+            <div class="tags"><span>JJWXC</span><span>WAP</span><span>VIP</span><span>COMMENTS</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">03</div>
+          <div>
+            <h3>微信读书</h3>
+            <p>扫码登录、书架浏览、EPUB 下载与离线阅读、阅读进度同步；本地书、晋江书和微信读书共用一个书架，并显示来源徽标。</p>
+            <div class="tags"><span>WEREAD</span><span>SYNC</span><span>OFFLINE</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">04</div>
+          <div>
+            <h3>为中文阅读准备</h3>
+            <p>离线拼音输入与书名搜索、11 种语言断词、GB2312 常用字兜底；支持 SD 卡 TTF / OTF / TTC 与 EPUB 内嵌字体，按书覆盖字体。</p>
+            <div class="tags"><span>PINYIN</span><span>HYPHENATION</span><span>FONTS</span><span>GB2312</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">05</div>
+          <div>
+            <h3>墨水屏显示</h3>
+            <p>水波纹翻页、黑白快速翻页、状态栏时钟局部刷新、屏幕修复。为 684×1216 面板调过 gamma、波形和异步推屏，尽量少闪、少残影。</p>
+            <div class="tags"><span>WAVE</span><span>FAST TURN</span><span>AREA REFRESH</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">06</div>
+          <div>
+            <h3>体感翻页</h3>
+            <p>倾斜或左右摇晃设备翻页。阈值来自 kiikoread 的手势策略：慢倾斜、回弹、纵向晃动和普通点按都不会误触。</p>
+            <div class="tags"><span>TILT</span><span>SHAKE</span><span>IMU</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">07</div>
+          <div>
+            <h3>本地书库与阅读器</h3>
+            <p>EPUB / TXT / CBZ / FB2，实验性 PDF；书签、批注、词典、阅读统计、待机表盘。成品 EPUB 与章节正文使用设备绑定密钥加密。</p>
+            <div class="tags"><span>EPUB</span><span>CBZ</span><span>FB2</span><span>ANNOTATION</span></div>
+          </div>
+        </article>
+        <article class="feature reveal">
+          <div class="idx">08</div>
+          <div>
+            <h3>系统与连接</h3>
+            <p>设备 OTA、SD 卡固件更新、浏览器传书与设置、WebDAV、OPDS、Calibre 无线；33 种 UI 语言按需从数据分区加载。</p>
+            <div class="tags"><span>OTA</span><span>WEB TRANSFER</span><span>OPDS</span><span>i18n</span></div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="principles-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">02 / PRINCIPLES</div>
+        <h2 id="principles-title">三条取舍。<span>WHAT WE OPTIMISED FOR</span></h2>
+      </div>
+      <div class="principles reveal">
+        <div class="principle">
+          <div class="n">01</div>
+          <h3>阅读优先</h3>
+          <p>打开设备先看到上次读到的书，而不是功能网格。翻页、字号、字体和进度是主线；游戏和工具可以等。</p>
+        </div>
+        <div class="principle">
+          <div class="n">02</div>
+          <h3>中文优先</h3>
+          <p>拼音输入、断词、字体回退、晋江和微信读书都按中文阅读习惯设计。英文界面仍然完整，但不再是一切的原点。</p>
+        </div>
+        <div class="principle">
+          <div class="n">03</div>
+          <h3>设备优先</h3>
+          <p>每个功能都按 Read Pico 的 4.7 英寸、16 灰阶、无前光和有限内部内存做取舍；不能在这块板上成立的方案就不放进来。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="screens" aria-labelledby="screens-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">03 / INTERFACE</div>
+        <h2 id="screens-title">界面结构。<span>LAYOUT MOCKUPS, NOT DEVICE CAPTURES</span></h2>
+      </div>
+      <p class="muted" style="margin:-18px 0 28px;max-width:760px;font-size:13px">以下为排版与结构示意，不含任何设备上的书籍、账号或网络信息。真机效果以实际固件为准。</p>
+      <div class="gallery">
+        <figure class="shot reveal">
+          <div class="frame"><div class="mock-screen">
+            <div class="mock-status"><span class="mock-logo">脆皮鸭</span><span>10/26</span></div>
+            <div class="mock-hero"><span class="mock-kicker">上次读到</span><b>继续阅读</b><span class="mock-bar"><i style="width:42%"></i></span></div>
+            <div class="mock-grid"><span></span><span></span><span></span></div>
+            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
+          </div></div>
+          <figcaption><b>首页</b>上次读到、统计与最近阅读同屏。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><div class="mock-screen">
+            <div class="mock-status"><span class="mock-logo">书架</span><span>全部</span></div>
+            <div class="mock-tabs"><b>全部</b><span>本地</span><span>微信读书</span><span>晋江</span></div>
+            <div class="mock-covers"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
+          </div></div>
+          <figcaption><b>书架</b>来源与阅读进度共用一套网格。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><div class="mock-screen">
+            <div class="mock-status"><span class="mock-logo">阅读</span><span>42%</span></div>
+            <div class="mock-lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="mock-nav"><span>上一页</span><span>菜单</span><span>下一页</span></div>
+          </div></div>
+          <figcaption><b>阅读</b>正文、状态栏与翻页区域分层。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><div class="mock-screen">
+            <div class="mock-status"><span class="mock-logo">Wi-Fi 网络</span><span>找到 3 个</span></div>
+            <div class="mock-list"><span>网络 A</span><span>网络 B</span><span>网络 C</span></div>
+            <div class="mock-nav"><span>重试</span><span>隐藏网络</span><span>取消</span></div>
+          </div></div>
+          <figcaption><b>Wi-Fi 面板</b>扫描、连接和取消都在一个底部面板。</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="device-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">04 / DEVICE</div>
+        <h2 id="device-title">只为一台设备。<span>READ PICO / 小纸 PICO</span></h2>
+      </div>
+      <div class="reveal">
+        <table class="specs">
+          <tr><th>Device</th><td><b>Read Pico（小纸 Pico，RDP-G01-W）</b></td></tr>
+          <tr><th>Panel</th><td>EWW 4.7" · 684 × 1216 · 16 灰阶 · 约 297 PPI · 无前光</td></tr>
+          <tr><th>SoC</th><td>ESP32-S3 · 双核 240 MHz · 8 MB PSRAM · Wi-Fi / BT5</td></tr>
+          <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
+          <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
+          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.1.0</span></b> · 预编译包只面向 Read Pico；上游其它目标仍可从源码构建</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" aria-labelledby="install-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">05 / INSTALL</div>
+        <h2 id="install-title">用浏览器刷机。<span>NO TOOLCHAIN REQUIRED</span></h2>
+      </div>
+      <div class="install-grid">
+        <div class="panel reveal">
+          <div class="status">
+            <span class="v" id="release-version">0.1.0</span>
+            <span class="date" id="release-date">READ PICO · 2026</span>
+          </div>
+          <h3>这次更新</h3>
+          <ul class="notes" id="release-notes">
+            <li>新版首页、书架与找书界面</li>
+            <li>晋江书架、发现、段评与购章</li>
+            <li>水波纹翻页与摇晃翻页</li>
+            <li>拼音输入与 SD 卡字体</li>
+          </ul>
+          <div class="sha">
+            SHA-256 <span id="firmware-sha">—</span>
+            <button type="button" id="copy-sha">复制</button>
+          </div>
+          <div class="downloads">
+            <a id="download-zip" href="https://github.com/Yana-Hangabina/cpyos/releases">完整安装包</a>
+            <a id="download-app" href="https://github.com/Yana-Hangabina/cpyos/releases">应用固件</a>
+            <a id="download-sums" href="https://github.com/Yana-Hangabina/cpyos/releases">SHA256SUMS</a>
+            <a id="download-release" href="https://github.com/Yana-Hangabina/cpyos/releases">Release notes</a>
+          </div>
+        </div>
+        <div class="panel reveal">
+          <h3>选择安装方式</h3>
+          <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留 NVS 和分区表。</p>
+          <div class="install-actions">
+            <esp-web-install-button id="install-button" manifest="./downloads/0.1.0/manifest-install.json">
+              <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
+              <span slot="unsupported" class="warn">这个浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge。</span>
+              <span slot="not-allowed" class="warn">刷机页必须通过 https 打开；本地预览请用 http://localhost。</span>
+            </esp-web-install-button>
+            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.1.0/manifest-upgrade.json">
+              <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
+            </esp-web-install-button>
+          </div>
+          <p class="warn">首次安装会按完整安装包重建分区表，并要求浏览器擦除芯片。开始前请确认已备份整片 Flash，SD 卡里的书和设置不会被网页刷机删除。</p>
+          <ol style="margin-top:18px">
+            <li>用 USB-C 数据线连接设备；它应显示为 <span class="mono">USB JTAG/serial debug unit</span>。</li>
+            <li>点按钮，在串口列表里选择设备，等待写入完成并自动重启。</li>
+            <li>串口列表只显示 Read Pico（USB <span class="mono">303A:1001</span>）；看不到设备时先换数据线。</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="install-grid" style="margin-top:30px">
+        <div class="panel reveal">
+          <h3>设备内 OTA</h3>
+          <p>已经安装 CPYOS 后，直接在设备上更新：</p>
+          <ol>
+            <li>连接 Wi-Fi。</li>
+            <li>打开 <b>设置 → 系统 → 检查更新</b>。</li>
+            <li>确认升级后不要断电；完成后设备会重启。</li>
+          </ol>
+          <p class="muted" style="margin-top:14px">OTA 只写 app0，不动 SD 卡、书库和设置。首次从 CrossMux 1.6.5 升级请使用完整安装包，因为两边的分区表不同。</p>
+        </div>
+        <div class="panel reveal">
+          <h3>先备份，再刷机</h3>
+          <p>这是非官方固件。第一次安装前请用 esptool 做一次整片 16 MiB 备份，并把备份文件放在另一台机器上。</p>
+          <p class="mono" style="font-size:10.5px;line-height:1.9;word-break:break-all">python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin</p>
+          <p>恢复时把整片备份写回 <span class="mono">0x0</span>。不要只凭本页的偏移量手动刷写；完整包里的 <span class="mono">FLASH.md</span> 和 <span class="mono">SHA256SUMS</span> 才是准绳。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="credits" aria-labelledby="credits-title">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="no mono">06 / CREDITS</div>
+        <h2 id="credits-title">站在很多人肩上。<span>THANKS</span></h2>
+      </div>
+      <div class="credits reveal">
+        <div>
+          <h3>上游与朋友</h3>
+          <ul>
+            <li><a href="https://github.com/0x1abin/crossmux">CrossMux</a>：本项目的上游固件、构建系统、设备抽象与发布工具。</li>
+            <li><a href="https://github.com/crosspoint-reader/crosspoint-reader">CrossPoint Reader</a>：阅读器与界面原点的社区项目。</li>
+            <li><a href="https://github.com/obijuankenobiii/inx">Inx</a>、<a href="https://github.com/franssjz/cpr-vcodex">cpr-vcodex</a>、<a href="https://github.com/atomic14/diy-esp32-epub-reader">diy-esp32-epub-reader</a>：排版、界面与 EPUB 阅读的早期探索。</li>
+            <li><a href="https://github.com/Yana-Hangabina/cpyos">脆皮鸭 CPYOS</a>：新版界面、晋江与微信读书整合、中文输入与本文所列的设备侧改动。</li>
+          </ul>
+          <div class="kiikoread">
+            <b>KIIKOREAD / APACHE-2.0</b>
+            <p><a href="https://github.com/wegooo-cell/read-pico-reader">kiikoread</a> 的水波纹翻页引擎、TEXTTURN 白→中灰提前回浅、gamma 覆盖 LUT、离线拼音搜索与连续拼音输入、摇晃翻页阈值与判定，均在本项目中标注并移植。移植时按 Read Pico 的内部内存与扫描时序做了改动，具体差异见仓库 <span class="mono">patches/</span>。</p>
+          </div>
+        </div>
+        <div>
+          <h3>第三方组件</h3>
+          <ul>
+            <li>MuPDF 1.26.3（AGPL-3.0）：实验性 PDF 阅读。默认 Read Pico 发布包不启用 PDF；启用后的组合按 AGPL-3.0 分发。</li>
+            <li>FreeType（FTL / GPLv2）：矢量字体与 CFF / OTF 轮廓。</li>
+            <li>Noto Sans CJK、Source Han Sans（SIL OFL 1.1）：中文回退字体与测试字体。</li>
+            <li>pypinyin 0.55.0（MIT）、hyphenation 词典（各自许可证）、Lucide 图标（ISC）。</li>
+            <li>晋江文学城与微信读书是各自权利人的商标；本项目是非官方客户端，与两家公司及 MindReset 无隶属关系。</li>
+          </ul>
+          <h3 style="margin-top:28px">许可证</h3>
+          <p>本项目代码以 MIT 发布；第三方组件保留各自许可证。完整清单见仓库的 <span class="mono">LICENSE</span>、<span class="mono">THIRD_PARTY_NOTICES.md</span> 与 <span class="mono">LICENSES/</span>。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="duckfoot">
+      <svg aria-hidden="true"><use href="#duck"/></svg>
+      <span>脆皮鸭 CPYOS · 非官方 Read Pico 固件</span>
+    </div>
+    <div>
+      <a href="https://github.com/Yana-Hangabina/cpyos">源代码</a> ·
+      <a href="https://github.com/Yana-Hangabina/cpyos/releases">发布</a> ·
+      <a href="https://github.com/Yana-Hangabina/cpyos/issues">问题</a> ·
+      <a href="https://github.com/0x1abin/crossmux">CrossMux 上游</a>
+    </div>
+  </div>
+</footer>
+
+<script src="./main.js"></script>
+</body>
+</html>

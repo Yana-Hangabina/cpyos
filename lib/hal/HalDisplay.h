@@ -99,6 +99,10 @@ class HalDisplay {
 
   // Access to frame buffer
   uint8_t* getFrameBuffer() const;
+  // Copy the just-displayed frame back into the write buffer so a screenshot
+  // reads what the panel shows (displayBuffer() swaps buffers). No-op in
+  // single-buffer mode.
+  void syncFrameBufferFromActive();
 
   // Lend the framebuffer's ~48 KB STORAGE to a memory-hungry phase (chapter
   // builds) without freeing it: the allocation never moves, so repeated loans
@@ -130,6 +134,12 @@ class HalDisplay {
 
   void displayGrayBuffer(bool turnOffScreen = false);
 
+  // Refresh only the framebuffer rect [x, x+w) x [y, y+h) in PHYSICAL panel
+  // coordinates (the caller rotates its logical rect in first). Panels without a
+  // windowed push fall back to a full-frame Fast refresh. Used by the reader's
+  // per-minute status-bar clock tick so the body text is never re-driven.
+  void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.
@@ -148,6 +158,11 @@ class HalDisplay {
   bool canUseTextTransition() const;
   void cancelGrayscale();
 
+  // Water-ripple page turn request for panels that can stagger the reveal
+  // (Read Pico). >0 forward, <0 backward, 0 off; applies to the next presented
+  // frame only and is a no-op on panels without the capability.
+  void setPageTurnDirection(int direction);
+
   // Runtime geometry passthrough — the authoritative source for every layout
   // decision (GfxRenderer reads exactly these in its begin()). Prefer them over
   // the compile-time constants above, which only describe the panel before the
@@ -156,7 +171,11 @@ class HalDisplay {
   uint16_t getDisplayHeight() const;
   uint8_t getGrayscaleLevels() const;
   uint8_t* beginGrayscale16();
-  bool commitGrayscale16();
+  uint8_t* beginGrayscale16From1bpp(const uint8_t* fb);
+  bool commitGrayscale16(bool clean = false);
+  bool commitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                             bool clean = false);
+  bool commitGrayscale16Areas(const freeink::GrayArea* areas, int count, bool clean = false);
   void cancelGrayscale16();
   uint16_t getDisplayWidthBytes() const;
   uint32_t getBufferSize() const;

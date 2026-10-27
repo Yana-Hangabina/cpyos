@@ -51,8 +51,8 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
   for (const char* p = text;; p++) {
     if (*p == ' ' || *p == '\0') {
       if (!word.empty()) {
-        parsed.addWord(word, firstWord && SETTINGS.uiTheme == CrossPointSettings::INX ? EpdFontFamily::BOLD
-                                                                                      : EpdFontFamily::REGULAR);
+        (void)firstWord;
+        parsed.addWord(word, EpdFontFamily::REGULAR);
         firstWord = false;
         word.clear();
       }
@@ -135,7 +135,7 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
   if (key != layout.key) {
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->prewarmCache(fontId, I18N.get(StrId::STR_FONT_PREVIEW_TEXT),
-                        SETTINGS.uiTheme == CrossPointSettings::INX || SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
+                        SETTINGS.focusReadingEnabled ? 0x03 : 0x01);
     }
     relayout(layout, renderer, fontId, textWidth, static_cast<size_t>(maxLines));
     layout.key = key;

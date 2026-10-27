@@ -133,6 +133,55 @@ bool TextBlock::hasRuby() const {
   return false;
 }
 
+namespace {
+// Chinese vertical layout needs the vertical forms of full-width punctuation:
+// drawn as-is a comma sits mid-cell and collides with the glyph below it. Only
+// 3-byte BMP forms are mapped; everything else is drawn unchanged.
+const char* vtxPunct(const char* glyph) {
+  const unsigned char c0 = static_cast<unsigned char>(glyph[0]);
+  if ((c0 & 0xF0) != 0xE0 || glyph[1] == 0 || glyph[2] == 0) return glyph;
+  const uint32_t cp = (static_cast<uint32_t>(c0 & 0x0F) << 12) |
+                      ((static_cast<uint32_t>(glyph[1]) & 0x3F) << 6) |
+                      (static_cast<uint32_t>(glyph[2]) & 0x3F);
+  switch (cp) {
+    case 0xFF0C: return "\xEF\xB8\x90";  // ， → ︐
+    case 0x3001: return "\xEF\xB8\x91";  // 、 → ︑
+    case 0x3002: return "\xEF\xB8\x92";  // 。 → ︒
+    case 0xFF1B: return "\xEF\xB8\x93";  // ； → ︓
+    case 0xFF1A: return "\xEF\xB8\x94";  // ： → ︔
+    case 0xFF01: return "\xEF\xB8\x95";  // ！ → ︕
+    case 0xFF1F: return "\xEF\xB8\x96";  // ？ → ︖
+    case 0x2026: return "\xEF\xB8\x99";  // … → ︙
+    case 0x2014: return "\xEF\xB8\xB1";  // — → ︱
+    case 0x300C: return "\xEF\xB9\x81";  // 「 → ﹁
+    case 0x300D: return "\xEF\xB9\x82";  // 」 → ﹂
+    case 0x300E: return "\xEF\xB9\x83";  // 『 → ﹃
+    case 0x300F: return "\xEF\xB9\x84";  // 』 → ﹄
+    default: return glyph;
+  }
+}
+}  // namespace
+
+void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y,
+                               const int lineStep) const {
+  if (!isValid) return;
+  const int step = lineStep > 0 ? lineStep : renderer.getLineHeight(fontId);
+  int cursorY = y;
+  for (uint16_t i = 0; i < numWords; i++) {
+    const char* word = wordText(i);
+    const EpdFontFamily::Style style = wordStyle(i);
+    for (const char* p = word; *p;) {
+      const unsigned char c = static_cast<unsigned char>(*p);
+      const int len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
+      char glyph[5] = {0, 0, 0, 0, 0};
+      for (int k = 0; k < len; ++k) glyph[k] = p[k];
+      renderer.drawText(fontId, x, cursorY, vtxPunct(glyph), true, style);
+      p += len;
+      cursorY += step;
+    }
+  }
+}
+
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   if (!isValid) {
     LOG_ERR("TXB", "Render skipped: invalid block");
@@ -315,6 +364,8 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, numWords);
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
   serialization::writePod(file, textBytes);
+  serialization::writePod(file, paragraphIndex);
+  serialization::writePod(file, visibleOffset);
   if (numWords > 0) {
     const size_t size = arenaSize(numWords, focusPresent, textBytes);
     if (file.write(arena.get(), size) != size) {
@@ -352,8 +403,11 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   uint16_t wc = 0;
   uint8_t hasFocus = 0;
   uint16_t textBytes = 0;
+  uint16_t paragraphIndex = 0xFFFF;
+  uint32_t visibleOffset = 0;
   if (!serialization::readPod(file, wc) || !serialization::readPod(file, hasFocus) ||
-      !serialization::readPod(file, textBytes)) {
+      !serialization::readPod(file, textBytes) || !serialization::readPod(file, paragraphIndex) ||
+      !serialization::readPod(file, visibleOffset)) {
     LOG_ERR("TXB", "Deserialization failed: truncated header");
     return nullptr;
   }
@@ -378,6 +432,8 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->numWords = wc;
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
+  block->paragraphIndex = paragraphIndex;
+  block->visibleOffset = visibleOffset;
 
   if (wc > 0) {
     const size_t size = arenaSize(wc, block->focusPresent, textBytes);

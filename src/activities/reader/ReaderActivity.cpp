@@ -13,6 +13,10 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "CbzReaderActivity.h"
+#if defined(CROSSPOINT_MUPDF)
+#include "PdfReaderActivity.h"
+#endif
 #include "EpubReaderActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
@@ -35,6 +39,12 @@ std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, Ma
   std::unique_ptr<ReaderActivity> activity;
   if (FsHelpers::hasXtcExtension(path)) {
     activity = makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  } else if (FsHelpers::hasCbzExtension(path)) {
+    activity = makeUniqueNoThrow<CbzReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+#if defined(CROSSPOINT_MUPDF)
+  } else if (FsHelpers::hasPdfExtension(path)) {
+    activity = makeUniqueNoThrow<PdfReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+#endif
   } else {
     activity = makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
@@ -223,7 +233,7 @@ void ReaderActivity::loop() {
   if (handleBackNavigation()) return;
 
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromMotion] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) return;
@@ -231,7 +241,7 @@ void ReaderActivity::loop() {
 
   const unsigned long heldMs = (touch.prev || touch.next) ? touch.heldMs : mappedInput.getHeldTime();
   const bool skip =
-      !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
+      !fromMotion && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP && heldMs >= ReaderUtils::SKIP_HOLD_MS;
 
   if (prevTriggered) {
     if (skip) {

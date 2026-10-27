@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f4f1e9"/>
+  <rect x="72" y="70" width="1056" height="490" fill="none" stroke="#121210" stroke-width="2"/>
+  <g fill="#121210">
+    <path d="M760 318c0-48 40-86 94-86 34 0 62 16 80 41h55l48 19-48 19h-34c-15 31-48 52-88 52h-57c-30 0-50-18-50-45Z"/>
+    <circle cx="932" cy="205" r="48"/>
+    <path d="M975 198h62l-29 24h-33Z"/>
+    <circle cx="944" cy="190" r="7" fill="#f4f1e9"/>
+  </g>
+  <path d="M640 466c58-30 112 30 170 0s112 30 170 0 86 19 116 9" fill="none" stroke="#121210" stroke-width="5"/>
+  <path d="M690 500c46-21 88 21 134 0s88 21 134 0 74 13 100 7" fill="none" stroke="#121210" stroke-width="3" opacity=".55"/>
+  <text x="128" y="190" font-family="Songti SC, Noto Serif SC, Source Han Serif SC, serif" font-size="34" fill="#706d64">READ PICO · E-INK READING</text>
+  <text x="120" y="340" font-family="Songti SC, Noto Serif SC, Source Han Serif SC, serif" font-size="150" font-weight="600" fill="#121210">脆皮鸭</text>
+  <text x="128" y="410" font-family="ui-monospace, SF Mono, Menlo, monospace" font-size="34" letter-spacing="16" fill="#121210">CPYOS</text>
+  <text x="128" y="500" font-family="Songti SC, Noto Serif SC, Source Han Serif SC, serif" font-size="30" fill="#37352f">晋江 · 微信读书 · 中文输入 · 水波纹翻页</text>
+</svg>

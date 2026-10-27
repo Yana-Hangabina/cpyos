@@ -43,23 +43,26 @@
 #include "ProtectedPaths.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
+#include "WebAssets.h"
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
+// Only the home and font pages are included here; they are small and "/" is the
+// page a user lands on when the asset pack is missing. The four localized pages
+// (files, settings, JSZip, plugin runner) are served exclusively through
+// web_assets::view() -- WebAssets.cpp includes their arrays on embedded builds
+// and reads the data partition on Read Pico. Including them here as well would
+// put ~154 KB straight back into the pack build's image: the handlers no longer
+// name the arrays, so only the linker would hide the mistake, and only while an
+// LTO/--gc-sections build happens to drop them.
 namespace web_zh_cn {
-#include "html/zh-CN/FilesPageHtml.generated.h"
 #include "html/zh-CN/FontsPageHtml.generated.h"
 #include "html/zh-CN/HomePageHtml.generated.h"
-#include "html/zh-CN/SettingsPageHtml.generated.h"
 }  // namespace web_zh_cn
 namespace web_en {
-#include "html/en/FilesPageHtml.generated.h"
 #include "html/en/FontsPageHtml.generated.h"
 #include "html/en/HomePageHtml.generated.h"
-#include "html/en/SettingsPageHtml.generated.h"
 }  // namespace web_en
 #include "WifiPowerSaveGuard.h"
-#include "html/RunnerPageHtml.generated.h"
-#include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/DictionaryRegistry.h"
 #include "util/PluginHttp.h"
@@ -106,7 +109,8 @@ constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 // of these must mark the index dirty so the next Library entry rebuilds it.
 bool isLibraryBookFile(const String& filename) {
   return FsHelpers::checkFileExtension(filename, ".epub") || FsHelpers::checkFileExtension(filename, ".txt") ||
-         FsHelpers::checkFileExtension(filename, ".md") || FsHelpers::checkFileExtension(filename, ".xtc");
+         FsHelpers::checkFileExtension(filename, ".md") || FsHelpers::checkFileExtension(filename, ".xtc") ||
+         FsHelpers::checkFileExtension(filename, ".cbz") || FsHelpers::checkFileExtension(filename, ".fb2");
 }
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
@@ -340,11 +344,13 @@ bool CrossPointWebServer::begin() {
 
   udpActive = udp.begin(LOCAL_UDP_PORT);
   if (!udpActive) {
-    LOG_ERR("WEB", "Failed to start discovery UDP on port %d", LOCAL_UDP_PORT);
-    stop();
-    return false;
+    // Discovery is a convenience, not a prerequisite for file transfer.
+    // Memory-tight builds (for example the MuPDF app0) can fail this
+    // allocation while the HTTP/WebSocket/WebDAV services are still usable.
+    LOG_ERR("WEB", "Discovery UDP unavailable on port %d; continuing without discovery", LOCAL_UDP_PORT);
+  } else {
+    LOG_DBG("WEB", "Discovery UDP enabled on port %d", LOCAL_UDP_PORT);
   }
-  LOG_DBG("WEB", "Discovery UDP enabled on port %d", LOCAL_UDP_PORT);
 
   // Reuse one request buffer for the server lifetime to avoid repeated heap churn.
   fileListBatch = makeWebBuffer(FILE_LIST_BATCH_CAPACITY);
@@ -353,6 +359,14 @@ bool CrossPointWebServer::begin() {
     stop();
     return false;
   }
+
+  // Read Pico: load and validate the data-partition page pack now, on this task
+  // (the loop task, internal stack), rather than lazily inside a handler. A
+  // missing or outdated pack is then logged once per server start and every
+  // page handler shares the same verdict. A failure is not fatal: the server
+  // still serves "/" (embedded), /api/status, /upload and WebDAV, and the page
+  // routes answer with the recovery page that explains how to reflash.
+  web_assets::begin();
 
   running = true;
 
@@ -418,6 +432,7 @@ void CrossPointWebServer::abortWsUpload(const char* tag) {
 }
 
 void CrossPointWebServer::stop() {
+  web_assets::end();
   if (!server) {
     LOG_DBG("WEB", "stop() called but already stopped (running=%d, server=%p)", running, server.get());
     fileListBatch.reset();
@@ -595,6 +610,25 @@ static bool sendCompressedContent(WebServer* server, const char* contentType, co
 #endif
 }
 
+// Why an asset is unavailable, for a log line: the pack-level reason when there
+// is one, otherwise the per-asset CRC rejection (the pack loaded but this page
+// did not survive validation).
+static const char* webAssetsStateText() {
+  const char* status = web_assets::statusText();
+  return status != nullptr ? status : "asset failed its CRC";
+}
+
+// 200 with the small uncompressed recovery page. Used for /files, /settings and
+// /plugins-run when their asset is missing: the server, /api/status, /upload and
+// WebDAV stay usable, which is what makes reflashing the pack possible from the
+// device itself.
+static void sendRecoveryPage(WebServer* server, const char* uri) {
+  size_t size = 0;
+  const char* page = web_assets::recoveryPage(size);
+  LOG_ERR("WEB", "%s: serving the recovery page (%s)", uri, webAssetsStateText());
+  server->send_P(200, "text/html", page, size);
+}
+
 void CrossPointWebServer::handleRoot() const {
   const auto page = localizedPage(web_zh_cn::HomePageHtml, sizeof(web_zh_cn::HomePageHtml), web_en::HomePageHtml,
                                   sizeof(web_en::HomePageHtml));
@@ -604,7 +638,16 @@ void CrossPointWebServer::handleRoot() const {
 }
 
 void CrossPointWebServer::handleJszip() const {
-  if (sendCompressedContent(server.get(), "application/javascript", jszip_minJs, jszip_minJsCompressedSize)) {
+  const auto asset = web_assets::view(web_assets::Asset::JsZip, false);
+  if (!asset) {
+    // Empty body rather than the recovery page: callers are scripts, and an
+    // HTML document parsed as JavaScript would fail with a confusing syntax
+    // error instead of a clean 404.
+    LOG_ERR("WEB", "/js/jszip.min.js unavailable (%s)", webAssetsStateText());
+    server->send(404, "application/javascript", "");
+    return;
+  }
+  if (sendCompressedContent(server.get(), "application/javascript", asset.data, asset.size)) {
     LOG_DBG("WEB", "Served jszip.min.js");
   }
 }
@@ -753,9 +796,14 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<bool(c
 bool CrossPointWebServer::isEpubFile(const String& filename) const { return FsHelpers::hasEpubExtension(filename); }
 
 void CrossPointWebServer::handleFileList() const {
-  const auto page = localizedPage(web_zh_cn::FilesPageHtml, sizeof(web_zh_cn::FilesPageHtml), web_en::FilesPageHtml,
-                                  sizeof(web_en::FilesPageHtml));
-  sendCompressedContent(server.get(), "text/html", page.data, page.size);
+  const auto asset = web_assets::view(web_assets::Asset::FilesPage, useChineseWebUi());
+  if (!asset) {
+    sendRecoveryPage(server.get(), "/files");
+    return;
+  }
+  // The Assets menu (file browser) is also the only UI for uploading a new
+  // web_pack.dat, so this page must never hard-fail.
+  sendCompressedContent(server.get(), "text/html", asset.data, asset.size);
 }
 
 void CrossPointWebServer::handleFileListData() const {
@@ -931,6 +979,10 @@ void CrossPointWebServer::handleDownload() const {
   String contentType = "application/octet-stream";
   if (isEpubFile(itemPath)) {
     contentType = "application/epub+zip";
+  } else if (FsHelpers::hasCbzExtension(itemPath)) {
+    contentType = "application/vnd.comicbook+zip";
+  } else if (FsHelpers::hasFb2Extension(itemPath)) {
+    contentType = "application/x-fictionbook+xml";
   }
 
   char nameBuf[128] = {0};
@@ -1508,9 +1560,12 @@ void CrossPointWebServer::handleDelete() const {
 }
 
 void CrossPointWebServer::handleSettingsPage() const {
-  const auto page = localizedPage(web_zh_cn::SettingsPageHtml, sizeof(web_zh_cn::SettingsPageHtml),
-                                  web_en::SettingsPageHtml, sizeof(web_en::SettingsPageHtml));
-  if (sendCompressedContent(server.get(), "text/html", page.data, page.size)) {
+  const auto asset = web_assets::view(web_assets::Asset::SettingsPage, useChineseWebUi());
+  if (!asset) {
+    sendRecoveryPage(server.get(), "/settings");
+    return;
+  }
+  if (sendCompressedContent(server.get(), "text/html", asset.data, asset.size)) {
     LOG_DBG("WEB", "Served settings page");
   }
 }
@@ -2614,7 +2669,12 @@ void CrossPointWebServer::handleBookKey() {
 }
 
 void CrossPointWebServer::handlePluginRunnerPage() const {
-  sendCompressedContent(server.get(), "text/html", RunnerPageHtml, sizeof(RunnerPageHtml));
+  const auto asset = web_assets::view(web_assets::Asset::PluginRunner, false);
+  if (!asset) {
+    sendRecoveryPage(server.get(), "/plugins-run");
+    return;
+  }
+  sendCompressedContent(server.get(), "text/html", asset.data, asset.size);
   LOG_DBG("WEB", "Served plugin runner page");
 }
 

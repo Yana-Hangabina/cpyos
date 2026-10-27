@@ -34,10 +34,19 @@ class PageElement {
 // a line from a block element
 class PageLine final : public PageElement {
   std::unique_ptr<TextBlock> block;
+  // Set by Page::setVertical() when the reader is in vertical writing mode.
+  bool verticalMode = false;
+  int verticalWidth = 0;
+  int verticalColW = 0;
 
  public:
   PageLine(std::unique_ptr<TextBlock> block, const int16_t xPos, const int16_t yPos)
       : PageElement(xPos, yPos), block(std::move(block)) {}
+  void setVertical(const bool on, const int width, const int colWidth) {
+    verticalMode = on;
+    verticalWidth = width;
+    verticalColW = colWidth;
+  }
   const std::unique_ptr<TextBlock>& getBlock() const { return block; }
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) override;
   bool serialize(HalFile& file) override;
@@ -95,6 +104,10 @@ class Page {
   bool addLink(const char* href, int16_t x, int16_t y, int16_t width, int16_t height);
 
   void render(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
+  // Vertical writing mode: laid-out lines become right-to-left columns. colWidth
+  // carries the reader's line height (font line height x line compression) so the
+  // column pitch matches the horizontal line pitch.
+  void setVertical(bool on, int viewportWidth, int colWidth);
   void renderImages(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void renderWithImagePlaceholders(GfxRenderer& renderer, int fontId, int xOffset, int yOffset) const;
   void extractImagesNeedingDecode();

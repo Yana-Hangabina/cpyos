@@ -47,9 +47,18 @@ class EndOfBookOptions : private UiAppHost {
   static void listScreen(UiScreen& screen, void* user);
   static void onRowEvent(const freeink::ui::ActionEvent& event, void* user);
   void buildListScreen(UiScreen& screen);
+  // CPY (design frame 32): a celebration header the render() paints, then
+  // custom rows with covers and the Home primary pill, all in one pass here.
+  void drawCpyHeader();
+  void buildCpyRows(UiScreen& screen);
 
   GfxRenderer& renderer;
   std::string folder;
+  // Basename of the finished book, shown under the celebration title.
+  std::string bookTitle;
+  // Bottom of the CPY header, written by drawCpyHeader() immediately before
+  // renderUi() repaints the rows in the same render() call.
+  int cpyRowsTop = 0;
   // Written by the render task in loadOnce(), immutable afterwards; the main task only
   // reads it after isLoaded is observed true (acquire), so no further locking is needed.
   std::vector<std::string> names;

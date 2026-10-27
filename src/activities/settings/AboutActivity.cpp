@@ -1,4 +1,5 @@
 #include "AboutActivity.h"
+#include <I18n.h>
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -29,12 +30,15 @@ enum MenuItem {
   ITEM_MAC,
 };
 
-// Deliberately hardcoded English, exempt from the tr() rule: support reads
-// these screenshots across every device language, so the labels must be
-// identical on every unit.
-const char* const menuNames[AboutActivity::ITEM_COUNT] = {
-    "Device", "Firmware",          "Chip",        "Flash", "Display Controller", "Resolution", "Touch", "Frontlight",
-    "RTC",    "Tilt Sensor (IMU)", "MAC Address",
+// Translated labels (user request, 2026-10-16): the page is user-facing on a
+// Chinese device and read as a wall of English. The upstream note asked for
+// fixed English labels so support can read screenshots; the values (device
+// data, part numbers) stay identical on every unit, only the labels localise.
+static constexpr StrId kAboutLabelKeys[AboutActivity::ITEM_COUNT] = {
+    StrId::STR_ABOUT_DEVICE,     StrId::STR_ABOUT_FIRMWARE,   StrId::STR_ABOUT_CHIP,
+    StrId::STR_ABOUT_FLASH,      StrId::STR_ABOUT_DISPLAY,    StrId::STR_ABOUT_RESOLUTION,
+    StrId::STR_ABOUT_TOUCH,      StrId::STR_ABOUT_FRONTLIGHT, StrId::STR_ABOUT_RTC,
+    StrId::STR_ABOUT_IMU,        StrId::STR_ABOUT_MAC,
 };
 
 // Chip part numbers, not user prose — deliberately untranslated.
@@ -87,7 +91,7 @@ const char* AboutActivity::headerTitle() const { return "About"; }
 void AboutActivity::onEnter() {
   UiListActivity::onEnter();
   for (int i = 0; i < ITEM_COUNT; i++) {
-    rowItems_[i].label = menuNames[i];
+    rowItems_[i].label = I18N.get(kAboutLabelKeys[i]);
     rowItems_[i].actionValue = static_cast<int16_t>(i);
   }
 

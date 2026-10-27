@@ -50,7 +50,16 @@ class TextBlock final : public Block {
  private:
   BlockStyle blockStyle;
   uint16_t numWords = 0;
-  uint16_t textBytes = 0;  // total size of the text region, including NULs
+  uint16_t textBytes = 0;
+  // 1-based index of the source <p> this line belongs to, or 0xFFFF outside one.
+  // Serialized with the line so cached pages keep the paragraph mapping used by
+  // the JJWXC paragraph-comment bubbles.
+  uint16_t paragraphIndex = 0xFFFF;  // total size of the text region, including NULs
+  // Visible-codepoint offset of this line's first word in the spine body. Stored
+  // so annotations (and anything else keyed on reading position) can map a range
+  // onto the words of a cached line. 0 for lines written before this field
+  // existed — the section format version was bumped, so those are rebuilt.
+  uint32_t visibleOffset = 0;
   bool focusPresent = false;
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
@@ -90,6 +99,10 @@ class TextBlock final : public Block {
   bool isEmpty() override { return numWords == 0; }
   bool valid() const { return isValid; }
   uint16_t wordCount() const { return numWords; }
+  uint16_t getParagraphIndex() const { return paragraphIndex; }
+  void setParagraphIndex(const uint16_t index) { paragraphIndex = index; }
+  uint32_t getVisibleOffset() const { return visibleOffset; }
+  void setVisibleOffset(const uint32_t offset) { visibleOffset = offset; }
   // NUL-terminated by construction; safe to pass to C APIs directly.
   const char* wordText(const uint16_t i) const { return textArr + textOffArr[i]; }
   uint16_t wordTextLen(const uint16_t i) const {
@@ -106,6 +119,12 @@ class TextBlock final : public Block {
   std::vector<LinkSpan> takeLinkSpans() { return std::move(linkSpans); }
 
   void render(const GfxRenderer& renderer, int fontId, int x, int y) const;
+  // Chinese vertical layout: stacks every codepoint of this block's words down a
+  // column starting at (x, y). lineStep must match the layout's line height
+  // (font line height x line compression), otherwise a compressed layout packs
+  // more glyphs into the column than the renderer can fit and the column runs
+  // past the bottom of the page.
+  void renderVertical(const GfxRenderer& renderer, int fontId, int x, int y, int lineStep = 0) const;
   BlockType getType() override { return TEXT_BLOCK; }
   bool serialize(HalFile& file) const;
   static std::unique_ptr<TextBlock> deserialize(HalFile& file);

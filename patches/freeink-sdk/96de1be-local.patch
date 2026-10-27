@@ -1,0 +1,3160 @@
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h sdk_work/libs/display/EpdiyLcd/include/EpdiyLcd.h
+--- sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h
++++ sdk_work/libs/display/EpdiyLcd/include/EpdiyLcd.h
+@@ -29,6 +29,14 @@
+   /// value outside 0..50, falls back to 20 °C — this board's table has a single
+   /// 0–50 °C range, so the value does not change which phases run.
+   float (*getTemperature)();
++  /// 推帧收尾时释放像素驱动（清 XOE），**保留高压轨**。可选：nullptr = 旧行为
++  /// （驱动自上电起一直保持）。面板图像双稳，放电无可见后果；下一次推帧的
++  /// powerOn 会重新抬起 XOE。Read Pico 用它避免静止画面长期受驱动。
++  /// / Release the pixel drive (drop XOE) at the END of a push, keeping the HV rails
++  /// up. Optional: nullptr keeps the old behaviour (drive held from power-on). The
++  /// image is bistable, so dropping the drive is not visible; the next push's powerOn
++  /// raises XOE again. Read Pico uses it so an idle frame is not left driven.
++  bool (*releaseDrive)();
+ };
+ 
+ /// 一行四段 + CKV，单位是像素钟个数（ckv 是 0.1µs）。对应 epdiy 的
+@@ -89,7 +97,20 @@
+ // Borrow the existing front framebuffer. No allocation. Commit uses GL16 and
+ // promotes an unknown baseline to GC16; cancellation never changes the glass.
+ uint8_t* epdiyLcdBeginGrayscale16();
+-bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy);
++// Like beginGrayscale16(), but initialise the 4bpp front from the caller's
++// current 1bpp page instead of clearing it to white. Lets a page keep fast
++// 1-bit UI while only a rectangle is redrawn with native grays.
++uint8_t* epdiyLcdBeginGrayscale16From1bpp(const uint8_t* fb);
++bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy, bool clean = false);
++// Commit only a physical-coordinate rectangle of the 4bpp front. Areas outside
++// the rectangle keep their previous glass pixels; callers are responsible for
++// having presented the 1-bit UI below first.
++bool epdiyLcdCommitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
++                                   bool clean = false);
++// Commit several physical rectangles from one native gray front. `rects` is a
++// flat [x, y, width, height] * count array. The panel is powered once for the
++// whole batch; callers must pass disjoint rectangles.
++bool epdiyLcdCommitGrayscale16Areas(const uint8_t* bwProxy, const uint16_t* rects, int count, bool clean = false);
+ void epdiyLcdCancelGrayscale16();
+ 
+ /// 推一帧。`fb` 是 1bpp、MSB 在前、每行 width/8 字节、height 行；位约定由
+@@ -98,6 +119,45 @@
+ /// the bit convention is the one handed to epdiyLcdBegin.
+ bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
+ 
++/// 非阻塞版 `epdiyLcdDraw`：展开、差分与起扫在调用线程里完成，面板扫描交给内部
++/// 任务，调用方立即返回。适用于普通差分帧（非 Full、无水波纹）。
++/// 返回 true 表示「扫描已在飞，调用方欠一次 `epdiyLcdWaitScan()`」；false 表示
++/// 已同步完成（水波纹、内容无变化）或失败——两种都不欠 wait。起扫后调用方可以
++/// 立刻改写 `fb`（驱动已拷贝），但下一次任何显示入口之前必须 wait——其它入口
++/// 都会自己先 join，所以只需在"起扫后、下一次操作前"的窗口里别直接碰硬件。
++/// / Non-blocking `epdiyLcdDraw`: expansion, difference and the start run inline;
++/// the panel scan runs on the internal task and the caller returns immediately.
++/// Meant for ordinary differential frames (not Full, no ripple). true means the
++/// frame started or completed synchronously; false is a failure. After a start
++/// the caller may redraw `fb` (the driver already copied it), but must call
++/// `epdiyLcdWaitScan()` before the next display entry -- the other entries join
++/// by themselves, so the only rule is not to touch the hardware directly in
++/// between.
++bool epdiyLcdDrawAsync(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
++
++/// 非阻塞版 `epdiyLcdDrawGray`（抗锯齿提交）。契约同上。
++/// / Non-blocking `epdiyLcdDrawGray` (anti-aliased commit). Same contract.
++bool epdiyLcdDrawGrayAsync(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff);
++
++/// 等待在飞的异步扫描收尾（没有在飞时立即返回）。
++/// / Join the deferred scan; returns immediately when none is in flight.
++void epdiyLcdWaitScan();
++bool epdiyLcdScanPending();
++
++/// 只更新矩形区域 [x, x+w) x [y, y+h)：把 `fb` 展开成 epdiy 的帧缓冲后，只对这个
++/// 区域做一次差分推送，区域外既不比对也不回写。坐标是 epdiy 帧缓冲的原始坐标
++/// （本板 1216x684，rotation 恒为 LANDSCAPE），调用方负责先把逻辑坐标旋转进来。
++/// 基准未知时拒绝（返回 false），因为区域差分没有整屏重写可以依赖；下一次整帧推送
++/// 会重建基准。高压轨保持不动（区域更新通常连续到来，掉轨再抬的代价更大）。
++/// / Update only the rect [x, x+w) x [y, y+h): expand `fb` into epdiy's framebuffer and
++/// run one differential push scoped to that rect -- nothing outside is diffed or copied
++/// back. Coordinates are epdiy framebuffer-native (1216x684 here; rotation is always
++/// LANDSCAPE), so the caller rotates its logical rect in first. Refused (false) when the
++/// baseline is unknown, since an area diff has no full rewrite to lean on; the next full
++/// push rebuilds it. The HV rails are left up (area updates usually arrive back to back,
++/// so dropping and re-raising costs more than holding).
++bool epdiyLcdUpdateArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h, EpdiyLcdRefresh mode);
++
+ /// 只把这一页留作底图，不推屏。给「底图与灰阶合并成一次波形」的宿主用：宿主随后调用
+ /// epdiyLcdDrawGray()，由它用这张底图合成整页并只推一次。
+ /// / Stash this page as the base WITHOUT presenting it. For hosts that combine the
+@@ -119,6 +179,17 @@
+ /// complement of the page), so pushing it yields a negative. LgfxEpdDriver.cpp:187-201
+ /// documents the same trap; this keeps a base image for the same reason.
+ bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff);
++
++/// 水波纹翻页：请求把下一次推帧用错相条带揭页动画呈现（引擎在
++/// src/e0470_page_turn/，移植自 read-pico-reader）。>0 向前、<0 向后、0 关闭。
++/// 请求只消费一次；Full（清屏）帧与基准未知的帧忽略它，动画失败自动落回普通推送。
++/// 只有 Read Pico 的 epdiy LCD 路径有此能力，其余驱动上它是空操作。
++/// / Water-ripple page turn: present the NEXT pushed frame with the staggered
++/// band-reveal animation (engine in src/e0470_page_turn/, ported from
++/// read-pico-reader). >0 forward, <0 backward, 0 off. The request is consumed once;
++/// Full (clean) frames and an unknown baseline ignore it, and a failed animation
++/// falls back to the ordinary push.
++void epdiyLcdSetWaterTurn(int direction);
+ 
+ /// 进入低功耗：掉轨并释放 LCD_CAM/GDMA/RMT。
+ /// / Enter low power: drop the rails and release LCD_CAM/GDMA/RMT.
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk_work/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
+--- sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
++++ sdk_work/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
+@@ -9,8 +9,8 @@
+ 
+ #include <EpdiyLcd.h>
+ #include <esp_heap_caps.h>
+-#if FREEINK_READPICO_DIAGNOSTICS
+ #include <esp_timer.h>
++#if FREEINK_READPICO_DIAGNOSTICS
+ // rom console rather than ESP_LOGI: on this build ESP_LOG does not reach the serial
+ // port. The header is ESP-IDF-only, and the host transaction test builds this file
+ // twice -- once with diagnostics on -- so it cannot be included unconditionally.
+@@ -23,6 +23,7 @@
+ #endif
+ #include <esp_log.h>
+ 
++#include <algorithm>
+ #include <cstring>
+ 
+ extern "C" {
+@@ -31,6 +32,7 @@
+ // / epdiy headers without extern "C" guards are wrapped here; re-wrapping the
+ // guarded ones is harmless.
+ #include "e0470/include/e0470_epaper_waveform.h"
++#include "e0470_page_turn/e0470_page_turn.h"
+ #include "epdiy/include/epd_lcd.h"
+ #include "epdiy/include/epd_waveform.h"
+ #include "epdiy/src/epd_board.h"
+@@ -57,7 +59,137 @@
+ // 调用方的 1bpp 位约定，由 epdiyLcdBegin 给定一次。
+ // / The caller's 1 bpp bit convention, fixed once by epdiyLcdBegin.
+ bool g_blackIsOne = false;
++// 待消费的水波纹翻页请求（epdiyLcdSetWaterTurn）：>0 向前、<0 向后、0 关闭。
++// pushFrame 消费一次即清零，动画失败落回普通推送。
++// / Pending water-ripple turn request (epdiyLcdSetWaterTurn): >0 forward, <0 back,
++// 0 off. pushFrame consumes it once; a failed animation falls back to the ordinary push.
++int g_waterTurnDirection = 0;
+ 
++// Rectangles that currently contain native gray on the glass. The next 1-bit
++// page cleans these before its ordinary FAST scan, so only the gray rectangle
++// is driven with GC16 instead of the whole screen. Merged on record.
++struct GrayRect {
++  int x;
++  int y;
++  int w;
++  int h;
++};
++constexpr int kMaxGrayRects = 12;
++GrayRect g_grayRects[kMaxGrayRects] = {};
++int g_grayRectCount = 0;
++
++
++void clearGrayRects() { g_grayRectCount = 0; }
++
++void recordGrayRect(const int x, const int y, const int w, const int h) {
++  if (w <= 0 || h <= 0) return;
++  int nx = x;
++  int ny = y;
++  int nw = w;
++  int nh = h;
++  // Merge any touching/overlapping rectangle, then restart the scan because the
++  // merged box may now touch another entry.
++  bool merged = true;
++  while (merged) {
++    merged = false;
++    for (int i = 0; i < g_grayRectCount; ++i) {
++      GrayRect& r = g_grayRects[i];
++      if (nx > r.x + r.w || nx + nw < r.x || ny > r.y + r.h || ny + nh < r.y) continue;
++      const int x0 = std::min(nx, r.x);
++      const int y0 = std::min(ny, r.y);
++      const int x1 = std::max(nx + nw, r.x + r.w);
++      const int y1 = std::max(ny + nh, r.y + r.h);
++      nx = x0;
++      ny = y0;
++      nw = x1 - x0;
++      nh = y1 - y0;
++      g_grayRects[i] = g_grayRects[--g_grayRectCount];
++      merged = true;
++      break;
++    }
++  }
++  if (g_grayRectCount < kMaxGrayRects) {
++    g_grayRects[g_grayRectCount++] = {nx, ny, nw, nh};
++  } else {
++    // Too fragmented: one bounding box is cheaper than dropping a region.
++    int x0 = g_grayRects[0].x;
++    int y0 = g_grayRects[0].y;
++    int x1 = x0 + g_grayRects[0].w;
++    int y1 = y0 + g_grayRects[0].h;
++    for (int i = 1; i < g_grayRectCount; ++i) {
++      x0 = std::min(x0, g_grayRects[i].x);
++      y0 = std::min(y0, g_grayRects[i].y);
++      x1 = std::max(x1, g_grayRects[i].x + g_grayRects[i].w);
++      y1 = std::max(y1, g_grayRects[i].y + g_grayRects[i].h);
++    }
++    x0 = std::min(x0, nx);
++    y0 = std::min(y0, ny);
++    x1 = std::max(x1, nx + nw);
++    y1 = std::max(y1, ny + nh);
++    g_grayRects[0] = {x0, y0, x1 - x0, y1 - y0};
++    g_grayRectCount = 1;
++  }
++}
++
++void recordFullGray() { g_grayRects[0] = {0, 0, epd_width(), epd_height()}; g_grayRectCount = 1; }
++
++// 异步推屏的在飞状态。起扫后扫描任务拥有 render_context，直到 waitScan() 收尾；
++// 期间所有会碰面板或 epdiy 帧缓冲的入口都必须先 join（见各入口）。
++// / Deferred-push state. After a start the scan task owns render_context until
++// waitScan(); every entry that touches the panel or epdiy's framebuffer must
++// join first (see the entry points).
++bool g_scanPending = false;
++// 定义在 pushFrame 之前；提前声明，因为 epdiyLcdEnd() 等在它之前就要 join。
++// / Defined next to pushFrame; forward-declared because epdiyLcdEnd() joins earlier.
++void waitScan();
++bool g_scanTurnOff = false;
++bool g_scanSwapWaveform = false;
++int g_scanPrefillBefore = 0;
++EpdiyLcdRefresh g_scanMode = EpdiyLcdRefresh::Fast;
++int64_t g_scanStartedUs = 0;
++
++// 异步扫描期间的预填行数（96 行 = 1536us 的垫子）。水波纹用 64；这里另一核
++// 同时在排版/光栅化/SD 读，64 仍偶发 EPD_DRAW_EMPTY_LINE_QUEUE，所以取 96。
++// ★ 硬上限是 2*队列容量-16 = 112：两个 feeder 的行队列各只有 64 槽，触发点
++// 必须早于两个队列都填满，否则两个 feeder 会在 lq_current 上忙等，扫描永不
++// 启动、CPU 空转、TWDT 复位（128 行在真机上正是这样把"打开阅读器设置"变成
++// 重启的）。render_lcd.c 里另有同样的硬钳制兜底。
++// / Prefill during a deferred scan (96 lines = a 1536 us cushion). The ripple
++// uses 64; here the other core lays out, rasterises and reads SD at the same
++// time and 64 still underran occasionally, so 96.
++// ★ Hard ceiling is 2*queue_size-16 = 112: each feeder's line queue holds 64
++// entries and the trigger must fire before both fill, or both feeders spin in
++// lq_current, the scan never starts and the TWDT resets (128 did exactly that
++// on hardware). render_lcd.c clamps to the same bound.
++constexpr int kAsyncPrefillLines = 96;
++
++// 水波纹扫描期间的节奏，照搬厂商 main/apps/app_book.c 与 main/display.c 的调用方准备。
++// 板级配置的 kPrefillLines(32) 是按厂商 FULL 档「普通扫描」实测定的；错相揭页的每一拍
++// 也跑在同一个 16us 行周期上，却要连发 44 帧，厂商因此在开扫前把预填抬到 64、扫完还原。
++// 预填行数决定开扫那一刻行队列里已经排好的行数，也就是喂线程能吸收多长的停顿：
++// 32 行 = 512us，64 行 = 1024us。render_lcd.c 与 epdiy.h 对这个参数的说明都指出，
++// 太小会在 ISR 延迟抖动下抽干行队列并置 EPD_DRAW_EMPTY_LINE_QUEUE（真机日志里的
++// "line buffer underrun occurred!" + Water turn failed (1024)）。
++// / Pacing for the ripple scans, taken from the vendor caller in main/apps/app_book.c and
++// main/display.c. The board's kPrefillLines(32) was measured for ORDINARY scans on the
++// vendor FULL profile; each ripple beat runs the same 16 us line period but 44 frames in a
++// row, so the vendor raises the prefill to 64 before scanning and restores it afterwards.
++// The prefill sets how many lines are already queued when the frame starts, i.e. how long a
++// stall the feeder can absorb: 32 lines = 512 us, 64 = 1024 us. Both render_lcd.c and
++// epdiy.h document that too small a value drains the queue on ISR-latency jitter and sets
++// EPD_DRAW_EMPTY_LINE_QUEUE — the device log's "line buffer underrun occurred!" plus
++// Water turn failed (1024).
++constexpr int kWaterTurnPrefillLines = 64;
++// 非水波纹推送用的预填行数：boardInit 装进 epdiy 的那一份，水波纹扫完还原到它。对应厂商
++// use_scan_for() 还原「FULL 档 = 32」的做法，但取自板级配置而不是写死一个 32。初值只是
++// boardInit 之前的占位，取偏大的一侧（余量只会多不会少）；任何一次推帧之前都会被覆盖。
++// / The prefill non-ripple pushes use: the value boardInit installed into epdiy, restored
++// once a ripple finishes. Mirrors the vendor's use_scan_for() restoring "FULL = 32", but
++// taken from the board config rather than hardcoding a 32. The initialiser is only a
++// placeholder for the window before boardInit, biased to the larger side (more margin, never
++// less); any push overwrites it first.
++int g_normalPrefillLines = kWaterTurnPrefillLines;
++
+ // 1bpp 行 → 4bpp 行的展开表：一个输入字节出 4 个输出字节。
+ // epdiy 是每字节两个像素，偶数列在低半字节、奇数列在高半字节，15 = 白。
+ // / Expansion table: one 1 bpp input byte becomes four 4 bpp bytes. epdiy packs
+@@ -122,6 +254,9 @@
+ 
+   if (epd_lcd_init(&c, static_cast<int>(epd_width()), static_cast<int>(epd_height())) != ESP_OK) return false;
+   epd_lcd_set_prefill_lines(g_cfg->prefillLines);
++  // 记下来，水波纹扫完还原到这一份（见 pushFrame 里的拦截块）。
++  // / Recorded so the ripple restores exactly this value afterwards (see pushFrame).
++  g_normalPrefillLines = g_cfg->prefillLines;
+   return true;
+ }
+ 
+@@ -147,6 +282,16 @@
+   g_powerReady = false;
+ }
+ 
++// 推帧收尾：释放像素驱动、保留高压轨（见 EpdiyLcdPowerHooks::releaseDrive）。
++// 可选钩子；未提供时不做事（保持旧行为）。返回 false 只表示一次 I2C 写入失败，
++// 与图像无关。
++// / End-of-push: release the pixel drive, keep the HV rails (see
++// EpdiyLcdPowerHooks::releaseDrive). Optional hook; a no-op when absent (old
++// behaviour). false only means one I2C write failed — unrelated to the image.
++bool boardReleaseDrive() {
++  return g_cfg != nullptr && g_cfg->power.releaseDrive != nullptr && g_cfg->power.releaseDrive();
++}
++
+ void boardMeasureVcom(epd_ctrl_state_t* state) { (void)state; }
+ 
+ // 硬规则：面板 VCOM 是出厂写进 PMU 的，与这块玻璃配对，写错会永久损坏面板。
+@@ -182,6 +327,10 @@
+   // 波形必须在 epd_hl_init 之前建好：E0470_WAVEFORM 的相位数据由它填。
+   // / The waveform must be built before epd_hl_init(): it fills E0470_WAVEFORM.
+   e0470_waveform_init();
++  // 水波纹节拍与 read-pico-reader 阅读侧一致；扫描慢于节拍时引擎只慢不截相。
++  // / Water-ripple pacing matches the read-pico-reader reader; a slower scan only
++  // stretches the turn, phases are never truncated.
++  e0470_page_turn_set_tick_us(E0470_TURN_FAST_TICK_US);
+ 
+   epd_set_board(&kBoard);
+   if (!epd_init(&kBoard, &E0470_DISPLAY, EPD_OPTIONS_DEFAULT)) {
+@@ -248,8 +397,14 @@
+ 
+ void epdiyLcdEnd() {
+   if (!g_initialized) return;
++  waitScan();
+   epd_deinit();
+   epd_hl_deinit(&g_hl);
++  // 归还水波纹引擎按需分配的 40 KiB PSRAM 相位表，并丢弃未消费的动画请求。
++  // / Return the water engine's lazily allocated 40 KiB PSRAM phase table and drop
++  // any unconsumed animation request.
++  e0470_page_turn_release();
++  g_waterTurnDirection = 0;
+   heap_caps_free(g_base);
+   g_base = nullptr;
+   g_fb4 = nullptr;
+@@ -257,6 +412,7 @@
+   g_nativeGrayActive = false;
+   g_initialized = false;
+   g_baselineKnown = false;
++  clearGrayRects();
+ }
+ 
+ namespace {
+@@ -281,7 +437,12 @@
+ // and push it back to black, and that erase is the flash a turn shows. Every other
+ // profile keeps the table epd_hl_init attached.
+ const EpdWaveform* waveformFor(EpdiyLcdRefresh mode) {
+-  return mode == EpdiyLcdRefresh::TextTurn ? &E0470_TEXTTURN_WAVEFORM : &E0470_WAVEFORM;
++  if (mode == EpdiyLcdRefresh::TextTurn) return &E0470_TEXTTURN_WAVEFORM;
++  // The default table is the 36-phase GC16 the board timing was calibrated
++  // against. E0470_FULL_WAVEFORM (48 phases) is the untrimmed reference table;
++  // it is not part of that calibration and over-drove the panel when used for
++  // every FULL, latching the source/gate driver state.
++  return &E0470_WAVEFORM;
+ }
+ 
+ // 1bpp 页 -> epdiy 4bpp。展开表把调用方的位约定翻成 epdiy 的灰度级；本玻璃实测
+@@ -313,7 +474,59 @@
+ }
+ #endif
+ 
+-bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
++// 等待在飞的异步扫描并做收尾：还原波形表与预填、按失败/掉轨决定断电还是释放驱动。
++// 没有在飞时立即返回。单线程契约：所有显示入口都从 FreeInkDisplay 的同一串行
++// 调用链过来（渲染任务/主循环由 RenderLock 串行），所以这里不需要互斥。
++// / Join a deferred scan and finish it: restore the waveform table and prefill,
++// then either power off (turn-off or failure) or release the pixel drive. Returns
++// immediately when nothing is in flight. Single-thread contract: every display
++// entry comes from FreeInkDisplay's serialised call chain (render task / main
++// loop, serialised by RenderLock), so no mutex is needed here.
++void waitScan() {
++  if (!g_scanPending) return;
++  g_scanPending = false;
++#if FREEINK_READPICO_DIAGNOSTICS
++  const int64_t joinEnteredUs = esp_timer_get_time();
++#endif
++  const auto err = epd_hl_update_wait();
++  if (g_scanSwapWaveform) {
++    epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++    g_scanSwapWaveform = false;
++  }
++  epd_lcd_set_prefill_lines(g_scanPrefillBefore);
++  g_baselineKnown = err == EPD_DRAW_SUCCESS;
++  if (!g_baselineKnown) {
++    ESP_LOGE("EpdiyLcd", "Deferred frame failed (%u); clean retry required", static_cast<unsigned>(err));
++  }
++#if FREEINK_READPICO_DIAGNOSTICS
++  int diffMs, drawMs, copyMs;
++  epd_hl_last_timing(&diffMs, &drawMs, &copyMs);
++  ++g_frameTiming.frames;
++  // scan_wait 是从起扫到 join 的墙钟；overlapped 是起扫到调用方来 join 之间那段，
++  // 也就是真正与扫描重叠出去的时间。两者一起看才知道重叠有没有生效。
++  // / scan_wait is the wall clock from start to join; overlapped is the span
++  // between the start and the caller's join, i.e. the work that really
++  // overlapped the scan. Read them together to judge the overlap.
++  const long long overlappedMs = static_cast<long long>((joinEnteredUs - g_scanStartedUs) / 1000);
++  esp_rom_printf(
++      "[EPDF] frame #%u mode=%u result=%u convert=%uus max_convert=%uus diff=%dms scan_wait=%dms copy=%dms deferred=1 overlapped=%lldms\r\n",
++      static_cast<unsigned>(g_frameTiming.frames), static_cast<unsigned>(g_scanMode), static_cast<unsigned>(err),
++      static_cast<unsigned>(g_frameTiming.convertUs), static_cast<unsigned>(g_frameTiming.maxConvertUs), diffMs, drawMs,
++      copyMs, overlappedMs);
++#else
++  (void)g_scanMode;
++  (void)g_scanStartedUs;
++#endif
++  if (g_scanTurnOff || !g_baselineKnown) {
++    epd_poweroff();
++  } else {
++    (void)boardReleaseDrive();
++  }
++}
++
++bool pushFrame(EpdiyLcdRefresh mode, bool turnOff, bool allowAsync, bool clearGrayAreas = false,
++               bool forceAllLines = false) {
++  waitScan();
+   epd_poweron();
+   if (!g_powerReady) {
+     g_baselineKnown = false;
+@@ -326,10 +539,105 @@
+     memset(g_hl.back_fb, 0xFF, static_cast<size_t>(epd_width()) / 2 * epd_height());
+     mode = EpdiyLcdRefresh::Full;
+   }
++
+   const int temperature = static_cast<int>(panelTemperature());
++  if (clearGrayAreas) {
++    if (mode == EpdiyLcdRefresh::Full) {
++      // A full GC16 sweep covers every old gray rectangle.
++      clearGrayRects();
++    } else if (g_grayRectCount > 0) {
++      // Clean only the rectangles that held native gray on the previous page.
++      // This is what replaces the old whole-screen FULL guard after a partial
++      // gray page: the following FAST scan sees those pixels already equal to
++      // front_fb and does not drive them again.
++      const EpdWaveform* wf = waveformFor(EpdiyLcdRefresh::Full);
++      const bool swap = wf != g_hl.waveform;
++      if (swap) epd_hl_waveform(&g_hl, wf);
++      bool ok = true;
++      for (int i = 0; i < g_grayRectCount; ++i) {
++        const GrayRect& r = g_grayRects[i];
++        const EpdRect area = {.x = r.x, .y = r.y, .width = r.w, .height = r.h};
++        const auto err = epd_hl_update_area_full(&g_hl, drawModeFor(EpdiyLcdRefresh::Full), temperature, area);
++        if (err != EPD_DRAW_SUCCESS) {
++          ok = false;
++          ESP_LOGE("EpdiyLcd", "Gray cleanup failed (%u); full rebuild follows", static_cast<unsigned>(err));
++          break;
++        }
++      }
++      if (swap) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++      clearGrayRects();
++      if (!ok) {
++        g_baselineKnown = false;
++        mode = EpdiyLcdRefresh::Full;
++      }
++    }
++  }
++
++  // 水波纹翻页：只对基准已知的非清屏帧生效（上面 baseline 提升已把未知基准并成 Full）。
++  // 引擎自己做一次差分 + 44 拍错相扫描，成功时已把 front 拷回 back，差分基准保持有效；
++  // 失败落回普通推送——GL16 是整帧重写波形，动画中途被驱动过的像素会被完整重写，
++  // 未变化像素在动画里本来就没被驱动，所以 back_fb 基准两条路都成立。
++  // / Water-ripple turn: only for a non-clean frame with a known baseline (the promotion
++  // above already folds an unknown baseline into Full). The engine runs its own single
++  // difference pass plus 44 staggered scans and copies front to back on success, keeping
++  // the differential baseline valid. On failure the ordinary push follows: GL16 rewrites
++  // every changed pixel in full, and unchanged pixels were never driven by the animation,
++  // so back_fb remains the correct baseline either way.
++  const int waterDir = g_waterTurnDirection;
++  g_waterTurnDirection = 0;
++  if (waterDir != 0 && mode != EpdiyLcdRefresh::Full) {
++    // 厂商的调用方在开扫前抬起预填，扫完立刻还原（display.c 的 use_scan_for()）。这里按
++    // 同样的顺序做，并且把还原放在任何分支之前：成功后 return、失败后落回普通推送，两条路
++    // 都必须让非水波纹的推送看到它今天看到的那一份预填。
++    // 厂商同时还切 FAST 扫描档，本移植没有这个档位可切——ReadPicoEpdiyConfig.cpp 只在编译期
++    // 解 FULL 档（16us/行，帧周期对齐波形标定的 kFrameTargetUs），文件里也写明快档是给厂商
++    // 跟随 DU 用的、本移植不驱动。运行时改行时序会把帧周期从约 11216us 拉到约 7010us，而
++    // FULL 档把行周期凑到 kFrameTargetUs 正是因为驱动量正比于帧周期：那是 44 拍每一拍的
++    // 光学改动，不是节奏改动，所以不做、也不假装做了。
++    // 厂商阅读侧的第三个旋钮（每拍节拍 11090us）本移植已经在 epdiyLcdBegin 里全局设过了，
++    // 而且这棵树只有水波纹一个消费者，全局设置与厂商的按次设置+还原等价，这里不重复。
++    // / The vendor caller raises the prefill before scanning and restores it immediately
++    // afterwards (use_scan_for() in display.c). Same order here, with the restore placed
++    // before either branch: the success return and the ordinary-push fallback must both leave
++    // non-ripple pushes the prefill they see today.
++    // The vendor also switches to the FAST scan profile; this port has no such profile to
++    // switch. ReadPicoEpdiyConfig.cpp solves only the FULL profile at compile time (16 us per
++    // line, frame period aligned to the waveform's kFrameTargetUs) and states the fast
++    // profiles belong to the vendor's follow DU, which this port does not drive. Re-solving
++    // the line timing at runtime would pull the frame period from about 11216 us to about
++    // 7010 us, and FULL pads the line to kFrameTargetUs precisely because drive scales with
++    // the frame period: that is an optical change to all 44 beats, not a pacing one, so it is
++    // neither done nor faked.
++    // The vendor reader's third knob, the 11090 us per-beat tick, is already set globally in
++    // epdiyLcdBegin; this tree has the ripple as the engine's only consumer, so a global
++    // setting is equivalent to the vendor's per-turn set-and-restore and is not repeated here.
++    const int priorPrefill = g_normalPrefillLines;
++    epd_lcd_set_prefill_lines(kWaterTurnPrefillLines);
++    const auto werr = e0470_page_turn(&g_hl, epd_full_screen(),
++                                      waterDir > 0 ? E0470_TURN_RTL : E0470_TURN_LTR);
++    epd_lcd_set_prefill_lines(priorPrefill);
++    // 用 ESP_LOGE：这个构建的 CONFIG_LOG_DEFAULT_LEVEL 是 ERROR，I/W 级出不了串口。
++    // 这一行让下一份真机日志能证明这一次翻页究竟跑在哪种预填与扫描档上。
++    // / ESP_LOGE: this build sets CONFIG_LOG_DEFAULT_LEVEL to ERROR, so info and warn never
++    // reach the serial port. This line lets the next device log prove which prefill and scan
++    // profile a turn actually ran on.
++    ESP_LOGE("EpdiyLcd", "Water turn pacing: prefill %d->%d lines, scan=FULL 16us/line (no FAST profile in this port), tick %d us, err=%u",
++             priorPrefill, kWaterTurnPrefillLines, E0470_TURN_FAST_TICK_US, static_cast<unsigned>(werr));
++    if (werr == EPD_DRAW_SUCCESS) {
++      if (turnOff)
++        epd_poweroff();
++      else
++        (void)boardReleaseDrive();
++      return true;
++    }
++    ESP_LOGE("EpdiyLcd", "Water turn failed (%u); ordinary push follows", static_cast<unsigned>(werr));
++  }
+   // 文字转页表只在这次推送期间挂上，推完还原，避免影响后续档位的历史与差分基准。
++  // 异步路径的还原推迟到 waitScan()：扫描期间 render_context 还引用着这张表。
+   // / The text-turn table is attached only for this push; it is swapped back afterwards
+-  // so later profiles keep the waveform the rest of the code expects.
++  // so later profiles keep the waveform the rest of the code expects. On the deferred
++  // path the restore moves to waitScan(): render_context still references the table
++  // while the scan runs.
+   const EpdWaveform* waveform = waveformFor(mode);
+   const bool swapWaveform = waveform != g_hl.waveform;
+   if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
+@@ -338,8 +646,45 @@
+   // / Full takes the all-lines-and-columns-dirty path; every other profile is pushed
+   // differentially, and it is only a differential push that lets the held diagonal
+   // actually skip a pixel.
+-  const auto err = mode == EpdiyLcdRefresh::Full ? epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature)
+-                                                 : epd_hl_update_screen(&g_hl, drawModeFor(mode), temperature);
++  enum EpdDrawError err = EPD_DRAW_SUCCESS;
++  if (mode == EpdiyLcdRefresh::Full) {
++    // Full screen, GC16, real (from,to) pairs. Never fabricate the previous
++    // state here: the waveform is a transition table, and feeding it a made-up
++    // "from" injects the wrong drive sequence into every pixel.
++    err = epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature);
++  } else if (forceAllLines) {
++    // Full-page GL16: every line is processed, so the GL16 table rewrites the
++    // whole frame without the GC16 flash. Used by 16-level pages so the real
++    // optical state and back_fb cannot drift apart.
++    err = epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature);
++  } else if (allowAsync) {
++    // 起扫后立即返回，让调用方用这 400ms 排版下一页。预填临时抬到 64 行：
++    // 另一核在排版/光栅化时 ISR 抖动比空闲时大（水波纹移植时的欠载就是踩的
++    // 这个），垫子按最坏情况留。
++    // / Return right after the start so the caller can lay out the next page
++    // during the ~400 ms scan. Prefill is raised to 64 lines for the duration:
++    // layout/rasterisation on the other core widens ISR jitter, which is exactly
++    // what underran the ripple port, so budget for the worst case.
++    const int priorPrefill = epd_lcd_prefill_lines();
++    epd_lcd_set_prefill_lines(kAsyncPrefillLines);
++    bool started = false;
++    err = epd_hl_update_screen_start(&g_hl, drawModeFor(mode), temperature, &started);
++    if (err == EPD_DRAW_SUCCESS && started) {
++      g_scanPending = true;
++      g_scanTurnOff = turnOff;
++      g_scanSwapWaveform = swapWaveform;
++      g_scanPrefillBefore = priorPrefill;
++      g_scanMode = mode;
++      g_scanStartedUs = esp_timer_get_time();
++      return true;
++    }
++    // 内容没有变化（差分空）或起扫失败：把预填还回去，走同步收尾。
++    // / Nothing changed (empty difference) or the start failed: restore the
++    // prefill and finish synchronously.
++    epd_lcd_set_prefill_lines(priorPrefill);
++  } else {
++    err = epd_hl_update_screen(&g_hl, drawModeFor(mode), temperature);
++  }
+   if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
+ #if FREEINK_READPICO_DIAGNOSTICS
+   int diffMs, drawMs, copyMs;
+@@ -357,36 +702,204 @@
+ #endif
+   g_baselineKnown = err == EPD_DRAW_SUCCESS;
+   if (!g_baselineKnown) ESP_LOGE("EpdiyLcd", "Frame failed (%u); clean retry required", static_cast<unsigned>(err));
+-  if (turnOff || !g_baselineKnown) epd_poweroff();
++  if (turnOff || !g_baselineKnown) {
++    epd_poweroff();
++  } else {
++    // 收尾释放像素驱动、保留高压轨：静止/无变化的画面不再受力（rc95 的“无变化释放”）。
++    // 下一次推帧的 epd_poweron() 会重新抬起 XOE。
++    // / End-of-push drive release with the rails kept: a still/unchanged frame is not
++    // left driven. The next push's epd_poweron() raises XOE again.
++    (void)boardReleaseDrive();
++  }
+   return g_baselineKnown;
+ }
+ 
+ }  // namespace
+ 
+ uint8_t* epdiyLcdBeginGrayscale16() {
++  waitScan();
+   if (!epdiyLcdReady() || g_nativeGrayActive) return nullptr;
+   g_nativeGrayActive = true;
+   memset(g_fb4, 0xFF, static_cast<size_t>(epd_width()) / 2 * epd_height());
+   return g_fb4;
+ }
+ 
+-bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy) {
++uint8_t* epdiyLcdBeginGrayscale16From1bpp(const uint8_t* fb) {
++  waitScan();
++  if (!epdiyLcdReady() || g_nativeGrayActive || fb == nullptr) return nullptr;
++  g_nativeGrayActive = true;
++  fillFrom1bpp(fb);
++  return g_fb4;
++}
++
++bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy, bool clean) {
++  waitScan();
+   if (!g_nativeGrayActive || !epdiyLcdReady() || bwProxy == nullptr) return false;
+   g_nativeGrayActive = false;
+-  if (!pushFrame(EpdiyLcdRefresh::Half, true)) return false;
++  // 16 灰阶提交仍然同步（FreeInkDisplay 的该路径没有异步 pending 语义），但不再
++  // 关轨：turnOff=true 会走 epdPowerOff() 的固定 500ms 保持，而 AA 路径本来就不关轨。
++  // 收尾仍释放像素驱动、保留高压轨，静止画面不受力。
++  // / The 16-level commit stays synchronous (its FreeInkDisplay path has no
++  // pending semantics) but no longer turns the rails off: turnOff=true costs the
++  // fixed 500 ms hold in epdPowerOff(), while the AA path keeps the rails up for
++  // the whole session anyway. The push still releases the pixel drive.
++  // Ordinary 16-level pages use full GL16, not the text-turn table. TextTurn
++  // holds the diagonal, so unchanged pixels are never re-driven; their real
++  // optical state then drifts away from back_fb, and a later "full" refresh
++  // (which still only drives differing pixels) cannot see or clear it. GL16
++  // rewrites every changed line from scratch and keeps the baseline honest.
++  if (!pushFrame(clean ? EpdiyLcdRefresh::Full : EpdiyLcdRefresh::Half, false, false,
++                 /*clearGrayAreas=*/false, /*forceAllLines=*/!clean)) {
++    return false;
++  }
+   epdiyLcdStashBase(bwProxy);
++  recordFullGray();
+   return true;
+ }
+ 
++bool epdiyLcdCommitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
++                                   const bool clean) {
++  waitScan();
++  if (!g_nativeGrayActive || !epdiyLcdReady() || bwProxy == nullptr || w == 0 || h == 0) return false;
++  g_nativeGrayActive = false;
++
++  if (x >= epd_width() || y >= epd_height()) return false;
++  if (static_cast<int>(x) + w > epd_width()) w = static_cast<uint16_t>(epd_width() - x);
++  if (static_cast<int>(y) + h > epd_height()) h = static_cast<uint16_t>(epd_height() - y);
++
++  epd_poweron();
++  if (!g_powerReady) {
++    g_baselineKnown = false;
++    epd_poweroff();
++    return false;
++  }
++
++  // An area diff cannot establish a baseline after a failed/unknown frame.
++  // Fall back to a full push of the composed page, which also makes the area
++  // correct and leaves back_fb known again.
++  if (!g_baselineKnown) {
++    const bool ok = pushFrame(EpdiyLcdRefresh::Full, false, false);
++    if (ok) {
++      epdiyLcdStashBase(bwProxy);
++      recordFullGray();
++    }
++    return ok;
++  }
++
++  const EpdiyLcdRefresh mode = clean ? EpdiyLcdRefresh::Full : EpdiyLcdRefresh::TextTurn;
++  const int temperature = static_cast<int>(panelTemperature());
++  const EpdWaveform* waveform = waveformFor(mode);
++  const bool swapWaveform = waveform != g_hl.waveform;
++  if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
++
++  const EpdRect area = {.x = static_cast<int>(x),
++                        .y = static_cast<int>(y),
++                        .width = static_cast<int>(w),
++                        .height = static_cast<int>(h)};
++  const auto err = clean ? epd_hl_update_area_full(&g_hl, drawModeFor(mode), temperature, area)
++                         : epd_hl_update_area(&g_hl, drawModeFor(mode), temperature, area);
++  if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++
++  g_baselineKnown = err == EPD_DRAW_SUCCESS;
++  if (!g_baselineKnown) {
++    ESP_LOGE("EpdiyLcd", "Gray area failed (%u); clean retry required", static_cast<unsigned>(err));
++    epd_poweroff();
++    return false;
++  }
++
++  // The 1bpp proxy is the best base we have for the next page; the area outside
++  // the rectangle was already part of the same UI page and is unchanged.
++  epdiyLcdStashBase(bwProxy);
++  recordGrayRect(x, y, w, h);
++  (void)boardReleaseDrive();
++  return true;
++}
++
++bool epdiyLcdCommitGrayscale16Areas(const uint8_t* bwProxy, const uint16_t* rects, const int count,
++                                    const bool clean) {
++  waitScan();
++  if (!g_nativeGrayActive || !epdiyLcdReady() || bwProxy == nullptr || rects == nullptr || count <= 0) return false;
++  g_nativeGrayActive = false;
++
++  epd_poweron();
++  if (!g_powerReady) {
++    g_baselineKnown = false;
++    epd_poweroff();
++    return false;
++  }
++  if (!g_baselineKnown) {
++    const bool ok = pushFrame(EpdiyLcdRefresh::Full, false, false);
++    if (ok) {
++      epdiyLcdStashBase(bwProxy);
++      recordFullGray();
++    }
++    return ok;
++  }
++
++  const EpdiyLcdRefresh mode = clean ? EpdiyLcdRefresh::Full : EpdiyLcdRefresh::TextTurn;
++  const int temperature = static_cast<int>(panelTemperature());
++  const EpdWaveform* waveform = waveformFor(mode);
++  const bool swapWaveform = waveform != g_hl.waveform;
++  if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
++
++  bool ok = true;
++  for (int i = 0; i < count; ++i) {
++    int x = rects[i * 4 + 0];
++    int y = rects[i * 4 + 1];
++    int w = rects[i * 4 + 2];
++    int h = rects[i * 4 + 3];
++    if (w <= 0 || h <= 0 || x >= epd_width() || y >= epd_height()) continue;
++    if (x + w > epd_width()) w = epd_width() - x;
++    if (y + h > epd_height()) h = epd_height() - y;
++    const EpdRect area = {.x = x, .y = y, .width = w, .height = h};
++    const auto err = clean ? epd_hl_update_area_full(&g_hl, drawModeFor(mode), temperature, area)
++                           : epd_hl_update_area(&g_hl, drawModeFor(mode), temperature, area);
++    if (err != EPD_DRAW_SUCCESS) {
++      ok = false;
++      ESP_LOGE("EpdiyLcd", "Gray areas failed at %d (%u); clean retry required", i,
++               static_cast<unsigned>(err));
++      break;
++    }
++  }
++  if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++
++  g_baselineKnown = ok;
++  if (!ok) {
++    epd_poweroff();
++    return false;
++  }
++
++  epdiyLcdStashBase(bwProxy);
++  for (int i = 0; i < count; ++i) {
++    int x = rects[i * 4 + 0];
++    int y = rects[i * 4 + 1];
++    int w = rects[i * 4 + 2];
++    int h = rects[i * 4 + 3];
++    if (w <= 0 || h <= 0 || x >= epd_width() || y >= epd_height()) continue;
++    if (x + w > epd_width()) w = epd_width() - x;
++    if (y + h > epd_height()) h = epd_height() - y;
++    recordGrayRect(x, y, w, h);
++  }
++  (void)boardReleaseDrive();
++  return true;
++}
++
+ void epdiyLcdCancelGrayscale16() {
++  waitScan();
+   if (!g_nativeGrayActive) return;
+   g_nativeGrayActive = false;
++  // 取消的提交不欠一次动画：请求随本次提交一起作废。
++  // / A cancelled commit owes no animation: the request dies with it.
++  g_waterTurnDirection = 0;
+   if (epdiyLcdReady() && g_baselineKnown) {
+     memcpy(g_fb4, g_hl.back_fb, static_cast<size_t>(epd_width()) / 2 * epd_height());
+   }
+ }
+ 
+-bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
++namespace {
++
++bool drawPage(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff, bool allowAsync) {
++  waitScan();
+   if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
+ 
+ #if FREEINK_READPICO_DIAGNOSTICS
+@@ -402,10 +915,36 @@
+ #if FREEINK_READPICO_DIAGNOSTICS
+   recordConversion(conversionStartedUs);
+ #endif
+-  return pushFrame(mode, turnOff);
++  const bool ok = pushFrame(mode, turnOff, allowAsync);
++  if (!allowAsync) return ok;
++  // 异步入口的返回值是"是否需要 wait"：水波纹、无变化与失败都在这里同步完成。
++  // / The async entry's result means "a wait is owed": ripple, unchanged frames
++  // and failures all complete inline here.
++  return ok && g_scanPending;
+ }
+ 
++}  // namespace
++
++bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
++  return drawPage(fb, mode, turnOff, false);
++}
++
++bool epdiyLcdDrawAsync(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
++  return drawPage(fb, mode, turnOff, true);
++}
++
++void epdiyLcdWaitScan() { waitScan(); }
++
++bool epdiyLcdScanPending() { return g_scanPending; }
++
+ void epdiyLcdStashBase(const uint8_t* fb) {
++  // 故意不 join：这里只写宿主的 1bpp 底图副本，扫描任务读的是差分图，两者不相干。
++  // AA 页的底图暂存与灰度平面渲染因此可以和上一页的扫描重叠；真正的合成在
++  // epdiyLcdDrawGrayAsync 里，那时才 join。
++  // / Deliberately no join: this only writes the host's 1 bpp base copy, while
++  // the scan reads the difference image. Stashing the base and rendering the
++  // grey planes can therefore overlap the previous page's scan; the actual
++  // composition in epdiyLcdDrawGrayAsync joins first.
+   if (!g_started || fb == nullptr || g_base == nullptr || g_cfg == nullptr) return;
+   // 只留底图：不展开、不推帧。灰阶提交会用它合成整页，所以整帧只被一种波形驱动一次。
+   // / Stash only: no expansion, no frame push. The grey commit composes the whole page
+@@ -414,7 +953,60 @@
+   memcpy(g_base, fb, bytes);
+ }
+ 
+-bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
++bool epdiyLcdUpdateArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h, EpdiyLcdRefresh mode) {
++  // 区段刷新保持同步：它要等 415ms 扫描才返回，但调用方是主循环里的分钟级时钟，
++  // 不存在可重叠的排版工作；与整帧异步扫描也绝不能并发（同一个 render_context）。
++  // / Area refresh stays synchronous: it blocks for the scan, but its caller is
++  // the once-a-minute clock in the main loop with no layout work to overlap, and
++  // it must never run concurrently with a deferred full-frame scan.
++  waitScan();
++  if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
++  if (w == 0 || h == 0) return false;
++  if (x >= epd_width() || y >= epd_height()) return false;
++  if (static_cast<int>(x) + w > epd_width()) w = static_cast<uint16_t>(epd_width() - x);
++  if (static_cast<int>(y) + h > epd_height()) h = static_cast<uint16_t>(epd_height() - y);
++  epd_poweron();
++  if (!g_powerReady) {
++    g_baselineKnown = false;
++    ESP_LOGE("EpdiyLcd", "Panel power-on failed; area update skipped");
++    epd_poweroff();
++    return false;
++  }
++  // 区域差分没有整屏重写可依赖：基准未知就拒绝，交给下一次整帧推送去重建。
++  // / An area diff has no full rewrite to lean on: refuse while the baseline is unknown
++  // and let the next full push rebuild it.
++  if (!g_baselineKnown) {
++    epd_poweroff();
++    return false;
++  }
++  fillFrom1bpp(fb);
++  const int temperature = static_cast<int>(panelTemperature());
++  const EpdWaveform* waveform = waveformFor(mode);
++  const bool swapWaveform = waveform != g_hl.waveform;
++  if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
++  EpdRect area = {.x = static_cast<int>(x),
++                  .y = static_cast<int>(y),
++                  .width = static_cast<int>(w),
++                  .height = static_cast<int>(h)};
++  const auto err = epd_hl_update_area(&g_hl, drawModeFor(mode), temperature, area);
++  if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++  g_baselineKnown = err == EPD_DRAW_SUCCESS;
++  if (!g_baselineKnown) {
++    ESP_LOGE("EpdiyLcd", "Area update failed (%u); clean retry required", static_cast<unsigned>(err));
++  }
++  // 高压轨保持不动：区域更新通常连续到来。掉轨只留给 turnOff（休眠/清屏）与失败。
++  // 成功则收尾释放像素驱动（保留轨），与整帧推送一致。
++  // / Keep the HV rails up: area updates usually arrive back to back. Drop the rails
++  // only for turnOff (sleep/clean) and on failure. On success release the pixel drive
++  // (rails kept), matching the full-frame push.
++  if (g_baselineKnown) (void)boardReleaseDrive();
++  return g_baselineKnown;
++}
++
++namespace {
++
++bool drawGrayPage(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff, bool allowAsync) {
++  waitScan();
+   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return false;
+   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return false;
+ 
+@@ -459,15 +1051,34 @@
+ #if FREEINK_READPICO_DIAGNOSTICS
+   recordConversion(conversionStartedUs);
+ #endif
+-  return pushFrame(mode, turnOff);
++  const bool ok = pushFrame(mode, turnOff, allowAsync);
++  if (!allowAsync) {
++    if (ok) recordFullGray();
++    return ok;
++  }
++  if (ok) recordFullGray();
++  return ok && g_scanPending;
+ }
+ 
++}  // namespace
++
++bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
++  return drawGrayPage(lsb, msb, mode, turnOff, false);
++}
++
++bool epdiyLcdDrawGrayAsync(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
++  return drawGrayPage(lsb, msb, mode, turnOff, true);
++}
++
+ void epdiyLcdDeepSleep() {
+   if (!g_started) return;
++  waitScan();  // 掉轨会掐断在飞的扫描 / dropping the rails would abort a scan in flight
+   (void)epd_poweroff();
+   epdiyLcdEnd();
+ }
+ 
+ bool epdiyLcdReady() { return g_started && g_fb4 != nullptr; }
++
++void epdiyLcdSetWaterTurn(int direction) { g_waterTurnDirection = direction; }
+ 
+ }  // namespace freeink
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c sdk_work/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c
++++ sdk_work/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c
+@@ -80,6 +80,33 @@
+     .temp_intervals = e0470_intervals,
+ };
+ 
++/* ---- 错相 GL16 执行表 / Staggered GL16 apply waveform ---- */
++// 水波纹翻页每拍用它调 epd_draw_base：frame_count==1，一次物理扫描，像素动作全部来自
++// 逐带挂上的相位 LUT。移植自 read-pico-reader（Apache-2.0）。
++// / The water-ripple turn passes this to epd_draw_base each tick: frame_count==1, one
++// physical scan, all pixel actions supplied by the per-band phase LUTs. Ported from
++// read-pico-reader (Apache-2.0).
++static uint8_t e0470_apply_data[1][16][4];
++static const EpdWaveformPhases e0470_apply_phases = {
++    .phases = 1,
++    .phase_times = NULL,
++    .luts = (const uint8_t*)&e0470_apply_data[0],
++};
++static const EpdWaveformPhases* e0470_apply_ranges[] = { &e0470_apply_phases };
++static const EpdWaveformMode e0470_apply_mode = {
++    .type = 1,  // MODE_DU / MODE_DU
++    .temp_ranges = 1,
++    .range_data = &e0470_apply_ranges[0],
++};
++static const EpdWaveformMode* e0470_apply_modes[] = { &e0470_apply_mode };
++
++const EpdWaveform E0470_APPLY_WAVEFORM = {
++    .num_modes = 1,
++    .num_temp_ranges = 1,
++    .mode_data = e0470_apply_modes,
++    .temp_intervals = e0470_intervals,
++};
++
+ /* ---- 阈值 DU / Threshold DU ---- */
+ // 源表只认目标 0/15。中间灰按 50/50 切开，暗的走整段到黑、亮的走整段到白。
+ // from 不切片，沿用源表对真实起点的时间序列，上一帧残留的浅墨也会被推到黑或白。
+@@ -285,8 +312,55 @@
+     return (*cell >> (6 - 2 * (from % 4))) & 3;
+ }
+ 
++/* ---- 灰边提前回浅 / Gray-edge early settling ---- */
++// 移植自 read-pico-reader 的 display_reader_waveform.c(冻结决策:仅白→中灰、最多提前两相、
++// 只交换不删相)。15→中灰 序列尾部的 1~2 相浅擦交换到前段压黑之间，中灰更早落浅，抗锯齿字形的
++// 灰边看起来更干净；推动总数与帧时序不变。相同驱动计数不保证光学灰度相同，此调序需实屏对比
++// 深浅与残影。
++// / Ported from read-pico-reader display_reader_waveform.c (frozen: white-to-midgray pairs only,
++// at most two settling phases, swap pulses instead of dropping them). A trailing erase on a
++// 15→gray sequence is exchanged with an earlier darken, so the pixel settles lighter sooner
++// and anti-aliased edges read cleaner; pulse counts and frame timing are unchanged. Equal drive
++// counts do not guarantee equal optical grays; validate on the panel against tone and ghosting.
++static void e0470_textturn_soft_settle(void) {
++    // 只改 from=15 列。写前先快照该列，读一律用快照，与源实现「读原表、改副本」等价。
++    // / Only the from=15 column is touched. Snapshot it before mutating so every read uses the
++    // pre-swap value, matching the source's read-original/write-copy structure.
++    uint8_t orig[E0470_GL16_FRAMES];
++    for (int to = 1; to < 15; to++) {
++        int first_white = E0470_GL16_FRAMES, last_black = -1;
++        for (int f = 0; f < E0470_GL16_FRAMES; f++) {
++            const int action = lut_get(e0470_textturn_gl16_data, f, to, 15);
++            if (action == 2 && first_white == E0470_GL16_FRAMES) first_white = f;
++            if (action == 1) last_black = f;
++            orig[f] = (uint8_t)action;
++        }
++        int prefix_black = 0, tail_white = 0;
++        for (int f = 0; f < first_white; f++) prefix_black += orig[f] == 1;
++        for (int f = last_black + 1; f < E0470_GL16_FRAMES; f++) tail_white += orig[f] == 2;
++        const int moves = tail_white >= 4 && prefix_black >= 6 ? 2
++                        : tail_white >= 2 && prefix_black >= 4 ? 1 : 0;
++        if (!moves) continue;
++        int rank = 0, moved = 0, white = last_black + 1;
++        int target_rank = prefix_black - (moves == 2 ? 5 : 3);
++        for (int f = 0; f < first_white && moved < moves; f++) {
++            if (orig[f] != 1) continue;
++            if (rank++ != target_rank) continue;
++            while (white < E0470_GL16_FRAMES && orig[white] != 2) white++;
++            if (white == E0470_GL16_FRAMES) break;
++            // from=15 只占该字节最低两位；其余三对不变。/ from=15 occupies only the lowest two bits.
++            e0470_textturn_gl16_data[f][to][3] = (uint8_t)((e0470_textturn_gl16_data[f][to][3] & ~3u) | 2u);
++            e0470_textturn_gl16_data[white][to][3] = (uint8_t)((e0470_textturn_gl16_data[white][to][3] & ~3u) | 1u);
++            white++;
++            moved++;
++            target_rank += 2;
++        }
++    }
++}
++
+ void e0470_waveform_init(void) {
+     e0470_follow_lut_build(E0470_FOLLOW_FRAMES, e0470_follow_data);
++    e0470_follow_lut_build(1, e0470_apply_data);
+     e0470_complete_du_build();
+ 
+     const e0470_trim_t trim = {
+@@ -345,4 +419,6 @@
+             }
+         }
+     }
++
++    e0470_textturn_soft_settle();
+ }
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/e0470/include/e0470_epaper_waveform.h sdk_work/libs/display/EpdiyLcd/src/e0470/include/e0470_epaper_waveform.h
+--- sdk_pristine/libs/display/EpdiyLcd/src/e0470/include/e0470_epaper_waveform.h
++++ sdk_work/libs/display/EpdiyLcd/src/e0470/include/e0470_epaper_waveform.h
+@@ -78,6 +78,8 @@
+ ///      「旧文字擦白」18 相晚 5 相开始，中间整页是白的；左对齐后两者同起拍，是交叉
+ ///      淡化，没有白场，相数仍是 37（比未裁剪的 48 相快约 120ms）。
+ /// 静止内容的刷新交给周期性 GC16，与原厂 APP_GC16_EVERY 同一分工。
++/// 最后对白→中灰序列做至多两相的「提前回浅」交换（.c 的 soft settle），只换相不删相；
++/// 实屏不接受时删掉那一次调用即整体回退。
+ /// / Text-turn table: the trimmed GL16 (37 phases) **left-aligned**, with the whole
+ /// `to == from` diagonal held. Two things each account for a visible flash:
+ ///   1. Re-driving a black pixel in place erases it white first; clearing the diagonal
+@@ -88,6 +90,9 @@
+ ///      cross-fade with no white field, still 37 phases (~120 ms faster than untrimmed).
+ /// Static content is refreshed by the periodic GC16 instead, the same division of labour as
+ /// the vendor's APP_GC16_EVERY.
++/// White-to-midgray sequences then get an at-most-two-phase early light settle (the .c
++/// soft settle): pulses are swapped, never dropped; deleting that one call reverts the
++/// whole step if the panel does not accept it.
+ extern const EpdWaveform E0470_TEXTTURN_WAVEFORM;
+ 
+ /// 触摸笔迹跟手用的 8 帧短 DU，走 FAST 扫描（帧周期约 7ms）。
+@@ -99,6 +104,15 @@
+ #define E0470_FOLLOW_FRAMES 8
+ extern const EpdWaveform E0470_FOLLOW_WAVEFORM;
+ 
++/// 单相位执行表，供水波纹翻页（e0470_page_turn）的错相 GL16 扫描使用：epd_draw_base
++/// 每拍只扫一帧，像素动作全部来自逐带/逐行挂上的相位 LUT。移植自 read-pico-reader
++/// components/e0470_epaper_waveform（Apache-2.0）。
++/// / One-phase apply waveform for the staggered GL16 scans of the water-ripple page
++/// turn (e0470_page_turn): each tick scans exactly one frame and every pixel action
++/// comes from the per-band/per-line phase LUTs. Ported from read-pico-reader
++/// components/e0470_epaper_waveform (Apache-2.0).
++extern const EpdWaveform E0470_APPLY_WAVEFORM;
++
+ /// 按上面的公式生成 frames 帧的跟随表写进 dst（容量 frames×16×4 字节）。
+ /// / Build a follow table of `frames` into dst (frames×16×4 bytes).
+ void e0470_follow_lut_build(int frames, uint8_t (*dst)[16][4]);
+@@ -111,8 +125,8 @@
+ /// / 2-bit action for (from→to) at `phase`: 0 hold, 1 darken, 2 erase.
+ int e0470_phase_action(const EpdWaveformPhases* phases, int phase, int to, int from);
+ 
+-/// 生成 E0470_WAVEFORM 与 E0470_FOLLOW_WAVEFORM 的表。必须在第一次刷新之前调用一次。
+-/// / Build E0470_WAVEFORM and E0470_FOLLOW_WAVEFORM. Call once before the first refresh.
++/// 生成 E0470_WAVEFORM、E0470_FOLLOW_WAVEFORM 与 E0470_APPLY_WAVEFORM 的表。必须在第一次刷新之前调用一次。
++/// / Build E0470_WAVEFORM, E0470_FOLLOW_WAVEFORM and E0470_APPLY_WAVEFORM. Call once before the first refresh.
+ void e0470_waveform_init(void);
+ 
+ #ifdef __cplusplus
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c sdk_work/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c
++++ sdk_work/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c
+@@ -0,0 +1,516 @@
++/*
++ * SPDX-FileCopyrightText: 2026 mindreset
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * 移植自 read-pico-reader components/e0470_page_turn（Apache-2.0），逻辑未改动；
++ * 依赖的 epd_set_line_phase_luts / epd_set_col_phase_luts / epd_clear_phase_luts
++ * 与 E0470_APPLY_WAVEFORM 已随本次移植一并加入本库。
++ * Ported verbatim from read-pico-reader components/e0470_page_turn (Apache-2.0).
++ *
++ * 基于 MindReset Read Pico 官方 E0470 波形与刷新路径实现。
++ * Built on the MindReset Read Pico E0470 waveform and refresh path.
++ * 错相揭页引擎实现。阅读使用8带/GL16；主页可指定柔和序列和条带数。差分只算一次，每拍只换对应相位的1K LUT。
++ * Staggered page-turn engine: reading uses 8 bands / GL16; main pages may supply a soft sequence and band count. Calculate differences once and select per-band 1 KiB phase LUTs on each tick.
++ * 用户最新指定：阅读和主页均8带37相共44拍，每拍11090us；保留各自灰阶序列、完整相位与原错开启动接口。
++ * Latest user request: reader and main use eight bands/37 phases over 44 ticks at 11090us, with independent gray sequences. Preserve every scan phase and the spaced-launch API.
++ */
++
++#include "e0470_page_turn.h"
++
++#include <stdbool.h>
++#include <string.h>
++
++#include "e0470_epaper_waveform.h"
++#include "esp_attr.h"
++#include "esp_heap_caps.h"
++#include "esp_log.h"
++#include "esp_rom_sys.h"
++#include "esp_timer.h"
++
++static const char* TAG = "e0470_turn";
++
++#define TURN_DEFAULT_BANDS E0470_TURN_FAST_BANDS
++#define TURN_BANDS_MAX 32
++#define TURN_PHASE_CAP 40
++#define TURN_LINE_MAX 2048
++// 每个相位表 1 KiB（256 项 × 32 位），正好是 calc_epd_input_1ppB_1k_S3_VE 一行要读的量。
++// / One phase row is 1 KiB (256 entries x 32 bits), exactly what calc_epd_input_1ppB_1k_S3_VE reads per line.
++#define TURN_LUT_BYTES 1024
++
++static uint8_t (*s_lut)[TURN_LUT_BYTES];
++// 内部 RAM 热窗口：只装本拍活跃条带的那几行。/ Internal hot window: only the rows of the bands active this tick.
++static uint8_t (*s_hot)[TURN_LUT_BYTES];
++static int s_hot_slots;
++// 按绝对相位号索引，指向热窗口里的槽；未激活的相位是 NULL，扫描永远不该读到它。
++// / Indexed by absolute phase, pointing at a hot-window slot; inactive phases stay NULL and the scan must never index them.
++static const uint8_t* s_hot_ptr[TURN_PHASE_CAP];
++static int s_band0[TURN_BANDS_MAX];
++static int s_band1[TURN_BANDS_MAX];
++static int8_t s_band_phase[TURN_BANDS_MAX];
++static int8_t s_line_phase[TURN_LINE_MAX] DRAM_ATTR;
++static const EpdWaveformPhases* s_lut_src;
++static int s_lut_n;
++static int s_tick_us = E0470_TURN_DEFAULT_TICK_US;
++
++// 热窗口只在一次动画期间有意义，所以每次动画结束就归还（见 page_turn_run 末尾），
++// 不跨翻页缓存。内部 RAM 是本机最紧的资源，为一个装饰性动效长期扣住 8 KiB 不值得；
++// 而"由调用方在离开阅读时释放"这种约定已经被证明会漏——这棵树里只有 epdiyLcdEnd()
++// 调过 release，退出阅读器根本不调，于是用一次波纹就少 8 KiB 直到本次开机结束。
++// 放在这里，就没有哪个调用方能忘记它。
++// / The window is only meaningful during one animation, so it goes back at the end of each
++// one (see the tail of page_turn_run) instead of being cached across turns. Internal RAM is
++// the scarcest resource on this board and holding 8 KiB for a decorative effect is not worth
++// it; the "caller releases it when leaving the reader" contract already proved leaky -- only
++// epdiyLcdEnd() ever called release, and leaving the reader does not, so one ripple turn cost
++// 8 KiB for the rest of the boot. Releasing it here means no caller can forget.
++static void release_hot_window(void) {
++    heap_caps_free(s_hot);
++    s_hot = NULL;
++    s_hot_slots = 0;
++    memset(s_hot_ptr, 0, sizeof(s_hot_ptr));
++}
++
++void e0470_page_turn_release(void) {
++    heap_caps_free(s_lut);
++    s_lut = NULL;
++    release_hot_window();
++    s_lut_src = NULL;
++    s_lut_n = 0;
++}
++
++const char* e0470_turn_dir_name(e0470_turn_dir_t dir) {
++    switch (dir) {
++        case E0470_TURN_LTR: return "ltr";
++        case E0470_TURN_RTL: return "rtl";
++        case E0470_TURN_TTB: return "ttb";
++        case E0470_TURN_BTT: return "btt";
++        default: return "?";
++    }
++}
++
++void e0470_page_turn_set_tick_us(int us) {
++    if (us < 0) us = 0;
++    s_tick_us = us;
++}
++
++int e0470_page_turn_tick_us(void) {
++    return s_tick_us;
++}
++
++static void clip_rect(EpdRect* r, int w, int h) {
++    if (r->x < 0) {
++        r->width += r->x;
++        r->x = 0;
++    }
++    if (r->y < 0) {
++        r->height += r->y;
++        r->y = 0;
++    }
++    if (r->x + r->width > w) r->width = w - r->x;
++    if (r->y + r->height > h) r->height = h - r->y;
++}
++
++static EpdRect rotate_to_fb(EpdRect rect) {
++    const int pw = epd_width();
++    const int ph = epd_height();
++    const int lx0 = rect.x;
++    const int ly0 = rect.y;
++    const int lx1 = rect.x + rect.width - 1;
++    const int ly1 = rect.y + rect.height - 1;
++    int ax, ay, bx, by;
++
++    switch (epd_get_rotation()) {
++        case EPD_ROT_LANDSCAPE:
++            ax = lx0;
++            ay = ly0;
++            bx = lx1;
++            by = ly1;
++            break;
++        case EPD_ROT_PORTRAIT:
++            ax = pw - ly0 - 1;
++            ay = lx0;
++            bx = pw - ly1 - 1;
++            by = lx1;
++            break;
++        case EPD_ROT_INVERTED_LANDSCAPE:
++            ax = pw - lx0 - 1;
++            ay = ph - ly0 - 1;
++            bx = pw - lx1 - 1;
++            by = ph - ly1 - 1;
++            break;
++        default:
++            ax = ly0;
++            ay = ph - lx0 - 1;
++            bx = ly1;
++            by = ph - lx1 - 1;
++            break;
++    }
++
++    const int x0 = ax < bx ? ax : bx;
++    const int x1 = ax < bx ? bx : ax;
++    const int y0 = ay < by ? ay : by;
++    const int y1 = ay < by ? by : ay;
++    return (EpdRect){ .x = x0, .y = y0, .width = x1 - x0 + 1, .height = y1 - y0 + 1 };
++}
++
++static void phys_to_logical(int px, int py, int* lx, int* ly) {
++    const int pw = epd_width();
++    const int ph = epd_height();
++    switch (epd_get_rotation()) {
++        case EPD_ROT_LANDSCAPE:
++            *lx = px;
++            *ly = py;
++            break;
++        case EPD_ROT_PORTRAIT:
++            *lx = py;
++            *ly = pw - px - 1;
++            break;
++        case EPD_ROT_INVERTED_LANDSCAPE:
++            *lx = pw - px - 1;
++            *ly = ph - py - 1;
++            break;
++        default:
++            *lx = ph - py - 1;
++            *ly = px;
++            break;
++    }
++}
++
++static bool dir_is_lr(e0470_turn_dir_t dir) {
++    return dir == E0470_TURN_LTR || dir == E0470_TURN_RTL;
++}
++
++static bool dir_is_reverse(e0470_turn_dir_t dir) {
++    return dir == E0470_TURN_RTL || dir == E0470_TURN_BTT;
++}
++
++// 错相轴若落在物理 y 上，整行共用一个相位；落在物理 x 上则一行内分段。
++// If the stagger axis is physical y, a whole line shares one phase; physical x needs column bands.
++static bool uses_line_phase(e0470_turn_dir_t dir) {
++    const bool lr = dir_is_lr(dir);
++    switch (epd_get_rotation()) {
++        case EPD_ROT_LANDSCAPE:
++        case EPD_ROT_INVERTED_LANDSCAPE:
++            return !lr;
++        default:
++            return lr;
++    }
++}
++
++static int band_of(int coord, int origin, int span, int bands, bool reverse) {
++    int band = (coord - origin) * bands / span;
++    if (band < 0) band = 0;
++    if (band >= bands) band = bands - 1;
++    return reverse ? bands - 1 - band : band;
++}
++
++static void clear_bands(int* b0, int* b1, int n) {
++    for (int i = 0; i < n; i++) {
++        b0[i] = 0;
++        b1[i] = 0;
++    }
++}
++
++static void assign_bands(
++    int* b0,
++    int* b1,
++    int bands,
++    int from,
++    int to,
++    int step,
++    bool along_x,
++    int origin,
++    int span,
++    bool lr,
++    bool reverse
++) {
++    clear_bands(b0, b1, bands);
++    int cur = -1;
++    int run = from;
++    for (int p = from; p < to; p += step) {
++        int lx, ly;
++        if (along_x) phys_to_logical(p, 0, &lx, &ly);
++        else phys_to_logical(0, p, &lx, &ly);
++        const int coord = lr ? lx : ly;
++        const int band = band_of(coord, origin, span, bands, reverse);
++        if (band != cur) {
++            if (cur >= 0) {
++                b0[cur] = run;
++                b1[cur] = p;
++            }
++            cur = band;
++            run = p;
++        }
++    }
++    if (cur >= 0) {
++        b0[cur] = run;
++        b1[cur] = to;
++    }
++}
++
++static bool build_luts(const EpdWaveformPhases* gl) {
++    // 40 KiB 全表留在 PSRAM：内部 RAM 空闲只有 ~40 KiB，整表搬进来会吃掉显示 DMA 那块
++    // 45 KiB 连续内存周围的余量。扫描期间真正被逐行读的只有本拍活跃条带的那几行，
++    // 它们在开扫前搬进 ensure_hot_window() 分配的内部窗口。
++    // / The whole 40 KiB table stays in PSRAM: only ~40 KiB of internal RAM is free, and
++    // moving the table in would eat the headroom around the display DMA's 45 KiB
++    // contiguous block. The scan only reads the rows of the bands active in a tick, and
++    // those are copied into the internal window from ensure_hot_window() before scanning.
++    if (!s_lut) {
++        s_lut = heap_caps_aligned_alloc(16, sizeof(uint8_t[TURN_PHASE_CAP][TURN_LUT_BYTES]),
++                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
++        if (!s_lut) return false;
++    }
++    if (s_lut_src == gl && s_lut_n == gl->phases) return true;
++    const int n = gl->phases < TURN_PHASE_CAP ? gl->phases : TURN_PHASE_CAP;
++    for (int phase = 0; phase < n; phase++) {
++        epd_build_1ppB_lut_1k(s_lut[phase], gl, phase);
++    }
++    s_lut_src = gl;
++    s_lut_n = gl->phases;
++    return true;
++}
++
++// 供行线程在扫描临界区里逐行读相位表（render_lcd.c 的 ctx->phase_luts[phase] 交给
++// calc_epd_input_1ppB_1k_S3_VE）。PSRAM 与 LCD DMA 挂在同一条总线上、又走 cache，
++// 逐行回读会把供数拖过 16us 的行预算，行队列被抽干就是 EPD_DRAW_EMPTY_LINE_QUEUE。
++// 所以每拍只把「这一拍真会被读到的」条带 LUT 先拷进内部 RAM，拷贝发生在 setter 和
++// epd_draw_base 之前，扫描开始后不再碰 PSRAM 里的全表。
++// / The feeder threads read the phase rows per line inside the scan critical section
++// (render_lcd.c hands ctx->phase_luts[phase] to calc_epd_input_1ppB_1k_S3_VE). PSRAM
++// sits behind the cache on the same bus as the LCD DMA, so reading it line by line
++// pushes the feeder past the 16 us line budget and drains the queue into
++// EPD_DRAW_EMPTY_LINE_QUEUE. Each tick therefore copies only the band LUTs that tick
++// will actually read into internal RAM, before the setters and epd_draw_base, so no
++// PSRAM row is touched once the scan is running.
++static bool ensure_hot_window(int slots) {
++    if (s_hot != NULL && s_hot_slots >= slots) return true;
++    // 窗口尺寸和内部 RAM 余量必须能从设备日志里读出来，不能靠推算：45 KiB 的 DMA
++    // 连续块是否还够，取决于这里的 largest free block。
++    // / The window size and the internal headroom must be readable from a device log
++    // rather than assumed: whether the 45 KiB contiguous DMA block still fits is exactly
++    // what the largest-free-block figure below answers.
++    const unsigned free_before = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
++    const unsigned block_before = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
++    heap_caps_free(s_hot);
++    s_hot = NULL;
++    s_hot_slots = 0;
++    s_hot = heap_caps_aligned_alloc(16, (size_t)slots * TURN_LUT_BYTES,
++                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++    if (s_hot == NULL) {
++        // 用 ESP_LOGE 而不是 ESP_LOGI：这个构建的 CONFIG_LOG_DEFAULT_LEVEL 是 ERROR，
++        // I/W 级根本不出串口，写在那里的诊断等于没写。
++        // / ESP_LOGE rather than ESP_LOGI: this build sets CONFIG_LOG_DEFAULT_LEVEL to
++        // ERROR, so info and warn never reach the serial port and a diagnostic logged
++        // there is a diagnostic not taken.
++        ESP_LOGE(TAG, "hot window alloc failed: want %d B, internal free %u largest %u",
++                 slots * TURN_LUT_BYTES, free_before, block_before);
++        return false;
++    }
++    s_hot_slots = slots;
++    ESP_LOGE(TAG, "hot window %d B = %d slots x %d in internal RAM; free %u->%u largest %u->%u",
++             slots * TURN_LUT_BYTES, slots, TURN_LUT_BYTES, free_before,
++             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), block_before,
++             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
++    return true;
++}
++
++static void copy_front_to_back(EpdiyHighlevelState* hl, EpdRect phys) {
++    const int w = epd_width();
++    const int h = epd_height();
++    clip_rect(&phys, w, h);
++    if (phys.width <= 0 || phys.height <= 0) return;
++
++    for (int y = phys.y; y < phys.y + phys.height; y++) {
++        uint8_t* src = hl->front_fb + y * w / 2;
++        uint8_t* dst = hl->back_fb + y * w / 2;
++        int x = phys.x;
++        int x_last = phys.x + phys.width - 1;
++        if (x & 1) {
++            dst[x / 2] = (uint8_t)((src[x / 2] & 0xF0) | (dst[x / 2] & 0x0F));
++            x++;
++        }
++        if ((x_last & 1) == 0) {
++            dst[x_last / 2] = (uint8_t)((src[x_last / 2] & 0x0F) | (dst[x_last / 2] & 0xF0));
++            x_last--;
++        }
++        if (x_last >= x) memcpy(dst + x / 2, src + x / 2, (size_t)((x_last - x + 1) / 2));
++    }
++}
++
++static enum EpdDrawError page_turn_run(EpdiyHighlevelState* hl, EpdRect area,
++    e0470_turn_dir_t dir, const EpdWaveform* waveform, unsigned band_count, bool compact) {
++    if (hl == NULL) return EPD_DRAW_NO_PHASES_AVAILABLE;
++    if (band_count < 2 || band_count > TURN_BANDS_MAX) return EPD_DRAW_INVALID_CROP;
++    if (dir > E0470_TURN_BTT) dir = E0470_TURN_RTL;
++
++    const EpdWaveformPhases* gl = e0470_waveform_phases(waveform, MODE_GL16);
++    if (gl == NULL || gl->luts == NULL || gl->phases <= 0 || gl->phases > TURN_PHASE_CAP || gl->phase_times) {
++        return EPD_DRAW_NO_PHASES_AVAILABLE;
++    }
++
++    const int bands = (int)band_count;
++    const int nphase = gl->phases;
++    // 紧凑模式供阅读和快速主页共用；仅提前后续条带的启动，不跳过每个像素的任何相位。
++    // Reading and fast main pages share compact launches; start later bands sooner without skipping any pixel phase.
++    const int launch_step = compact ? 1 : (nphase + bands - 2) / (bands - 1);
++    const int ticks = (bands - 1) * launch_step + nphase;
++    const int fb_w = epd_width();
++    const int fb_h = epd_height();
++    if (fb_h > TURN_LINE_MAX) return EPD_DRAW_INVALID_CROP;
++
++    EpdRect phys = rotate_to_fb(area);
++    clip_rect(&phys, fb_w, fb_h);
++    if (phys.width <= 0 || phys.height <= 0) return EPD_DRAW_SUCCESS;
++
++    const int y0 = phys.y;
++    const int y1 = phys.y + phys.height;
++    const bool lr = dir_is_lr(dir);
++    const bool reverse = dir_is_reverse(dir);
++    const bool line_ph = uses_line_phase(dir);
++    const int origin = lr ? area.x : area.y;
++    const int span = lr ? (area.width > 0 ? area.width : 1) : (area.height > 0 ? area.height : 1);
++
++    if (line_ph) {
++        assign_bands(
++            s_band0, s_band1, bands, y0, y1, 1, false, origin, span, lr, reverse
++        );
++    } else {
++        const int x_lo = (phys.x + 15) & ~15;
++        const int x_hi = (phys.x + phys.width) & ~15;
++        assign_bands(
++            s_band0, s_band1, bands, x_lo, x_hi, 16, true, origin, span, lr, reverse
++        );
++    }
++    int assigned = 0;
++    for (int band = 0; band < bands; ++band) assigned += s_band0[band] < s_band1[band];
++    if (assigned != bands) return EPD_DRAW_INVALID_CROP;
++
++    if (!build_luts(gl)) return EPD_DRAW_NO_PHASES_AVAILABLE;
++    // 窗口拿不到就不上电、不扫描，让调用方落回普通推送。
++    // / Without a window, do not power the panel or scan; let the caller fall back to an ordinary push.
++    if (!ensure_hot_window(bands)) return EPD_DRAW_NO_PHASES_AVAILABLE;
++    epd_poweron();
++
++    const int64_t t_all = esp_timer_get_time();
++    const int64_t t_gen = esp_timer_get_time();
++    epd_difference_image_cropped(
++        hl->front_fb, hl->back_fb, phys, hl->difference_fb, hl->dirty_lines, hl->dirty_columns
++    );
++    const int64_t gen_us = esp_timer_get_time() - t_gen;
++
++    int64_t draw_us = 0;
++    enum EpdDrawError err = EPD_DRAW_SUCCESS;
++    for (int tick = 0; tick < ticks; tick++) {
++        const int64_t t_tick = esp_timer_get_time();
++        memset(hl->dirty_lines, 0, sizeof(bool) * (size_t)fb_h);
++        memset(hl->dirty_columns, 0, (size_t)fb_w / 2);
++        memset(s_band_phase, -1, (size_t)bands);
++        if (line_ph) memset(s_line_phase, -1, (size_t)fb_h);
++
++        bool any = false;
++        // 每拍重填：只有下面这个循环认出的活跃相位才会拿到槽位，其余保持 NULL。
++        // 供行线程只会用 line_phase/col_band_phase 里 >=0 的值去索引，而那两个数组
++        // 每拍都先被清成 -1、且只在这里跟槽位同时写入，所以 NULL 项永远读不到。
++        // / Refilled every tick: only the active phases this loop accepts get a slot, the
++        // rest stay NULL. The feeder indexes phase_luts solely with values >= 0 from
++        // line_phase/col_band_phase, both cleared to -1 each tick and written only here
++        // alongside a slot, so a NULL entry can never be read.
++        memset(s_hot_ptr, 0, sizeof(s_hot_ptr));
++        int hot_used = 0;
++        for (int band = 0; band < bands; band++) {
++            const int phase = tick - band * launch_step;
++            if (phase < 0 || phase >= nphase) continue;
++            const int a = s_band0[band];
++            const int b = s_band1[band];
++            if (a >= b) continue;
++            s_band_phase[band] = (int8_t)phase;
++            // 槽位数上界就是本循环的迭代次数 bands，而 ensure_hot_window(bands) 已经
++            // 保证 s_hot_slots >= bands，所以这里不需要再做边界检查。
++            // / The slot count is bounded by this loop's bands iterations, and
++            // ensure_hot_window(bands) already guarantees s_hot_slots >= bands, so no
++            // bounds check is needed here.
++            memcpy(s_hot[hot_used], s_lut[phase], TURN_LUT_BYTES);
++            s_hot_ptr[phase] = s_hot[hot_used];
++            ++hot_used;
++            if (line_ph) {
++                memset(hl->dirty_lines + a, 1, (size_t)(b - a));
++                memset(s_line_phase + a, (int)(int8_t)phase, (size_t)(b - a));
++            } else {
++                memset(hl->dirty_columns + a / 2, 0xFF, (size_t)((b - a) / 2));
++            }
++            any = true;
++        }
++        if (!any) continue;
++
++        if (line_ph) {
++            int xs = phys.x & ~1;
++            int xe = (phys.x + phys.width + 1) & ~1;
++            if (xe > xs) {
++                memset(hl->dirty_columns + xs / 2, 0xFF, (size_t)((xe - xs) / 2));
++            }
++            epd_set_line_phase_luts(s_hot_ptr, s_line_phase);
++        } else {
++            memset(hl->dirty_lines + y0, 1, (size_t)(y1 - y0));
++            epd_set_col_phase_luts(s_hot_ptr, s_band0, s_band1, s_band_phase, bands);
++        }
++
++        const int64_t t_draw = esp_timer_get_time();
++        err = epd_draw_base(
++            epd_full_screen(),
++            hl->difference_fb,
++            epd_full_screen(),
++            MODE_PACKING_1PPB_DIFFERENCE | MODE_DU,
++            25,
++            hl->dirty_lines,
++            hl->dirty_columns,
++            &E0470_APPLY_WAVEFORM
++        );
++        epd_clear_phase_luts();
++        draw_us += esp_timer_get_time() - t_draw;
++        if (err != EPD_DRAW_SUCCESS) break;
++        const int64_t used = esp_timer_get_time() - t_tick;
++        if (s_tick_us > 0 && used < s_tick_us) {
++            esp_rom_delay_us((uint32_t)(s_tick_us - used));
++        }
++    }
++
++    // 扫描已经结束，而每拍末尾的 epd_clear_phase_luts() 早已把 render_lcd 那几个指向本窗口的
++    // 静态指针置空（render.c:54-60），所以现在归还是安全的：动画之后没有任何路径还会读它，
++    // 包括失败后紧接着的普通推送。
++    // / The scan is over, and epd_clear_phase_luts() at the end of every tick already nulled
++    // render_lcd's static pointers into this window (render.c:54-60), so releasing here is
++    // safe: no path after the animation reads it, including the ordinary push that follows a
++    // failure.
++    release_hot_window();
++
++    // 扫描失败时屏幕可能停在中间相位，保留旧帧基准给调用方恢复。
++    // A failed scan may leave intermediate pixels; keep the old baseline for caller recovery.
++    if (err == EPD_DRAW_SUCCESS) copy_front_to_back(hl, phys);
++    ESP_LOGI(
++        TAG,
++        "dir=%s ticks=%d gen=%d ms draw=%d ms scan_avg=%d us wall=%d ms err=%d",
++        e0470_turn_dir_name(dir),
++        ticks,
++        (int)(gen_us / 1000),
++        (int)(draw_us / 1000),
++        ticks ? (int)(draw_us / ticks) : 0,
++        (int)((esp_timer_get_time() - t_all) / 1000),
++        (int)err
++    );
++    return err;
++}
++
++enum EpdDrawError e0470_page_turn(EpdiyHighlevelState* hl, EpdRect area, e0470_turn_dir_t dir) {
++    return page_turn_run(hl, area, dir, &E0470_WAVEFORM, TURN_DEFAULT_BANDS, true);
++}
++
++enum EpdDrawError e0470_page_turn_with_waveform(EpdiyHighlevelState* hl, EpdRect area,
++    e0470_turn_dir_t dir, const EpdWaveform* waveform, unsigned band_count) {
++    return page_turn_run(hl, area, dir, waveform, band_count, false);
++}
++
++enum EpdDrawError e0470_page_turn_with_waveform_compact(EpdiyHighlevelState* hl, EpdRect area,
++    e0470_turn_dir_t dir, const EpdWaveform* waveform, unsigned band_count) {
++    return page_turn_run(hl, area, dir, waveform, band_count, true);
++}
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.h sdk_work/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.h
+--- sdk_pristine/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.h
++++ sdk_work/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.h
+@@ -0,0 +1,71 @@
++/*
++ * SPDX-FileCopyrightText: 2026 mindreset
++ * SPDX-License-Identifier: Apache-2.0
++ *
++ * 移植自 read-pico-reader components/e0470_page_turn（Apache-2.0），接口未改动。
++ * Ported verbatim from read-pico-reader components/e0470_page_turn (Apache-2.0).
++ *
++ * 基于 MindReset Read Pico 官方 E0470 波形与刷新路径实现。
++ * Built on the MindReset Read Pico E0470 waveform and refresh path.
++ * 错相揭页引擎。应用只依赖本公开接口，不依赖条带或 LUT 的内部布局。
++ * Staggered page-turn engine. Applications depend on this public API, not the internal band or LUT layout.
++ * 用户最新指定阅读与主页均用8带、11090us节拍；保留各自灰阶序列，原错开启动接口仍可用。
++ * Latest user request: reader and main pages use eight bands at 11090us with distinct gray sequences, retaining the spaced-launch API.
++ */
++
++#pragma once
++
++#include "epd_highlevel.h"
++#include "epdiy.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/// 逻辑屏幕上的揭页方向；库内按当前旋转映射到 framebuffer。/ Logical direction mapped through the current rotation.
++typedef enum {
++    E0470_TURN_LTR = 0,
++    E0470_TURN_RTL = 1,
++    E0470_TURN_TTB = 2,
++    E0470_TURN_BTT = 3,
++} e0470_turn_dir_t;
++
++#define E0470_TURN_DEFAULT_TICK_US 12000
++// PR17快档只缩短软件补等，不改变单次扫描或每像素相位。/ PR17 fast pacing changes only software padding, never a scan or a pixel's phases.
++#define E0470_TURN_FAST_TICK_US 11090
++#define E0470_TURN_FAST_BANDS 8
++
++const char* e0470_turn_dir_name(e0470_turn_dir_t dir);
++
++/// 每拍目标间隔；默认12ms，实际扫描更慢时不截短；不改变驱动脉冲宽度。/ Target tick interval: 12ms; never truncate a slower scan or change pulse widths.
++void e0470_page_turn_set_tick_us(int us);
++int e0470_page_turn_tick_us(void);
++/// 离开阅读时释放按需分配的相位表。/ Release the lazily allocated phase table when leaving the reader.
++/// 内部 RAM 的热窗口不在此列：它按次分配、每次动画结束就归还，寿命只有一次翻页。
++/// The internal hot window is not part of this: it is allocated per animation and handed back
++/// when that animation ends, so its lifetime is a single turn.
++void e0470_page_turn_release(void);
++
++/// `area` 是逻辑坐标；无可用 GL16 时返回 `EPD_DRAW_NO_PHASES_AVAILABLE`，不刷屏。
++/// `area` uses logical coordinates; unavailable GL16 phases return without scanning.
++/// 阅读8带按一拍一带启动，37相共44拍；调用方选择11090us并负责FAST扫描与HV轨保活。
++/// Reader launches 8 bands one per tick, totaling 44 ticks for 37 phases; the caller selects 11090us and owns FAST scanning and HV rail keepalive.
++enum EpdDrawError e0470_page_turn(
++    EpdiyHighlevelState* hl, EpdRect area, e0470_turn_dir_t dir
++);
++
++/// 显式灰阶序列与2..32条带；阅读入口固定原GL16/8带。/ Explicit gray sequence and 2..32 bands; the reader entry uses original GL16/8 bands.
++enum EpdDrawError e0470_page_turn_with_waveform(
++    EpdiyHighlevelState* hl, EpdRect area, e0470_turn_dir_t dir,
++    const EpdWaveform* waveform, unsigned bands
++);
++
++/// 显式序列的一拍一带入口；保留波形、指定条带数与当前节拍，8带37相共44拍。/ Compact explicit sequence: retain waveform, requested bands and current pacing; eight bands/37 phases take 44 ticks.
++enum EpdDrawError e0470_page_turn_with_waveform_compact(
++    EpdiyHighlevelState* hl, EpdRect area, e0470_turn_dir_t dir,
++    const EpdWaveform* waveform, unsigned bands
++);
++
++#ifdef __cplusplus
++}
++#endif
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/epd_highlevel.h sdk_work/libs/display/EpdiyLcd/src/epdiy/src/epd_highlevel.h
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/epd_highlevel.h
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/epd_highlevel.h
+@@ -147,6 +147,31 @@
+     EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area
+ );
+ 
++/**
++ * 非阻塞版更新：差分与 back_fb 回写在调用线程里同步完成，面板扫描交给内部任务。
++ * `*started == false` 表示没有内容变化、根本没有起扫（仍然是成功的），调用方无需等待。
++ * 起扫后调用方可以立刻改写 `state->front_fb`（差分包已经算好），但下一次更新之前
++ * 必须调用 `epd_hl_update_wait()`。
++ * / Non-blocking update: the difference and the back_fb copy-back run inline;
++ * the panel scan runs on the internal task. `*started == false` means nothing
++ * changed and no scan was started (still success) -- nothing to wait for.
++ * After a start the caller may redraw `state->front_fb` (the difference image is
++ * already built), but must call `epd_hl_update_wait()` before the next update.
++ */
++enum EpdDrawError epd_hl_update_screen_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, bool* started
++);
++enum EpdDrawError epd_hl_update_area_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool* started
++);
++enum EpdDrawError epd_hl_update_area_full_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool* started
++);
++
++/// 等待上一次 `*_start` 的扫描跑完并返回其结果（没有在飞时返回成功）。
++enum EpdDrawError epd_hl_update_wait(void);
++bool epd_hl_update_pending(void);
++
+ /// 区域内强制脏行/脏列，未变化的白像素也会走 LUT（GL16 白底补推用）。
+ enum EpdDrawError epd_hl_update_area_full(
+     EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/epdiy.h sdk_work/libs/display/EpdiyLcd/src/epdiy/src/epdiy.h
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/epdiy.h
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/epdiy.h
+@@ -163,6 +163,10 @@
+     ///
+     /// Reduce the display clock speed.
+     EPD_DRAW_EMPTY_LINE_QUEUE = 0x400,
++
++    /// A deferred scan is still in flight, or the scan task is not available.
++    /// Callers must join with epd_draw_wait() before starting the next one.
++    EPD_DRAW_SCAN_BUSY = 0x800,
+ };
+ 
+ /// The default draw mode (non-flashy refresh, whith previously white screen).
+@@ -528,6 +532,39 @@
+     const uint8_t* drawn_columns,
+     const EpdWaveform* waveform
+ );
++
++/**
++ * 非阻塞版 `epd_draw_base`：做完差分/上下文准备后立即返回，扫描在内部任务上跑。
++ * 返回成功表示扫描已启动（或已有一个在飞时返回 `EPD_DRAW_SCAN_BUSY`），调用方
++ * 之后必须用 `epd_draw_wait()` 收尾；在此之前不得再启动任何绘制，也不得改写
++ * 作为差分输入的帧缓冲。
++ * / Non-blocking `epd_draw_base`: prepares the difference/context and returns
++ * once the scan is running on the internal task. Must be joined with
++ * `epd_draw_wait()`; no other draw may start (and no input buffer may be
++ * rewritten) in between.
++ */
++enum EpdDrawError epd_draw_base_start(
++    EpdRect area,
++    const uint8_t* data,
++    EpdRect crop_to,
++    enum EpdDrawMode mode,
++    int temperature,
++    const bool* drawn_lines,
++    const uint8_t* drawn_columns,
++    const EpdWaveform* waveform
++);
++
++/** 等待 `epd_draw_base_start()` 启动的扫描跑完；没有在飞时返回上一次结果。 */
++enum EpdDrawError epd_draw_wait(void);
++bool epd_draw_scan_pending(void);
++
++/// 下一次扫描按行选择相位 LUT；负相位表示该行保持。/ Select a phase LUT by line for the next scan; negative phases hold.
++void epd_set_line_phase_luts(const uint8_t* const* phase_luts, const int8_t* line_phase);
++/// 下一次扫描按物理列条带选择相位 LUT；范围为半开像素区间。/ Select phase LUTs by physical column bands for the next scan.
++void epd_set_col_phase_luts(const uint8_t* const* phase_luts, const int* x0, const int* x1,
++                            const int8_t* phase, int nbands);
++/// 丢弃未用的错相配置。/ Discard a staged phase configuration that was not consumed.
++void epd_clear_phase_luts(void);
+ 
+ /// 把波形第 `frame` 相展开成 1ppB / S3 VE 用的 1K 表（256 × uint32）。
+ void epd_build_1ppB_lut_1k(uint8_t* lut, const EpdWaveformPhases* phases, int frame);
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/highlevel.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/highlevel.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/highlevel.c
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/highlevel.c
+@@ -92,6 +92,42 @@
+     if (copy_ms) *copy_ms = s_last_copy_ms;
+ }
+ 
++// 异步更新的待收尾状态。同一时刻只有一次扫描在飞（render_context 是单例）。
++// 计时字段用于 epd_hl_last_timing()：draw_ms 是从起扫到 wait 返回的墙钟，
++// 所以异步调用方重叠出去的时间会算在里面，读日志时别把它当成纯扫描时间。
++// / Pending state for a deferred update. Only one scan may be in flight (the
++// render context is a singleton). The timing fields feed
++// epd_hl_last_timing(): draw_ms is the wall clock from start to wait, so time
++// the caller overlapped appears in it -- do not read it as pure scan time.
++static bool s_update_pending;
++static int s_pending_diff_ms;
++static int s_pending_copy_ms;
++static uint32_t s_pending_started_ms;
++
++static enum EpdDrawError hl_update_wait(void) {
++    if (!s_update_pending) {
++        return EPD_DRAW_SUCCESS;
++    }
++    s_update_pending = false;
++    enum EpdDrawError err = epd_draw_wait();
++    uint32_t now = esp_timer_get_time() / 1000;
++    int draw_ms = (int)(now - s_pending_started_ms);
++    hl_record_timing(s_pending_diff_ms, draw_ms, s_pending_copy_ms);
++    ESP_LOGI(
++        "epdiy",
++        "diff: %dms, draw: %dms, buffer update: %dms, total: %dms",
++        s_pending_diff_ms,
++        draw_ms,
++        s_pending_copy_ms,
++        s_pending_diff_ms + draw_ms + s_pending_copy_ms
++    );
++    return err;
++}
++
++bool epd_hl_update_pending(void) {
++    return s_update_pending;
++}
++
+ enum EpdDrawError epd_hl_update_screen(EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature) {
+     return epd_hl_update_area(state, mode, temperature, epd_full_screen());
+ }
+@@ -198,10 +234,13 @@
+     return rotated;
+ }
+ 
+-static enum EpdDrawError hl_update_area(
+-    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool force_full
++static enum EpdDrawError hl_update_area_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool force_full,
++    bool* started
+ ) {
+     assert(state != NULL);
++    assert(started != NULL);
++    *started = false;
+     // Not right to rotate here since this copies part of buffer directly
+ 
+     // Check rotation FIX
+@@ -250,8 +289,7 @@
+     diff_area.width = epd_width();
+     diff_area.height = epd_height();
+ 
+-    enum EpdDrawError err = EPD_DRAW_SUCCESS;
+-    err = epd_draw_base(
++    enum EpdDrawError err = epd_draw_base_start(
+         epd_full_screen(),
+         state->difference_fb,
+         diff_area,
+@@ -262,56 +300,98 @@
+         state->waveform
+     );
+ 
+-    uint32_t t2 = esp_timer_get_time() / 1000;
+-
+     if (err != EPD_DRAW_SUCCESS) {
+-        hl_record_timing(t1 - ts, t2 - t1, 0);
++        hl_record_timing(t1 - ts, 0, 0);
+         return err;
+     }
++
+     // 回写范围和差分实际算过的列段一致：段外的像素没被驱动，back_fb 不能跟着改。
+-    int x_start, x_stop;
+-    epd_difference_column_range(area, &x_start, &x_stop);
+-    diff_area.x = x_start;
+-    diff_area.y = 0;
+-    diff_area.width = x_stop - x_start;
+-    diff_area.height = epd_height();
++    // 回写放在 start 返回之后、调用方拿到控制权之前：那时 front_fb 还是本帧的内容，
++    // 而扫描任务只读差分图，与写 back_fb 无冲突。start 本身失败（无波形/非法裁剪）
++    // 时不回写，与旧语义一致。
++    //
++    // ★ 语义变化：扫描失败只有 wait 时才知道，那时 back_fb 已经推进了。失败后上层
++    // 必须整屏重建基准（EpdiyLcd 会清 baselineKnown 并强制下一次 Full），否则差分
++    // 会以为这一帧已经上屏。
++    // / Copy back only the column segment the difference covered: pixels outside
++    // it are never driven, so back_fb must not change there. The copy runs after
++    // start returns but before the caller regains control, when front_fb still
++    // holds this frame and the scan only reads the difference image. A start
++    // failure (no phases / bad crop) skips the copy, matching the old semantics.
++    //
++    // ★ Semantic change: a scan failure is only known at wait, by which time
++    // back_fb has advanced. After a failure the caller MUST rebuild the baseline
++    // with a full frame (EpdiyLcd clears baselineKnown and forces the next push
++    // to Full); otherwise the difference believes this frame is already shown.
++    {
++        int x_start, x_stop;
++        epd_difference_column_range(area, &x_start, &x_stop);
++        EpdRect copy_area = {.x = x_start, .y = 0, .width = x_stop - x_start, .height = epd_height()};
++        int buf_width = epd_width();
++        for (int l = copy_area.y; copy_area.width > 0 && l < copy_area.y + copy_area.height; l++) {
++            if (state->dirty_lines[l] > 0) {
++                uint8_t* lfb = state->front_fb + buf_width / 2 * l;
++                uint8_t* lbb = state->back_fb + buf_width / 2 * l;
+ 
+-    int buf_width = epd_width();
++                int x = copy_area.x;
++                int x_last = copy_area.x + copy_area.width - 1;
+ 
+-    for (int l = diff_area.y; diff_area.width > 0 && l < diff_area.y + diff_area.height; l++) {
+-        if (state->dirty_lines[l] > 0) {
+-            uint8_t* lfb = state->front_fb + buf_width / 2 * l;
+-            uint8_t* lbb = state->back_fb + buf_width / 2 * l;
++                if (x % 2) {
++                    *(lbb + x / 2) = (*(lfb + x / 2) & 0xF0) | (*(lbb + x / 2) & 0x0F);
++                    x += 1;
++                }
+ 
+-            int x = diff_area.x;
+-            int x_last = diff_area.x + diff_area.width - 1;
++                if (!(x_last % 2)) {
++                    *(lbb + x_last / 2) = (*(lfb + x_last / 2) & 0x0F) | (*(lbb + x_last / 2) & 0xF0);
++                    x_last -= 1;
++                }
+ 
+-            if (x % 2) {
+-                *(lbb + x / 2) = (*(lfb + x / 2) & 0xF0) | (*(lbb + x / 2) & 0x0F);
+-                x += 1;
++                memcpy(lbb + (x / 2), lfb + (x / 2), (x_last - x + 1) / 2);
+             }
+-
+-            if (!(x_last % 2)) {
+-                *(lbb + x_last / 2) = (*(lfb + x_last / 2) & 0x0F) | (*(lbb + x_last / 2) & 0xF0);
+-                x_last -= 1;
+-            }
+-
+-            memcpy(lbb + (x / 2), lfb + (x / 2), (x_last - x + 1) / 2);
+         }
+     }
+ 
+-    uint32_t t3 = esp_timer_get_time() / 1000;
+-    hl_record_timing(t1 - ts, t2 - t1, t3 - t2);
++    uint32_t t2 = esp_timer_get_time() / 1000;
+ 
+-    ESP_LOGI(
+-        "epdiy",
+-        "diff: %dms, draw: %dms, buffer update: %dms, total: %dms",
+-        t1 - ts,
+-        t2 - t1,
+-        t3 - t2,
+-        t3 - ts
+-    );
+-    return err;
++    s_update_pending = true;
++    s_pending_diff_ms = (int)(t1 - ts);
++    s_pending_copy_ms = (int)(t2 - t1);
++    s_pending_started_ms = t2;
++    *started = true;
++    return EPD_DRAW_SUCCESS;
++}
++
++enum EpdDrawError epd_hl_update_area_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool* started
++) {
++    return hl_update_area_start(state, mode, temperature, area, false, started);
++}
++
++enum EpdDrawError epd_hl_update_area_full_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool* started
++) {
++    return hl_update_area_start(state, mode, temperature, area, true, started);
++}
++
++enum EpdDrawError epd_hl_update_screen_start(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, bool* started
++) {
++    return hl_update_area_start(state, mode, temperature, epd_full_screen(), false, started);
++}
++
++enum EpdDrawError epd_hl_update_wait(void) {
++    return hl_update_wait();
++}
++
++static enum EpdDrawError hl_update_area(
++    EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature, EpdRect area, bool force_full
++) {
++    bool started = false;
++    enum EpdDrawError err = hl_update_area_start(state, mode, temperature, area, force_full, &started);
++    if (err != EPD_DRAW_SUCCESS || !started) {
++        return err;
++    }
++    return hl_update_wait();
+ }
+ 
+ enum EpdDrawError epd_hl_update_area(
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
+@@ -64,6 +64,14 @@
+     /// LUT building function. Must not be NULL
+     lut_build_func_t lut_build_func;
+ 
++    // 同一物理扫描中的逐行或逐列错相 LUT。/ Per-line or per-column staggered LUTs in one physical scan.
++    const uint8_t* const* phase_luts;
++    const int8_t* line_phase;
++    const int* col_band_x0;
++    const int* col_band_x1;
++    const int8_t* col_band_phase;
++    int col_band_n;
++
+     /// Queue of lines prepared for output to the display,
+     /// one for each thread.
+     LineQueue_t line_queues[NUM_RENDER_THREADS];
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
+@@ -77,6 +77,19 @@
+         epd_lcd_frame_done_cb((frame_done_func_t)handle_lcd_frame_done, ctx);
+         prepare_context_for_next_frame(ctx);
+ 
++        // Both feeders must be idle here (the previous frame joined above).
++        // A leftover ring index means a feeder missed a line; from then on the
++        // two queues can hand the ISR lines out of order, which shows as a
++        // horizontal smear that survives every later refresh. Reset per frame
++        // so a single disturbed frame cannot poison the rest of the session.
++        for (int i = 0; i < NUM_RENDER_THREADS; i++) {
++            if (ctx->line_queues[i].current != ctx->line_queues[i].last) {
++                ESP_LOGE("epd_lcd", "line queue %d not empty (%d/%d); resetting", i,
++                         (int)ctx->line_queues[i].current, (int)ctx->line_queues[i].last);
++            }
++            lq_reset(&ctx->line_queues[i]);
++        }
++
+         // start both feeder tasks
+         xTaskNotifyGive(ctx->feed_tasks[!xPortGetCoreID()]);
+         xTaskNotifyGive(ctx->feed_tasks[xPortGetCoreID()]);
+@@ -207,6 +220,16 @@
+ 
+     // index of the line that triggers the frame output when processed
+     int trigger_line = int_min(s_prefill_lines, max_y - min_y);
++    // ★ 硬上限：触发点必须早于两个 feeder 都填满各自的队列。两个队列合计
++    // 2*size 行；触发点若达到这个量级，两个 feeder 会先在 lq_current 上忙等，
++    // 而 l == trigger_line 永远轮不到分配，于是帧永不启动、CPU 空转、TWDT 复位。
++    // 留 16 行余量。s_prefill_lines 由调用方设置（异步 128 曾因此死锁）。
++    // / Hard cap: the trigger must fire before both feeders fill their queues.
++    // Together they hold 2*size lines; at that point both can block in
++    // lq_current, l == trigger_line is never handed out, the frame never
++    // starts, the CPUs spin and the TWDT resets the device (seen with 128).
++    const int max_trigger = 2 * ctx->line_queues[thread_id].size - 16;
++    if (trigger_line > max_trigger) trigger_line = max_trigger;
+ 
+     while (l = atomic_fetch_add(&ctx->lines_prepared, 1), l < ctx->lines_total) {
+         ctx->line_threads[l] = thread_id;
+@@ -253,7 +276,29 @@
+             buf = lq_current(lq);
+         }
+ 
+-        ctx->lut_lookup_func(lp, buf, ctx->conversion_lut, ctx->display_width);
++        if (ctx->col_band_n > 0 && ctx->phase_luts && ctx->col_band_x0 &&
++            ctx->col_band_x1 && ctx->col_band_phase) {
++            // 未启动的条带保持零电压；活跃条带使用自己的 GL16 相位。
++            // Inactive bands hold at zero voltage; active bands use their GL16 phase.
++            memset(buf, 0x00, ctx->display_width / 4);
++            for (int band = 0; band < ctx->col_band_n; ++band) {
++                int8_t phase = ctx->col_band_phase[band];
++                if (phase < 0) continue;
++                int x0 = ctx->col_band_x0[band];
++                int x1 = ctx->col_band_x1[band];
++                if (x0 < 0 || x1 > ctx->display_width || x0 >= x1 ||
++                    (x0 & 15) || (x1 & 15)) continue;
++                ctx->lut_lookup_func((const uint32_t*)(ptr + x0), buf + x0 / 4,
++                                     ctx->phase_luts[phase], (uint32_t)(x1 - x0));
++            }
++        } else {
++            const uint8_t* lut = ctx->conversion_lut;
++            if (ctx->line_phase && ctx->phase_luts && l < ctx->display_height) {
++                int8_t phase = ctx->line_phase[l];
++                if (phase >= 0) lut = ctx->phase_luts[phase];
++            }
++            ctx->lut_lookup_func(lp, buf, lut, ctx->display_width);
++        }
+ 
+         // apply the line mask
+         epd_apply_line_mask_VE(buf, ctx->line_mask, ctx->display_width / 4);
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/render.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render.c
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/render.c
+@@ -38,6 +38,44 @@
+ static bool board_init_attempted;
+ static bool renderer_ready;
+ 
++/* 错相 LUT 暂存（水波纹翻页用）：setter 只登记指针，epd_draw_base 拷进 context 后立刻
++ * 作废，所以配置严格一次性，不会泄漏到下一次普通扫描。移植自 read-pico-reader。
++ * / Staging for staggered phase LUTs (water-ripple turn): the setters only register
++ * pointers; epd_draw_base copies them into the context and immediately discards the
++ * staging, so a configuration is strictly one-shot and never leaks into the next
++ * ordinary scan. Ported from read-pico-reader (Apache-2.0). */
++static const uint8_t* const* s_phase_luts;
++static const int8_t* s_line_phase;
++static const int* s_col_band_x0;
++static const int* s_col_band_x1;
++static const int8_t* s_col_band_phase;
++static int s_col_band_n;
++
++void epd_clear_phase_luts(void) {
++    s_phase_luts = NULL;
++    s_line_phase = NULL;
++    s_col_band_x0 = NULL;
++    s_col_band_x1 = NULL;
++    s_col_band_phase = NULL;
++    s_col_band_n = 0;
++}
++
++void epd_set_line_phase_luts(const uint8_t* const* phase_luts, const int8_t* line_phase) {
++    epd_clear_phase_luts();
++    s_phase_luts = phase_luts;
++    s_line_phase = line_phase;
++}
++
++void epd_set_col_phase_luts(const uint8_t* const* phase_luts, const int* x0, const int* x1,
++                            const int8_t* phase, int nbands) {
++    epd_clear_phase_luts();
++    s_phase_luts = phase_luts;
++    s_col_band_x0 = x0;
++    s_col_band_x1 = x1;
++    s_col_band_phase = phase;
++    s_col_band_n = nbands;
++}
++
+ void epd_push_pixels(EpdRect area, short time, int color) {
+     render_context.area = area;
+     epd_push_pixels_lcd(&render_context, time, color);
+@@ -174,10 +212,37 @@
+     return (((epd_height() + 7) / 8) * 8);
+ }
+ 
++///////////////////////////// Deferred scan ///////////////////////////////
++// 异步推屏：把一帧的扫描交给独立任务，调用方在帧启动后立即返回，用扫描的
++// 400ms 去排版/预绘下一页，直到 epd_draw_wait() 之前都不再碰 render_context。
++// render_context 是全局单例，所以同一时刻只允许一次扫描在飞；上层负责 join。
++// / Deferred scan: one frame's scan runs on a dedicated task so the caller can
++// return right after the frame starts and lay out the next page during the
++// ~400 ms scan. render_context is a singleton, so at most one scan may be in
++// flight; the caller owns the join (epd_draw_wait).
++//
++// Why a task instead of a state machine on the caller: lcd_do_update() advances
++// one waveform phase per frame_done ISR and must keep doing so for the whole
++// cycle (37 phases for GL16). Somebody has to be sleeping on that semaphore.
++static TaskHandle_t s_scan_task;
++static SemaphoreHandle_t s_scan_done;
++static volatile bool s_scan_pending;
++static volatile enum EpdDrawError s_scan_error;
++
++static void scan_task(void* arg) {
++    (void)arg;
++    while (true) {
++        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
++        lcd_do_update(&render_context);
++        s_scan_error = render_context.error;
++        xSemaphoreGive(s_scan_done);
++    }
++}
++
+ // FIXME: fix misleading naming:
+ //  area -> buffer dimensions
+ //  crop -> area taken out of buffer
+-enum EpdDrawError IRAM_ATTR epd_draw_base(
++static enum EpdDrawError epd_draw_base_prepare(
+     EpdRect area,
+     const uint8_t* data,
+     EpdRect crop_to,
+@@ -250,6 +315,13 @@
+     render_context.data_ptr = data;
+     render_context.lut_build_func = lut_functions.build_func;
+     render_context.lut_lookup_func = lut_functions.lookup_func;
++    render_context.phase_luts = s_phase_luts;
++    render_context.line_phase = s_line_phase;
++    render_context.col_band_x0 = s_col_band_x0;
++    render_context.col_band_x1 = s_col_band_x1;
++    render_context.col_band_phase = s_col_band_phase;
++    render_context.col_band_n = s_col_band_n;
++    epd_clear_phase_luts();
+ 
+     render_context.lines_prepared = 0;
+     render_context.lines_consumed = 0;
+@@ -282,16 +354,83 @@
+         render_context.line_mask, drawn_columns, render_context.display_width / 4
+     );
+ 
+-    lcd_do_update(&render_context);
++    return EPD_DRAW_SUCCESS;
++}
+ 
+-    if (render_context.error & EPD_DRAW_EMPTY_LINE_QUEUE) {
++enum EpdDrawError epd_draw_base_start(
++    EpdRect area,
++    const uint8_t* data,
++    EpdRect crop_to,
++    enum EpdDrawMode mode,
++    int temperature,
++    const bool* drawn_lines,
++    const uint8_t* drawn_columns,
++    const EpdWaveform* waveform
++) {
++    if (s_scan_task == NULL || s_scan_done == NULL) {
++        return EPD_DRAW_SCAN_BUSY;
++    }
++    if (s_scan_pending) {
++        // The caller broke the contract. Refuse instead of corrupting the
++        // context of the scan that is still running.
++        return EPD_DRAW_SCAN_BUSY;
++    }
++    enum EpdDrawError err = epd_draw_base_prepare(
++        area, data, crop_to, mode, temperature, drawn_lines, drawn_columns, waveform
++    );
++    if (err != EPD_DRAW_SUCCESS) {
++        return err;
++    }
++    s_scan_error = EPD_DRAW_SUCCESS;
++    s_scan_pending = true;
++    xTaskNotifyGive(s_scan_task);
++    return EPD_DRAW_SUCCESS;
++}
++
++enum EpdDrawError epd_draw_wait(void) {
++    if (!s_scan_pending) {
++        return s_scan_error;
++    }
++    xSemaphoreTake(s_scan_done, portMAX_DELAY);
++    s_scan_pending = false;
++
++    render_context.phase_luts = NULL;
++    render_context.line_phase = NULL;
++    render_context.col_band_x0 = NULL;
++    render_context.col_band_x1 = NULL;
++    render_context.col_band_phase = NULL;
++    render_context.col_band_n = 0;
++
++    if (s_scan_error & EPD_DRAW_EMPTY_LINE_QUEUE) {
+         ESP_LOGE("epdiy", "line buffer underrun occurred!");
+     }
++    return s_scan_error;
++}
+ 
+-    if (render_context.error != EPD_DRAW_SUCCESS) {
+-        return render_context.error;
++bool epd_draw_scan_pending(void) {
++    return s_scan_pending;
++}
++
++// FIXME: fix misleading naming:
++//  area -> buffer dimensions
++//  crop -> area taken out of buffer
++enum EpdDrawError IRAM_ATTR epd_draw_base(
++    EpdRect area,
++    const uint8_t* data,
++    EpdRect crop_to,
++    enum EpdDrawMode mode,
++    int temperature,
++    const bool* drawn_lines,
++    const uint8_t* drawn_columns,
++    const EpdWaveform* waveform
++) {
++    enum EpdDrawError err = epd_draw_base_start(
++        area, data, crop_to, mode, temperature, drawn_lines, drawn_columns, waveform
++    );
++    if (err != EPD_DRAW_SUCCESS) {
++        return err;
+     }
+-    return EPD_DRAW_SUCCESS;
++    return epd_draw_wait();
+ }
+ 
+ static void IRAM_ATTR render_thread(void* arg) {
+@@ -381,6 +520,16 @@
+         if (xTaskCreatePinnedToCore(render_thread, "epd_prep", 1 << 12, (void*)i,
+                                   configMAX_PRIORITIES - 1, &render_context.feed_tasks[i], i) != pdPASS) goto fail;
+     }
++    // 扫描推进任务：只负责在 37 个相位之间等 frame_done 并准备下一帧，几乎总是
++    // 阻塞，所以给它高优先级也不会抢渲染任务。绑 core 0：渲染任务固定在 core 1，
++    // 排版/字体光栅化与相位推进分属两核。
++    // / Scan driver: sleeps on frame_done between phases and prepares the next
++    // one. It is almost always blocked, so a high priority costs the render task
++    // nothing. Pinned to core 0; the render task lives on core 1.
++    s_scan_done = xSemaphoreCreateBinary();
++    if (s_scan_done == NULL) goto fail;
++    if (xTaskCreatePinnedToCore(scan_task, "epd_scan", 3 << 10, NULL,
++                                configMAX_PRIORITIES - 2, &s_scan_task, 0) != pdPASS) goto fail;
+     renderer_ready = true;
+     return true;
+ fail:
+@@ -392,6 +541,15 @@
+ void epd_renderer_deinit() {
+     const EpdBoardDefinition* board = epd_current_board();
+     if (board_init_attempted && board != NULL) board->poweroff(epd_ctrl_state());
++    // 先停扫描推进任务：它可能正睡在 frame_done 上，而下面要拆掉喂行任务与信号量。
++    // / Stop the scan driver first: it may be sleeping on frame_done, and the
++    // feeder tasks and semaphores are torn down below.
++    if (s_scan_task != NULL) vTaskDelete(s_scan_task);
++    s_scan_task = NULL;
++    if (s_scan_done != NULL) vSemaphoreDelete(s_scan_done);
++    s_scan_done = NULL;
++    s_scan_pending = false;
++    s_scan_error = EPD_DRAW_SUCCESS;
+     for (int i = NUM_RENDER_THREADS - 1; i >= 0; i--) {
+         // FreeRTOS interprets a null task handle as the calling task.
+         if (render_context.feed_tasks[i] != NULL) vTaskDelete(render_context.feed_tasks[i]);
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/test/host/queue.c sdk_work/libs/display/EpdiyLcd/test/host/queue.c
+--- sdk_pristine/libs/display/EpdiyLcd/test/host/queue.c
++++ sdk_work/libs/display/EpdiyLcd/test/host/queue.c
+@@ -5,7 +5,13 @@
+ #include "output_common/line_queue.h"
+ 
+ static size_t table_bytes;
++#if defined(__APPLE__)
++// macOS ld64 has no --wrap. The test compiles line_queue.c with
++// -Dcalloc=__wrap_calloc instead, so the real allocator needs a definition here.
++void* __real_calloc(size_t count, size_t size) { return calloc(count, size); }
++#else
+ void* __real_calloc(size_t, size_t);
++#endif
+ void* __wrap_calloc(size_t count, size_t size) {
+   table_bytes = count * size;
+   return __real_calloc(count, size);
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/test/host/test_transactions.py sdk_work/libs/display/EpdiyLcd/test/host/test_transactions.py
+--- sdk_pristine/libs/display/EpdiyLcd/test/host/test_transactions.py
++++ sdk_work/libs/display/EpdiyLcd/test/host/test_transactions.py
+@@ -92,14 +92,18 @@
+         (display / "src/bus/EpdBus.h").write_text(
+             "#pragma once\n#include <cstdint>\nnamespace freeink { enum class BusyPolarity {ActiveLow}; class EpdBus {}; }\n")
+         includes = [root, LCD / "include", LCD / "src", LCD / "src/epdiy/src",
+-                    LCD / "src/epdiy/include", LCD / "src/e0470/include",
++                    LCD / "src/epdiy/include", LCD / "src/e0470/include", LCD / "src/e0470_page_turn",
+                     display / "include", display / "src/driver"]
+         flags = ["-I" + str(path) for path in includes]
+         highlevel = root / "highlevel.o"
+         queue = root / "queue.o"
+         subprocess.run(["cc", "-std=c11", "-D_POSIX_C_SOURCE=200112L", *flags, "-c",
+                         str(LCD / "src/epdiy/src/highlevel.c"), "-o", str(highlevel)], check=True)
+-        subprocess.run(["cc", "-std=c11", "-D_POSIX_C_SOURCE=200112L", *flags, "-c",
++        # macOS ld64 has no --wrap; redirect calloc in line_queue.c with a macro
++        # instead. The Linux path keeps the linker wrap.
++        darwin = sys.platform == "darwin"
++        queue_defs = ["-Dcalloc=__wrap_calloc"] if darwin else []
++        subprocess.run(["cc", "-std=c11", "-D_POSIX_C_SOURCE=200112L", *flags, *queue_defs, "-c",
+                         str(LCD / "src/epdiy/src/output_common/line_queue.c"), "-o", str(queue)], check=True)
+         queue_check = root / "queue-check.o"
+         subprocess.run(["cc", "-std=c11", *flags, "-c", str(HERE / "queue.c"),
+@@ -110,7 +114,7 @@
+                         f"-DFREEINK_READPICO_DIAGNOSTICS={diagnostics}",
+                             str(HERE / "transactions.cpp"), str(LCD / "src/EpdiyLcd.cpp"),
+                             str(display / "src/driver/EpdiyLcdDriver.cpp"), str(highlevel), str(queue), str(queue_check),
+-                            "-Wl,--wrap=calloc", "-o", str(binary)], check=True)
++                            *([] if darwin else ["-Wl,--wrap=calloc"]), "-o", str(binary)], check=True)
+             subprocess.run([str(binary)], check=True)
+             subprocess.run([str(binary), "boot-power-failure"], check=True)
+             subprocess.run([str(binary), "highlevel"], check=True)
+@@ -132,8 +136,15 @@
+                         "-I" + str(board / "include"), "-I" + str(board / "src"),
+                         str(HERE / "pmu.cpp"), "-o", str(binary)], check=True)
+         subprocess.run([str(binary)], check=True)
+-        from test_resources import run as run_resources
+-        run_resources(root, includes)
++        if darwin:
++            # ld64 has neither --wrap nor --gc-sections; the resource harness
++            # relies on both to record allocator ownership. Its Linux coverage is
++            # unchanged; the transaction tests above are the part that matters
++            # for the deferred-scan state machine.
++            print("SKIP resource harness on macOS (ld64 lacks --wrap/--gc-sections)")
++        else:
++            from test_resources import run as run_resources
++            run_resources(root, includes)
+         from test_waveform_trim import run as run_waveform_trim
+         run_waveform_trim()
+         print("Read Pico display, resource failures, clear masks and concurrent PMU checks passed")
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/test/host/transactions.cpp sdk_work/libs/display/EpdiyLcd/test/host/transactions.cpp
+--- sdk_pristine/libs/display/EpdiyLcd/test/host/transactions.cpp
++++ sdk_work/libs/display/EpdiyLcd/test/host/transactions.cpp
+@@ -7,6 +7,7 @@
+ #include <initializer_list>
+ extern "C" {
+ #include "e0470_epaper_waveform.h"
++#include "e0470_page_turn.h"
+ #include "epd_lcd.h"
+ #include "epdiy.h"
+ void check_queue(void);
+@@ -19,6 +20,8 @@
+ int draws = 0, clears = 0;
+ int lastMode = 0;
+ uint8_t lastTo[32];
++int prefillLast = -1;
++int prefillChanges = 0;
+ const EpdBoardDefinition* board = nullptr;
+ EpdiyHighlevelState* state = nullptr;
+ bool powerOn() {
+@@ -31,6 +34,7 @@
+ namespace freeink {
+ const EpdiyLcdConfig& testConfig() {
+   static EpdiyLcdConfig cfg{};
++  cfg.prefillLines = 32;  // the Read Pico value the async path restores to
+   cfg.power.powerOn = powerOn;
+   cfg.power.powerOff = powerOff;
+   return cfg;
+@@ -40,11 +44,29 @@
+ extern "C" {
+ int allocation_calls = 0, fail_allocation = 0;
+ const EpdWaveform E0470_WAVEFORM{};
++// FULL uses the untrimmed GC16 table, which also lives in e0470_epaper_waveform.c.
++const EpdWaveform E0470_FULL_WAVEFORM{};
+ // The text-turn table lives in e0470_epaper_waveform.c, which this host test does not
+ // compile, so it needs a stub here too -- EpdiyLcd.cpp references it by name.
+ const EpdWaveform E0470_TEXTTURN_WAVEFORM{};
+ const EpdDisplay_t E0470_DISPLAY{16, 2, 16, 18, &E0470_WAVEFORM};
+ void e0470_waveform_init() {}
++// The ripple engine is not part of this host build; EpdiyLcd.cpp only calls these
++// three entry points.
++int e0470_turn_tick = 0;
++const char* e0470_turn_dir_name(e0470_turn_dir_t) { return "stub"; }
++void e0470_page_turn_set_tick_us(int us) { e0470_turn_tick = us; }
++int e0470_page_turn_tick_us(void) { return e0470_turn_tick; }
++void e0470_page_turn_release(void) {}
++enum EpdDrawError e0470_page_turn(EpdiyHighlevelState*, EpdRect, e0470_turn_dir_t) { return EPD_DRAW_SUCCESS; }
++enum EpdDrawError e0470_page_turn_with_waveform(EpdiyHighlevelState*, EpdRect, e0470_turn_dir_t,
++                                                const EpdWaveform*, unsigned) {
++  return EPD_DRAW_SUCCESS;
++}
++enum EpdDrawError e0470_page_turn_with_waveform_compact(EpdiyHighlevelState*, EpdRect, e0470_turn_dir_t,
++                                                        const EpdWaveform*, unsigned) {
++  return EPD_DRAW_SUCCESS;
++}
+ // EpdiyLcd.cpp prints its per-frame diagnostics through the ESP-IDF rom console, and the
+ // host has no such header. It declares the entry point itself under
+ // !defined(ESP_PLATFORM); this is the definition it needs to link.
+@@ -73,7 +95,11 @@
+   ++clears;
+ }
+ esp_err_t epd_lcd_init(const LcdEpdConfig_t*, int, int) { return ESP_OK; }
+-void epd_lcd_set_prefill_lines(int) {}
++void epd_lcd_set_prefill_lines(int lines) {
++  if (lines != prefillLast) ++prefillChanges;
++  prefillLast = lines;
++}
++int epd_lcd_prefill_lines(void) { return prefillLast < 0 ? 32 : prefillLast; }
+ void epd_lcd_deinit() {}
+ void epd_leading_skip_discard() {}
+ void epd_difference_column_range(EpdRect area, int* first, int* end) {
+@@ -94,15 +120,36 @@
+   std::memset(columns, changed ? 0xFF : 0, 8);
+   return changed ? area : EpdRect{0, 0, 0, 0};
+ }
+-enum EpdDrawError epd_draw_base(EpdRect, const uint8_t* diff, EpdRect, enum EpdDrawMode mode, int, const bool*,
+-                                const uint8_t*, const EpdWaveform*) {
++static bool scanPending = false;
++int waitCalls = 0;
++int startCalls = 0;
++
++enum EpdDrawError epd_draw_base_start(EpdRect, const uint8_t* diff, EpdRect, enum EpdDrawMode mode, int,
++                                      const bool*, const uint8_t*, const EpdWaveform*) {
+   assert(powered);
+   ++draws;
++  ++startCalls;
+   for (int p = 0; p < 32; ++p) lastTo[p] = diff[p] >> 4;
+   lastMode = mode & 0x3F;
++  scanPending = true;
++  return EPD_DRAW_SUCCESS;
++}
++
++enum EpdDrawError epd_draw_wait(void) {
++  ++waitCalls;
++  scanPending = false;
+   return failDraw ? EPD_DRAW_EMPTY_LINE_QUEUE : EPD_DRAW_SUCCESS;
+ }
++
++bool epd_draw_scan_pending(void) { return scanPending; }
++
++enum EpdDrawError epd_draw_base(EpdRect area, const uint8_t* diff, EpdRect crop, enum EpdDrawMode mode, int temp,
++                                const bool* lines, const uint8_t* columns, const EpdWaveform* waveform) {
++  enum EpdDrawError err = epd_draw_base_start(area, diff, crop, mode, temp, lines, columns, waveform);
++  if (err != EPD_DRAW_SUCCESS) return err;
++  return epd_draw_wait();
+ }
++}
+ 
+ void checkGrayPacking(freeink::EpdiyLcdDriver& driver, freeink::EpdBus& bus) {
+   for (int pair = 0; pair < 64; ++pair) {
+@@ -162,7 +209,13 @@
+   powered = true;
+   failDraw = true;
+   assert(epd_hl_update_screen(state, MODE_GL16, 20) != EPD_DRAW_SUCCESS);
+-  assert(std::memcmp(baseline, hl.back_fb, 16) == 0);
++  // New deferred-update semantics: the failure only surfaces at wait, after the
++  // back_fb copy-back has already run. The caller must rebuild the baseline with
++  // a full frame (EpdiyLcd clears baselineKnown and forces Full).
++  assert(std::memcmp(hl.front_fb, hl.back_fb, 16) == 0);
++  // The full-screen path stays synchronous and returns before its copy-back, so
++  // a failure there leaves back_fb untouched.
++  std::memcpy(baseline, hl.back_fb, 16);
+   assert(epd_hl_update_screen_full(state, MODE_GC16, 20) != EPD_DRAW_SUCCESS);
+   assert(std::memcmp(baseline, hl.back_fb, 16) == 0);
+   failDraw = false;
+@@ -170,6 +223,76 @@
+   assert(std::memcmp(hl.front_fb, hl.back_fb, 16) == 0);
+ }
+ 
++void checkAsync(freeink::EpdiyLcdDriver& driver, freeink::EpdBus& bus) {
++  uint8_t fb[4] = {0x55, 0xAA, 0x55, 0xAA};
++  uint8_t gray[4] = {0xFF, 0x00, 0xFF, 0x00};
++
++  // Full stays synchronous and reports "completed inline". It also moves
++  // back_fb to this frame, so every later Half push changes fb first.
++  int waits = waitCalls;
++  assert(!driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Full, false));
++  assert(!freeink::epdiyLcdScanPending());
++  assert(waitCalls == waits + 1);
++
++  // A start without a finish leaves a scan in flight; a second start joins it
++  // first, then starts its own.
++  fb[0] ^= 0x0F;
++  assert(driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Half, false));
++  assert(freeink::epdiyLcdScanPending());
++  assert(prefillLast == 96);  // kAsyncPrefillLines, raised for the overlap
++  waits = waitCalls;
++  fb[1] ^= 0x0F;
++  assert(driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Half, false));
++  assert(waitCalls == waits + 1);
++  assert(freeink::epdiyLcdScanPending());
++  driver.displayFinish(bus, fb);
++  assert(!freeink::epdiyLcdScanPending());
++  assert(prefillLast == 32);  // restored
++
++  // An unchanged frame starts no scan: the deferred entry reports "nothing owed".
++  waits = waitCalls;
++  assert(!driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Half, false));
++  assert(!freeink::epdiyLcdScanPending());
++  assert(waitCalls == waits);
++  assert(prefillLast == 32);
++
++  // turnOff stays synchronous (the rails must not drop mid-scan).
++  fb[2] ^= 0x33;
++  waits = waitCalls;
++  assert(!driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Half, true));
++  assert(waitCalls == waits + 1);
++  assert(!freeink::epdiyLcdScanPending());
++
++  // A failed deferred scan invalidates the baseline; the next Fast is promoted
++  // to a synchronous GC16 clear.
++  fb[1] ^= 0xF0;
++  failDraw = true;
++  assert(driver.displayStart(bus, fb, nullptr, freeink::RefreshMode::Half, false));
++  driver.displayFinish(bus, fb);
++  assert(!freeink::epdiyLcdScanPending());
++  failDraw = false;
++  const int clearsBefore = clears;
++  fb[0] ^= 1;
++  assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Fast, false));
++  assert(clears == clearsBefore + 1);
++  assert(lastMode == MODE_GC16);
++  assert(!freeink::epdiyLcdScanPending());
++
++  // Deferred grayscale commit.
++  driver.displayGrayscaleBaseWithContext(bus, fb, freeink::RefreshMode::Half, false,
++                                         freeink::RefreshContext::Normal);
++  driver.copyGrayscaleLsb(bus, gray);
++  driver.copyGrayscaleMsb(bus, gray);
++  assert(driver.displayGrayStart(bus, gray, false, nullptr, false));
++  assert(freeink::epdiyLcdScanPending());
++  assert(lastMode == MODE_GL16);
++  driver.displayGrayFinish(bus);
++  assert(!freeink::epdiyLcdScanPending());
++  // turnOff keeps the grayscale commit synchronous.
++  assert(!driver.displayGrayStart(bus, gray, true, nullptr, false));
++  assert(!freeink::epdiyLcdScanPending());
++}
++
+ int main(int argc, char** argv) {
+   if (argc > 1 && std::strcmp(argv[1], "highlevel") == 0) {
+     checkHighlevel();
+@@ -211,6 +334,7 @@
+   }
+   checkGrayPacking(driver, bus);
+   checkNativeGray(driver);
++  checkAsync(driver, bus);
+   const int before = draws;
+   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));
+   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/include/FreeInkDisplay.h sdk_work/libs/display/FreeInkDisplay/include/FreeInkDisplay.h
+--- sdk_pristine/libs/display/FreeInkDisplay/include/FreeInkDisplay.h
++++ sdk_work/libs/display/FreeInkDisplay/include/FreeInkDisplay.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include "GrayArea.h"
+ #include "RefreshContext.h"
+ 
+ // FreeInk SDK — display facade.
+@@ -101,9 +102,22 @@
+   uint32_t getBufferSize() const { return bufferSize; }
+   uint8_t getGrayscaleLevels() const { return BoardConfig::ACTIVE.grayscaleLevels; }
+   uint8_t* beginGrayscale16();
+-  bool commitGrayscale16();
++  // Start a native 16-level pass without clearing the current 1bpp page.
++  uint8_t* beginGrayscale16From1bpp(const uint8_t* fb = nullptr);
++  bool commitGrayscale16(bool clean = false);
++  // Commit one physical rectangle of the native gray front.
++  bool commitGrayscale16Area(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool clean = false);
++  // Commit several disjoint rectangles from the same native gray front. Drivers
++  // that support it keep the panel powered for the whole batch; others return
++  // false so the caller can fall back to a full commit.
++  bool commitGrayscale16Areas(const GrayArea* areas, int count, bool clean = false);
+   void cancelGrayscale16();
+ 
++  // Water-ripple page turn request for panels that can stagger the reveal
++  // (Read Pico). >0 forward, <0 backward, 0 off; applies to the next presented
++  // frame only. No-op on panels without the capability.
++  void setPageTurnDirection(int direction);
++
+   // Frame buffer operations
+   void clearScreen(uint8_t color = 0xFF) const;
+   void drawImage(const uint8_t* imageData, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+@@ -459,6 +473,9 @@
+   void cancelGrayscalePass();
+   bool acceptGrayscaleRows(unsigned plane, const uint8_t* data, uint16_t y, uint16_t rows);
+   bool _refreshPending = false;
++  // True when the pending refresh is a deferred grayscale commit (displayGrayStart);
++  // syncPendingAsync then drains it through displayGrayFinish instead of displayFinish.
++  bool _pendingGray = false;
+   uint8_t* _asyncShadow = nullptr;
+   bool _shadowValid = false;
+ #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/include/GrayArea.h sdk_work/libs/display/FreeInkDisplay/include/GrayArea.h
+--- sdk_pristine/libs/display/FreeInkDisplay/include/GrayArea.h
++++ sdk_work/libs/display/FreeInkDisplay/include/GrayArea.h
+@@ -0,0 +1,17 @@
++#pragma once
++
++#include <cstdint>
++
++namespace freeink {
++
++// A physical-panel rectangle for a native-gray commit. Kept in one small
++// header so the facade, the panel-driver interface and the firmware all name
++// the same type.
++struct GrayArea {
++  uint16_t x;
++  uint16_t y;
++  uint16_t width;
++  uint16_t height;
++};
++
++}  // namespace freeink
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp sdk_work/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
+--- sdk_pristine/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
++++ sdk_work/libs/display/FreeInkDisplay/src/FreeInkDisplay.cpp
+@@ -608,6 +608,12 @@
+   // pipeline (X3 DTM1 sync + conditioning). A plain waitBusy would skip that
+   // and leave the controller mid-pipeline.
+   if (!_refreshPending) return;
++  if (_pendingGray) {
++    _driver->displayGrayFinish(_bus);
++    _pendingGray = false;
++    _refreshPending = false;
++    return;
++  }
+ #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
+   _driver->displayFinish(_bus, _pendingSingleBufferFrame);
+   _pendingSingleBufferFrame = nullptr;
+@@ -955,6 +961,17 @@
+     cancelGrayscalePass();
+     return;
+   }
++  // Deferred commit: the driver starts the waveform and returns, so the caller
++  // can overlap CPU work (on Read Pico: laying out the next page). turnOff is
++  // kept on the blocking path because powering the rails down needs the scan
++  // finished anyway.
++  if (!turnOffScreen && _driver->supportsAsyncGrayDisplay()) {
++    // displayGrayStart() owns the commit on both outcomes: true means a scan is
++    // in flight, false means it already completed inline (or failed).
++    _refreshPending = _driver->displayGrayStart(_bus, frameBuffer, turnOffScreen, lut, factoryMode);
++    _pendingGray = _refreshPending;
++    return;
++  }
+   _driver->displayGray(_bus, frameBuffer, turnOffScreen, lut, factoryMode);
+ }
+ 
+@@ -976,7 +993,12 @@
+ 
+ void FreeInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
+   if (_inverted) return;
+-  syncPendingAsync();  // RAM writes must not race a deferred refresh
++  // Staging writes the driver's private plane copies. Only join first when the
++  // driver's scan may be reading them; a driver that consumes them solely at
++  // commit time lets the next page stage during the previous scan.
++  if (_driver == nullptr || !_driver->asyncSafeGrayscaleStaging()) {
++    syncPendingAsync();  // RAM writes must not race a deferred refresh
++  }
+   if (!acceptGrayscaleRows(0, lsbBuffer, 0, getDisplayHeight())) return;
+ #if FREEINK_SSD1677_TEXT_ROUTING
+   if (!_textAaPending) selectTextAaDriver(false);
+@@ -997,14 +1019,44 @@
+   return buffer;
+ }
+ 
+-bool FreeInkDisplay::commitGrayscale16() {
++uint8_t* FreeInkDisplay::beginGrayscale16From1bpp(const uint8_t* fb) {
++  if (_nativeGrayActive || _buildLent || !frameBuffer || _inverted || getGrayscaleLevels() != 16 || !_driver)
++    return nullptr;
++  cancelGrayscalePass();
++  syncPendingAsync();
++  uint8_t* buffer = _driver->beginGrayscale16From1bpp(fb ? fb : frameBuffer);
++  _nativeGrayActive = buffer != nullptr;
++  return buffer;
++}
++
++bool FreeInkDisplay::commitGrayscale16Area(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const bool clean) {
+   if (!_nativeGrayActive || !_driver) return false;
+   _nativeGrayActive = false;
+   _shadowValid = false;
+   _redRamSynced = false;
+-  return _driver->commitGrayscale16(frameBuffer);
++  return _driver->commitGrayscale16Area(frameBuffer, x, y, w, h, clean);
+ }
+ 
++bool FreeInkDisplay::commitGrayscale16Areas(const GrayArea* areas, const int count, const bool clean) {
++  if (!_nativeGrayActive || !_driver || areas == nullptr || count <= 0) return false;
++  _nativeGrayActive = false;
++  _shadowValid = false;
++  _redRamSynced = false;
++  return _driver->commitGrayscale16Areas(frameBuffer, areas, count, clean);
++}
++
++bool FreeInkDisplay::commitGrayscale16(bool clean) {
++  if (!_nativeGrayActive || !_driver) return false;
++  _nativeGrayActive = false;
++  _shadowValid = false;
++  _redRamSynced = false;
++  return _driver->commitGrayscale16WithClean(frameBuffer, clean);
++}
++
++void FreeInkDisplay::setPageTurnDirection(int direction) {
++  if (_driver) _driver->setPageTurnDirection(direction);
++}
++
+ void FreeInkDisplay::cancelGrayscale16() {
+   if (_nativeGrayActive && _driver) _driver->cancelGrayscale16();
+   _nativeGrayActive = false;
+@@ -1045,7 +1097,9 @@
+   if (!caps.supported()) return false;
+   if (_inversionDirty && (mode == GrayscaleMode::Overlay || caps.base == GrayscaleBase::Separate))
+     displayBuffer(fallback, turnOffScreen, context);
+-  syncPendingAsync();
++  if (_driver == nullptr || !_driver->asyncSafeGrayscaleStaging()) {
++    syncPendingAsync();
++  }
+   _shadowValid = false;
+   _grayPassFailed = false;
+   if (mode == GrayscaleMode::Overlay) {
+@@ -1065,7 +1119,11 @@
+     displayBuffer(fallback, turnOffScreen, context);
+     return;
+   }
+-  syncPendingAsync();
++  // The base is only stashed for the later commit on a driver whose staging is
++  // scan-independent; otherwise the stash must wait for the previous scan.
++  if (_driver == nullptr || !_driver->asyncSafeGrayscaleStaging()) {
++    syncPendingAsync();
++  }
+ #if FREEINK_SSD1677_TEXT_ROUTING
+   const bool textAa = context == RefreshContext::TextOnlyAntiAliasing && _textCombinedAvailable;
+   _textAaPending = false;
+@@ -1190,13 +1248,20 @@
+ 
+ void FreeInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
+   cancelGrayscalePass();
+-  syncPendingAsync();
++  // A driver whose cleanup is a no-op keeps a deferred grayscale scan alive:
++  // this call exists to restore the host-side BW baseline / controller RAM,
++  // which such a driver does not mirror. Joining here would erase the overlap
++  // the deferred commit was started for; the pending finish is drained by the
++  // next display entry (all of them call syncPendingAsync()).
++  const bool noOpCleanup = _driver != nullptr && _driver->grayscaleCleanupIsNoOp();
++  const bool keepPending = _pendingGray && noOpCleanup;
++  if (!keepPending) syncPendingAsync();
+   bool safeToWrite = true;
+ #if FREEINK_SSD1677_TEXT_ROUTING
+   safeToWrite = !_bus.isBusy();
+   if (!safeToWrite) invalidateTextRoute();
+ #endif
+-  if (safeToWrite && !_inverted) {
++  if (safeToWrite && !_inverted && !noOpCleanup) {
+     _driver->cleanupGrayscaleBuffers(_bus, bwBuffer);
+   }
+ #if FREEINK_SSD1677_TEXT_ROUTING
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.cpp sdk_work/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.cpp
+--- sdk_pristine/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.cpp
++++ sdk_work/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.cpp
+@@ -46,6 +46,9 @@
+     case RefreshMode::Full:
+       return EpdiyLcdRefresh::Full;
+     case RefreshMode::Half:
++      // System UI now runs here instead of DU. Full GL16 rewrites every pixel,
++      // so the previous page's residue is not carried forward; the reference
++      // firmware's system-page experiment settled on the same choice.
+       return EpdiyLcdRefresh::Half;
+     case RefreshMode::Fast:
+       return EpdiyLcdRefresh::Fast;
+@@ -122,6 +125,28 @@
+   epdiyLcdDraw(fb, _lastBaseMode, turnOff);
+ }
+ 
++bool EpdiyLcdDriver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode,
++                                  bool turnOff) {
++  (void)bus;
++  (void)prev;
++  if (!_ready || fb == nullptr) return false;
++  _lastBaseMode = refreshFor(mode);
++  // Full 与 turnOff 帧走同步路径：前者本来就要等整屏重写，后者掉轨前必须扫完。
++  // / Full and turnOff frames stay synchronous: the former is a full rewrite by
++  // definition, the latter must finish before the rails drop.
++  if (_lastBaseMode == EpdiyLcdRefresh::Full || turnOff) {
++    epdiyLcdDraw(fb, _lastBaseMode, turnOff);
++    return false;
++  }
++  return epdiyLcdDrawAsync(fb, _lastBaseMode, turnOff);
++}
++
++void EpdiyLcdDriver::displayFinish(EpdBus& bus, const uint8_t* fb) {
++  (void)bus;
++  (void)fb;  // 驱动在 displayStart 里已拷贝帧缓冲，不再重读 / copied at start, never re-read
++  epdiyLcdWaitScan();
++}
++
+ void EpdiyLcdDriver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
+   (void)bus;
+   if (_lsb == nullptr || lsb == nullptr) return;
+@@ -169,6 +194,27 @@
+   epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
+ }
+ 
++bool EpdiyLcdDriver::displayGrayStart(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
++                                      bool factoryMode) {
++  (void)bus;
++  (void)fb;
++  (void)lut;
++  (void)factoryMode;
++  if (!_ready || _lsb == nullptr || _msb == nullptr) return false;
++  // 与 displayGray() 同一套档位选择（原因见那里）。turnOff 保持同步。
++  // / Same profile choice as displayGray() (see there). turnOff stays synchronous.
++  if (turnOff || _lastBaseMode == EpdiyLcdRefresh::Full) {
++    displayGray(bus, fb, turnOff, lut, factoryMode);
++    return false;
++  }
++  return epdiyLcdDrawGrayAsync(_lsb, _msb, EpdiyLcdRefresh::TextTurn, false);
++}
++
++void EpdiyLcdDriver::displayGrayFinish(EpdBus& bus) {
++  (void)bus;
++  epdiyLcdWaitScan();
++}
++
+ void EpdiyLcdDriver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                                      RefreshContext context) {
+   (void)bus;
+@@ -180,6 +226,28 @@
+   // / Defer: the host writes the LSB/MSB planes next and calls displayGray(), which
+   // composes the whole page and presents it once.
+   epdiyLcdStashBase(fb);
++}
++
++void EpdiyLcdDriver::setPageTurnDirection(int direction) {
++  if (!_ready) return;
++  epdiyLcdSetWaterTurn(direction);
++}
++
++void EpdiyLcdDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y,
++                                   uint16_t w, uint16_t h, bool turnOff) {
++  (void)bus;
++  (void)prev;
++  (void)turnOff;  // 区域更新保持高压轨：连续的时钟刷新不值得每次掉轨再抬
++  if (!_ready) return;
++  // TextTurn：GL16 加全保持对角线，只有真正变化的像素被驱动。基准未知时拒绝，
++  // 由下一次整帧推送重建后区域刷新才会生效。
++  // 区段被拒（基准未知/区域无效）时整屏回退：popup 这类一次性提示不能静默丢失。
++  // / TextTurn: GL16 with the all-hold diagonal, so only changed pixels are driven.
++  // Refused while the baseline is unknown (the next full push rebuilds it). On
++  // refusal, fall back to a full push: one-shot popups must not vanish silently.
++  if (!epdiyLcdUpdateArea(fb, x, y, w, h, EpdiyLcdRefresh::TextTurn)) {
++    epdiyLcdDraw(fb, EpdiyLcdRefresh::Fast, false);
++  }
+ }
+ 
+ PanelDriver& epdiyLcdDriver() {
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.h sdk_work/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.h
+--- sdk_pristine/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.h
++++ sdk_work/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.h
+@@ -64,7 +64,34 @@
+   GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const override;
+ 
+   uint8_t* beginGrayscale16() override { return _ready ? epdiyLcdBeginGrayscale16() : nullptr; }
+-  bool commitGrayscale16(const uint8_t* bwProxy) override { return _ready && epdiyLcdCommitGrayscale16(bwProxy); }
++  uint8_t* beginGrayscale16From1bpp(const uint8_t* fb) override {
++    return _ready ? epdiyLcdBeginGrayscale16From1bpp(fb) : nullptr;
++  }
++  bool commitGrayscale16(const uint8_t* bwProxy) override {
++    return _ready && epdiyLcdCommitGrayscale16(bwProxy, false);
++  }
++  bool commitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
++                             bool clean) override {
++    return _ready && epdiyLcdCommitGrayscale16Area(bwProxy, x, y, w, h, clean);
++  }
++  bool commitGrayscale16Areas(const uint8_t* bwProxy, const GrayArea* areas, int count, bool clean) override {
++    if (!_ready || areas == nullptr || count <= 0) return false;
++    constexpr int kMaxAreas = 12;
++    if (count > kMaxAreas) count = kMaxAreas;
++    uint16_t flat[kMaxAreas * 4];
++    for (int i = 0; i < count; ++i) {
++      flat[i * 4 + 0] = areas[i].x;
++      flat[i * 4 + 1] = areas[i].y;
++      flat[i * 4 + 2] = areas[i].width;
++      flat[i * 4 + 3] = areas[i].height;
++    }
++    return epdiyLcdCommitGrayscale16Areas(bwProxy, flat, count, clean);
++  }
++  // clean=true raises the commit to a full GC16 sweep so the periodic/manual
++  // refresh cadence actually clears ghosting on the 16-level path too.
++  bool commitGrayscale16WithClean(const uint8_t* bwProxy, bool clean) override {
++    return _ready && epdiyLcdCommitGrayscale16(bwProxy, clean);
++  }
+   void cancelGrayscale16() override { epdiyLcdCancelGrayscale16(); }
+   void begin(EpdBus& bus) override;
+   void deepSleep(EpdBus& bus) override;
+@@ -97,6 +124,60 @@
+   // / Combined base: see above.
+   void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                        RefreshContext context) override;
++  void setPageTurnDirection(int direction) override;
++
++  // 只刷新一个矩形区域。整页里只有小块变化（阅读状态栏时钟）时走这里：区域外既不
++  // 差分也不回写。用 TextTurn（GL16 + 全保持对角线），未变化的像素完全不驱动，所以
++  // 既不闪也不把整页文字重推一遍。基类默认会把整帧按 Fast 推上去，代价大得多。
++  // / Refresh a single rect. Used when only a small part of the page changed (the reader
++  // status-bar clock): nothing outside the rect is diffed or written back. TextTurn
++  // (GL16 with the all-hold diagonal) drives no unchanged pixel, so it neither flashes
++  // nor re-pushes the body text. The base default would push the whole frame as Fast.
++  void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
++                     uint16_t h, bool turnOff) override;
++
++  // 异步推屏：displayStart() 完成展开/差分/起扫后立即返回，扫描在 epdiy 的内部
++  // 任务上跑；displayFinish() 等它收尾。宿主（FreeInkDisplay 的 noShadow 路径）
++  // 在两次调用之间可以立刻重画帧缓冲——本驱动在 displayStart 返回前已经把它拷贝
++  // 进 epdiy 的 4bpp 帧缓冲，扫描读的是差分图，不再是调用方的缓冲。
++  // Full（清屏）与带 turnOff 的帧仍同步完成，返回 false。
++  // / Deferred push: displayStart() expands, diffs and starts the scan, then
++  // returns; the scan runs on epdiy's internal task and displayFinish() joins it.
++  // The host may redraw the framebuffer between the two calls -- this driver has
++  // already copied it into epdiy's 4 bpp framebuffer, and the scan reads the
++  // difference image, not the caller's buffer. Full (clean) and turnOff frames
++  // still complete synchronously and return false.
++  // The deferred scan can leave the LCD_CAM/line-feeder state latched after
++  // long mixed sessions; a blocking scan per frame is the only state that has
++  // stayed clean on this panel. Keep the async implementation for other
++  // boards' drivers, but do not advertise it here.
++  bool supportsAsyncDisplay() const override { return false; }
++  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
++  void displayFinish(EpdBus& bus, const uint8_t* fb) override;
++
++  // 抗锯齿提交同样可以延迟：起扫后宿主立刻去做下一件事，扫描完成由
++  // displayGrayFinish()（经 FreeInkDisplay::syncPendingAsync）收尾。
++  // / The anti-aliased commit can be deferred too: after the start the host
++  // moves on, and displayGrayFinish() (through syncPendingAsync) joins the scan.
++  bool supportsAsyncGrayDisplay() const override { return false; }
++  bool displayGrayStart(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
++                        bool factoryMode) override;
++  void displayGrayFinish(EpdBus& bus) override;
++
++  // epdiy 的差分基准在驱动自己的 back_fb 里，宿主帧缓冲不是控制器的镜像，所以
++  // 灰度提交后的 cleanup 无事可做——它不应该把刚起扫的帧 join 回来。
++  // / epdiy's differential baseline lives in the driver's own back_fb; the host
++  // framebuffer is not a controller mirror, so the post-commit cleanup has
++  // nothing to do -- and must not join the scan that was just started.
++  bool grayscaleCleanupIsNoOp() const override { return true; }
++
++  // The LSB/MSB planes and the base stash live in this driver and are consumed
++  // only by epdiyLcdDrawGrayAsync(), which joins before composing. A running
++  // scan reads the difference image, never these buffers, so staging the next
++  // page while the previous scan runs is safe.
++  // / 选择平面与底图副本只由合成阶段读取（合成前已 join），扫描读差分图，
++  // 所以下一页的平面渲染可以与上一页扫描并行。
++  bool asyncSafeGrayscaleStaging() const override { return _ready; }
+ 
+  private:
+   const EpdiyLcdConfig& _cfg;
+diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/PanelDriver.h sdk_work/libs/display/FreeInkDisplay/src/driver/PanelDriver.h
+--- sdk_pristine/libs/display/FreeInkDisplay/src/driver/PanelDriver.h
++++ sdk_work/libs/display/FreeInkDisplay/src/driver/PanelDriver.h
+@@ -15,6 +15,7 @@
+ #include <Arduino.h>
+ #include <RefreshContext.h>
+ 
++#include "../../include/GrayArea.h"
+ #include "../../include/GrayscaleCapabilities.h"
+ #include "../bus/EpdBus.h"
+ 
+@@ -113,10 +114,42 @@
+   // Borrow native 4bpp storage: even pixels in the low nibble, 0 black / 15 white.
+   // Unsupported drivers do not allocate or emulate a native frame.
+   virtual uint8_t* beginGrayscale16() { return nullptr; }
++  // Preserve the current 1bpp page in the native 4bpp front. Drivers that
++  // support partial gray updates use this to avoid clearing the whole page.
++  virtual uint8_t* beginGrayscale16From1bpp(const uint8_t* fb) {
++    (void)fb;
++    return nullptr;
++  }
+   virtual bool commitGrayscale16(const uint8_t* bwProxy) {
+     (void)bwProxy;
+     return false;
+   }
++  // Commit one physical rectangle of the native gray front. Default: no-op.
++  virtual bool commitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
++                                     bool clean) {
++    (void)bwProxy;
++    (void)x;
++    (void)y;
++    (void)w;
++    (void)h;
++    (void)clean;
++    return false;
++  }
++  // Commit several disjoint rectangles from the same native gray front.
++  // Default: unsupported; callers fall back to a full commit.
++  virtual bool commitGrayscale16Areas(const uint8_t* bwProxy, const GrayArea* areas, int count, bool clean) {
++    (void)bwProxy;
++    (void)areas;
++    (void)count;
++    (void)clean;
++    return false;
++  }
++  // Clean variant: drivers that can raise the commit to a full GC16 sweep
++  // override this. The default keeps the old single-profile commit.
++  virtual bool commitGrayscale16WithClean(const uint8_t* bwProxy, bool clean) {
++    (void)clean;
++    return commitGrayscale16(bwProxy);
++  }
+   virtual void cancelGrayscale16() {}
+ 
+   // --- grayscale (dual-plane LSB/MSB) ---
+@@ -188,6 +221,28 @@
+     (void)factoryMode;
+     display(bus, fb, nullptr, RefreshMode::Fast, turnOff);
+   }
++  // Deferred grayscale commit, same two-call contract as displayStart/Finish.
++  // Default: complete inline (returns false), so existing drivers are unchanged.
++  // A driver that returns true must implement displayGrayFinish(), which the
++  // facade calls from syncPendingAsync().
++  virtual bool supportsAsyncGrayDisplay() const { return false; }
++  virtual bool displayGrayStart(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
++                                bool factoryMode) {
++    displayGray(bus, fb, turnOff, lut, factoryMode);
++    return false;
++  }
++  virtual void displayGrayFinish(EpdBus& bus) { (void)bus; }
++  // True when cleanupGrayscaleBuffers() has nothing to do on this driver: its
++  // differential baseline lives inside the driver (or its own high-level state),
++  // not in controller RAM that the host framebuffer mirrors. Lets the facade
++  // skip the join that cleanup would otherwise perform, so a deferred grayscale
++  // commit keeps overlapping the caller's next work.
++  virtual bool grayscaleCleanupIsNoOp() const { return false; }
++  // True when the grayscale staging buffers (copyGrayscaleLsb/Msb and the base
++  // stash) are private copies that an in-flight scan never reads. The facade
++  // then stages the next page's planes while the previous scan runs instead of
++  // joining first; only the commit (displayGrayBuffer) has to wait.
++  virtual bool asyncSafeGrayscaleStaging() const { return false; }
+   // Diagnostic four-gray comparison. The full frame is first rendered with
+   // the controller's flashing OTP waveform; `custom*` is then rebuilt with the
+   // driver's non-flashing grayscale path. Default drivers keep the OTP frame.
+@@ -232,6 +287,11 @@
+   // non-flashing. Drivers may use this to widen their drive set (re-blacken
+   // the unchanged background each update) or bias their deghost direction.
+   virtual void setBackgroundHint(bool darkBackground) { (void)darkBackground; }
++  // Water-ripple page turn request for panels that can stagger the reveal
++  // (Read Pico's epdiy LCD path). >0 forward, <0 backward, 0 off. The request
++  // applies to the NEXT presented frame only and is ignored by panels without
++  // the capability; a failed animation falls back to the ordinary push.
++  virtual void setPageTurnDirection(int direction) { (void)direction; }
+   // Capture the cancellation generation at the start of a logical UI render.
+   // This must happen before CPU-side composition: input arriving while an old
+   // frame is being composed must still cancel its optional post-refresh work.
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/include/BoardReadPico.h sdk_work/libs/hardware/BoardReadPico/include/BoardReadPico.h
+--- sdk_pristine/libs/hardware/BoardReadPico/include/BoardReadPico.h
++++ sdk_work/libs/hardware/BoardReadPico/include/BoardReadPico.h
+@@ -122,4 +122,10 @@
+ bool epdPowerOn();
+ void epdPowerOff();
+ 
++// Release the pixel drive (drop XOE) while KEEPING the HV rails up. Called at the
++// end of a frame push so an idle/still frame is not left driven; the next
++// epdPowerOn() re-raises XOE. Returns false only on an I2C error (the caller may
++// retry; the panel image is unaffected either way — it is bistable).
++bool epdReleaseDrive();
++
+ }  // namespace BoardReadPico
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
+--- sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
++++ sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
+@@ -137,7 +137,8 @@
+       // / Reuse the board power hooks (ReadPicoPower.cpp): they already
+       // implement the verified board_poweron() order with the VCOM gate before any
+       // rail comes up.
+-      {&BoardReadPico::epdPrepare, &BoardReadPico::epdPowerOn, &BoardReadPico::epdPowerOff, nullptr},
++      {&BoardReadPico::epdPrepare, &BoardReadPico::epdPowerOn, &BoardReadPico::epdPowerOff, nullptr,
++       &BoardReadPico::epdReleaseDrive},
+   };
+   return cfg;
+ }
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoPower.cpp sdk_work/libs/hardware/BoardReadPico/src/ReadPicoPower.cpp
+--- sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoPower.cpp
++++ sdk_work/libs/hardware/BoardReadPico/src/ReadPicoPower.cpp
+@@ -149,7 +149,14 @@
+ bool epdPowerOn() {
+   // These hooks own every rail line for the epdiy LCD adapter.
+   // Steps 1-4 are read-pico.md §1.4's verified board_poweron() order.
+-  if (g_railsOn) return true;
++  if (g_railsOn) {
++    // Rails already up: only make sure the pixel drive is asserted again, since
++    // epdReleaseDrive() may have cleared XOE at the end of the previous push.
++    // Nothing else in the sequence needs repeating (VCOM/PGOOD already settled).
++    const uint8_t out0 = static_cast<uint8_t>(detail::ioeOutput() | (1U << READPICO_IOE_XOE));
++    (void)detail::ioeSetOutput(out0);
++    return true;
++  }
+ 
+   // VCOM FIRST, read-only, BEFORE anything is energised.
+   //
+@@ -252,6 +259,19 @@
+   (void)syEn(false);
+   g_railsOn = false;
+   logLine("[RDP] EPD rails off\r\n");
++}
++
++bool epdReleaseDrive() {
++  // 推论无变化不会进入扫描器；同样需要退出上电时开启的驱动状态。
++  // 只清 XOE（输出使能），SY7636A 高压轨与 VCOM 保持不动——下一次 epdPowerOn()
++  // 在轨已开的分支里会把 XOE 抬回来。图像双稳，放电不影响显示。
++  // / An unchanged differential never enters the scanner, but must still exit the
++  // drive state that power-on enabled. Clear only XOE (output enable); the SY7636A
++  // HV rails and VCOM stay up, and the next epdPowerOn() re-raises XOE from its
++  // rails-already-on branch. The image is bistable, so this is not visible.
++  if (!g_railsOn) return true;
++  const uint8_t out0 = static_cast<uint8_t>(detail::ioeOutput() & ~(1U << READPICO_IOE_XOE));
++  return detail::ioeSetOutput(out0);
+ }
+ 
+ }  // namespace BoardReadPico
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
+--- sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
++++ sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
+@@ -116,8 +116,18 @@
+   // live in PSRAM / at an unaligned address, while native SDMMC requires an
+   // internal-RAM DMA buffer. Limiting each transfer to eight sectors keeps the
+   // buffer bounded at 4 KiB and avoids heap churn in the USB-MSC callbacks.
+-  _dmaBuffer = static_cast<uint8_t*>(heap_caps_malloc(kSectorSize * kMaxTransferSectors,
+-                                                      MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
++  //
++  // Cache-line aligned, not merely word aligned. sdmmc_read_sectors() asks
++  // sdmmc_host_check_buffer_alignment() about the buffer, and that requires the
++  // alignment esp_cache_get_alignment() reports -- 64 B on this board, whose
++  // sdkconfig sets CONFIG_ESP32S3_DATA_CACHE_LINE_64B. A buffer failing the check
++  // is not rejected: the caller quietly allocates its own temporary DMA buffer and
++  // memcpys every chunk through it (components/sdmmc/sdmmc_cmd.c, sdmmc_read_sectors
++  // / sdmmc_write_sectors). That is a 4 KiB alloc+free per request on a board whose
++  // largest free internal block is ~30 KiB, paid on every sector of every copy.
++  // heap_caps_malloc only guarantees word alignment, so ask for the cache line.
++  _dmaBuffer = static_cast<uint8_t*>(heap_caps_aligned_alloc(kDmaBufferAlignment, kSectorSize * kMaxTransferSectors,
++                                                            MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+   if (!_dmaBuffer) {
+     free(card);
+     sdmmc_host_deinit();
+@@ -178,10 +188,13 @@
+   }
+ }
+ 
+-// esp-idf SDMMC uses DMA, which requires the transfer buffer to be in DMA-capable
+-// internal RAM and word-aligned. SdFat's cache buffers aren't guaranteed to be
+-// (PSRAM / arbitrary alignment), which makes sdmmc_read/write_sectors fail. Bounce
+-// through a DMA-capable buffer. (heap_caps_aligned_alloc via MALLOC_CAP_DMA.)
++// esp-idf's SDMMC path DMAs straight into the caller's buffer, so that buffer has
++// to be in DMA-capable internal RAM and aligned to the data cache line. SdFat's
++// cache buffers are guaranteed to be neither (PSRAM / arbitrary alignment). This
++// does not make sdmmc_read/write_sectors fail: on a buffer they cannot DMA from
++// they allocate a temporary one and memcpy every chunk through it, so an unaligned
++// caller silently pays a hidden alloc+copy per chunk. Bounce through a buffer we
++// own instead -- allocated once, cache-line aligned, in mount(); see _dmaBuffer.
+ bool SdmmcBlockDevice::readSectors(Sector_t sector, uint8_t* dst, size_t ns) {
+   if (!_card || !_dmaBuffer || !dst || ns == 0) return false;
+   while (ns > 0) {
+diff -ruN --exclude=.git sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.h sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.h
+--- sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.h
++++ sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.h
+@@ -44,6 +44,10 @@
+  private:
+   static constexpr size_t kSectorSize = 512;
+   static constexpr size_t kMaxTransferSectors = 8;
++  // The data cache line, which is what esp-idf's SDMMC DMA path requires of a
++  // caller-supplied buffer -- see the allocation site in the .cpp. Over-aligning
++  // is harmless, so this stays correct if a board narrows its cache line.
++  static constexpr size_t kDmaBufferAlignment = 64;
+ 
+   // esp-idf's sdmmc_card_t is a typedef of an anonymous struct, so it can't be
+   // forward-declared here (a `struct sdmmc_card_t;` tag is a different, conflicting

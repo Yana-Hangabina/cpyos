@@ -1,9 +1,12 @@
 #pragma once
 
 #include <Epub.h>
+#include <Epub/AnnotationStore.h>
 #include <Epub/FootnoteEntry.h>
+#include <Epub/JjwxcCommentSidecar.h>
 #include <Epub/PageLink.h>
 #include <Epub/Section.h>
+#include <VectorFontSupport.h>
 
 #include <atomic>
 #include <memory>
@@ -19,6 +22,11 @@
 #include "ReaderPageCache.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#ifdef BOARD_HAS_PSRAM
+#include "activities/apps/jjwxc/JjwxcPsramAllocator.h"
+#endif
+
+class TtfEpdFont;
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -35,7 +43,26 @@ class EpubReaderActivity final : public ReaderActivity {
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   uint8_t pageTurnRate = 15;
-  int8_t pendingManualTurn = 0;
+  // Net-delta turn accumulator: taps queued while a render holds the lock (or
+  // inside the minimum turn gap) collapse into one jump to the final page —
+  // intermediate pages are never rendered. Bounded so a long render cannot
+  // accumulate an unbounded skip. Netting also fixes the old two-deep queue's
+  // habit of dropping the middle direction on a fast double tap.
+  int8_t pendingTurnDelta = 0;
+  static constexpr int8_t kMaxCoalescedTurns = 20;
+  void queueManualTurn(int8_t direction) {
+    const int next = pendingTurnDelta + direction;
+    pendingTurnDelta = static_cast<int8_t>(next > kMaxCoalescedTurns   ? kMaxCoalescedTurns
+                                           : next < -kMaxCoalescedTurns ? -kMaxCoalescedTurns
+                                                                        : next);
+  }
+  void clearPendingTurns() { pendingTurnDelta = 0; }
+  // 水波纹翻页请求：pageTurn() 记录方向（±1），renderContents() 在提交前交给显示层
+  // 并清零；非顺序翻页（章节跳转、重排、图片页、清屏周期）不消费它。
+  // / Water-ripple turn request: pageTurn() records the direction (±1);
+  // renderContents() hands it to the display layer right before the commit and
+  // clears it. Non-sequential renders never consume it.
+  int8_t waterTurnDirection = 0;
   bool pendingPercentJump = false;
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
@@ -84,9 +111,22 @@ class EpubReaderActivity final : public ReaderActivity {
   ReaderPageCacheKey pageCacheKey(int page, int top, int right, int bottom, int left) const;
   uint32_t idleRenderDelayMs() const override;
   void renderIdle(uint32_t generation) override;
+  // Build the forward slot at the end of renderContents: the idle pass it
+  // replaced ran too late and was cancelled by the next tap in most turns.
+  void prebuildForwardSlot();
   // Build one page into one cache slot; only called from renderIdle().
   bool buildPageCacheSlot(int slot, const ReaderPageCacheKey& key, uint32_t generation);
   void freePageCache();
+
+  // A2: per-minute status-bar clock refresh. When the reader sits idle with a
+  // status-bar clock showing, the loop repaints only the status strip into the
+  // framebuffer and pushes a windowed differential refresh; only the changed
+  // clock pixels are driven, so the body text is never re-drawn. lastClockMinute_
+  // is the minute the panel currently shows (set wherever the status bar is
+  // painted), so the tick fires once per minute boundary.
+  mutable int64_t lastClockMinute_ = -1;
+  memory::ByteBuffer clockScratch_;
+  void refreshStatusBarClockIfDue();
 #endif
 
   bool bookmarkRemoved = false;
@@ -105,8 +145,186 @@ class EpubReaderActivity final : public ReaderActivity {
   // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
   // over the page instead of pushing the full-screen list menu. Select opens the
   // Toolbar; its tools open the Contents/Text/More bottom-sheet panels.
-  enum class Overlay { None, Toolbar, Contents, Text, More };
+  enum class Overlay { None, Toolbar, Contents, Text, Bookmarks, More };
   Overlay overlay = Overlay::None;
+  // One-shot first-run map of the reader's touch zones. It is a full-screen
+  // page of its own (refreshed UI frame 16), not a wash over the body text; it owns
+  // input until dismissed once.
+  bool gestureHintVisible = false;
+  Rect gestureHintStartRect_{};
+  Rect gestureHintSettingsRect_{};
+  void drawGestureHint();
+  // Reader chrome (refreshed UI frame 04): a two-line header at the top, a wave
+  // progress band and the page numbers at the foot. One geometry helper feeds
+  // both the layout reserve in renderBook() and the per-minute clock repaint,
+  // so the three cannot drift apart.
+  struct ReaderChromeMetrics {
+    int left = 0;
+    int right = 0;
+    int top = 0;
+    int lineH = 0;
+    int titleY = 0;
+    int metaY = 0;
+    int ruleY = 0;
+    int headerBottom = 0;
+    int waveY = 0;
+    int waveH = 0;
+    int pageY = 0;
+    int pageH = 0;
+    int footerTop = 0;
+    int footerHeight = 0;
+  };
+  ReaderChromeMetrics readerChromeMetrics() const;
+  void drawReaderHeader() const;
+  void drawReaderFooter() const;
+  // Footnote preview card (B10): tapping a single footnote marker shows the note
+  // in a card over the page instead of jumping away. Drawn into the same frame
+  // as the page, so showing it costs no extra panel refresh; one tap on the
+  // footer still jumps to the real footnote page.
+  bool footnoteCardActive = false;
+  bool footnoteCardHasPage = false;
+  std::string footnoteCardText;
+  std::string footnoteCardHref;
+  int16_t footnoteCardX = 0;
+  int16_t footnoteCardY = 0;
+  int16_t footnoteCardW = 0;
+  int16_t footnoteCardH = 0;
+  int16_t footnoteCardButtonY = 0;
+  void openFootnoteCard(const char* href);
+  void closeFootnoteCard();
+  void drawFootnoteCard();
+  bool handleFootnoteCardInput();
+  // Two-finger pinch → next/previous font size step. Runs from the reading
+  // surface only (never while a sheet is open).
+  bool handlePinchGesture();
+
+  // --- Annotations (highlights / underlined notes), B9 ---
+  // Loaded once per book from <cache>/annotations.bin; painted as a 1-bit
+  // underline under the annotated words plus a small speech-bubble button at the
+  // end of a note's range. Both are drawn into the page frame, so they ride
+  // whichever refresh path the page takes (DU / GL16 / 16-level).
+  std::vector<annotations::Annotation> annotations_;
+  bool annotationsLoaded = false;
+  struct AnnotationBubbleHit {
+    int16_t x;
+    int16_t y;
+    int16_t w;
+    int16_t h;
+    size_t index;
+  };
+  std::vector<AnnotationBubbleHit> annotationBubbles_;
+  bool annotationCardActive = false;
+  size_t annotationCardIndex = 0;
+  std::string annotationCardTitle;
+  std::string annotationCardBody;
+  int16_t annotationCardX = 0;
+  int16_t annotationCardY = 0;
+  int16_t annotationCardW = 0;
+  int16_t annotationCardH = 0;
+  int16_t annotationCardButtonY = 0;
+  int16_t annotationCardButtonX = 0;
+  int16_t annotationCardButtonW = 0;
+  int16_t annotationCardDeleteX = 0;
+  int16_t annotationCardDeleteW = 0;
+  // >= 0 when the open selection is an existing annotation (tapping its text
+  // re-selects the whole range and turns the first action into Delete).
+  int selectionEditingIndex = -1;
+  void loadAnnotations();
+  void saveAnnotations();
+  void drawAnnotations(const Page& page, int fontId, int marginLeft, int marginTop);
+  void showAnnotationCard(size_t index);
+  void closeAnnotationCard();
+  void drawAnnotationCard();
+  bool handleAnnotationCardInput();
+  bool handleAnnotationBubbleTap();
+  int hitTestAnnotationBubble(int x, int y) const;
+
+  // --- Selection for annotations (long press on the page) ---
+  // Word-granular: e-ink has no drag handles, so the side keys extend the range
+  // one word at a time (CJK is one character per word, which reads naturally)
+  // and a second long press on another word moves the focus end.
+  struct AnnoWordRect {
+    int16_t x;
+    int16_t y;
+    int16_t w;
+    int16_t h;
+    uint16_t line;
+    uint16_t word;
+    uint32_t start;
+    uint32_t end;
+    const char* text;
+  };
+  bool selectionActive = false;
+  // Self-timed long press + drag selection. The SDK's long-press event is gated
+  // on flags a previous pinch can leave set (touchMultiContactSequence), which
+  // made it silently dead in the reading surface; timing it here from the live
+  // contact also gives us the drag-to-extend gesture for free.
+  bool pressTracking = false;
+  uint32_t pressStartMs = 0;
+  int16_t pressStartX = 0;
+  int16_t pressStartY = 0;
+  int16_t pressLastX = 0;
+  int16_t pressLastY = 0;
+  uint32_t pressLastHeldMs = 0;
+  bool selectionDragging = false;
+  int selectionDragHandle = 0;  // 0 = none, 1 = start handle, 2 = end handle
+  uint32_t selectionLastRedrawMs = 0;
+  uint32_t selectionMenuOpenedMs = 0;
+  uint32_t selectionClosedMs = 0;
+  // Transient "N pt" badge after a pinch, so the change is visible on a panel
+  // that has no other feedback for it.
+  uint8_t fontStepHintPointSize = 0;
+  uint32_t fontStepHintUntilMs = 0;
+  bool handleSelectionTouch();
+  bool handleSelectionHandleTouch();
+  int wordIndexAt(const std::vector<AnnoWordRect>& words, int x, int y) const;
+  void updateSelectionDragTo(int x, int y);
+  // Handle rectangles drawn by drawSelection (0 = start, 1 = end).
+  int16_t selectionHandleX[2] = {0, 0};
+  int16_t selectionHandleY[2] = {0, 0};
+  int16_t selectionHandleW[2] = {0, 0};
+  int16_t selectionHandleH[2] = {0, 0};
+  // Selection bounds in page coordinates, so the action bar can sit next to the
+  // highlighted text instead of guessing at screen height (the reader draws in
+  // rotated page coordinates, which made a bottom-anchored bar land off-screen).
+  int16_t selectionFirstTopY = 0;
+  int16_t selectionLastBottomY = 0;
+  // Column geometry of the selection, so the vertical action bar can sit beside it.
+  int16_t selectionFirstX = 0;
+  int16_t selectionLastX = 0;
+  int16_t selectionLastW = 0;
+  bool selectionMenuDrawLogged = false;
+  std::unique_ptr<Page> loadPageForSelection();
+  void promptEditAnnotation(size_t index);
+  // Selection action bar (highlight / note). Drawn and handled here, not through
+  // the shared popup: that one routes its input through the overlay path, which
+  // never runs on the reading surface — the menu could be shown but not answered.
+  bool selectionMenuActive = false;
+  int selectionMenuChoice = 0;  // 0 = highlight, 1 = note
+  int16_t selectionMenuHitX[2] = {0, 0};
+  int16_t selectionMenuHitY[2] = {0, 0};
+  int16_t selectionMenuHitW[2] = {0, 0};
+  int16_t selectionMenuHitH[2] = {0, 0};
+  void drawSelectionMenu();
+  void activateSelectionMenuChoice(int choice);
+  void extendSelectionTo(const AnnoWordRect& word);
+  uint16_t selectionStartLine = 0;
+  uint16_t selectionStartWord = 0;
+  uint16_t selectionEndLine = 0;
+  uint16_t selectionEndWord = 0;
+  int selectionAnchorX = 0;  // keeps the column when moving between lines
+  std::vector<AnnoWordRect> layoutPageWords(const Page& page, int fontId, int marginLeft, int marginTop);
+  void beginSelection(int x, int y);
+  void endSelection();
+  bool selectionCovers(uint16_t line, uint16_t word) const;
+  void drawSelection(const Page& page, int fontId, int marginLeft, int marginTop);
+  bool handleSelectionInput();
+  void showSelectionMenu();
+  void commitSelection(bool asNote);
+  // Bookmarks panel: false = bookmark list, true = annotation list (chips).
+  bool bookmarksPanelAnnotations = false;
+  void promptSelectionNote(const annotations::Annotation& base);
+  void exportAnnotations();
   int focusedTool = 0;  // toolbar tool focus: 0=Contents, 1=Text, 2=More
   int panelIndex = 0;   // selected row within the active panel
   // Panel list navigation: a tap steps one row, a hold jumps PANEL_HOLD_STEP rows in one go
@@ -116,6 +334,10 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr unsigned long PANEL_HOLD_MS = 1500;
   static constexpr int PANEL_HOLD_STEP = 10;
   bool panelHoldJumped = false;
+  // D5 steppers: the Text panel's Left/Right step the focused value while
+  // held (press fires immediately, then repeats at this cadence).
+  static constexpr uint32_t kTextStepRepeatMs = 160;
+  uint32_t lastTextStepMs = 0;
   // Whether the panel draws its cursor row. Button boards always do; touch
   // boards only once a button has moved it, so a tapped row is not left inverted.
   bool panelCursorShown = false;
@@ -167,6 +389,24 @@ class EpubReaderActivity final : public ReaderActivity {
   void saveLinkStack() const;
   void loadLinkStack();
 
+  // A5: an EPUB-embedded font. When the book declares one in its OPF manifest and
+  // the user has not chosen an SD font, it is read out of the package into PSRAM,
+  // registered with the renderer, and applied book-wide through
+  // SETTINGS.readerFontOverrideId. The face and its bytes live for the reading
+  // session and are released on exit (see releaseEmbeddedFont).
+  // Declared unconditionally (they are no-ops without vector fonts); the state they
+  // manage needs a complete TtfEpdFont at destruction, so only the members are gated.
+  void loadEmbeddedFontIfPresent();
+  void releaseEmbeddedFont();
+#if CROSSPOINT_VECTOR_FONTS
+  // Raw pointer, not unique_ptr: the owning TU (EpubReaderActivity.cpp) is the
+  // only one with a complete TtfEpdFont, and unique_ptr would demand completeness
+  // from every TU that destroys the activity. Freed in releaseEmbeddedFont().
+  TtfEpdFont* embeddedFont_ = nullptr;
+  memory::ByteBuffer embeddedFontBytes_;
+  int embeddedFontId_ = 0;
+#endif
+
   uint16_t buildViewportWidth = 0;
   uint16_t buildViewportHeight = 0;
 
@@ -187,6 +427,115 @@ class EpubReaderActivity final : public ReaderActivity {
   bool stylesDisabledForSession_ = false;
   int renderedSpineIndex_ = -1;
   int failedBuildSpine_ = -1;
+
+  // Bumped every time the JJWXC comment sidecar is (re)loaded. Part of the page
+  // cache key: a slot holds finished pixels, bubbles included, and must not be
+  // reused after the counts it was built from changed.
+  uint32_t commentGeneration_ = 0;
+
+#ifdef BOARD_HAS_PSRAM
+  // Paragraph-comment bubbles on a JJWXC EPUB. The counts come from the
+  // device-local sidecar (.crosspoint/jjwxc/<novelId>/comments/<chapterId>.bin),
+  // so this works offline; nothing here touches the network.
+  //
+  // A page shows at most one bubble per paragraph, and only on that paragraph's
+  // last line *on this page* (a paragraph continuing over the page break gets
+  // its bubble at the bottom edge, which is where a reader looks for it).
+  struct CommentBubble {
+    int16_t x = 0;
+    int16_t y = 0;
+    int16_t w = 0;
+    int16_t h = 0;
+    uint16_t paragraphIndex = 0;
+    uint16_t total = 0;
+    uint32_t paragraphId = 0;
+  };
+  // Worst page measured on a 1216x684 panel is ~30 short lines; 48 bounds the
+  // hit array (48 * 16 = 768 bytes) without ever truncating a real page.
+  static constexpr int kMaxCommentBubbles = 48;
+  CommentBubble commentBubbles_[kMaxCommentBubbles];
+  int commentBubbleCount_ = 0;
+
+  char jjwxcNovelId_[16] = {};
+  bool jjwxcBookResolved_ = false;  // the "/JJWXC/<title>-<id>.epub" test has run
+  bool jjwxcBook_ = false;
+  int jjwxcCommentSpine_ = -1;  // spine the counts below belong to
+  uint32_t jjwxcChapterId_ = 0;
+
+  // Per-chapter toc state for the toolbar Contents panel. 2 bytes per chapter
+  // and read once per open/update; drawing a chip must not touch the SD card.
+  struct JjwxcTocMeta {
+    uint32_t chapterId = 0;
+    uint8_t state = 0;
+    uint8_t isVip = 0;
+  };
+  std::vector<JjwxcTocMeta, jjwxc::PsramAllocator<JjwxcTocMeta>> jjwxcTocMeta_;
+  void loadJjwxcTocMeta();
+  // Placeholder chapters (missing / unpurchased) get one native action button
+  // at the bottom of the page: cache for a free chapter, purchase for a VIP
+  // one. Drawn in every framebuffer pass; the rectangle is the tap target.
+  void drawJjwxcPlaceholderAction(int fontId, int bottomMargin);
+  // "N more chapters · continue" on the LAST page of the last packaged chapter.
+  // This is where a serialised book actually ends for the reader, and it is the
+  // one place where "the next chapter is not here" is a fact rather than a
+  // guess: the update snapshot says how far behind the card is, and the action
+  // is the existing UpdateChapterList deep link.
+  void drawJjwxcMoreChapters(int bottomMargin);
+  Rect jjwxcMoreRect_{};
+  bool jjwxcMoreActive_ = false;
+  uint32_t jjwxcMoreChapters_ = 0;
+  Rect jjwxcActionRect_{};
+  // Bottom-right? no: top-right corner bookmark target, in physical screen coords.
+  Rect bookmarkCornerRect_{};
+  uint32_t jjwxcActionChapterId_ = 0;
+  int jjwxcActionOrdinal_ = -1;
+  bool jjwxcActionPurchase_ = false;
+  bool jjwxcActionActive_ = false;
+  void openContentsPanel(int focusTocIndex);
+  // PSRAM: up to 512 six-byte entries (3 KB) plus growth; internal RAM has no
+  // room for the app's bookkeeping and the reader's page cache both.
+  std::vector<JjwxcCommentSidecar::Count, jjwxc::PsramAllocator<JjwxcCommentSidecar::Count>> commentCounts_;
+
+  void resolveJjwxcBook();
+  void loadJjwxcCommentCounts();
+  uint16_t commentTotalFor(uint32_t paragraphId) const;
+  // Fills `out` with this page's bubbles. Returns the count. `top/right/bottom/
+  // left` are the same oriented margins renderContents() passes to Page::render.
+  int layoutCommentBubbles(const Page& page, int fontId, int top, int right, int bottom, int left, CommentBubble* out,
+                           int maxOut) const;
+  void drawCommentBubbles() const;
+  void drawCommentBubbleList(const CommentBubble* bubbles, int count) const;
+  void openCommentBubble(const CommentBubble& bubble);
+  // Opens the JJWXC app as a child, deep-linked to this book and to one of its
+  // two maintenance actions, then drops the derived section caches on return.
+  void openJjwxcUpdate(bool currentChapter, bool returnToContents = false);
+  // More -> book details: open the JJWXC app's BookDetail as a child and stay
+  // there until Back, then reopen the (possibly repackaged) EPUB here.
+  void openJjwxcBookDetail();
+  // Contents tail chip: cache/refresh or purchase/acquire one chapter, then
+  // reopen the same panel on return. The app detects "already bought" itself.
+  void openJjwxcChapterAction(uint32_t chapterId, bool purchase, int tocIndex);
+  void activateJjwxcChapterChip(int tocIndex);
+  // Saves the reading position and releases the section/page cache before a
+  // network child activity; shared by both entry points above.
+  void prepareForJjwxcChild();
+  int pendingContentsFocus_ = -1;
+  // The app may have replaced the EPUB while this reader kept the old Epub
+  // object (whose decryptor was opened against the plaintext file). Reopen the
+  // file so openProtection() sees the new manifest and key, then restore the
+  // current spine/page offset. Runs under the caller's render lock.
+  bool reopenBookAfterExternalChange();
+#endif
+  // Contents filter (JJWXC only): 0 all, 1 cached, 2 not cached. contentsRows_
+  // maps a VISIBLE row back to its toc index; nothing may use the row index as
+  // a chapter index while a filter is active.
+  int contentsFilter_ = 0;
+  std::vector<int16_t> contentsRows_;
+  void rebuildContentsRows();
+  int contentsTocForRow(int row) const;
+  int contentsRowForToc(int toc) const;
+  bool contentsFilterable() const;
+
   ReaderRenderSpec effectiveRenderSpec(uint16_t width, uint16_t height) const;
   bool handleBuildFailure(const char* stage, Section::BuildError error);
   bool buildHeapPaused = false;
@@ -206,6 +555,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool jumpToFraction(float fraction);
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  // Jump to a progress point read from a bookmark (the activity path and the
+  // in-sheet bookmarks panel share this body).
+  void applyProgressChange(const ProgressChangeResult& sync);
   // Live section position, or the values cached before a child screen
   // released the section.
   ChapterPosition chapterPosition() const;
@@ -220,10 +572,20 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderOverlay();
   int currentTocIndex() const;
   std::string currentChapterTitle() const;
-  // Text panel rows (font, size, line spacing, alignment, first-line indent).
+  // Text panel cells (refreshed UI frame 05, strict 2x4 grid): font, size, line
+  // spacing, paragraph spacing, page margin, fast page turn, water ripple,
+  // restore defaults. Every value here is backed by an existing setting.
+  static constexpr int kTextPanelCells = 8;
   std::string textRowName(int row) const;
   std::string textRowValue(int row) const;
   void showTextRowPopup(int row);
+  // D5: step a Text-panel value in place (font sizes / line spacing /
+  // paragraph spacing / page margin), applying live -- the book behind the
+  // sheet is the preview. Cell 0 (font family) is a list, not a value.
+  void stepTextRow(int row, int delta);
+  // Switch cells (fast page turn, water ripple) and the restore-defaults cell.
+  void toggleReaderSwitch(int cell);
+  void restoreReaderDefaults();
   // Persist + re-paginate + re-render under the open panel (live preview).
   void applyTextSettingLive();
   void paintOverlayPopup();
@@ -249,6 +611,10 @@ class EpubReaderActivity final : public ReaderActivity {
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();
+  // Index in cachedBookmarks of the entry for the page on screen, or -1.
+  int currentBookmarkIndex() const;
+  // Paints the page-corner bookmark glyph and records the tap target.
+  void drawBookmarkCorner(int top, int rightMargin);
 
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
@@ -290,6 +656,12 @@ class EpubReaderActivity final : public ReaderActivity {
                               bool allowFastInitialRefresh)
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   ~EpubReaderActivity() override;
+
+  // Debug-only (serial CMD:PANEL): opens a reader sheet without a tap.
+  void debugOpenPanel(int tool) override;
+  void debugSetContentsFilter(int filter) override;
+  void debugActivateContentsRow(int row) override;
+  void debugDismissHint() override;
 
   void onExit() override;
   void loop() override;

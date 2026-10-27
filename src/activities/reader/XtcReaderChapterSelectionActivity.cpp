@@ -42,6 +42,12 @@ void XtcReaderChapterSelectionActivity::onEnter() {
   // Open on the current chapter, which may sit past the first page; the first
   // screen build pulls the viewport to it (ListNav follow-on-build).
   nav.selected = findChapterIndexForPage(currentPage);
+  // CPY (frame 10): the chapter being read stays marked even when the cursor
+  // moves away -- the list's own inversion only tracks the cursor.
+  if (UITheme::getInstance().usesCpyLayout() && nav.selected >= 0 &&
+      nav.selected < static_cast<int>(rowItems.size())) {
+    rowItems[static_cast<size_t>(nav.selected)].value = tr(STR_CURRENT_CHAPTER);
+  }
 }
 
 // Derives rowItems from the xtc's chapters. Called once from onEnter() since

@@ -5,12 +5,15 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <iterator>
 
 #include "KeyboardLayoutSet.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
-#include "components/themes/lyra/LyraTheme.h"
+#include "components/UiHighDpiProfile.h"
+#include "components/themes/upstream/UpstreamStyleTheme.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -22,6 +25,17 @@ constexpr int KEYBOARD_MIN_GAP = 6;
 constexpr int KEYBOARD_PANEL_PADDING = 4;
 constexpr int BUTTON_KEY_HEIGHT = 42;
 constexpr int BUTTON_KEYBOARD_HINT_GAP = 4;
+
+// Candidate strip under the input field. Only the last 128 bytes of committed
+// text ever reach the engine (it looks at most 24 back), matching kiikoread's cap.
+constexpr size_t PRECEDING_MAX = 128;
+constexpr int STRIP_CELL_PADDING = 16;
+// Was 44: at 297 ppi that is ~3.8 mm, the smallest touch target in the UI
+// (keyboard keys are 88 px). Chinese candidates are tapped far more often than
+// any single key, so give them a real target.
+constexpr int STRIP_MIN_CELL_WIDTH = 56;
+
+int stripHeight(const bool highDpi) { return highDpi ? 84 : 48; }
 
 int keyboardGap(const ThemeMetrics& metrics, const bool compact = false) {
   return compact ? KEYBOARD_MIN_GAP : std::max(metrics.keyboardKeySpacing, KEYBOARD_MIN_GAP);
@@ -133,6 +147,11 @@ const fui::KeyboardLayout URL_SNIPPET_LAYOUT{URL_SNIP_ROWS, 4};
 
 }  // namespace
 
+void KeyboardEntryActivity::setLiveResults(LiveResultsFn fn, void* ctx) {
+  liveResultsFn_ = fn;
+  liveResultsCtx_ = ctx;
+}
+
 void KeyboardEntryActivity::onEnter() {
   Activity::onEnter();
   cursorPos = text.length();
@@ -161,18 +180,91 @@ void KeyboardEntryActivity::onEnter() {
   touchRouter.holdMs = TOUCH_LONG_PRESS_MS;
   touchRouter.overrideHoldMs = TOUCH_DEL_LONG_PRESS_MS;
   interactionsReady = false;
+  // Chinese entry needs a free-form text field (accounts, codes and numbers
+  // opt out via InputType::Ascii), the Pinyin database, PSRAM for it, touch to
+  // pick candidates, and room above the keyboard for the strip — without any
+  // of those the globe never appears and the keyboard is exactly the old one.
+  // The load happens here, not on the first letter, so no keystroke pays half
+  // a second for it; on a card without the resource (and on no-PSRAM builds)
+  // this is a cheap no-op.
+  chineseMode = false;
+  imeActive = false;
+  composition.clear();
+  candidateSkip = 0;
+  chineseAvailable = inputType == InputType::Text && mappedInput.hasTouch() &&
+                     pinyin::PinyinDb::shared().ensureLoaded();
+  if (chineseAvailable) {
+    StripLayout probe;
+    layoutStrip(probe);
+    chineseAvailable = !probe.strip.empty();
+  }
   requestUpdate();
 }
 
-void KeyboardEntryActivity::onExit() { Activity::onExit(); }
+void KeyboardEntryActivity::onExit() {
+  Activity::onExit();
+  // Release the PSRAM session with the screen that owns it.
+  ime.end();
+  imeActive = false;
+  chineseMode = false;
+}
 
-const fui::KeyboardLayout& KeyboardEntryActivity::currentLayout() const {
+const fui::KeyboardLayout& KeyboardEntryActivity::baseLayout() const {
   if (symbols) return fui::builtinKeyboardLayout(layoutId, shifted, true, false, false);
   if (inputType == InputType::Url) {
     if (urlPanel) return URL_SNIPPET_LAYOUT;
     return shifted ? URL_SHIFT_LAYOUT : URL_LAYOUT;
   }
   return fui::builtinKeyboardLayout(layoutId, shifted, false, true, showLangKey);
+}
+
+// The globe sits in the bottom row's leftmost slot, before the mode key. Its
+// two units come out of the mode key and the space bar so the row still adds
+// up to the same width and OK keeps its size; a row too tight for that gets a
+// one-unit globe instead. The globe's value is app-owned (-5), so nothing
+// collides with the SDK's own control ids (-1..-4).
+int KeyboardEntryActivity::globeLogicalIndex() const {
+  const fui::KeyboardLayout& layout = currentLayout();
+  if (layout.rowCount == 0) return -1;
+  int index = 0;
+  for (int row = 0; row + 1 < layout.rowCount; row++) index += layout.rows[row].count;
+  return index;
+}
+
+const fui::KeyboardLayout& KeyboardEntryActivity::currentLayout() const {
+  const fui::KeyboardLayout& base = baseLayout();
+  if (!chineseAvailable || base.rows == nullptr || base.rowCount == 0) return base;
+  if (chineseBaseCache == &base) return chineseLayout_;
+  const size_t bottom = base.rowCount - 1;
+  const fui::KeyboardRow& source = base.rows[bottom];
+  if (source.keys == nullptr || source.insetUnits != 0 || source.count + 1 > std::size(chineseKeyCache_)) return base;
+
+  for (size_t i = 0; i <= bottom; i++) chineseRowCache_[i] = base.rows[i];
+  size_t modeIndex = SIZE_MAX;
+  size_t spaceIndex = SIZE_MAX;
+  for (size_t i = 0; i < source.count; i++) {
+    chineseKeyCache_[i + 1] = source.keys[i];
+    if (source.keys[i].kind == fui::KeyKind::Mode) modeIndex = i + 1;
+    if (source.keys[i].kind == fui::KeyKind::Space) spaceIndex = i + 1;
+  }
+  uint8_t globeUnits = 2;
+  if (modeIndex != SIZE_MAX && chineseKeyCache_[modeIndex].widthUnits >= 2) {
+    chineseKeyCache_[modeIndex].widthUnits -= 1;
+  } else {
+    globeUnits = 1;
+  }
+  if (spaceIndex != SIZE_MAX && chineseKeyCache_[spaceIndex].widthUnits >= 3) {
+    chineseKeyCache_[spaceIndex].widthUnits -= 1;
+  } else if (globeUnits == 2) {
+    globeUnits = 1;
+  }
+  chineseKeyCache_[0] = fui::KeyboardKey{nullptr, nullptr, fui::KeyKind::Lang, fui::StateNormal, CHINESE_KEY,
+                                         globeUnits, true, nullptr};
+  chineseRowCache_[bottom] =
+      fui::KeyboardRow{chineseKeyCache_, static_cast<uint8_t>(source.count + 1), 0, source.independentKeyWidth};
+  chineseLayout_ = fui::KeyboardLayout{chineseRowCache_, base.rowCount};
+  chineseBaseCache = &base;
+  return chineseLayout_;
 }
 
 const fui::KeyboardKey* KeyboardEntryActivity::selectedKey() const {
@@ -273,6 +365,221 @@ bool KeyboardEntryActivity::backspaceUtf8() {
   return true;
 }
 
+// --- Chinese Pinyin entry ----------------------------------------------------
+//
+// The strip above the keyboard owns everything Chinese: the toggle that enters
+// the mode, the Pinyin being composed, and the candidate cells. Chinese mode
+// changes how letter keys route (composition instead of text) and pins the
+// layout to QWERTY — it adds no key tables, so the SDK layouts stay untouched.
+
+void KeyboardEntryActivity::setChineseMode(const bool enabled) {
+  if (enabled == chineseMode || !chineseAvailable) return;
+  if (enabled) {
+    if (!imeActive) imeActive = ime.begin(pinyin::PinyinDb::shared().tables());
+    if (!imeActive) return;  // no PSRAM session: stay in the Latin fallback
+    // Pinyin reads Latin letters; whatever script was active, Chinese entry
+    // uses the QWERTY table. Leaving restores the user's layout.
+    layoutBeforeChinese = layoutId;
+    layoutId = fui::KeyboardLayoutId::QwertyEn;
+    symbols = false;
+    urlPanel = false;
+    shifted = false;
+    chineseMode = true;
+    composition.clear();
+    candidateSkip = 0;
+    refreshCandidates();
+  } else {
+    chineseMode = false;
+    composition.clear();
+    candidateSkip = 0;
+    layoutId = layoutBeforeChinese;
+    shifted = false;
+  }
+  clampSelection();
+}
+
+bool KeyboardEntryActivity::requestCandidates(const size_t skip) {
+  if (!imeActive) return false;
+  char before[PRECEDING_MAX + 1];
+  const size_t pos = std::min(cursorPos, text.length());
+  const size_t n = std::min(pos, PRECEDING_MAX);
+  if (n > 0) memcpy(before, text.data() + (pos - n), n);
+  before[n] = 0;
+  // `nine` stays false: this keyboard has no digit grid, and the engine's T9
+  // path is only reachable from one.
+  return ime.candidatesPage(composition.c_str(), false, nullptr, before, skip);
+}
+
+void KeyboardEntryActivity::refreshCandidates() {
+  candidateSkip = 0;
+  requestCandidates(0);
+}
+
+bool KeyboardEntryActivity::commitCandidateAt(const size_t index) {
+  if (!imeActive) return false;
+  const pinyin::ImeResult& result = ime.result();
+  if (index >= result.count) return false;
+  const pinyin::ImeCandidate& item = result.items[index];
+  const size_t length = strlen(item.text);
+  if (maxLength != 0 && text.length() + length > maxLength) return false;
+  insertUtf8(item.text);
+  if (item.consume <= composition.size()) composition.erase(0, item.consume);
+  refreshCandidates();
+  return true;
+}
+
+void KeyboardEntryActivity::pageCandidates(const int direction, const size_t visibleCount) {
+  if (!imeActive) return;
+  const size_t step = visibleCount > 0 ? visibleCount : 1;
+  if (direction > 0) {
+    if (!requestCandidates(candidateSkip + step) || ime.result().count == 0) {
+      requestCandidates(candidateSkip);  // put the current page back
+      return;
+    }
+    candidateSkip += step;
+  } else {
+    if (candidateSkip == 0) return;
+    candidateSkip = candidateSkip > step ? candidateSkip - step : 0;
+    requestCandidates(candidateSkip);
+  }
+}
+
+void KeyboardEntryActivity::layoutStrip(StripLayout& out) const {
+  out = StripLayout{};
+  if (!chineseAvailable) return;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const fui::Rect kb = keyboardRect();
+  const int pageWidth = renderer.getScreenWidth();
+  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int underlineBottom = inputStartY() + inputLineCount() * lineHeight + metrics.verticalSpacing + 4;
+  const int height = stripHeight(UiHighDpiProfile::enabled);
+  const int bottom = kb.y - KEYBOARD_MIN_GAP;
+  const int top = bottom - height;
+  // No room between the field and the keys: no strip, and with it no way to
+  // pick a candidate, so the toggle does not appear either.
+  if (top < underlineBottom + 4) return;
+  out.strip = fui::Rect{0, static_cast<int16_t>(top), static_cast<int16_t>(pageWidth),
+                        static_cast<int16_t>(height)};
+
+  const int margin = 8;
+  const int gap = KEYBOARD_MIN_GAP;
+  const int rowHeight = height - 2 * margin;
+  const int y = top + margin;
+
+  int cursorX = margin;
+  const int rightLimit = pageWidth - margin;
+  if (!composition.empty()) {
+    // Show the tail of the composition: the letters just typed are the ones
+    // the candidates are for.
+    const char* shown = composition.c_str();
+    const int maxWidth = pageWidth / 4;
+    int width = renderer.getTextWidth(UI_12_FONT_ID, shown);
+    while (width > maxWidth && *shown) {
+      shown++;
+      width = renderer.getTextWidth(UI_12_FONT_ID, shown);
+    }
+    if (*shown) {
+      out.compose = fui::Rect{static_cast<int16_t>(cursorX), static_cast<int16_t>(y), static_cast<int16_t>(width),
+                              static_cast<int16_t>(rowHeight)};
+      out.composeText = shown;
+      cursorX += width + gap;
+    }
+  }
+  if (chineseMode && imeActive) {
+    const pinyin::ImeResult& result = ime.result();
+    const int arrowWidth = rowHeight;
+    const int cellsLimit = rightLimit - arrowWidth - gap;
+    // A homophone list runs past the built-in CJK coverage, so a cell the
+    // active face would draw as tofu is dropped rather than offered. The
+    // filter must be all-or-nothing for the strip: a card with no CJK-capable
+    // face at all still gets its cells, tofu and all, or nothing would be
+    // selectable.
+    const auto place = [&](const bool requireGlyphs) {
+      out.cellCount = 0;
+      int cellX = cursorX + arrowWidth + gap;
+      for (size_t i = 0; i < result.count && out.cellCount < StripLayout::MAX_CELLS; i++) {
+        const char* text = result.items[i].text;
+        if (requireGlyphs && !renderer.canRenderText(UI_12_FONT_ID, text)) continue;
+        int width = renderer.getTextWidth(UI_12_FONT_ID, text) + STRIP_CELL_PADDING;
+        if (width < STRIP_MIN_CELL_WIDTH) width = STRIP_MIN_CELL_WIDTH;
+        if (cellX + width > cellsLimit) break;
+        out.cells[out.cellCount] = fui::Rect{static_cast<int16_t>(cellX), static_cast<int16_t>(y),
+                                             static_cast<int16_t>(width), static_cast<int16_t>(rowHeight)};
+        out.cellItem[out.cellCount] = i;
+        out.cellCount++;
+        cellX += width + gap;
+      }
+    };
+    place(true);
+    if (out.cellCount == 0 && result.count > 0) place(false);
+    out.prev = fui::Rect{static_cast<int16_t>(cursorX), static_cast<int16_t>(y), static_cast<int16_t>(arrowWidth),
+                         static_cast<int16_t>(rowHeight)};
+    out.next = fui::Rect{static_cast<int16_t>(rightLimit - arrowWidth), static_cast<int16_t>(y),
+                         static_cast<int16_t>(arrowWidth), static_cast<int16_t>(rowHeight)};
+  }
+}
+
+void KeyboardEntryActivity::drawStrip(const StripLayout& layout) {
+  const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const auto centeredY = [&](const fui::Rect& rect) { return rect.y + (rect.height - lineHeight) / 2; };
+  const auto centeredX = [&](const fui::Rect& rect, const char* text, const int font) {
+    return rect.x + (rect.width - renderer.getTextWidth(font, text)) / 2;
+  };
+
+  if (layout.composeText != nullptr) {
+    const fui::Rect& rect = layout.compose;
+    renderer.drawText(UI_12_FONT_ID, rect.x, centeredY(rect), layout.composeText, true);
+    // A rule marks the Pinyin as pending input, not committed text.
+    renderer.drawLine(rect.x, rect.bottom() - 3, rect.right(), rect.bottom() - 3, 1, true);
+  }
+
+  if (chineseMode && imeActive) {
+    const pinyin::ImeResult& result = ime.result();
+    const bool canPrev = candidateSkip > 0;
+    const bool canNext =
+        result.hasMore ||
+        (layout.cellCount > 0 && layout.cellItem[layout.cellCount - 1] + 1 < result.count);
+    if (canPrev) renderer.drawText(SMALL_FONT_ID, centeredX(layout.prev, "<", SMALL_FONT_ID), centeredY(layout.prev), "<");
+    if (canNext) renderer.drawText(SMALL_FONT_ID, centeredX(layout.next, ">", SMALL_FONT_ID), centeredY(layout.next), ">");
+    for (size_t i = 0; i < layout.cellCount; i++) {
+      const fui::Rect& cell = layout.cells[i];
+      const char* text = result.items[layout.cellItem[i]].text;
+      const int textX = centeredX(cell, text, UI_12_FONT_ID);
+      if (i == 0) {
+        // The leading candidate is what Space and OK would commit: paint it
+        // as chosen, the same inverted style the key layer uses.
+        renderer.fillRect(cell.x, cell.y, cell.width, cell.height, true);
+        renderer.drawText(UI_12_FONT_ID, textX, centeredY(cell), text, false);
+      } else {
+        renderer.drawRect(cell.x, cell.y, cell.width, cell.height, true);
+        renderer.drawText(UI_12_FONT_ID, textX, centeredY(cell), text, true);
+      }
+    }
+  }
+}
+
+bool KeyboardEntryActivity::handleStripTap(const int x, const int y) {
+  if (!chineseAvailable) return false;
+  StripLayout layout;
+  layoutStrip(layout);
+  if (layout.strip.empty() || !layout.strip.contains(static_cast<int16_t>(x), static_cast<int16_t>(y))) return false;
+  if (chineseMode && imeActive) {
+    if (layout.prev.contains(static_cast<int16_t>(x), static_cast<int16_t>(y))) {
+      pageCandidates(-1, layout.cellCount);
+      return true;
+    }
+    if (layout.next.contains(static_cast<int16_t>(x), static_cast<int16_t>(y))) {
+      pageCandidates(1, layout.cellCount);
+      return true;
+    }
+    for (size_t i = 0; i < layout.cellCount; i++) {
+      if (layout.cells[i].contains(static_cast<int16_t>(x), static_cast<int16_t>(y)))
+        return commitCandidateAt(layout.cellItem[i]);
+    }
+  }
+  return false;
+}
+
 bool KeyboardEntryActivity::activateValue(const int16_t value, const bool longPress) {
   switch (value) {
     case fui::QWERTY_KEY_SHIFT:
@@ -316,13 +623,37 @@ bool KeyboardEntryActivity::activateValue(const int16_t value, const bool longPr
       shifted = false;
       clampSelection();
       return true;
+    case CHINESE_KEY:
+      delPressCount = 0;
+      hintVisible = false;
+      if (!chineseAvailable) return false;
+      setChineseMode(!chineseMode);
+      return true;
     case fui::QWERTY_KEY_ENTER:
+      // Unconfirmed Pinyin never silently disappears into a saved field.
+      if (chineseMode && !composition.empty() && ime.result().count == 0) return false;
+      if (chineseMode && !composition.empty()) commitCandidateAt(0);
       onComplete(text);
       return false;
     case fui::QWERTY_KEY_BACKSPACE:
       if (longPress) {
+        // The long press still means "start over" — but only over what is
+        // being composed; the committed text is one more deliberate press
+        // away, so a half-typed Pinyin can never eat the field's contents.
+        if (chineseMode && !composition.empty()) {
+          composition.clear();
+          candidateSkip = 0;
+          refreshCandidates();
+          return true;
+        }
         text.clear();
         cursorPos = 0;
+        return true;
+      }
+      if (chineseMode && !composition.empty()) {
+        composition.pop_back();
+        candidateSkip = 0;
+        refreshCandidates();
         return true;
       }
       delPressCount++;
@@ -340,6 +671,26 @@ bool KeyboardEntryActivity::activateValue(const int16_t value, const bool longPr
       const char* out = longPress ? fui::keyboardAltOutputFor(layer, value) : nullptr;
       if (!out) out = fui::keyboardOutputFor(layer, value);
       if (!out) return false;
+      if (chineseMode) {
+        // Space commits the leading candidate, exactly like kiikoread's 选择 key;
+        // with nothing composing it stays an ordinary space.
+        if (value == fui::QWERTY_KEY_SPACE) {
+          if (!composition.empty()) return commitCandidateAt(0);
+          insertUtf8(" ");
+          return true;
+        }
+        const char c = out[0];
+        const bool singleLetter =
+            c != 0 && out[1] == 0 && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'));
+        if (singleLetter) {
+          if (composition.size() < pinyin::kImeRawMax) {
+            composition.push_back(c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c);
+            candidateSkip = 0;
+            refreshCandidates();
+          }
+          return true;
+        }
+      }
       insertUtf8(out);
       if (shifted && !symbols) {
         shifted = false;  // shift auto-releases after one character
@@ -488,6 +839,15 @@ bool KeyboardEntryActivity::cursorPositionFromPoint(const int x, const int y, si
                                                                    toggleGap
                                                              : 0;
   const int textAreaWidth = pageWidth - 2 * effectiveMargin - toggleReserve;
+  // The [abc] toggle is drawn one line below the last text line, so that line's
+  // hit rect -- which extends verticalSpacing past the glyphs -- overlaps it, and
+  // `x >= lineStartX + textWidth` would swallow the tap as an end-of-line cursor
+  // placement before the toggle test below ever runs. Masked text is short, so
+  // that branch always won. Text never reaches this column (textAreaWidth already
+  // reserves it), so excluding the column costs nothing and keeps the two hit
+  // regions disjoint.
+  const bool hasToggleColumn = (inputType == InputType::Password);
+  const int toggleColumnX = pageWidth - effectiveMargin - (toggleReserve - toggleGap) - 4;
   const int maxLineWidth = textAreaWidth;
   const bool centerText = metrics.keyboardCenteredText;
   std::string displayText = displayTextForCurrentState();
@@ -510,7 +870,8 @@ bool KeyboardEntryActivity::cursorPositionFromPoint(const int x, const int y, si
     lastLineStartX = lineStartX;
     lastLineWidth = textWidth;
 
-    if (y >= lineY - metrics.verticalSpacing && y < lineY + lineHeight + metrics.verticalSpacing) {
+    if (y >= lineY - metrics.verticalSpacing && y < lineY + lineHeight + metrics.verticalSpacing &&
+        !(hasToggleColumn && x >= toggleColumnX)) {
       if (x <= lineStartX) {
         position = static_cast<size_t>(isRtl ? lineEndIdx : lineStartIdx);
         return true;
@@ -580,8 +941,8 @@ fui::Rect KeyboardEntryActivity::keyboardRect() const {
     // Compact landscape keeps the cursor's line visible and spends the saved
     // height on keys. The underline and its 6px gap remain inside the input band.
     const int keyboardInputY =
-        SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX
-            ? std::max(inputStartY(), safe.y + LyraMetrics::values.topPadding + UiHighDpiProfile::headerHeight +
+        UITheme::getInstance().usesModernLayout()
+            ? std::max(inputStartY(), safe.y + UpstreamStyleMetrics::values.topPadding + UiHighDpiProfile::headerHeight +
                                           UiHighDpiProfile::controlGap)
             : inputStartY();
     const int inputBottom = keyboardInputY + inputLineCount() * renderer.getLineHeight(UI_12_FONT_ID) +
@@ -597,8 +958,8 @@ fui::Rect KeyboardEntryActivity::keyboardRect() const {
   }
   const int height = keyboardKeysHeight(metrics, rows, hasTouch);
   const int hintGap = hasTouch
-                          ? (SETTINGS.uiTheme == CrossPointSettings::UI_THEME::INX ? LyraMetrics::values.verticalSpacing
-                                                                                   : metrics.verticalSpacing) -
+                          ? (UITheme::getInstance().usesModernLayout() ? UpstreamStyleMetrics::values.verticalSpacing
+                                                                       : metrics.verticalSpacing) -
                                 metrics.keyboardVerticalOffset
                           : BUTTON_KEYBOARD_HINT_GAP;
   const int y = pageHeight - metrics.buttonHintsHeight - height - hintGap;
@@ -621,6 +982,21 @@ void KeyboardEntryActivity::loop() {
 
   size_t touchedCursorPos = 0;
   bool touchedPasswordToggle = false;
+  if (mappedInput.wasScreenTapped(tx, ty) && jjwxcSearchFn_ != nullptr && jjwxcSearchRect_.width > 0 &&
+      tx >= jjwxcSearchRect_.x && tx < jjwxcSearchRect_.x + jjwxcSearchRect_.width &&
+      ty >= jjwxcSearchRect_.y && ty < jjwxcSearchRect_.y + jjwxcSearchRect_.height) {
+    jjwxcSearchFn_(jjwxcSearchCtx_, text.c_str());
+    return;
+  }
+  if (mappedInput.wasScreenTapped(tx, ty)) {
+    // The candidate strip sits between the field and the keys; its taps are
+    // consumed here so they never fall through to cursor placement or the key
+    // router below.
+    if (handleStripTap(tx, ty)) {
+      requestUpdate();
+      return;
+    }
+  }
   if (mappedInput.wasScreenTapped(tx, ty) && cursorPositionFromPoint(tx, ty, touchedCursorPos, touchedPasswordToggle)) {
     if (touchedPasswordToggle) {
       passwordVisible = !passwordVisible;
@@ -1003,6 +1379,50 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const fui::Rect kbRect = keyboardRect();
   const fui::Rect keysRect = keyboardKeysRect();
 
+  // The Chinese strip (toggle + composing Pinyin + candidates) lives in the
+  // band between the field and the keys and owns it while it is up.
+  StripLayout strip;
+  layoutStrip(strip);
+  if (!strip.strip.empty()) drawStrip(strip);
+
+  // refreshed UI frame 07: a live result preview above the QWERTY keys. The preview
+  // is local-only (the JJWXC search runs in its own app); the row at the bottom
+  // says so instead of pretending to merge two result sets.
+  if (liveResultsFn_ != nullptr && !chineseMode && !text.empty()) {
+    const int previewTop = inputY + inputHeight + lineHeight + metrics.verticalSpacing + 10;
+    const int previewBottom = kbRect.y - 8;
+    if (previewBottom - previewTop >= 80) {
+      const int rowH = std::min(64, std::max(44, (previewBottom - previewTop - 32) / 5));
+      int y = previewTop;
+      renderer.drawText(SMALL_FONT_ID, effectiveMargin, y, tr(STR_LOCAL_MATCHES), true, EpdFontFamily::BOLD);
+      y += renderer.getLineHeight(SMALL_FONT_ID) + 4;
+      const auto matches = liveResultsFn_(liveResultsCtx_, text.c_str());
+      if (matches.empty()) {
+        renderer.drawText(UI_10_FONT_ID, effectiveMargin, y, tr(STR_LOCAL_NO_MATCHES));
+      } else {
+        for (size_t i = 0; i < matches.size() && y + rowH <= previewBottom - 24; ++i) {
+          renderer.drawText(UI_10_FONT_ID, effectiveMargin, y + (rowH - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                            renderer.truncatedText(UI_10_FONT_ID, matches[i].c_str(),
+                                                   pageWidth - effectiveMargin * 2)
+                                .c_str());
+          y += rowH;
+        }
+      }
+      if (jjwxcSearchFn_ != nullptr) {
+        const int lineY = std::min(y + 6, previewBottom - renderer.getLineHeight(SMALL_FONT_ID));
+        renderer.drawText(SMALL_FONT_ID, effectiveMargin, lineY, tr(STR_JJWXC_SEARCH_IN_APP));
+        jjwxcSearchRect_ = freeink::ui::Rect{static_cast<int16_t>(effectiveMargin),
+                                             static_cast<int16_t>(lineY - 6),
+                                             static_cast<int16_t>(pageWidth - effectiveMargin * 2),
+                                             static_cast<int16_t>(renderer.getLineHeight(SMALL_FONT_ID) + 12)};
+        renderer.drawLine(pageWidth - effectiveMargin - 8, lineY + 6, pageWidth - effectiveMargin, lineY + 12, true);
+        renderer.drawLine(pageWidth - effectiveMargin, lineY + 12, pageWidth - effectiveMargin - 8, lineY + 18, true);
+      } else {
+        jjwxcSearchRect_ = freeink::ui::Rect{};
+      }
+    }
+  }
+
   const int tipsLh = renderer.getLineHeight(SMALL_FONT_ID);
   const int underlineBottom = inputY + inputHeight + lineHeight + metrics.verticalSpacing + 4;
   auto drawTip = [&](const char* tip, int y) { renderer.drawCenteredText(SMALL_FONT_ID, y, tip, true); };
@@ -1018,7 +1438,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     tipCount = 1 + (inputType == InputType::Url ? 1 : 0) + (!text.empty() ? 1 : 0);
   }
 
-  if ((!UITheme::getInstance().hasMainTabs() || !mappedInput.hasTouch()) && tipCount > 0) {
+  if (strip.strip.empty() && (!UITheme::getInstance().hasMainTabs() || !mappedInput.hasTouch()) && tipCount > 0) {
     int y = (underlineBottom + kbRect.y) / 2 - (tipCount + 1) * tipsLh / 2;
     drawTip(tr(STR_KB_TIPS), y);
     y += tipsLh;
@@ -1080,6 +1500,13 @@ void KeyboardEntryActivity::render(RenderLock&&) {
       (symbols || (inputType == InputType::Url && urlPanel)) ? tr(STR_KEY_MODE_ABC) : tr(STR_KEY_MODE_SYMBOLS);
   props.inputMask = static_cast<uint16_t>(fui::InputTouch | fui::InputLongPress);
   props.selectedIndex = (cursorMode || mappedInput.hasTouch()) ? -1 : static_cast<int16_t>(selectedLogicalIndex());
+  if (!cursorMode && mappedInput.hasTouch() && chineseAvailable && chineseMode) {
+    // Touch navigation never marks a key, so the slot stays -1 and the Chinese
+    // mode would have no visible state. Pin it to the globe: the selected
+    // style draws it inverted, the same "this one is on" idiom every other
+    // control in this app uses.
+    props.selectedIndex = static_cast<int16_t>(globeLogicalIndex());
+  }
   // The 12-column Arabic rows need the smaller font for wide isolated letters.
   props.labelText.font = layoutId == fui::KeyboardLayoutId::ArabicAr && !symbols ? fui::GfxRendererTarget::FONT_SMALL
                                                                                  : fui::GfxRendererTarget::FONT_BODY;
@@ -1110,7 +1537,13 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 
   GUI.drawSideButtonHints(renderer, ">", "<");
 
-  renderer.displayBuffer();
+  // TransientUi: a keystroke repaints the whole surface, and on Read Pico every
+  // push is a full-page differential scan that counts toward the periodic GC16
+  // sweep -- so typing flashed black/white every Nth key, mid-word. The keyboard
+  // is a short-lived modal; excluding its pushes from the sweep keeps typing
+  // clean, and the screen it closes into resumes Normal pushes (and the sweep)
+  // right after, clearing any faint residue from the text field.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
 void KeyboardEntryActivity::onComplete(std::string text) {

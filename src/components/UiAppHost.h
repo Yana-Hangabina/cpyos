@@ -26,7 +26,10 @@ class UiAppHost {
   // capacity-templated, so per-screen capacities each minted a fresh copy of
   // that code in flash. The wider interaction buffer costs ~300 bytes of RAM
   // per live host, bounded by the activity stack depth.
-  using UiApp = freeink::ui::FreeInkApp<24, 6>;
+  // 8 handlers, not 6: LibraryListActivity alone registers seven (base row +
+// tab, search, rebuild, back, chip, sort), and the app drops overflow
+// SILENTLY — the sort action drew its hit but never ran (sim, 2026-10-17).
+using UiApp = freeink::ui::FreeInkApp<24, 8>;
   using UiScreen = UiApp::ScreenType;
 
   explicit UiAppHost(const GfxRenderer& renderer, bool upstreamStyle = false);
