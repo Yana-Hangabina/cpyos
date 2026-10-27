@@ -136,13 +136,15 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t assets < <(find "dist/cpyos/$VERSION" -maxdepth 1 -type f -print | sort)
-          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$VERSION" --repo "$GITHUB_REPOSITORY" \
+          # Use the actual git tag (cpyos-X.Y.Z). Bare 0.x tags belong to
+          # upstream CrossMux history and must never receive CPYOS assets.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "脆皮鸭 CPYOS $VERSION" \
               --notes-file "docs/releases/$VERSION.md" --latest
           else
-            gh release create "$VERSION" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
               --title "脆皮鸭 CPYOS $VERSION" \
               --notes-file "docs/releases/$VERSION.md" --latest
           fi
