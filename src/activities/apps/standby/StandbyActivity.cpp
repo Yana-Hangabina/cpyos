@@ -430,6 +430,20 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
       processFaceTick(true);
       return true;
     case HalPowerManager::LightSleepWakeReason::PowerButton:
+      // Swallow the rest of this press in main: a wake hold is not a new
+      // in-app long-press, and it must not hand the host to the PMU.
+      mappedInput.notePowerWakeFromSleep();
+      if (returnOnWake_) {
+        finish();
+        return true;
+      }
+      mode_ = DisplayMode::Normal;
+      lastInputMs_ = millis();
+      requestUpdate();
+      return true;
+    case HalPowerManager::LightSleepWakeReason::External:
+      // AC-in / card detect / PGOOD. Treat as an ordinary wake, but do not mark
+      // a power-key release: there is no key press to swallow.
       if (returnOnWake_) {
         finish();
         return true;

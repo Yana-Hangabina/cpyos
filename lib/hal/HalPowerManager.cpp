@@ -110,50 +110,68 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
 
   // Release a pending assertion first: the expander's INT# is open-drain and NOT
   // latched, and reading its Input register is what releases it (fca9555.h).
-  // Leaving a stale low on the line would end the sleep immediately.
+  // The PMU's event FIFO can otherwise keep CW_INT low; drain it too so old
+  // events cannot make the first slice wake immediately.
   BoardReadPico::clearIoeInt();
+  (void)BoardReadPico::pmuTakeKeyWakeup();
 
   if (!freeink::PowerManager::armLightSleepWakeupLevels(kIoeIntMask, 0)) {
     LOG_ERR("PWR", "Failed to arm the GPIO%d light-sleep wake", READPICO_IOE_INT);
     return LightSleepWakeReason::Failed;
   }
-  const esp_err_t timerError = esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(seconds) * 1000000ULL);
-  if (timerError != ESP_OK) {
+
+  const auto cleanup = [kIoeIntMask] {
     freeink::PowerManager::clearLightSleepWakeup(kIoeIntMask);
-    LOG_ERR("PWR", "Failed to arm the light-sleep timer: %d", static_cast<int>(timerError));
-    return LightSleepWakeReason::Failed;
-  }
+    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  };
 
-  const esp_err_t sleepError = esp_light_sleep_start();
-  const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-  freeink::PowerManager::clearLightSleepWakeup(kIoeIntMask);
-  const esp_err_t timerCleanupError = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  // read-pico-reader's lock loop uses a 2 s PMU poll: the IOE edge alone misses
+  // a short key press (the line is released before the chip is awake), while the
+  // PMU keeps KEY_SHORT in its event FIFO. A short slice wakes often enough to
+  // drain that FIFO; the clock face still only redraws at the requested minute.
+  constexpr int64_t kKeyPollMs = 2000;
+  const int64_t deadlineMs = static_cast<int64_t>(millis()) + static_cast<int64_t>(seconds) * 1000;
 
-  if (sleepError != ESP_OK) {
-    LOG_ERR("PWR", "Light sleep failed: %d", static_cast<int>(sleepError));
-    return LightSleepWakeReason::Failed;
-  }
-  if (timerCleanupError != ESP_OK) {
-    LOG_ERR("PWR", "Failed to clean up the light-sleep timer: %d", static_cast<int>(timerCleanupError));
-    return LightSleepWakeReason::Failed;
-  }
-
-  switch (cause) {
-    case ESP_SLEEP_WAKEUP_TIMER:
-      return LightSleepWakeReason::Timer;
-    case ESP_SLEEP_WAKEUP_GPIO:
-      // The armed line is the expander INT#, i.e. the PMU's own interrupt (power
-      // key, AC-in, RTC alarm) or any other expander input change (card detect,
-      // PGOOD). Reported as PowerButton because that is the only "an external
-      // event ended the sleep" value the enum has; StandbyActivity leaves
-      // immersive standby on it, which is the correct response to any of them.
-      // No waitForPowerButtonRelease(): the key is PMU-owned and there is no GPIO
-      // to poll.
-      return LightSleepWakeReason::PowerButton;
-    default:
-      LOG_ERR("PWR", "Unexpected light-sleep wake cause: %d", static_cast<int>(cause));
+  while (static_cast<int64_t>(millis()) < deadlineMs) {
+    const int64_t remainingMs = deadlineMs - static_cast<int64_t>(millis());
+    const int64_t sliceMs = remainingMs < kKeyPollMs ? remainingMs : kKeyPollMs;
+    if (sliceMs <= 0) break;
+    const esp_err_t timerError =
+        esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sliceMs) * 1000ULL);
+    if (timerError != ESP_OK) {
+      cleanup();
+      LOG_ERR("PWR", "Failed to arm the light-sleep timer: %d", static_cast<int>(timerError));
       return LightSleepWakeReason::Failed;
+    }
+
+    const esp_err_t sleepError = esp_light_sleep_start();
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    BoardReadPico::clearIoeInt();
+
+    // The PMU event is authoritative even when the IOE edge was missed. This is
+    // what turns a short key press into a wake before the 60 s clock tick.
+    if (BoardReadPico::pmuTakeKeyWakeup()) {
+      cleanup();
+      return LightSleepWakeReason::PowerButton;
+    }
+    if (sleepError != ESP_OK) {
+      cleanup();
+      LOG_ERR("PWR", "Light sleep failed: %d", static_cast<int>(sleepError));
+      return LightSleepWakeReason::Failed;
+    }
+    if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+      cleanup();
+      // Another expander input (AC-in, card detect, PGOOD) ended the sleep.
+      return LightSleepWakeReason::External;
+    }
+    if (cause == ESP_SLEEP_WAKEUP_TIMER) continue;
+    cleanup();
+    LOG_ERR("PWR", "Unexpected light-sleep wake cause: %d", static_cast<int>(cause));
+    return LightSleepWakeReason::Failed;
   }
+
+  cleanup();
+  return LightSleepWakeReason::Timer;
 }
 #endif  // FREEINK_DEVICE_READPICO
 }  // namespace

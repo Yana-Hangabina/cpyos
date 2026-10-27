@@ -25,7 +25,12 @@ class HalPowerManager {
   SemaphoreHandle_t modeMutex = nullptr;  // Protect lock mode, clock transitions, and isLowPower
 
  public:
-  enum class LightSleepWakeReason : uint8_t { Timer, PowerButton, Failed };
+  enum class LightSleepWakeReason : uint8_t {
+    Timer,        // the requested sleep window elapsed
+    PowerButton,  // the PMU key produced an event (or is held)
+    External,     // another FCA9555 input (AC-in, card detect, PGOOD)
+    Failed
+  };
 
 #if BOARD_HAS_PSRAM
   static constexpr int LOW_POWER_FREQ = 80;  // MHz
