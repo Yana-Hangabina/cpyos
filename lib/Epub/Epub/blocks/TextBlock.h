@@ -60,6 +60,12 @@ class TextBlock final : public Block {
   // onto the words of a cached line. 0 for lines written before this field
   // existed — the section format version was bumped, so those are rebuilt.
   uint32_t visibleOffset = 0;
+  // True on the line that carries the final word of its source <p>. A paragraph
+  // split across pages has several lines with the same paragraphIndex; only this
+  // one may draw the JJWXC comment bubble. Serialized with the line, so a cached
+  // page keeps the answer and the reader can drop the duplicate bubble that used
+  // to appear at the bottom of the preceding page.
+  bool paragraphFinal = false;
   bool focusPresent = false;
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
@@ -103,6 +109,8 @@ class TextBlock final : public Block {
   void setParagraphIndex(const uint16_t index) { paragraphIndex = index; }
   uint32_t getVisibleOffset() const { return visibleOffset; }
   void setVisibleOffset(const uint32_t offset) { visibleOffset = offset; }
+  bool isParagraphFinal() const { return paragraphFinal; }
+  void setParagraphFinal(const bool final) { paragraphFinal = final; }
   // NUL-terminated by construction; safe to pass to C APIs directly.
   const char* wordText(const uint16_t i) const { return textArr + textOffArr[i]; }
   uint16_t wordTextLen(const uint16_t i) const {

@@ -1,5 +1,7 @@
 #include "ReaderActivity.h"
 
+#include "EmojiFont.h"
+
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -66,6 +68,9 @@ void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+  // The reader is where emoji matter; follow the persisted reader point size.
+  // Reloading is a no-op unless the size changed since the last book.
+  emoji_font::setPointSize(renderer, SETTINGS.fontPointSize);
 
   // Heap ledger for field crash reports: free vs largest block distinguishes a
   // leak (free falls) from fragmentation (free stable, largest collapses).

@@ -410,7 +410,10 @@ bool GfxRenderer::canRenderText(const int fontId, const char* text, const EpdFon
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
     bool usedReplacement = false;
-    if (family->second.getGlyph(cp, style, &usedReplacement) == nullptr || usedReplacement) return false;
+    if (family->second.getGlyph(cp, style, &usedReplacement) == nullptr || usedReplacement) {
+      if (hasEmojiGlyph(cp)) continue;  // drawText() will switch to the emoji face for this code point
+      return false;
+    }
   }
   return true;
 }
@@ -949,7 +952,144 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   }
 }
 
+namespace {
+
+bool isEmojiBaseCp(const uint32_t cp) {
+  return (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF) ||
+         (cp >= 0x2B00 && cp <= 0x2BFF) || cp == 0x00A9 || cp == 0x00AE || cp == 0x203C || cp == 0x2049 ||
+         cp == 0x2122 || cp == 0x2139 || cp == 0x3030 || cp == 0x303D || cp == 0x3297 || cp == 0x3299;
+}
+
+bool isEmojiExtendCp(const uint32_t cp) {
+  return cp == 0xFE0E || cp == 0xFE0F || cp == 0x200D || cp == 0x20E3 ||
+         (cp >= 0x1F3FB && cp <= 0x1F3FF) || (cp >= 0xE0020 && cp <= 0xE007F);
+}
+
+// Length of a UTF-8 prefix that fits in a 255-byte stack buffer without
+// splitting a code point.
+size_t utf8Chunk(const char* text, const size_t len, const size_t off) {
+  const auto* cursor = reinterpret_cast<const uint8_t*>(text + off);
+  size_t used = 0;
+  while (off + used < len) {
+    const uint8_t* before = cursor;
+    const uint32_t cp = utf8NextCodepoint(&cursor);
+    if (cp == 0) break;
+    const size_t step = static_cast<size_t>(cursor - before);
+    if (used + step > 255) break;
+    used += step;
+  }
+  return used == 0 ? (len - off < 255 ? len - off : 255) : used;
+}
+
+}  // namespace
+
+bool GfxRenderer::hasEmojiGlyph(const uint32_t cp) const {
+  if (emojiFontId_ == 0) return false;
+  const auto it = fontMap.find(emojiFontId_);
+  if (it == fontMap.end()) return false;
+  bool usedReplacement = false;
+  return it->second.getGlyph(cp, EpdFontFamily::REGULAR, &usedReplacement) != nullptr && !usedReplacement;
+}
+
+size_t GfxRenderer::nextEmojiRun(const char* text, const size_t len, const size_t pos, bool& emoji) const {
+  const auto at = [&](const size_t p, uint32_t& cp) -> size_t {
+    if (p >= len) {
+      cp = 0;
+      return 0;
+    }
+    const auto* cursor = reinterpret_cast<const uint8_t*>(text + p);
+    cp = utf8NextCodepoint(&cursor);
+    return static_cast<size_t>(cursor - reinterpret_cast<const uint8_t*>(text + p));
+  };
+
+  size_t p = pos;
+  uint32_t cp = 0;
+  const size_t first = at(p, cp);
+  if (first == 0) {
+    emoji = false;
+    return 0;
+  }
+  if (isEmojiBaseCp(cp) && hasEmojiGlyph(cp)) {
+    emoji = true;
+    p += first;
+    while (p < len) {
+      uint32_t next = 0;
+      const size_t n = at(p, next);
+      if (n == 0) break;
+      if (isEmojiBaseCp(next) && hasEmojiGlyph(next)) {
+        p += n;
+        continue;
+      }
+      if (isEmojiExtendCp(next)) {
+        if (next == 0x200D) {
+          // A joiner belongs to the run only when an emoji base follows it.
+          size_t q = p + n;
+          uint32_t after = 0;
+          const size_t an = at(q, after);
+          if (an != 0 && isEmojiBaseCp(after) && hasEmojiGlyph(after)) {
+            q += an;
+            p = q;
+            continue;
+          }
+        } else {
+          p += n;
+          continue;
+        }
+      }
+      break;
+    }
+    return p - pos;
+  }
+
+  emoji = false;
+  p += first;
+  while (p < len) {
+    uint32_t next = 0;
+    const size_t n = at(p, next);
+    if (n == 0) break;
+    if (isEmojiBaseCp(next) && hasEmojiGlyph(next)) break;
+    p += n;
+  }
+  return p - pos;
+}
+
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
+                              const BidiUtils::BidiBaseDir baseDir) const {
+  if (text == nullptr || *text == '\0') return 0;
+  if (emojiFontId_ == 0) return getTextWidthRun(fontId, text, style, baseDir);
+  const size_t len = strlen(text);
+  bool any = false;
+  for (size_t i = 0; i < len;) {
+    bool emoji = false;
+    const size_t n = nextEmojiRun(text, len, i, emoji);
+    if (n == 0) break;
+    any |= emoji;
+    i += n;
+  }
+  if (!any) return getTextWidthRun(fontId, text, style, baseDir);
+
+  int total = 0;
+  for (size_t i = 0; i < len;) {
+    bool emoji = false;
+    const size_t n = nextEmojiRun(text, len, i, emoji);
+    if (n == 0) break;
+    const int runFont = emoji ? emojiFontId_ : fontId;
+    size_t off = 0;
+    while (off < n) {
+      const size_t chunk = utf8Chunk(text + i, n, off);
+      if (chunk == 0) break;
+      char buf[256];
+      memcpy(buf, text + i + off, chunk);
+      buf[chunk] = '\0';
+      total += getTextWidthRun(runFont, buf, style, baseDir);
+      off += chunk;
+    }
+    i += n;
+  }
+  return total;
+}
+
+int GfxRenderer::getTextWidthRun(const int fontId, const char* text, const EpdFontFamily::Style style,
                               const BidiUtils::BidiBaseDir baseDir) const {
   if (text == nullptr || *text == '\0') {
     return 0;
@@ -986,6 +1126,51 @@ void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* te
 }
 
 void GfxRenderer::drawText(const int fontId, const int x, const int y, const char* text, const bool black,
+                           const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
+                           const int8_t tracking) const {
+  if (text == nullptr || *text == '\0') return;
+  if (emojiFontId_ == 0) {
+    drawTextRun(fontId, x, y, text, black, style, baseDir, tracking);
+    return;
+  }
+  const size_t len = strlen(text);
+  bool any = false;
+  for (size_t i = 0; i < len;) {
+    bool emoji = false;
+    const size_t n = nextEmojiRun(text, len, i, emoji);
+    if (n == 0) break;
+    any |= emoji;
+    i += n;
+  }
+  if (!any) {
+    drawTextRun(fontId, x, y, text, black, style, baseDir, tracking);
+    return;
+  }
+
+  const int normalAsc = getFontAscenderSize(fontId);
+  int cursor = x;
+  for (size_t i = 0; i < len;) {
+    bool emoji = false;
+    const size_t n = nextEmojiRun(text, len, i, emoji);
+    if (n == 0) break;
+    const int runFont = emoji ? emojiFontId_ : fontId;
+    const int runY = emoji ? y + normalAsc - getFontAscenderSize(runFont) : y;
+    size_t off = 0;
+    while (off < n) {
+      const size_t chunk = utf8Chunk(text + i, n, off);
+      if (chunk == 0) break;
+      char buf[256];
+      memcpy(buf, text + i + off, chunk);
+      buf[chunk] = '\0';
+      drawTextRun(runFont, cursor, runY, buf, black, style, baseDir, tracking);
+      cursor += getTextWidthRun(runFont, buf, style, baseDir);
+      off += chunk;
+    }
+    i += n;
+  }
+}
+
+void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const char* text, const bool black,
                            const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
                            const int8_t tracking) const {
   // cannot draw a NULL / empty string

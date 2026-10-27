@@ -1,0 +1,20 @@
+{
+  "en": [
+    "Fix the comment-panel teardown crash",
+    "Comment badges never overlap body text",
+    "One font size for wrapped comments",
+    "Full-screen first-run gesture map",
+    "Noto Emoji fallback",
+    "JJWXC chapter numbers match the site",
+    "Optional comment-body caching"
+  ],
+  "zh": [
+    "修复段评返回时的崩溃",
+    "段评气泡不再与正文重叠",
+    "段评正文统一字号",
+    "首次手势提示改为全屏区域图",
+    "新增 Noto Emoji 回退",
+    "晋江章序号与站点一致",
+    "可同时缓存段评正文（默认关）"
+  ]
+}

@@ -40,6 +40,7 @@ import argparse
 import hashlib
 import os
 import re
+import subprocess
 import sys
 
 # Read Pico is the only target whose flash script writes the data partition, and it
@@ -50,6 +51,7 @@ STORE_HEADER = "lib/Epub/Epub/hyphenation/HyphenationStore.h"
 PINYIN_HEADER = "lib/Pinyin/PinyinDb.h"
 I18N_PACK_HEADER = "lib/I18n/I18nPack.h"
 WEB_PACK_HEADER = "src/network/WebPackFormat.h"
+EMOJI_PACK_HEADER = "src/EmojiPackFormat.h"
 
 # Pinyin's loader reads from partition offset 0 unconditionally (PinyinDb.cpp:96),
 # so that is not a choice this script gets to make.
@@ -110,7 +112,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset):
+def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset):
     """Build the row list from whatever data blobs actually exist.
 
     pinyin/hyphen/i18n degrade to a note when absent. The web pack does not:
@@ -123,6 +125,7 @@ def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset):
         ("hyphen", hyphen_offset, os.path.join(root, "build", "hyphen.dat"), False),
         ("i18n", i18n_offset, os.path.join(root, "build", "i18n_pack.dat"), False),
         ("web", web_offset, os.path.join(root, "build", "web_pack.dat"), True),
+        ("emoji", emoji_offset, os.path.join(root, "build", "emoji.dat"), True),
     ]
     rows = []
     for name, offset, path, required in candidates:
@@ -216,7 +219,16 @@ def main():
     # reserved factory bytes. collect() is what proves they do not overlap.
     if web_offset == i18n_offset:
         fail("WebPackFormat.h and I18nPack.h both claim partition offset 0x%x" % web_offset)
-    rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset)
+    emoji_offset = read_cpp_constant(os.path.join(args.repo, EMOJI_PACK_HEADER), "kPartitionOffset")
+    if emoji_offset <= i18n_offset:
+        fail("EmojiPackFormat.h puts emoji at 0x%x, which is not after the language pack (0x%x)"
+             % (emoji_offset, i18n_offset))
+    # The pack is generated from the committed subset every time the manifest is
+    # rebuilt, so a missing/stale pack cannot describe a partition the firmware
+    # would reject at boot.
+    subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "generate_emoji_pack.py"),
+                    "--repo", args.repo], check=True)
+    rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset)
     text = render(base, partition_size, rows)
 
     out = args.out or os.path.join(args.repo, "build", "data_manifest.txt")

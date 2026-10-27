@@ -53,10 +53,11 @@ namespace {
 //   77 / 78 - TextBlock stores the source <p> index for JJWXC paragraph comments
 //   78 / 79 - latched paragraph index (the first version stored 0xFFFF on every line)
 //   79 / 80 - TextBlock stores the line's first visibleTextOffset (annotations)
+//   81 / 82 - TextBlock stores whether the line ends its source <p> (comment bubbles)
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 81;
+constexpr uint8_t SECTION_FILE_VERSION = 82;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 80;
+constexpr uint8_t SECTION_FILE_VERSION = 81;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /

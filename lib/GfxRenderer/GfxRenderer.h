@@ -151,6 +151,13 @@ class GfxRenderer {
 
   // Resolve a missing-glyph fallback; the high-density profile checks whole-run coverage.
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  int getTextWidthRun(int fontId, const char* text, EpdFontFamily::Style style,
+                      BidiUtils::BidiBaseDir baseDir) const;
+  void drawTextRun(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style,
+                   BidiUtils::BidiBaseDir baseDir, int8_t tracking) const;
+  bool hasEmojiGlyph(uint32_t cp) const;
+  size_t nextEmojiRun(const char* text, size_t len, size_t pos, bool& emoji) const;
+  int emojiFontId_ = 0;
   void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style, bool metadataOnly) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
@@ -436,11 +443,25 @@ class GfxRenderer {
   enum class TextMeasureMode { Layout, Rendered };
   int getTextWidth(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                    BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
+  // Optional monochrome emoji face. When set, getTextWidth()/drawText() split a
+  // text run at emoji boundaries and use this face only for the emoji segments.
+  // The face's own point size is whatever EmojiFont loaded; the wrapper aligns
+  // its baseline to the surrounding text. Zero (the default) keeps the old
+  // one-font-per-run behaviour byte for byte.
+  void setEmojiFont(int fontId) { emojiFontId_ = fontId; }
+  int emojiFontId() const { return emojiFontId_; }
   /// True when every codepoint in `text` gets a real glyph from the face
   /// drawText would pick (the same fallback chain, including SD fonts) rather
   /// than the missing-glyph outline. Callers use it to avoid offering text
   /// that would draw as tofu.
   bool canRenderText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  /// Pick the one face drawText would use for a whole string. Callers that draw
+  /// several lines of one logical text (a comment body, a wrapped caption) use
+  /// this once and pass the result to every line, so the fallback chain cannot
+  /// choose a different size per line.
+  int chooseFontForText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const {
+    return resolveTextFontId(fontId, text, style);
+  }
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                         BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO) const;
