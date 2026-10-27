@@ -741,6 +741,22 @@ bool ActivityManager::isReaderActivity() const {
          (currentActivity && currentActivity->isReaderActivity());
 }
 
+bool ActivityManager::isReaderForeground() const {
+  return currentActivity && currentActivity->isReaderActivity();
+}
+
+void ActivityManager::goToReaderStandby() {
+  if (!isReaderForeground()) return;
+  auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput, /*returnOnWake=*/true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: reader standby");
+    return;
+  }
+  pushActivity(std::move(activity));
+}
+
+void ActivityManager::debugWakeStandby() { StandbyActivity::debugWakeNow(); }
+
 bool ActivityManager::keepsBluetoothAlive() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
                      [](const auto& activity) { return activity->keepsBluetoothAlive(); }) ||

@@ -16,4 +16,10 @@ void prepare(GfxRenderer& renderer);
 // The only entry point for enabling STA/AP mode in application code.
 bool setMode(GfxRenderer& renderer, wifi_mode_t mode);
 
+// Stop SNTP, disconnect, power the radio off and release the WiFi driver.
+// Idempotent and safe when the radio was never started. Used when the owner of
+// a WiFi session goes away: an STA mode left behind forces the CPU to stay at
+// full speed (HalPowerManager) and keeps the modem powered for nothing.
+void releaseRadio();
+
 }  // namespace NetworkStartup

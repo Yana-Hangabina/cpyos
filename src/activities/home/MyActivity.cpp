@@ -790,8 +790,8 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
       // Bluetooth opens its settings, and the sleep chip opens the display
       // category that owns the timeout.
       if (i == 0) {
-        activityManager.pushActivity(
-            std::make_unique<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false));
+        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(
+            renderer, mappedInput, /*autoConnect=*/false, /*keepRadioOnExit=*/false));
       } else if (i == 1) {
         activityManager.pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput));
       } else {

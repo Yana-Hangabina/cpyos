@@ -186,6 +186,14 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
+  // True only when the reader itself is the visible activity (not a menu or a
+  // sub-page that sits above it). Used for the power-key standby gesture.
+  bool isReaderForeground() const;
+  // Push the standard clock standby over the reader; its power-key wake pops
+  // straight back to the preserved reader instead of going Home.
+  void goToReaderStandby();
+  // Debug hook for the serial test harness: simulate the standby power press.
+  void debugWakeStandby();
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
   bool handleForcedRefresh();

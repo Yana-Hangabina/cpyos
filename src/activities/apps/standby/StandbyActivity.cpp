@@ -102,6 +102,7 @@ uint8_t rankOfAvailableFace(int sw, int sh, uint8_t faceIdx) {
 // session will not re-prompt — the explicit way to retry is Settings → WiFi.
 // This module-scope flag persists across activity destroy/recreate.
 bool g_promptedForWifiThisSession = false;
+bool g_debugWakeRequested = false;
 
 // Bottom-center page indicator dots. One dot per face, filled for the current
 // face. Drawn only in Normal mode — hidden once we go Immersive. Shares the dot
@@ -117,10 +118,12 @@ void drawFaceDots(const GfxRenderer& renderer, int sw, int sh, uint8_t total, ui
 void StandbyActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG("STANDBY", "onEnter free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-  // Always default to face 0 (Sloppy Clock). If face 0 is somehow unavailable
-  // (currently impossible), fall back to the first available index.
-  faceIndex_ = 0;
-  if (!kFaces[0].isAvailable(renderer.getScreenWidth(), renderer.getScreenHeight())) {
+  // Normal standby starts on the duck face; the reader's power-key standby is a
+  // clock screen, so start one rank later (Sloppy Clock).
+  const uint8_t wantedRank = returnOnWake_ ? 1 : 0;
+  faceIndex_ = availableFaceIndexFromRank(renderer.getScreenWidth(), renderer.getScreenHeight(), wantedRank);
+  if (faceIndex_ >= kFaceCount) faceIndex_ = 0;
+  if (!kFaces[faceIndex_].isAvailable(renderer.getScreenWidth(), renderer.getScreenHeight())) {
     const uint8_t idx = availableFaceIndexFromRank(renderer.getScreenWidth(), renderer.getScreenHeight(), 0);
     if (idx < kFaceCount) faceIndex_ = idx;
   }
@@ -134,6 +137,9 @@ void StandbyActivity::onEnter() {
   currentFace_->onEnter();
   mode_ = DisplayMode::Normal;
   lastInputMs_ = millis();
+  powerArmed_ = false;
+  powerArmAtMs_ = millis() + 350;
+  g_debugWakeRequested = false;
   if (!TimeUtils::isClockValid() && SETTINGS.clockAutoSync) {
     syncState_ = SyncState::Delayed;
     syncStartMs_ = millis();
@@ -424,6 +430,10 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
       processFaceTick(true);
       return true;
     case HalPowerManager::LightSleepWakeReason::PowerButton:
+      if (returnOnWake_) {
+        finish();
+        return true;
+      }
       mode_ = DisplayMode::Normal;
       lastInputMs_ = millis();
       requestUpdate();
@@ -438,9 +448,26 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
   return false;
 }
 
+void StandbyActivity::debugWakeNow() { g_debugWakeRequested = true; }
+
 void StandbyActivity::loop() {
+  if (!powerArmed_ && millis() >= powerArmAtMs_ && !mappedInput.isPressed(MappedInputManager::Button::Power) &&
+      !mappedInput.wasReleased(MappedInputManager::Button::Power)) {
+    powerArmed_ = true;
+  }
+  if (g_debugWakeRequested) {
+    g_debugWakeRequested = false;
+    if (returnOnWake_) {
+      finish();
+      return;
+    }
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    activityManager.goHome();
+    if (returnOnWake_) {
+      finish();
+    } else {
+      activityManager.goHome();
+    }
     return;
   }
 
@@ -521,6 +548,10 @@ void StandbyActivity::loop() {
   // press is handled by main.cpp's global shutdown path.
   if (mappedInput.wasReleased(MappedInputManager::Button::Power)) {
     lastInputMs_ = millis();
+    if (returnOnWake_ && powerArmed_) {
+      finish();
+      return;
+    }
     if (mode_ == DisplayMode::Immersive) {
       mode_ = DisplayMode::Normal;
       requestUpdate();

@@ -10,8 +10,11 @@ struct ActivityResult;
 
 class StandbyActivity final : public Activity {
  public:
-  explicit StandbyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Standby", renderer, mappedInput) {}
+  explicit StandbyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool returnOnWake = false)
+      : Activity("Standby", renderer, mappedInput), returnOnWake_(returnOnWake) {}
+
+  // Serial test harness: behave as if the power key was pressed in standby.
+  static void debugWakeNow();
 
   void onEnter() override;
   void loop() override;
@@ -45,6 +48,12 @@ class StandbyActivity final : public Activity {
   DisplayMode mode_ = DisplayMode::Normal;
   uint32_t lastInputMs_ = 0;
   bool inverseMode_ = false;  // Confirm toggles black-bg/white-content. Not persisted.
+  // Reader standby: power wakes back to the reader instead of staying on the
+  // clock face. The first ~350 ms after entry are a release barrier so the
+  // press that launched this activity cannot immediately close it.
+  const bool returnOnWake_;
+  bool powerArmed_ = false;
+  uint32_t powerArmAtMs_ = 0;
 
   void switchFace(int8_t delta);
   void startTimeSync();

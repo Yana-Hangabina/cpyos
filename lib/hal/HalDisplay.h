@@ -140,6 +140,10 @@ class HalDisplay {
   // per-minute status-bar clock tick so the body text is never re-driven.
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
 
+  // Idle power hook for the active panel driver (Read Pico drops its HV rails
+  // when nothing has been pushed for 8 s). Must be called under the render lock.
+  void idlePowerTick(uint32_t nowMs);
+
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See
   // EInkDisplay::writeGrayscalePlaneStrip.

@@ -444,6 +444,15 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   return _batteryCachedPercent / 10;
 }
 
+HalPowerManager::BatteryTelemetry HalPowerManager::readBatteryTelemetry() const {
+  BatteryTelemetry telemetry;
+#if FREEINK_DEVICE_READPICO
+  telemetry.valid =
+      BoardReadPico::pmuBattery(telemetry.millivolts, telemetry.socPermille, telemetry.chargeState);
+#endif
+  return telemetry;
+}
+
 HalPowerManager::Lock::Lock(bool quiet) : quiet_(quiet) {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
   // Current limitation: only one lock at a time

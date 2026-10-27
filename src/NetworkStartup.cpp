@@ -8,6 +8,8 @@
 
 #if !defined(SIMULATOR)
 #include <esp_heap_caps.h>
+#include <esp_sntp.h>
+#include <esp_wifi.h>
 #include <sdkconfig.h>
 #endif
 
@@ -88,6 +90,23 @@ bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) {
   const bool started = WiFi.mode(mode);
   logMemory(started ? "WiFi mode ready" : "WiFi mode failed");
   return started;
+}
+
+void releaseRadio() {
+#if defined(SIMULATOR)
+  return;
+#else
+  if (WiFi.getMode() == WIFI_MODE_NULL) return;
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  WiFi.scanDelete();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  delay(30);
+  // WIFI_OFF drops the radio; deinit also returns the driver's internal RAM and
+  // makes a later STA start take the cold path instead of inheriting stale state.
+  const esp_err_t err = esp_wifi_deinit();
+  LOG_DBG("NET", "radio released (%s)", esp_err_to_name(err));
+#endif
 }
 
 }  // namespace NetworkStartup

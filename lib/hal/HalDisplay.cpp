@@ -207,6 +207,8 @@ void HalDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, b
   einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
 }
 
+void HalDisplay::idlePowerTick(const uint32_t nowMs) { einkDisplay.idlePowerTick(nowMs); }
+
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
                                        yStart, numRows);

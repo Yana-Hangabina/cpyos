@@ -57,6 +57,16 @@ class HalPowerManager {
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
 
+  // Raw pack telemetry for diagnostics (mV / PMU SOC / charge state). `valid`
+  // is false on boards without a PMU or when the read/CRC fails.
+  struct BatteryTelemetry {
+    bool valid = false;
+    uint16_t millivolts = 0;
+    uint16_t socPermille = 0;
+    uint8_t chargeState = 0;
+  };
+  BatteryTelemetry readBatteryTelemetry() const;
+
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs
   // full performance. When the Lock instance is destroyed (goes out of scope), power saving will be re-enabled.
