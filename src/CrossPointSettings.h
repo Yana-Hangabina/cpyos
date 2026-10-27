@@ -98,6 +98,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     STATUS_BAR_CLOCK_MODE_COUNT
   };
 
+  // How the reader keeps the status-bar clock current. A per-minute update is a
+  // full-page scan on Read Pico (partial-area scans are banned there), so the
+  // power-conscious default only refreshes it when the page is redrawn anyway.
+  enum STATUS_BAR_CLOCK_UPDATE_MODE {
+    STATUS_BAR_CLOCK_UPDATE_PAGE_TURN = 0,
+    STATUS_BAR_CLOCK_UPDATE_MINUTE = 1,
+    STATUS_BAR_CLOCK_UPDATE_MODE_COUNT
+  };
+
   // Auto follows the timezone's baked DST rule; On/Off override it — the
   // escape hatch for a zone whose law changed before the firmware caught up.
   enum CLOCK_DST_MODE { CLOCK_DST_AUTO = 0, CLOCK_DST_ON = 1, CLOCK_DST_OFF = 2, CLOCK_DST_MODE_COUNT };
@@ -357,6 +366,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
   // Clock display in the reader status bar.
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
+  // Minute updates cost a full-page scan on Read Pico; default to page turns.
+  uint8_t statusBarClockUpdate = STATUS_BAR_CLOCK_UPDATE_PAGE_TURN;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
   // timezones::activeIndex() when clockTimezone is unset.

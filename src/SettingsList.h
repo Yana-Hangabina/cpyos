@@ -223,7 +223,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
-    constexpr size_t entryCount = 85
+    constexpr size_t entryCount = 86
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -647,6 +647,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // Range 0..104 = quarter-hour steps from UTC-12:00 to UTC+14:00, biased by 48.
         SettingInfo::Enum(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, std::move(statusBarClockValues),
                           "statusBarClock", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_CLOCK_UPDATE, &CrossPointSettings::statusBarClockUpdate,
+                          {StrId::STR_CLOCK_UPDATE_PAGE_TURN, StrId::STR_CLOCK_UPDATE_MINUTE}, "statusBarClockUpdate",
+                          StrId::STR_CUSTOMISE_STATUS_BAR),
     });
     v.insert(v.end(), {
         SettingInfo::Value(StrId::STR_CLOCK_UTC_OFFSET, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1},
