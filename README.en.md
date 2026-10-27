@@ -18,6 +18,10 @@
 - **System** — device OTA, SD-card firmware update, browser transfer/settings, WebDAV, OPDS, Calibre wireless, optional USB MSC and 33 UI languages loaded from the data partition.
 - **Encryption** — the packaged EPUB and cached chapter text use device-bound keys; plaintext reader caches are removed on exit.
 
+### Why WAP login instead of the App login API
+
+The device signs in through JJWXC's mobile **WAP login** (`/login/wapLogin`), not the App API login. The WAP session is independent of the phone's browser/App session, so signing in on the device does not displace the phone — that coexistence is the point. The App API login is currently blocked by a server-side **graphical CAPTCHA** (`2021: missing prerequisite step or operation timed out` when requesting the device code); an e-ink device has no JS/graphical-CAPTCHA capability, and **that problem is unresolved**, so the App API path is unusable. WAP login has no graphical CAPTCHA at the moment and is the only supported path; if the service later adds one, a new approach is required rather than repeated retries. See [docs/cpyos/jjwxc-login.md](docs/cpyos/jjwxc-login.md).
+
 ## Install
 
 The prebuilt release is **Read Pico only**. Back up the full 16 MiB flash before the first install:
