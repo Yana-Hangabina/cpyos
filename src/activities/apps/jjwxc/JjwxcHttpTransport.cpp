@@ -1,5 +1,6 @@
 #include "JjwxcHttpTransport.h"
 
+#include <HalPowerManager.h>
 #include <Logging.h>
 
 #include <cstring>
@@ -55,11 +56,19 @@ WeReadHttpClient::Session& JjwxcHttpTransport::selectSession(const char* url) {
       return slot.session;
     }
   }
-  SessionSlot& victim = slots_[0].lastUse <= slots_[1].lastUse ? slots_[0] : slots_[1];
-  victim.session.reset();
-  snprintf(victim.host, sizeof(victim.host), "%s", host);
-  victim.lastUse = ++useCounter_;
-  return victim.session;
+  // Every slot is bound to some other host. This is the three-host VIP rotation
+  // (m -> static -> www -> m ...), where no slot can ever be reused: the next
+  // request is another host change. Drop all of them before the handshake so
+  // only the new TLS context is resident -- that peak is what pushed the heap to
+  // its floor and starved the handshake. A two-host batch never reaches here.
+  for (auto& slot : slots_) {
+    slot.session.reset();
+    slot.host[0] = '\0';
+  }
+  SessionSlot& chosen = slots_[0];
+  snprintf(chosen.host, sizeof(chosen.host), "%s", host);
+  chosen.lastUse = ++useCounter_;
+  return chosen.session;
 }
 
 int JjwxcHttpTransport::request(const char* method, const char* url, const jjwxc::RequestHeader* headers,
@@ -67,6 +76,15 @@ int JjwxcHttpTransport::request(const char* method, const char* url, const jjwxc
                                 void* bodyCtx, jjwxc::HeaderSink onHeader, void* headerCtx) {
   if (!url || !url[0]) return jjwxc::kTransportNetwork;
   if (!WeReadHttpClient::networkReady()) return jjwxc::kTransportNoNetwork;
+
+  // Keep the CPU at full speed for the exchange. The TLS handshake's ECDHE
+  // scalar multiplication is CPU-bound and does not yield; at the 80 MHz idle
+  // clock it can hold core 0 past the 5 s task-watchdog window, which is how a
+  // retry run aborted (jjwxcJob running, IDLE0 starved). The lock ends with the
+  // request, so the idle downclock still applies between chapters. It is
+  // opportunistic (quiet): the render task also takes this single global lock,
+  // and losing the race must not print an error for every progress frame.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
 
   // After the early returns: an invalid URL is no reason to touch the radio.
   //

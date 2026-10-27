@@ -365,6 +365,7 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
   serialization::writePod(file, textBytes);
   serialization::writePod(file, paragraphIndex);
+  serialization::writePod(file, static_cast<uint8_t>(paragraphFinal ? 1 : 0));
   serialization::writePod(file, visibleOffset);
   if (numWords > 0) {
     const size_t size = arenaSize(numWords, focusPresent, textBytes);
@@ -404,10 +405,11 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   uint8_t hasFocus = 0;
   uint16_t textBytes = 0;
   uint16_t paragraphIndex = 0xFFFF;
+  uint8_t paragraphFinal = 0;
   uint32_t visibleOffset = 0;
   if (!serialization::readPod(file, wc) || !serialization::readPod(file, hasFocus) ||
       !serialization::readPod(file, textBytes) || !serialization::readPod(file, paragraphIndex) ||
-      !serialization::readPod(file, visibleOffset)) {
+      !serialization::readPod(file, paragraphFinal) || !serialization::readPod(file, visibleOffset)) {
     LOG_ERR("TXB", "Deserialization failed: truncated header");
     return nullptr;
   }
@@ -433,6 +435,7 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
   block->paragraphIndex = paragraphIndex;
+  block->paragraphFinal = paragraphFinal != 0;
   block->visibleOffset = visibleOffset;
 
   if (wc > 0) {

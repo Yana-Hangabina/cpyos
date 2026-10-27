@@ -638,8 +638,9 @@ void ChapterHtmlSlimParser::finishTableRow() {
     }
     if (!tableRowCells[column]->layoutAndExtractLines(
             renderer, fontId, textWidth,
-            [this, &lines](std::unique_ptr<TextBlock> line, const uint32_t offset) {
+            [this, &lines](std::unique_ptr<TextBlock> line, const uint32_t offset, const bool paragraphFinal) {
               line->setParagraphIndex(currentBlockParagraphIndex);
+              line->setParagraphFinal(paragraphFinal);
               const size_t lineIndex = lines.size();
               lines.push_back(std::move(line));
               if (tableLineVisibleOffsets.size() <= lineIndex) {
@@ -1863,8 +1864,9 @@ void ChapterHtmlSlimParser::softFlushTextBlock() {
   const uint16_t width = inset < viewportWidth ? static_cast<uint16_t>(viewportWidth - inset) : viewportWidth;
   if (!currentTextBlock->layoutAndExtractLines(
           renderer, fontId, width,
-          [this](std::unique_ptr<TextBlock> line, const uint32_t offset) {
+          [this](std::unique_ptr<TextBlock> line, const uint32_t offset, const bool paragraphFinal) {
             line->setParagraphIndex(currentBlockParagraphIndex);
+            line->setParagraphFinal(paragraphFinal);
             return addLineToPage(std::move(line), offset);
           },
           false, characterSpacing, wordSpacingPercent)) {
@@ -2430,8 +2432,9 @@ void ChapterHtmlSlimParser::makePages() {
 
   if (!currentTextBlock->layoutAndExtractLines(
           renderer, fontId, effectiveWidth,
-          [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
+          [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset, const bool paragraphFinal) {
             textBlock->setParagraphIndex(currentBlockParagraphIndex);
+            textBlock->setParagraphFinal(paragraphFinal);
             return addLineToPage(std::move(textBlock), offset);
           },
           true, characterSpacing, wordSpacingPercent)) {

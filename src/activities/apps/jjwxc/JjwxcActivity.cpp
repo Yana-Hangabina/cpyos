@@ -684,6 +684,7 @@ void JjwxcActivity::onEnter() {
     }
   }
   JjwxcStore::ensureRoot();
+  JjwxcStore::loadCacheCommentBodiesPref(cacheCommentBodies_);
   // One-shot migration off the pre-EPUB TXT products. Nothing reads them any more
   // and the reader progress they anchored is discarded by design, so this only
   // reclaims card space. It is idempotent (a missing directory is success) and a
@@ -1054,6 +1055,8 @@ const char* JjwxcActivity::stateLabel(const uint8_t rawState) {
       return tr(STR_JJWXC_CHAPTER_UNPURCHASED);
     case JjwxcStore::ChapterState::Locked:
       return tr(STR_JJWXC_STATE_LOCKED);
+    case JjwxcStore::ChapterState::AppOnly:
+      return tr(STR_JJWXC_STATE_APP_ONLY);
     case JjwxcStore::ChapterState::Missing:
       break;
   }
@@ -1390,8 +1393,11 @@ void JjwxcActivity::rebuildRows() {
       rowIds_.push_back("firstn");
 
       // "Not cached yet" spans every chapter without a real body, refused ones
-      // included. The old Missing-only range is what made a book whose tail was 72
-      // purchase stubs offer nothing to do and report itself fully cached.
+      // included. It re-asks the chapters a previous run recorded as Unpurchased
+      // (the old separate "retry" preset folded into this one), because a chapter
+      // bought later on the phone only reaches the card through that request.
+      // Author-locked chapters are still not re-asked: nothing on the account can
+      // unlock them.
       if (tocSummary_.hasPending) {
         const unsigned long pending =
             static_cast<unsigned long>(tocSummary_.lastPending - tocSummary_.firstPending + 1);
@@ -1403,17 +1409,6 @@ void JjwxcActivity::rebuildRows() {
       rows_.push_back({tr(STR_JJWXC_RANGE_UNCACHED), sub});
       rowIds_.push_back("uncached");
 
-      if (tocSummary_.unpurchased > 0) {
-        // Re-requesting a recorded refusal is the only way a chapter bought later,
-        // on the phone, ever reaches the card -- so it is its own row and says how
-        // many. It is also the only preset that re-sends a request the service may
-        // answer with a purchase attempt (cacheChapterRange's refusal branch), which
-        // is why it is not folded into "uncached".
-        snprintf(sub, sizeof(sub), "%lu", static_cast<unsigned long>(tocSummary_.unpurchased));
-        rows_.push_back({tr(STR_JJWXC_RETRY_UNPURCHASED), sub});
-        rowIds_.push_back("retry");
-      }
-
       if (rangeFrom_ >= 0 && rangeTo_ >= 0) {
         snprintf(sub, sizeof(sub), "%d - %d", rangeFrom_ + 1, rangeTo_ + 1);
       } else {
@@ -1421,6 +1416,15 @@ void JjwxcActivity::rebuildRows() {
       }
       rows_.push_back({tr(STR_JJWXC_RANGE_CUSTOM), sub});
       rowIds_.push_back("custom");
+
+      // Off by default: the bubble counts are always cached, but the bodies cost
+      // one request per commented paragraph (10-108 per chapter), so turning this
+      // on can turn an 18-minute whole-book run into hours. It is a persistent
+      // preference because a user who wants offline comments wants them for every
+      // run, not just this one.
+      snprintf(sub, sizeof(sub), "%s", cacheCommentBodies_ ? tr(STR_ON) : tr(STR_OFF));
+      rows_.push_back({tr(STR_JJWXC_RANGE_COMMENT_BODIES), sub});
+      rowIds_.push_back("commentbodies");
       break;
     }
     case State::ChapterList: {
@@ -1632,7 +1636,14 @@ bool JjwxcActivity::startJob(std::function<void()> body, const char* busyText, c
   // lib/JjwxcApi/.
   BaseType_t ok = pdFAIL;
 #ifdef JJWXC_ALLOCATOR_HAS_HEAP_CAPS
-  ok = xTaskCreatePinnedToCoreWithCaps(jobTrampoline, "jjwxcJob", kJobStackPsramDepth, this, 1, &jobTask_, 0,
+  // Priority 0 (the IDLE priority) on purpose. This task is pinned to core 0 and
+  // spends up to several seconds inside a CPU-bound wolfSSL handshake with no
+  // yield; at a higher priority it starves IDLE0 and the task watchdog aborts the
+  // chip (measured twice while retrying VIP chapters). At priority 0 the tick
+  // time-slices it with IDLE0, so the watchdog is fed even if one ECC operation
+  // runs long. Higher-priority WiFi/render work still preempts it normally.
+  ok = xTaskCreatePinnedToCoreWithCaps(jobTrampoline, "jjwxcJob", kJobStackPsramDepth, this, tskIDLE_PRIORITY,
+                                       &jobTask_, 0,
                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   jobStackInPsram_ = ok == pdPASS;
   if (ok != pdPASS) LOG_ERR(kTag, "PSRAM job stack refused (%d); falling back to internal RAM", (int)ok);
@@ -1642,10 +1653,10 @@ bool JjwxcActivity::startJob(std::function<void()> body, const char* busyText, c
   // reporting "stack in INTERNAL RAM" with no explanation anywhere.
   LOG_ERR(kTag, "no PSRAM stack in this build; job stack must come from internal RAM");
 #endif
-  // Pinned to core 0 so the UI core keeps yielding and feeding the watchdog.
+  // Pinned to core 0, away from the UI core; the same IDLE priority applies.
   if (ok != pdPASS) {
     jobStackInPsram_ = false;
-    ok = xTaskCreatePinnedToCore(jobTrampoline, "jjwxcJob", kJobStackBytes, this, 1, &jobTask_, 0);
+    ok = xTaskCreatePinnedToCore(jobTrampoline, "jjwxcJob", kJobStackBytes, this, tskIDLE_PRIORITY, &jobTask_, 0);
   }
   if (ok == pdPASS) {
     // Printed so the next log settles where the stack landed and what it cost. Before this
@@ -2260,6 +2271,7 @@ size_t puaLookupFromMap(void* ctx, uint32_t codePoint, char out[4]) {
 jjwxc::Status JjwxcActivity::fetchWapVipChapter(const char* novelId, const uint32_t chapterId,
                                                 jjwxc::ChapterMeta& meta, jjwxc::TextSink onText, void* textCtx) {
   meta = jjwxc::ChapterMeta{};
+  wapAppOnly_ = false;
   if (novelId == nullptr || novelId[0] == '\0' || chapterId == 0 || onText == nullptr) return jjwxc::Status::Protocol;
   if (!ensureWapSession()) {
     jobFailKind_ = FailKind::OutOfMemory;
@@ -2377,6 +2389,17 @@ jjwxc::Status JjwxcActivity::fetchWapVipChapter(const char* novelId, const uint3
       LOG_ERR(kTag, "VIP chapter %lu: the service answered with a login page (%u bytes)", (unsigned long)chapterId,
               (unsigned)col.len);
       return jjwxc::Status::NeedLogin;
+    }
+    // The site's own notice for an unlocked bonus chapter (福利番外): "由于技术
+    // 问题，目前无法在wap站显示，请使用App阅读". It is not a purchase problem --
+    // the /buy page lists the chapter as 已解锁 -- so recording it as Unpurchased
+    // tells a fully-paid account it still owes money. Give it its own state.
+    if (findBytes(pageSlice, pageLen, "无法在wap站显示") != nullptr ||
+        findBytes(pageSlice, pageLen, "请使用App阅读") != nullptr) {
+      wapAppOnly_ = true;
+      LOG_INF(kTag, "VIP chapter %lu is an unlocked bonus chapter the WAP site cannot display; marking App-only",
+              (unsigned long)chapterId);
+      return jjwxc::Status::PurchaseRequired;
     }
     // NOT probed against a live unpurchased chapter: requesting one through the App API
     // was measured to trigger the account's own server-side auto-purchase (code 1013,
@@ -3481,7 +3504,8 @@ bool JjwxcActivity::onCommentCount(void* ctx, const jjwxc::ParagraphComment& ite
   return true;
 }
 
-void JjwxcActivity::fetchAndStoreCommentCounts(const uint32_t chapterId, const bool includeBodies) {
+void JjwxcActivity::fetchAndStoreCommentCounts(const uint32_t chapterId, const bool includeBodies,
+                                               const uint32_t prefetchMs, const size_t prefetchRequests) {
   if (!ensureWapSession() || scratch_ == nullptr || scratchCap_ < 64 * 1024) return;
   char sid[256];
   char token[400];
@@ -3529,7 +3553,7 @@ void JjwxcActivity::fetchAndStoreCommentCounts(const uint32_t chapterId, const b
     LOG_ERR(kTag, "comment sidecar write failed for chapter %lu", (unsigned long)chapterId);
   }
   if (includeBodies && ctx.count > 0) {
-    prefetchCommentBodies(chapterId, counts, ctx.count, millis() + 75000, static_cast<size_t>(-1));
+    prefetchCommentBodies(chapterId, counts, ctx.count, millis() + prefetchMs, prefetchRequests);
   }
 }
 
@@ -4458,6 +4482,10 @@ void JjwxcActivity::jumpToCloudProgress() {
     showMessage(tr(STR_JJWXC_CLOUD_JUMP_FAILED), State::BookDetail);
     return;
   }
+  if (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::AppOnly)) {
+    showMessage(tr(STR_JJWXC_CHAPTER_APP_ONLY), State::BookDetail);
+    return;
+  }
   if (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Unpurchased) ||
       rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Locked)) {
     showMessage(tr(STR_JJWXC_ERR_PURCHASE), State::BookDetail);
@@ -4772,6 +4800,11 @@ bool JjwxcActivity::onChapterEntry(void* ctx, const jjwxc::ChapterEntry& e, size
   auto* c = static_cast<ChapterListCtx*>(ctx);
   JjwxcActivity* self = c->self;
   if (self->jobCancel_.load()) return false;
+  // Not a chapter: the site's chapterList also carries chaptertype=1 sentinels
+  // ("HELLO WORLD", "OPEN WORLD"...) that reuse the next real chapter id with
+  // size 0. Keeping them put four extra rows in the Contents list and shifted
+  // every ordinal after each one by +1 against the site's own 187-chapter count.
+  if (e.chapterType != 0) return true;
 
   JjwxcStore::TocRecord record;
   if (!c->merger->add(e, record)) return false;
@@ -4865,14 +4898,16 @@ JjwxcStore::NovelRecord JjwxcActivity::buildNovelRecord(const JjwxcStore::TocSum
   return rec;
 }
 
-bool JjwxcActivity::writeChapterStub(const std::string& path, const JjwxcStore::TocRecord& rec, const bool locked) {
+bool JjwxcActivity::writeChapterStub(const std::string& path, const JjwxcStore::TocRecord& rec, const bool locked,
+                                     const bool appOnly) {
   // The stub is composed from THIS record's own title plus a fixed localised
   // note. There is no code path that copies a fetched body into it, which is the
   // structural guarantee against one chapter's text appearing in another: the
   // writer that received the rejected response was aborted and its part file
   // removed before this is called.
-  return JjwxcEpub::writePlaceholder(path, rec.title,
-                                     locked ? tr(STR_JJWXC_CHAPTER_LOCKED) : tr(STR_JJWXC_CHAPTER_UNPURCHASED));
+  const char* note = appOnly ? tr(STR_JJWXC_CHAPTER_APP_ONLY)
+                             : (locked ? tr(STR_JJWXC_CHAPTER_LOCKED) : tr(STR_JJWXC_CHAPTER_UNPURCHASED));
+  return JjwxcEpub::writePlaceholder(path, rec.title, note);
 }
 
 // Downloads NovelInfo::coverUrl into cover.source.jpg. Best effort: a book
@@ -5326,6 +5361,7 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
     // Every chapter starts at "requesting the body"; the VIP path advances this
     // to font/decode and the loop advances it to write below.
     dlStage_ = 0;
+    wapAppOnly_ = false;
     JjwxcStore::TocRecord rec;
     if (!toc.read(i, rec)) {
       toc.close();
@@ -5364,24 +5400,18 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
       dlDone_ = i - fromOrdinal + 1;
       continue;
     }
-    if (cacheMode_ == CacheMode::RetryBlocked && state != JjwxcStore::ChapterState::Unpurchased &&
-        state != JjwxcStore::ChapterState::Locked) {
-      // "Retry the chapters that were refused" must not re-download the ones that
-      // were not, and must not touch a chapter that has never been attempted: that
-      // is what the other two modes are for.
-      ++skipped;
-      if (JjwxcStore::isPackaged(rec.state)) ++packagedBefore;
-      dlSkipped_ = skipped;
-      dlDone_ = i - fromOrdinal + 1;
-      continue;
-    }
-    if (state == JjwxcStore::ChapterState::Unpurchased || state == JjwxcStore::ChapterState::Locked) {
+    if (state == JjwxcStore::ChapterState::Unpurchased || state == JjwxcStore::ChapterState::Locked ||
+        state == JjwxcStore::ChapterState::AppOnly) {
       // Already known to be unreadable: keep the stub, do not ask the server
-      // again. Only a refresh or an explicit retry re-requests these.
-      if (cacheMode_ == CacheMode::Incremental) {
+      // again. Only a refresh, or RetryPending for a purchase refusal, re-asks.
+      // Locked stays skipped even in RetryPending: an author-locked chapter
+      // cannot be unlocked by asking again. AppOnly is a WAP-site limitation,
+      // not a purchase state, so it is never retried either.
+      const bool retryThis = state == JjwxcStore::ChapterState::Unpurchased && cacheMode_ == CacheMode::RetryPending;
+      if (!retryThis && cacheMode_ != CacheMode::Refresh && cacheMode_ != CacheMode::RefreshCached) {
         if (!haveFile) {
           const bool locked = state == JjwxcStore::ChapterState::Locked;
-          if (!writeChapterStub(path, rec, locked)) {
+          if (!writeChapterStub(path, rec, locked, state == JjwxcStore::ChapterState::AppOnly)) {
             toc.close();
             storageFail();
             return;
@@ -5497,10 +5527,16 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
       // never turn a successfully cached chapter into a failed one.
       // A single-chapter run also fetches the first page of every commented
       // paragraph so the reader's comment panel is offline on first open. A
-      // range/whole-book run only fetches the counts: 100+ requests per chapter
-      // would dominate an already long run.
+      // range/whole-book run only fetches the counts unless the range page's
+      // "also cache comment bodies" toggle is on; then each chapter gets a small
+      // per-chapter budget instead of the unbounded single-chapter pass, because
+      // 10-108 requests per chapter would otherwise dominate the run.
       if (haveSession() && !jobCancel_.load()) {
-        fetchAndStoreCommentCounts(rec.chapterId, fromOrdinal == toOrdinal);
+        const bool singleChapter = fromOrdinal == toOrdinal;
+        const bool wantBodies = singleChapter || cacheCommentBodies_;
+        const uint32_t bodyMs = singleChapter ? 75000 : 30000;
+        const size_t bodyRequests = singleChapter ? static_cast<size_t>(-1) : 30;
+        fetchAndStoreCommentCounts(rec.chapterId, wantBodies, bodyMs, bodyRequests);
       }
       ++written;
       ++readableInRange;
@@ -5525,11 +5561,11 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
       // the `buy` endpoint and has never been seen from chapterContent. Every
       // refusal the service actually sends took the abort path instead, so a
       // whole-book cache died at the first unreadable chapter. Measured live on
-      // novelId=<novelId> with a valid token, the refusals were 1013 (auto-
+      // novelId=4465668 with a valid token, the refusals were 1013 (auto-
       // subscription failed, balance too low) and the STRING "1010" (already
       // subscribed / order in flight); statusFromCode() knew neither, so both fell
       // into its `default` arm and reached the screen as "晋江服务端错误". On
-      // novelId=<novelId> the same situation arrives as 1004, which chapterContent
+      // novelId=3157187 the same situation arrives as 1004, which chapterContent
       // also uses for a dead token -- hence the probe.
       //
       // The rule itself is a pure function in the library so the host tests can pin
@@ -5563,13 +5599,15 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
         // only a refresh re-asks the server about one, and the answer must not
         // silently reclassify it as a purchase problem.
         const bool locked = (state == JjwxcStore::ChapterState::Locked);
-        if (!writeChapterStub(path, rec, locked)) {
+        const bool appOnly = wapAppOnly_;
+        if (!writeChapterStub(path, rec, locked, appOnly)) {
           toc.close();
           storageFail();
           return;
         }
-        rec.state = static_cast<uint8_t>(locked ? JjwxcStore::ChapterState::Locked
-                                                : JjwxcStore::ChapterState::Unpurchased);
+        rec.state = static_cast<uint8_t>(appOnly ? JjwxcStore::ChapterState::AppOnly
+                                                : locked ? JjwxcStore::ChapterState::Locked
+                                                         : JjwxcStore::ChapterState::Unpurchased);
         rec.savedAt = now;
         rec.localBytes = 0;
         if (!toc.update(i, rec)) {
@@ -5584,8 +5622,9 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
         ++skipped;
         ++packagedBefore;
         dlSkipped_ = skipped;
-        LOG_INF(kTag, "chapter %lu refused (code=%ld, %s); placeholder written, continuing",
-                static_cast<unsigned long>(rec.chapterId), meta.businessCode, jjwxc::statusText(s));
+        LOG_INF(kTag, "chapter %lu refused (code=%ld, %s); %s placeholder written, continuing",
+                static_cast<unsigned long>(rec.chapterId), meta.businessCode, jjwxc::statusText(s),
+                appOnly ? "App-only" : "refusal");
         // Whether this refusal ends the run is a property of the PATH the chapter was
         // requested from, not of any user preference:
         //
@@ -5596,7 +5635,7 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
         //     made a selectively purchased book uncachable -- measured on a
         //     197-chapter book:
         //
-        //       VIP chapter 20 is not purchased (https://m.jjwxc.net/buy/<novelId>/20)
+        //       VIP chapter 20 is not purchased (https://m.jjwxc.net/buy/2169869/20)
         //       chapter 20 refused (code=0, 需要购买); placeholder written, continuing
         //       cached 0 new (20 readable, 1 stubs, 176 skipped), 21 in book
         //
@@ -5625,6 +5664,10 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
                   meta.businessCode, static_cast<unsigned long>(i));
           break;
         }
+        // RetryPending turns a recorded refusal back into a real request, so it
+        // needs the same polite pacing as a successful fetch. Without this, a run
+        // over a long block of unpurchased chapters would fire them back-to-back.
+        if (i != toOrdinal) vTaskDelay(pdMS_TO_TICKS(kChapterDelayMs));
       } else {
         // A dead session, an inconclusive probe, a client-level code, or a
         // transport/decrypt failure: not a property of this chapter. Stop here, keep
@@ -8174,17 +8217,20 @@ void JjwxcActivity::onListConfirm() {
           showMessage(tr(STR_JJWXC_ALL_CACHED), State::DownloadRange);
           return;
         }
-        startCaching(tocSummary_.firstPending, tocSummary_.lastPending, /*openAfter=*/false, mode);
-      } else if (id == "retry") {
-        // Explicitly asked for, so the range is the refused chapters only and the
-        // mode is what makes the run touch nothing else. This is the only path that
-        // re-requests a recorded refusal, which over WAP costs nothing (an
-        // unpurchased chapter is declined with 302 -> /buy) but is how a chapter
-        // bought later, on the phone, ever reaches the card -- which is why it is
-        // its own row rather than part of "uncached".
-        startCaching(tocSummary_.firstPending, tocSummary_.lastPending, /*openAfter=*/false, CacheMode::RetryBlocked);
+        // Incremental for the cached chapters, but re-ask the purchase refusals:
+        // a chapter bought on the phone should arrive through this preset, not a
+        // second menu row. Refresh, when armed, still means "everything".
+        const CacheMode uncachedMode = refreshPending_ ? CacheMode::Refresh : CacheMode::RetryPending;
+        startCaching(tocSummary_.firstPending, tocSummary_.lastPending, /*openAfter=*/false, uncachedMode);
       } else if (id == "custom") {
         promptRangeStart();
+      } else if (id == "commentbodies") {
+        cacheCommentBodies_ = !cacheCommentBodies_;
+        if (!JjwxcStore::saveCacheCommentBodiesPref(cacheCommentBodies_)) {
+          LOG_ERR(kTag, "cannot persist comment body cache preference");
+        }
+        rebuildRows();
+        requestUpdate();
       }
       return;
     }
@@ -8693,7 +8739,8 @@ void JjwxcActivity::showChapterActions() {
                                : 0;
   const bool canBuy = haveSession() && chapters_[static_cast<size_t>(chapterIndex)].isVip &&
                       rawState != static_cast<uint8_t>(JjwxcStore::ChapterState::Cached) &&
-                      rawState != static_cast<uint8_t>(JjwxcStore::ChapterState::Locked);
+                      rawState != static_cast<uint8_t>(JjwxcStore::ChapterState::Locked) &&
+                      rawState != static_cast<uint8_t>(JjwxcStore::ChapterState::AppOnly);
   int purchaseIndex = -1;
   if (canBuy) {
     purchaseIndex = optionCount;

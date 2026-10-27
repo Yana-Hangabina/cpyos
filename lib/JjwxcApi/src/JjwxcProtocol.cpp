@@ -256,7 +256,7 @@ Status statusFromCode(long code) {
     // Every "you may not read this chapter" answer the service has been seen to
     // give. 70200 belongs to `buy`; the other two come from `chapterContent` when
     // the account's auto-subscription could not complete, measured live on
-    // novelId=<novelId> with a valid token:
+    // novelId=4465668 with a valid token:
     //   1013  对不起，您的余额不足以购买下五章，自动购买失败。
     //   1010  对不起,您提交的订单中的章节【74】之前可能订阅过，或尚在交易处理中…
     // (1010 arrives as the STRING "1010"; toLong() handles both wire forms.)
@@ -446,6 +446,7 @@ enum ClField : uint8_t {
   CL_chapterdate,
   CL_chaptersize,
   CL_isvip,
+  CL_chaptertype,
   CL_point,
   CL_originalPrice,
   CL_islock,
@@ -460,6 +461,7 @@ uint8_t chapterListFieldFor(const char* k, size_t len, int depth) {
     if (keyIs(k, len, "chapterdate")) return CL_chapterdate;
     if (keyIs(k, len, "chaptersize")) return CL_chaptersize;
     if (keyIs(k, len, "isvip")) return CL_isvip;
+    if (keyIs(k, len, "chaptertype")) return CL_chaptertype;
     if (keyIs(k, len, "point")) return CL_point;
     if (keyIs(k, len, "originalPrice")) return CL_originalPrice;
     if (keyIs(k, len, "islock")) return CL_islock;
@@ -539,6 +541,7 @@ void ChapterListParser::onString(void* ctx, const char* value, size_t len) {
     case CL_chapterid: self->cur_.chapterId = toUint(value, len); break;
     case CL_chaptersize: self->cur_.size = toUint(value, len); break;
     case CL_isvip: self->cur_.isVip = static_cast<uint8_t>(toUint(value, len)); break;
+    case CL_chaptertype: self->cur_.chapterType = static_cast<uint8_t>(toUint(value, len)); break;
     case CL_point: self->cur_.price = toUint(value, len); break;
     case CL_originalPrice: self->cur_.listPrice = toUint(value, len); break;
     case CL_islock: self->cur_.isLock = (len > 0 && value[0] != '0'); break;
@@ -555,6 +558,7 @@ void ChapterListParser::onNumber(void* ctx, const char* value, size_t len) {
     case CL_chapterid: self->cur_.chapterId = static_cast<uint32_t>(toLong(value, len)); break;
     case CL_chaptersize: self->cur_.size = static_cast<uint32_t>(toLong(value, len)); break;
     case CL_isvip: self->cur_.isVip = static_cast<uint8_t>(toLong(value, len)); break;
+    case CL_chaptertype: self->cur_.chapterType = static_cast<uint8_t>(toLong(value, len)); break;
     case CL_point: self->cur_.price = static_cast<uint32_t>(toLong(value, len)); break;
     case CL_originalPrice: self->cur_.listPrice = static_cast<uint32_t>(toLong(value, len)); break;
     case CL_count: self->totalCount_ = static_cast<uint32_t>(toLong(value, len)); break;

@@ -784,7 +784,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
 }
 // Consumes data to minimize memory usage
 bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
-                                       const std::function<bool(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
+                                       const std::function<bool(std::unique_ptr<TextBlock>, uint32_t, bool)>& processLine,
                                        const bool includeLastLine, const int8_t characterSpacing,
                                        const uint8_t wordSpacingPercent) {
   if (words.empty()) {
@@ -866,7 +866,8 @@ bool ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
 
   for (size_t i = 0; i < lineCount; ++i) {
     if (!extractLine(i, breakAt(i), i > 0 ? breakAt(i - 1) : 0, lineBreakCount, pageWidth, wordWidths, wordContinues,
-                     wordNoSpaceBefore, processLine, renderer, fontId))
+                     wordNoSpaceBefore, processLine, renderer, fontId,
+                     includeLastLine && i + 1 == lineCount))
       return false;
   }
 
@@ -1452,8 +1453,8 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
 bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, const size_t lastBreakAt,
                              const size_t lineCount, const int pageWidth, const std::vector<uint16_t>& wordWidths,
                              const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
-                             const std::function<bool(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
-                             const GfxRenderer& renderer, const int fontId) {
+                             const std::function<bool(std::unique_ptr<TextBlock>, uint32_t, bool)>& processLine,
+                             const GfxRenderer& renderer, const int fontId, const bool paragraphFinal) {
   const size_t lineWordCount = lineBreak - lastBreakAt;
   const uint32_t lineVisibleOffset = visibleOffsetAt(lastBreakAt);
 
@@ -1820,7 +1821,7 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
       return false;
     }
     block->setVisibleOffset(lineVisibleOffset);
-    return processLine(std::move(block), lineVisibleOffset);
+    return processLine(std::move(block), lineVisibleOffset, paragraphFinal);
   }
 
   // Each word is one TextBlock entry carrying its own boundary; all that remains is the suffix x
@@ -1844,5 +1845,5 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
     return false;
   }
   block->setVisibleOffset(lineVisibleOffset);
-  return processLine(std::move(block), lineVisibleOffset);
+  return processLine(std::move(block), lineVisibleOffset, paragraphFinal);
 }

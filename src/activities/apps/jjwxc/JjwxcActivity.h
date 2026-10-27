@@ -136,13 +136,13 @@ class JjwxcActivity final : public Activity {
   enum class FailKind : uint8_t { Protocol, StorageWrite, OutOfMemory, LoginReturned };
 
   // Which chapters a cache run is allowed to touch. One enum rather than two
-  // booleans, because the three combinations that matter are mutually exclusive
-  // and "refresh + retry blocked" would be meaningless.
+  // booleans, because the combinations that matter are mutually exclusive and
+  // "refresh + retry" would be meaningless.
   enum class CacheMode : uint8_t {
-    Incremental,   // fetch what is missing; never re-ask about a known refusal
-    Refresh,       // re-fetch everything in the range, stubs included
-    RefreshCached, // re-fetch ONLY chapters that already have a real body
-    RetryBlocked,  // re-fetch ONLY the chapters a previous run recorded as refused
+    Incremental,    // fetch what is missing; never re-ask about a known refusal
+    RetryPending,   // fetch what is missing AND re-ask Unpurchased chapters (not Locked)
+    Refresh,        // re-fetch everything in the range, stubs included
+    RefreshCached,  // re-fetch ONLY chapters that already have a real body
   };
 
 
@@ -258,9 +258,12 @@ class JjwxcActivity final : public Activity {
   // Fetches the paragraph-comment totals for one chapter and writes the reader's
   // JJC1 sidecar. Best effort: the text cache must not fail because comments did.
   // `includeBodies` additionally fetches the first page of every commented
-  // paragraph (single-chapter runs only; a whole-book run would be thousands of
-  // requests). Bodies already on the card are skipped.
-  void fetchAndStoreCommentCounts(uint32_t chapterId, bool includeBodies);
+  // paragraph. A single-chapter run spends the full budget; a whole-book/range
+  // run passes the range page's toggle and a per-chapter cap, because 10-108
+  // requests per chapter would otherwise turn an 18-minute run into days.
+  // Bodies already on the card are skipped.
+  void fetchAndStoreCommentCounts(uint32_t chapterId, bool includeBodies,
+                                  uint32_t prefetchMs = 75000, size_t prefetchRequests = static_cast<size_t>(-1));
   struct CommentPrefetchResult {
     size_t fetched = 0;
     size_t skipped = 0;
@@ -393,7 +396,7 @@ class JjwxcActivity final : public Activity {
   // destructor (AGENTS.md rule #5).
   void releaseCover();
   // Worker task.
-  bool writeChapterStub(const std::string& path, const JjwxcStore::TocRecord& rec, bool locked);
+  bool writeChapterStub(const std::string& path, const JjwxcStore::TocRecord& rec, bool locked, bool appOnly);
   // True when a toc record describes a paid chapter. `isVip` is the server's own
   // per-chapter flag; `vipChapterId` (the novel-level "first VIP chapter") is the
   // fallback for a catalogue that omits it, and cannot misclassify a free chapter
@@ -895,6 +898,10 @@ class JjwxcActivity final : public Activity {
   bool openAfterJob_ = false;
   // Which chapters the running job may touch.
   CacheMode cacheMode_ = CacheMode::Incremental;
+  // Cache-range toggle: also fetch comment bodies while caching chapters.
+  // Off by default (a chapter has 10-108 commented paragraphs, so a whole book
+  // goes from ~18 min to hours). Persisted at /.crosspoint/jjwxc/commentbodies.
+  bool cacheCommentBodies_ = false;
   // Chapters the running job left alone: a recorded refusal it did not re-request,
   // or everything after the refusal that ended the run. Shown in the progress page
   // and the completion summary, because "done" alone would read as "cached".
@@ -909,6 +916,9 @@ class JjwxcActivity final : public Activity {
   // caused (see jjwxc::refusalEndsRun) instead of reaching the end of the range,
   // plus where it ended, so the summary can say so.
   bool jobStoppedAtPurchase_ = false;
+  // Set by fetchWapVipChapter when the WAP page is the site's "bonus chapter only
+  // available in the App" notice. Per-chapter and cleared before every fetch.
+  bool wapAppOnly_ = false;
   uint32_t jobStoppedOrdinal_ = 0;
   // Spine index the reader should open at, or -1 to leave progress.bin alone.
   int jobTargetSpine_ = -1;

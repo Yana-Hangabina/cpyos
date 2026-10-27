@@ -63,9 +63,13 @@ class HalPowerManager {
   class Lock {
     friend class HalPowerManager;
     bool valid = false;
+    bool quiet_ = false;
 
    public:
-    explicit Lock();
+    // `quiet` suppresses the "already held" error. Callers that can tolerate
+    // running without the lock (a network request competing with a render pass)
+    // use it instead of adding an error line to every collision.
+    explicit Lock(bool quiet = false);
     ~Lock();
 
     // Non-copyable and non-movable

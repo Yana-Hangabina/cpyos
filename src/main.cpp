@@ -39,6 +39,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "ReadingStatsStore.h"
+#include "EmojiFont.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "UiCjkFallbacks.h"
@@ -709,6 +710,9 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
   sdFontSystem.begin(renderer);
+  // Bundled mono emoji face (data partition, OFL Noto Emoji subset). Failure is
+  // non-fatal: no emoji pack simply leaves the old tofu behaviour.
+  emoji_font::begin(renderer, SETTINGS.fontPointSize);
 
   LOG_DBG("MAIN", "Fonts setup");
   return fontDecompressorReady;
@@ -1400,6 +1404,51 @@ void loop() {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false));
       } else if (cmd == "SLEEP") {
         activityManager.goToSleep(false);
+      } else if (cmd.startsWith("CAT ")) {
+        String path = cmd.substring(4);
+        path.trim();
+        HalFile f;
+        if (!Storage.openFileForRead("DBG", path.c_str(), f)) {
+          logSerial.printf("CAT_ERR open %s\n", path.c_str());
+        } else {
+          logSerial.printf("CAT_START:%s:%u\n", path.c_str(), static_cast<unsigned>(f.size()));
+          uint8_t buf[512];
+          size_t total = 0;
+          while (total < 16384) {
+            const int n = f.read(buf, sizeof(buf));
+            if (n <= 0) break;
+            logSerial.write(buf, n);
+            total += static_cast<size_t>(n);
+          }
+          f.close();
+          logSerial.printf("\nCAT_END:%u\n", static_cast<unsigned>(total));
+        }
+      } else if (cmd.startsWith("LS")) {
+        String path = "/";
+        const int space = cmd.indexOf(' ');
+        if (space > 0) path = cmd.substring(space + 1);
+        path.trim();
+        auto files = Storage.listFiles(path.c_str(), 400);
+        logSerial.printf("LS_START:%s:%u\n", path.c_str(), static_cast<unsigned>(files.size()));
+        for (auto& name : files) logSerial.printf("  %s\n", name.c_str());
+        logSerial.printf("LS_END\n");
+      } else if (cmd == "PAGENEXT") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugPageTurn(true);
+      } else if (cmd == "PAGEPREV") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugPageTurn(false);
+      } else if (cmd == "PAGEDUMP") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugDumpPage();
+      } else if (cmd == "STRESSCOMMENT") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenStressComment();
+      } else if (cmd == "FAKECOMMENT") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenFakeJjwxcComment();
+      } else if (cmd == "COMMENT") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcComment();
+      } else if (cmd == "EMOJI") {
+        // On-device probe for the bundled emoji fallback: the message page draws
+        // through drawText(), so this exercises font + per-run split.
+        activityManager.goToFullScreenMessage("Emoji \xF0\x9F\x98\x80\xF0\x9F\x91\x8D\xE2\x9D\xA4\xEF\xB8\x8F\xF0\x9F\x9A\x80 \xE4\xB8\xAD\xE6\x96\x87",
+                                              EpdFontFamily::BOLD, "Noto Emoji subset / fallback", false);
       }
 #if defined(CROSSPOINT_MUPDF)
       else if (cmd == "PDF") {
