@@ -17,6 +17,14 @@ class LanguageHyphenator {
   size_t minPrefix() const { return config_.minPrefix; }
   size_t minSuffix() const { return config_.minSuffix; }
 
+  // False when this language has no trie bytes behind it. That is the steady state
+  // in a build which loads tries from storage (see HyphenationEmbedding.h) whenever
+  // the dictionary is absent or rejected. An empty automaton would answer every
+  // query with "no breaks" anyway, but callers must see nullptr rather than an
+  // empty hyphenator: nullptr is the path ParsedText and Hyphenator already handle,
+  // and it keeps one meaning for "this language cannot be hyphenated".
+  bool hasPatterns() const { return patterns_.data != nullptr && patterns_.size != 0; }
+
  protected:
   const SerializedHyphenationPatterns& patterns_;
   LiangWordConfig config_;

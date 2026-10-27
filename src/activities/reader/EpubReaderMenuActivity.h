@@ -18,6 +18,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
     NIGHT_MODE,
     FRONTLIGHT,
     GO_TO_PERCENT,
+    GO_TO_PAGE,
     AUTO_PAGE_TURN,
     ROTATE_SCREEN,
     BOOKMARKS,
@@ -28,7 +29,18 @@ class EpubReaderMenuActivity final : public UiListActivity {
     SYNC,
     DELETE_CACHE,
     DICTIONARY,
-    IMAGE_SCALING  // Legacy action ID; image scaling remains in Settings.
+    IMAGE_SCALING,  // Legacy action ID; image scaling remains in Settings.
+    JJWXC_UPDATE_CURRENT,
+    JJWXC_UPDATE_LIST,
+    JJWXC_BOOK_DETAIL,
+    // The cloud that exists for a JJWXC book is the site's own reading progress,
+    // which the app reads and writes when its detail page opens. The generic
+    // SYNC row (KOReader) is meaningless there: it is a different service.
+    JJWXC_CLOUD_PROGRESS,
+    // PDF-only: a note anchored to the current page (PDF bitmaps have no text
+    // selection, so the note covers the page rather than a range).
+    PDF_PAGE_NOTE,
+    PDF_HIGHLIGHT_SCREEN
   };
 
   struct MenuItem {
@@ -36,11 +48,13 @@ class EpubReaderMenuActivity final : public UiListActivity {
     StrId labelId;
   };
 
-  static void buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks);
+  static void buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks, bool isJjwxc,
+                             bool isPdf = false);
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks);
+                                  const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks,
+                                  bool isJjwxc, bool isPdf = false);
 
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
@@ -50,7 +64,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // fixed-capacity array avoids any heap allocation for the row list. Labels
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
   // only refreshes rows whose values reflect live state.
-  static constexpr size_t MAX_MENU_ITEMS = 16;
+  static constexpr size_t MAX_MENU_ITEMS = 20;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
 

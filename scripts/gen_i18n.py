@@ -34,6 +34,8 @@ Examples:
 import sys
 import os
 import re
+import struct
+import zlib
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -44,6 +46,270 @@ I18N_NAMESPACE_CLOSE = "}  // namespace i18n_strings"
 YAML_KEY_RE = re.compile(r'^([A-Za-z_]\w*)\s*:\s*"(.*)"$', flags=re.ASCII)
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$", flags=re.ASCII)
 STR_KEY_RE = re.compile(r"\bSTR_\w+\b", flags=re.ASCII)
+
+# ---------------------------------------------------------------------------
+# Language pack (data partition)
+# ---------------------------------------------------------------------------
+#
+# CROSSPOINT_I18N_PACK builds keep only these languages' strings in the image;
+# every other language is read from the pack. ZH_CN stays embedded because it is
+# the CJK SKU's default and its glyphs ship in the same image.
+I18N_PACK_EMBEDDED_CODES = ("EN", "ZH_CN")
+I18N_PACK_MAGIC = b"JILP"
+# v2 added contentSignature (offset 36, formerly reserved). Must agree with
+# lib/I18n/I18nPackFormat.h; a v1 pack is rejected as "unsupported version".
+I18N_PACK_VERSION = 2
+I18N_PACK_HEADER_SIZE = 64
+I18N_PACK_ENTRY_SIZE = 32
+I18N_PACK_MAX_ENTRIES = 64
+I18N_PACK_MAX_ENTRY_BYTES = 0x7FFF
+I18N_PACK_DEFAULT_PATH = "build/i18n_pack.dat"
+# Header: magic, version, headerSize, flags, keyCount, keySignature,
+# languageCount, entrySize, indexOffset, indexCrc32, headerCrc32, totalSize,
+# contentSignature, reserved[24].  Must agree with lib/I18n/I18nPackFormat.h.
+PACK_HEADER_STRUCT = struct.Struct("<4sBBHIIHHIIIII24s")
+PACK_HEADER_CRC_OFFSET = 28
+# Entry: langId, flags, blobOff, blobSize, blobCrc32, bitmapOff, bitmapSize,
+# bitmapCrc32, reserved.  Must agree with lib/I18n/I18nPackFormat.h.
+PACK_ENTRY_STRUCT = struct.Struct("<HHIIIIIII")
+assert PACK_HEADER_STRUCT.size == I18N_PACK_HEADER_SIZE
+assert PACK_ENTRY_STRUCT.size == I18N_PACK_ENTRY_SIZE
+
+
+class LanguageTable:
+    """One language's flat blob, offset table and same-as-English bits.
+
+    ``blob`` is the exact byte sequence the C++ ``STRINGS_<code>_DATA`` array
+    holds (UTF-8 strings, each followed by its NUL), so the pack generator can
+    reuse it without re-deriving the layout.  English has no bitmap (``bits`` is
+    None).
+    """
+
+    __slots__ = ("code", "blob", "size", "offsets", "bits", "blob_strings")
+
+    def __init__(self, code: str, blob: bytes, size: int, offsets: List[int],
+                 bits: Optional[List[int]], blob_strings: List[str]) -> None:
+        self.code = code
+        self.blob = blob
+        self.size = size
+        self.offsets = offsets
+        self.bits = bits
+        self.blob_strings = blob_strings
+
+
+def fnv1a32(keys: List[str]) -> int:
+    """FNV-1a over each key name plus its NUL, in StrId order.
+
+    I18nPack refuses a pack whose fingerprint differs: offsets built from a
+    different key set would read the wrong strings, which is worse than an
+    English fallback.
+    """
+    value = 0x811C9DC5
+    for key in keys:
+        for byte in key.encode("ascii") + b"\x00":
+            value ^= byte
+            value = (value * 0x01000193) & 0xFFFFFFFF
+    return value
+
+
+def content_signature(languages: List[str], string_keys: List[str],
+                      translations: Dict[str, List[str]]) -> int:
+    """FNV-1a over every translation value, key order then language order.
+
+    ``translations[key]`` is indexed by the ``languages`` order, and each value
+    is followed by its NUL, so this is the concatenation of every language's
+    full (non-deduplicated) string sequence. The firmware bakes the same number
+    into ``I18N_CONTENT_SIGNATURE``; a pack rebuilt from edited text with an
+    unchanged key set therefore fails validation instead of serving stale
+    strings. Missing translations were already filled from English by
+    ``load_translations``, so both sides hash the same bytes.
+    """
+    value = 0x811C9DC5
+    for key in string_keys:
+        row = translations[key]
+        if len(row) != len(languages):
+            raise ValueError(f"'{key}' has {len(row)} translations for {len(languages)} languages")
+        for text in row:
+            for byte in text.encode("utf-8") + b"\x00":
+                value ^= byte
+                value = (value * 0x01000193) & 0xFFFFFFFF
+    return value
+
+
+def build_language_tables(languages: List[str], string_keys: List[str],
+                          translations: Dict[str, List[str]],
+                          compiled: Optional[Set[str]] = None) -> Dict[str, LanguageTable]:
+    """Build every language's blob/offsets/bitmap exactly as the C++ arrays do."""
+    en_strings = [translations[key][0] for key in string_keys]
+    en_offsets: List[int] = []
+    en_cursor = 0
+    for text in en_strings:
+        en_offsets.append(en_cursor)
+        en_cursor += len(text.encode("utf-8")) + 1
+    if en_cursor > 0x7FFF:
+        raise ValueError(
+            f"Language EN: blob size ({en_cursor} bytes) exceeds 15-bit offset limit (32767)"
+        )
+
+    tables: Dict[str, LanguageTable] = {}
+    for lang_idx, code in enumerate(languages):
+        if compiled is not None and code not in compiled:
+            tables[code] = LanguageTable(code, b"", 0, [], [], [])
+            continue
+        if lang_idx == 0:
+            blob = b"".join(text.encode("utf-8") + b"\x00" for text in en_strings)
+            tables[code] = LanguageTable(code, blob, len(blob), list(en_offsets), None,
+                                         list(en_strings))
+            continue
+
+        offsets: List[int] = []
+        bits: List[int] = []
+        parts: List[bytes] = []
+        blob_strings: List[str] = []
+        cursor = 0
+        for i, text in enumerate(translations[key][lang_idx] for key in string_keys):
+            if text == en_strings[i]:
+                offsets.append(en_offsets[i] | 0x8000)
+                bits.append(1)
+            else:
+                offsets.append(cursor)
+                bits.append(0)
+                encoded = text.encode("utf-8") + b"\x00"
+                parts.append(encoded)
+                blob_strings.append(text)
+                cursor += len(encoded)
+        if cursor > 0x7FFF:
+            raise ValueError(
+                f"Language {code}: blob size ({cursor} bytes) exceeds 15-bit offset limit (32767)"
+            )
+        tables[code] = LanguageTable(code, b"".join(parts), cursor, offsets, bits,
+                                     blob_strings)
+    return tables
+
+
+def bitmap_bytes(bits: List[int]) -> bytes:
+    """Pack same-as-English bits, LSB-first within each byte (I18nOffsetBuilder.h)."""
+    out = bytearray((len(bits) + 7) // 8)
+    for index, bit in enumerate(bits):
+        if bit:
+            out[index >> 3] |= 1 << (index & 7)
+    return bytes(out)
+
+
+def _align4(value: int) -> int:
+    return (value + 3) & ~3
+
+
+def build_pack_bytes(languages: List[str], string_keys: List[str],
+                     translations: Dict[str, List[str]]) -> bytes:
+    """Serialize every non-embedded language into the data-partition pack.
+
+    Every language in the translation set is included, not only the ones the
+    current `custom_i18n_builtin_langs` keeps: that makes the pack independent
+    of the build subset, and `--pack-only` can reproduce it byte for byte from
+    the same YAML without knowing the subset.
+    """
+    tables = build_language_tables(languages, string_keys, translations)
+    packed = [code for code in languages if code not in I18N_PACK_EMBEDDED_CODES]
+    if not packed:
+        raise ValueError("no languages to pack: every language is embedded")
+    if len(packed) > I18N_PACK_MAX_ENTRIES:
+        raise ValueError(f"{len(packed)} packed languages exceeds the format's {I18N_PACK_MAX_ENTRIES}")
+
+    index_size = len(packed) * I18N_PACK_ENTRY_SIZE
+    cursor = _align4(I18N_PACK_HEADER_SIZE + index_size)
+    body = bytearray()
+    body_base = I18N_PACK_HEADER_SIZE + index_size
+    index = bytearray(index_size)
+    seen: Set[int] = set()
+
+    for position, code in enumerate(packed):
+        table = tables[code]
+        lang_id = languages.index(code)
+        if lang_id in seen:
+            raise ValueError(f"duplicate language id {lang_id} in the pack")
+        seen.add(lang_id)
+        if table.size > I18N_PACK_MAX_ENTRY_BYTES:
+            raise ValueError(f"{code}: {table.size} bytes exceeds the 15-bit offset limit")
+
+        # Every region starts on a 4-byte boundary; a bitmap is 189 bytes, so
+        # the next blob would otherwise start unaligned.
+        blob_off = _align4(cursor)
+        body.extend(b"\x00" * (blob_off - (body_base + len(body))))
+        body.extend(table.blob)
+        cursor = blob_off + table.size
+
+        bitmap = bitmap_bytes(table.bits or [])
+        bitmap_off = _align4(cursor)
+        body.extend(b"\x00" * (bitmap_off - (body_base + len(body))))
+        body.extend(bitmap)
+        cursor = bitmap_off + len(bitmap)
+
+        PACK_ENTRY_STRUCT.pack_into(
+            index, position * I18N_PACK_ENTRY_SIZE,
+            lang_id, 0,
+            blob_off, table.size, zlib.crc32(table.blob) & 0xFFFFFFFF,
+            bitmap_off, len(bitmap), zlib.crc32(bitmap) & 0xFFFFFFFF,
+            0,
+        )
+
+    total_size = cursor
+    header_zero = PACK_HEADER_STRUCT.pack(
+        I18N_PACK_MAGIC, I18N_PACK_VERSION, I18N_PACK_HEADER_SIZE, 0,
+        len(string_keys), fnv1a32(string_keys),
+        len(packed), I18N_PACK_ENTRY_SIZE, I18N_PACK_HEADER_SIZE,
+        zlib.crc32(index) & 0xFFFFFFFF, 0, total_size,
+        content_signature(languages, string_keys, translations),
+        b"\x00" * 24,
+    )
+    header_crc = zlib.crc32(header_zero) & 0xFFFFFFFF
+    header = bytearray(header_zero)
+    # magic(4) version(1) headerSize(1) flags(2) keyCount(4) keySignature(4)
+    # languageCount(2) entrySize(2) indexOffset(4) indexCrc32(4) -> headerCrc32
+    struct.pack_into("<I", header, PACK_HEADER_CRC_OFFSET, header_crc)
+
+    return bytes(header) + bytes(index) + bytes(body)
+
+
+def default_pack_path() -> str:
+    """<repo>/build/i18n_pack.dat, independent of the process working directory.
+
+    Derived from this script's own location rather than from output_dir so a
+    --pack-only run from anywhere still lands next to build/data_manifest.txt.
+    SCons executes this file as a pre-script without defining __file__, so fall
+    back to the project root (the process cwd there); the Import branch below
+    passes $PROJECT_DIR explicitly, which is the authoritative form.
+    """
+    script = globals().get("__file__")
+    root = Path(script).resolve().parent.parent if script else Path.cwd()
+    return str(root / I18N_PACK_DEFAULT_PATH)
+
+
+def parse_generated_layout(header_path: str) -> Tuple[List[str], List[str], int]:
+    """Read the StrId order, Language enum and content signature from I18nKeys.h.
+
+    Used by --pack-only so the pack can be rebuilt from the header the firmware
+    was actually built with, even after I18nStrings.cpp has been regenerated or
+    removed from the command line. The content signature is only compared, to
+    warn when the YAML has moved on since that firmware was built.
+    """
+    text = Path(header_path).read_text(encoding="utf-8")
+    strid = re.search(r"enum class StrId : uint16_t \{(.*?)\n\};", text, re.S)
+    if not strid:
+        raise ValueError(f"{header_path}: cannot find the StrId enum")
+    keys = re.findall(r"^\s*(STR_[A-Za-z0-9_]+),", strid.group(1), flags=re.M)
+    language = re.search(r"enum class Language : uint8_t \{(.*?)\n\};", text, re.S)
+    if not language:
+        raise ValueError(f"{header_path}: cannot find the Language enum")
+    codes = re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*\d+,", language.group(1), flags=re.M)
+    if not keys or not codes:
+        raise ValueError(f"{header_path}: empty StrId or Language enum")
+    signature = re.search(r"I18N_CONTENT_SIGNATURE\s*=\s*0x([0-9A-Fa-f]{8})u", text)
+    if not signature:
+        raise ValueError(
+            f"{header_path}: no I18N_CONTENT_SIGNATURE; regenerate the i18n headers"
+        )
+    return codes, keys, int(signature.group(1), 16)
 
 
 # ---------------------------------------------------------------------------
@@ -451,20 +717,6 @@ def format_cpp_string_literal(segments: List[str], indent: str = "    ") -> List
 
 
 # ---------------------------------------------------------------------------
-# Character-set computation
-# ---------------------------------------------------------------------------
-
-
-def compute_character_set(translations: Dict[str, List[str]], lang_index: int) -> str:
-    """Return a sorted string of every unique character used in a language."""
-    chars = set()
-    for values in translations.values():
-        for ch in values[lang_index]:
-            chars.add(ord(ch))
-    return "".join(chr(cp) for cp in sorted(chars))
-
-
-# ---------------------------------------------------------------------------
 # Code generators
 # ---------------------------------------------------------------------------
 
@@ -477,6 +729,8 @@ def generate_keys_header(
     output_path: str,
     verbose: bool = False,
     builtin: Optional[Set[str]] = None,
+    *,
+    content_signature_value: int,
 ) -> None:
     """Generate I18nKeys.h.
 
@@ -485,6 +739,7 @@ def generate_keys_header(
     Only built-in languages get string tables and appear in the picker.
     """
     compiled = [c for c in languages if builtin is None or c in builtin]
+    embedded_zh = "ZH_CN" in compiled
     lines: List[str] = [
         "#pragma once",
         "#include <cstdint>",
@@ -492,13 +747,49 @@ def generate_keys_header(
         AUTO_GENERATED_COMMENT,
         CLANG_FORMAT_OFF_COMMENT,
         "",
+        "// Number of string keys and an FNV-1a fingerprint of their names in enum",
+        "// order. The data-partition language pack records the same pair; a pack",
+        "// built from a different translation set is rejected wholesale rather than",
+        "// read at the wrong offsets.",
+        f"constexpr uint32_t I18N_KEY_COUNT = {len(string_keys)};",
+        f"constexpr uint32_t I18N_KEY_SIGNATURE = 0x{fnv1a32(string_keys):08X}u;",
+        "",
+        "// FNV-1a over every translation value, key order then language order, each",
+        "// NUL-terminated. The pack records the same number, so a pack rebuilt from",
+        "// edited text with an unchanged key set is rejected instead of quietly",
+        "// serving stale translations. The device cannot recompute this: it holds",
+        "// only the embedded languages.",
+        f"constexpr uint32_t I18N_CONTENT_SIGNATURE = 0x{content_signature_value:08X}u;",
+        "",
+        "// 1 when Chinese is embedded in this build's image. The pack build keeps",
+        "// EN and ZH in flash; everything else comes from the data partition.",
+        f"#define I18N_EMBEDDED_ZH {1 if embedded_zh else 0}",
+        "",
         "// Forward declarations for flat string data blobs and offset tables",
         I18N_NAMESPACE_OPEN,
     ]
 
+    lines.append("#if defined(CROSSPOINT_I18N_PACK)")
+    lines.append("// Only the embedded languages have image-resident blobs on this target.")
+    lines.append("extern const char STRINGS_EN_DATA[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    if embedded_zh:
+        lines.append("extern const char STRINGS_ZH_CN_DATA[];")
+    lines.append("#elif defined(BOARD_HAS_PSRAM)")
+    lines.append("// PSRAM targets rebuild every non-English offset table at boot from")
+    lines.append("// SAME_AS_EN bitmaps, so only the English table is in flash.")
     for code in compiled:
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
-        lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    lines.append("#else")
+    lines.append("// Flash-resident blobs and complete offset tables (no PSRAM).")
+    for code in compiled:
+        lines.append(f"extern const char STRINGS_{code}_DATA[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    for code in compiled:
+        if code != "EN":
+            lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append("#endif")
 
     lines.append(I18N_NAMESPACE_CLOSE)
     lines.append("")
@@ -521,9 +812,6 @@ def generate_keys_header(
     lines.append("// Language display names (defined in I18nStrings.cpp)")
     lines.append("extern const char* const LANGUAGE_NAMES[];")
     lines.append("")
-    lines.append("// Character sets for each language (defined in I18nStrings.cpp)")
-    lines.append("extern const char* const CHARACTER_SETS[];")
-    lines.append("")
 
     # StrId enum
     lines.append("// String IDs")
@@ -533,6 +821,9 @@ def generate_keys_header(
     lines.append("  // Sentinel - must be last")
     lines.append("  _COUNT")
     lines.append("};")
+    lines.append("")
+    lines.append("static_assert(I18N_KEY_COUNT == static_cast<uint32_t>(StrId::_COUNT),")
+    lines.append('              "I18N_KEY_COUNT must match the StrId enum");')
     lines.append("")
 
     # LangStrings struct
@@ -547,6 +838,28 @@ def generate_keys_header(
     lines.append("// Helper function to get string data for a language")
     lines.append("inline LangStrings getLanguageStrings(Language lang) {")
     lines.append("  switch (lang) {")
+    lines.append("#if defined(CROSSPOINT_I18N_PACK)")
+    lines.append("    case Language::EN:")
+    lines.append("      return {i18n_strings::STRINGS_EN_DATA, i18n_strings::OFFSETS_EN};")
+    if embedded_zh:
+        lines.append("    case Language::ZH_CN:")
+        lines.append("      return {i18n_strings::STRINGS_ZH_CN_DATA, nullptr};")
+    lines.append("    default:")
+    lines.append("      // Packed languages are injected from PSRAM by I18n::init()/setLanguage().")
+    lines.append("      return {nullptr, nullptr};")
+    lines.append("#elif defined(BOARD_HAS_PSRAM)")
+    # PSRAM targets get the offsets from I18n::init(); only English keeps a
+    # flash table.
+    lines.append("    case Language::EN:")
+    lines.append("      return {i18n_strings::STRINGS_EN_DATA, i18n_strings::OFFSETS_EN};")
+    for code in compiled:
+        if code == "EN":
+            continue
+        lines.append(f"    case Language::{code}:")
+        lines.append(f"      return {{i18n_strings::STRINGS_{code}_DATA, nullptr}};")
+    lines.append("    default:")
+    lines.append("      return {i18n_strings::STRINGS_EN_DATA, i18n_strings::OFFSETS_EN};")
+    lines.append("#else")
     # A language left out of the build falls through to English below.
     for code in compiled:
         lines.append(f"    case Language::{code}:")
@@ -558,6 +871,7 @@ def generate_keys_header(
     lines.append(
         f"      return {{i18n_strings::STRINGS_{first_code}_DATA, i18n_strings::OFFSETS_{first_code}}};"
     )
+    lines.append("#endif")
     lines.append("  }")
     lines.append("}")
     lines.append("")
@@ -636,9 +950,42 @@ def generate_strings_header(
         "",
     ]
 
-    for code in (c for c in languages if builtin is None or c in builtin):
+    compiled = [c for c in languages if builtin is None or c in builtin]
+    embedded_zh = "ZH_CN" in compiled
+    lines.append("#if defined(CROSSPOINT_I18N_PACK)")
+    lines.append("// Only the embedded languages are in the image on this target.")
+    lines.append("extern const char STRINGS_EN_DATA[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    if embedded_zh:
+        lines.append("extern const char STRINGS_ZH_CN_DATA[];")
+        lines.append("extern const uint8_t SAME_AS_EN_ZH_CN[];")
+    lines.append("")
+    lines.append("// Byte length of each language blob (0 for an all-English language).")
+    lines.append("extern const uint16_t LANG_BLOB_SIZES[];")
+    lines.append("#elif defined(BOARD_HAS_PSRAM)")
+    for code in compiled:
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
-        lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    lines.append("")
+    lines.append("// One bit per StrId: 1 = reuse the English string, 0 = own blob string.")
+    for code in compiled:
+        if code != "EN":
+            lines.append(f"extern const uint8_t SAME_AS_EN_{code}[];")
+    lines.append("")
+    lines.append("// Indexed by Language; English has no bitmap (nullptr).")
+    lines.append("extern const uint8_t* const SAME_AS_EN_TABLES[];")
+    lines.append("")
+    lines.append("// Byte length of each language blob (0 for an all-English language).")
+    lines.append("extern const uint16_t LANG_BLOB_SIZES[];")
+    lines.append("#else")
+    lines.append("// Flash-resident blobs and offset tables for targets without PSRAM.")
+    for code in compiled:
+        lines.append(f"extern const char STRINGS_{code}_DATA[];")
+    lines.append("extern const uint16_t OFFSETS_EN[];")
+    for code in compiled:
+        if code != "EN":
+            lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+    lines.append("#endif")
 
     lines.append("")
     lines.append(I18N_NAMESPACE_CLOSE)
@@ -681,93 +1028,152 @@ def generate_strings_cpp(
     lines.append("};")
     lines.append("")
 
-    # CHARACTER_SETS array
-    lines.append("// Character sets for each language")
-    lines.append("const char* const CHARACTER_SETS[] = {")
-    for lang_idx, name in enumerate(language_names):
-        # A language left out of the build renders English strings, so it needs English glyphs.
-        in_build = languages[lang_idx] in compiled
-        charset = compute_character_set(translations, lang_idx if in_build else 0)
-        _append_string_entry(lines, charset, comment=name)
-    lines.append("};")
-    lines.append("")
-
-    # Per-language flat string blobs and offset tables.
-    # Non-English languages skip strings identical to English; their offset
-    # tables use bit 15 (0x8000) to flag "use English blob at offset & 0x7FFF".
+    # Per-language flat string blobs plus the lookup data derived from them.
+    # Non-English languages skip strings identical to English.
+    #   * CROSSPOINT_I18N_PACK targets keep EN and ZH in the image and read every
+    #     other language from the data-partition pack, so those blobs are not
+    #     compiled in at all (not even dead: they are not referenced).
+    #   * Other PSRAM targets emit a SAME_AS_EN_<code> bitmap and rebuild offsets
+    #     at boot, which keeps ~2 bytes per key per language out of the image.
+    #   * Targets without PSRAM keep the classic uint16 offset tables, where bit
+    #     15 means "use the English blob at offset & 0x7FFF".
     lines.append(I18N_NAMESPACE_OPEN)
     lines.append("")
 
-    en_strings = [translations[key][0] for key in string_keys]
-    en_offsets: List[int] = []
+    tables = build_language_tables(languages, string_keys, translations, set(compiled))
+    blob_sizes: Dict[str, int] = {code: tables[code].size for code in languages}
 
-    for lang_idx, code in enumerate(languages):
-        if code not in compiled:
-            continue
-        lang_strings = [translations[key][lang_idx] for key in string_keys]
-        is_english = lang_idx == 0
-
-        if is_english:
-            # Precompute byte offsets (UTF-8 encoded, +1 per string for null terminator)
-            offsets: List[int] = []
-            current_offset = 0
-            for s in lang_strings:
-                offsets.append(current_offset)
-                current_offset += len(s.encode("utf-8")) + 1
-            if current_offset > 0x7FFF:
-                raise ValueError(
-                    f"Language {code}: blob size ({current_offset} bytes) exceeds "
-                    "15-bit offset limit (32767)"
-                )
-            en_offsets = list(offsets)
-            blob_strings = lang_strings
-        else:
-            offsets = []
-            current_offset = 0
-            blob_strings = []
-            for i, (s, en_s) in enumerate(zip(lang_strings, en_strings)):
-                if s == en_s:
-                    offsets.append(en_offsets[i] | 0x8000)
-                else:
-                    offsets.append(current_offset)
-                    current_offset += len(s.encode("utf-8")) + 1
-                    blob_strings.append(s)
-            if current_offset > 0x7FFF:
-                raise ValueError(
-                    f"Language {code}: blob size ({current_offset} bytes) exceeds "
-                    "15-bit offset limit (32767)"
-                )
-
-        # Flat string data blob — all strings concatenated with \0 separators.
+    def emit_blob(code: str) -> None:
+        table = tables[code]
+        # Flat string data blob - all strings concatenated with \0 separators.
         lines.append(f"const char STRINGS_{code}_DATA[] =")
-        for text in blob_strings:
-            _append_string_data_entry(lines, text)
-        if not blob_strings:
+        if table.blob_strings:
+            for text in table.blob_strings:
+                _append_string_data_entry(lines, text)
+        else:
             _append_string_data_entry(lines, "")
         lines.append(";")
         lines.append("")
 
-        # Offset table — one uint16_t per StrId
+    def emit_offsets(code: str) -> None:
         lines.append(f"const uint16_t OFFSETS_{code}[] = {{")
         chunk_size = 12
-        for i in range(0, len(offsets), chunk_size):
-            chunk = offsets[i : i + chunk_size]
+        for i in range(0, len(tables[code].offsets), chunk_size):
+            chunk = tables[code].offsets[i : i + chunk_size]
             lines.append("    " + ", ".join(str(o) for o in chunk) + ",")
         lines.append("};")
         lines.append("")
+
+    def emit_bitmap(code: str) -> None:
+        lines.append(f"// 1 = identical to English; LSB-first within each byte for {code}.")
+        lines.append(f"const uint8_t SAME_AS_EN_{code}[] = {{")
+        bitmap = bitmap_bytes(tables[code].bits or [])
+        for i in range(0, len(bitmap), 16):
+            lines.append("    " + ", ".join(f"0x{b:02X}" for b in bitmap[i : i + 16]) + ",")
+        lines.append("};")
+        lines.append("")
+
+    lines.append("#if defined(CROSSPOINT_I18N_PACK)")
+    lines.append("// EN and ZH stay in the image; the rest live in the data-partition pack.")
+    emit_blob("EN")
+    emit_offsets("EN")
+    if "ZH_CN" in compiled:
+        emit_blob("ZH_CN")
+        emit_bitmap("ZH_CN")
+    lines.append("const uint16_t LANG_BLOB_SIZES[] = {")
+    for code in languages:
+        lines.append(f"    {blob_sizes.get(code, 0)},")
+    lines.append("};")
+    lines.append("#else")
+
+    for code in compiled:
+        emit_blob(code)
+        if code == "EN":
+            # English always keeps its table: it is the fallback every other
+            # language points into.
+            emit_offsets(code)
+        else:
+            lines.append("#if defined(BOARD_HAS_PSRAM)")
+            emit_bitmap(code)
+            lines.append("#else")
+            emit_offsets(code)
+            lines.append("#endif")
+
+    lines.append("#if defined(BOARD_HAS_PSRAM)")
+    lines.append("// Lookup data for I18n::init(). Indexed by Language.")
+    lines.append("const uint8_t* const SAME_AS_EN_TABLES[] = {")
+    for code in languages:
+        if code != "EN" and code in compiled:
+            lines.append(f"    SAME_AS_EN_{code},")
+        else:
+            lines.append("    nullptr,")
+    lines.append("};")
+    lines.append("")
+    lines.append("const uint16_t LANG_BLOB_SIZES[] = {")
+    for code in languages:
+        lines.append(f"    {blob_sizes.get(code, 0)},")
+    lines.append("};")
+    lines.append("#endif")
+    lines.append("#endif")
+    lines.append("")
 
     lines.append(I18N_NAMESPACE_CLOSE)
     lines.append("")
 
     # Compile-time size checks
     lines.append("// Compile-time validation of array sizes")
+    lines.append(
+        "static_assert(sizeof(i18n_strings::OFFSETS_EN) "
+        "/ sizeof(i18n_strings::OFFSETS_EN[0]) =="
+    )
+    lines.append("                  static_cast<size_t>(StrId::_COUNT),")
+    lines.append('              "OFFSETS_EN size mismatch");')
+    lines.append("#if defined(CROSSPOINT_I18N_PACK)")
+    lines.append("#if I18N_EMBEDDED_ZH")
+    lines.append(
+        "static_assert(sizeof(i18n_strings::SAME_AS_EN_ZH_CN) =="
+        " (static_cast<size_t>(StrId::_COUNT) + 7) / 8,"
+    )
+    lines.append('              "SAME_AS_EN_ZH_CN size mismatch");')
+    lines.append("#endif")
+    lines.append(
+        "static_assert(sizeof(i18n_strings::LANG_BLOB_SIZES) "
+        "/ sizeof(i18n_strings::LANG_BLOB_SIZES[0]) =="
+    )
+    lines.append("                  static_cast<size_t>(Language::_COUNT),")
+    lines.append('              "LANG_BLOB_SIZES size mismatch");')
+    lines.append("#elif defined(BOARD_HAS_PSRAM)")
     for code in compiled:
+        if code == "EN":
+            continue
+        lines.append(
+            f"static_assert(sizeof(i18n_strings::SAME_AS_EN_{code}) =="
+            " (static_cast<size_t>(StrId::_COUNT) + 7) / 8,"
+        )
+        lines.append(f'              "SAME_AS_EN_{code} size mismatch");')
+    lines.append(
+        "static_assert(sizeof(i18n_strings::SAME_AS_EN_TABLES) "
+        "/ sizeof(i18n_strings::SAME_AS_EN_TABLES[0]) =="
+    )
+    lines.append("                  static_cast<size_t>(Language::_COUNT),")
+    lines.append('              "SAME_AS_EN_TABLES size mismatch");')
+    lines.append(
+        "static_assert(sizeof(i18n_strings::LANG_BLOB_SIZES) "
+        "/ sizeof(i18n_strings::LANG_BLOB_SIZES[0]) =="
+    )
+    lines.append("                  static_cast<size_t>(Language::_COUNT),")
+    lines.append('              "LANG_BLOB_SIZES size mismatch");')
+    lines.append("#else")
+    for code in compiled:
+        if code == "EN":
+            continue
         lines.append(
             f"static_assert(sizeof(i18n_strings::OFFSETS_{code}) "
             f"/ sizeof(i18n_strings::OFFSETS_{code}[0]) =="
         )
         lines.append("                  static_cast<size_t>(StrId::_COUNT),")
         lines.append(f'              "OFFSETS_{code} size mismatch");')
+    lines.append("#endif")
 
     _write_file(output_path, lines, verbose)
 
@@ -827,13 +1233,29 @@ def _print_language_table(
     n_lang = len(rows)
     n_keys = len(string_keys)
     offset_table_size = n_lang * n_keys * 2
-    current_total = dedup_size + offset_table_size
+    by_code = dict(zip(language_codes, data_sizes))
+    embedded_size = sum(by_code.get(code, 0) for code in I18N_PACK_EMBEDDED_CODES)
+    packed_codes = [code for code in language_codes if code not in I18N_PACK_EMBEDDED_CODES]
+    packed_strings = sum(by_code.get(code, 0) for code in packed_codes)
+    bitmap_size = (n_keys + 7) // 8
+    bitmap_total = len(packed_codes) * bitmap_size
+    # Four alignment pads worst case (blob + bitmap per language) plus header/index.
+    pack_estimate = (I18N_PACK_HEADER_SIZE + len(packed_codes) * I18N_PACK_ENTRY_SIZE
+                     + packed_strings + bitmap_total + 8 * len(packed_codes))
     print(
         f"\n  Total: {total}  |  Used in code: {used}  |  Never used: {len(unused_keys)}"
     )
     print(
-        f"  Flash: {dedup_size:>7,} B strings (deduped)  +  {offset_table_size:>6,} B offset tables"
-        f"  =  {current_total:>7,} B"
+        f"  Flash, every language embedded (C3/simulator): {dedup_size:>7,} B strings"
+        f"  +  {offset_table_size:>6,} B offset tables  =  {dedup_size + offset_table_size:>7,} B"
+    )
+    print(
+        f"  Flash, CROSSPOINT_I18N_PACK image (EN+ZH only): {embedded_size:>7,} B strings"
+        f"  +  {bitmap_size:>4,} B ZH bitmap  (+ loader code)"
+    )
+    print(
+        f"  Data-partition pack: {len(packed_codes)} languages, {packed_strings:>7,} B strings"
+        f"  +  {bitmap_total:>4,} B bitmaps  ~=  {pack_estimate:>7,} B"
     )
 
 
@@ -896,6 +1318,70 @@ def parse_builtin_langs(value: Optional[str], languages: List[str]) -> Optional[
 # ---------------------------------------------------------------------------
 
 
+def write_pack(pack: bytes, target: str, verbose: bool = False) -> None:
+    """Write the pack atomically enough for a build step: temp file, then rename."""
+    os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+    temporary = target + ".tmp"
+    with open(temporary, "wb") as fh:
+        fh.write(pack)
+    os.replace(temporary, target)
+    if verbose:
+        print(f"  Language pack: {target}")
+
+
+def generate_pack_only(translations_dir: str, output_dir: str, pack_path: Optional[str],
+                       verbose: bool = False) -> None:
+    """Rebuild build/i18n_pack.dat from the already-generated I18nKeys.h.
+
+    The key list and language order are read from the header, not from the
+    command line, so the pack always matches the firmware that was built even
+    when --strip-unused or custom_i18n_builtin_langs shaped that header. This is
+    what exp/flash_device.sh runs when the pack is missing and no build has
+    regenerated it yet.
+    """
+    header_path = str(Path(output_dir) / "I18nKeys.h")
+    if not os.path.isfile(header_path):
+        raise ValueError(
+            f"{header_path} does not exist; run the full generator or a build first"
+        )
+    codes, keys, built_content_signature = parse_generated_layout(header_path)
+
+    languages, _names, _bcp47, _keys, translations, _inherited = load_translations(
+        translations_dir, verbose
+    )
+    by_code = {code: index for index, code in enumerate(languages)}
+    absent = [code for code in codes if code not in by_code]
+    if absent:
+        raise ValueError(
+            f"I18nKeys.h names {len(absent)} language(s) with no YAML file: {', '.join(absent)}"
+        )
+    missing = [key for key in keys if key not in translations]
+    if missing:
+        raise ValueError(
+            f"I18nKeys.h names {len(missing)} key(s) missing from english.yaml: "
+            f"{', '.join(missing[:8])}{'...' if len(missing) > 8 else ''}"
+        )
+
+    ordered = {key: [translations[key][by_code[code]] for code in codes] for key in keys}
+    pack = build_pack_bytes(codes, keys, ordered)
+    # A pack whose text no longer matches the firmware is still written -- that
+    # is the "OTA shipped a newer data partition" case the loader must reject --
+    # but say so, because flashing this over that firmware changes nothing.
+    computed = content_signature(codes, keys, ordered)
+    if computed != built_content_signature:
+        print(
+            "  WARNING: translations differ from the build that wrote I18nKeys.h "
+            f"(content signature 0x{computed:08X} != 0x{built_content_signature:08X}); "
+            "that firmware will reject this pack"
+        )
+    target = pack_path or default_pack_path()
+    write_pack(pack, target, verbose)
+    print(
+        f"  Pack-only: {len(codes) - len([c for c in codes if c in I18N_PACK_EMBEDDED_CODES])}"
+        f" languages, {len(keys)} keys -> {target} ({len(pack):,} B)"
+    )
+
+
 def main(
     translations_dir: Optional[str] = None,
     output_dir: Optional[str] = None,
@@ -904,6 +1390,9 @@ def main(
     verbose: bool = False,
     only_languages: Optional[Set[str]] = None,
     builtin_langs: Optional[str] = None,
+    pack_path: Optional[str] = None,
+    write_pack_file: bool = True,
+    pack_only: bool = False,
 ) -> None:
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
@@ -932,6 +1421,10 @@ def main(
         print()
 
     try:
+        if pack_only:
+            generate_pack_only(translations_dir, output_dir, pack_path, verbose)
+            return
+
         if only_languages:
             print(
                 f"Restricting build to languages: {', '.join(sorted(only_languages))} (plus EN fallback)"
@@ -1012,6 +1505,7 @@ def main(
             str(out / "I18nKeys.h"),
             verbose,
             builtin,
+            content_signature_value=content_signature(languages, string_keys, translations),
         )
         generate_strings_header(
             languages, str(out / "I18nStrings.h"), verbose, builtin
@@ -1025,6 +1519,16 @@ def main(
             verbose,
             builtin,
         )
+
+        if write_pack_file:
+            pack = build_pack_bytes(languages, string_keys, translations)
+            target = pack_path or default_pack_path()
+            write_pack(pack, target, verbose)
+            print(
+                f"  Language pack: {target} ({len(pack):,} B, "
+                f"{len(languages) - len([c for c in languages if c in I18N_PACK_EMBEDDED_CODES])}"
+                f" languages, {len(string_keys)} keys)"
+            )
 
         print()
         print("Code generation complete!")
@@ -1095,6 +1599,28 @@ if __name__ == "__main__":
             "English is always retained as the fallback source."
         ),
     )
+    parser.add_argument(
+        "--pack",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Language-pack output path (default: build/i18n_pack.dat next to the "
+            "repository root)."
+        ),
+    )
+    parser.add_argument(
+        "--no-pack",
+        action="store_true",
+        help="Do not write the data-partition language pack.",
+    )
+    parser.add_argument(
+        "--pack-only",
+        action="store_true",
+        help=(
+            "Only rebuild the language pack, using the StrId and Language enums "
+            "already present in <output_dir>/I18nKeys.h. C++ files are untouched."
+        ),
+    )
     args = parser.parse_args()
     only = set(args.only_languages) if args.only_languages else None
     main(
@@ -1105,9 +1631,17 @@ if __name__ == "__main__":
         args.verbose,
         only,
         args.builtin_langs,
+        args.pack,
+        not args.no_pack,
+        args.pack_only,
     )
 else:
     if "Import" in globals():
         Import("env")
         print("[gen_i18n] unified firmware; building full i18n")
-        main(strip_unused=True, builtin_langs=env.GetProjectOption("custom_i18n_builtin_langs", "all"))
+        project_dir = env.subst("$PROJECT_DIR") or os.getcwd()
+        main(
+            strip_unused=True,
+            builtin_langs=env.GetProjectOption("custom_i18n_builtin_langs", "all"),
+            pack_path=os.path.join(project_dir, I18N_PACK_DEFAULT_PATH),
+        )

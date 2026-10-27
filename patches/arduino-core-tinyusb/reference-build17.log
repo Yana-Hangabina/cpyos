@@ -1,0 +1,1944 @@
+Processing readpico_usbmsc (board: esp32-s3-devkitc1-n16r8; platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.311/platform-espressif32.zip; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+Patched wolfSSL settings: .pio/libdeps/sticky/Arduino-wolfSSL/src/user_settings.h
+Patched wolfSSL settings: .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h
+Patched wolfSSL settings: .pio/libdeps/default/Arduino-wolfSSL/src/user_settings.h
+Patched wolfSSL settings: .pio/libdeps/readpico/Arduino-wolfSSL/src/user_settings.h
+Patched wolfSSL settings: .pio/libdeps/x4pro/Arduino-wolfSSL/src/user_settings.h
+Patched wolfSSL settings: .pio/libdeps/simulator_readpico/Arduino-wolfSSL/src/user_settings.h
+Generated: src/network/html/RunnerPageHtml.generated.h
+  Original: 860 bytes
+  Minified: 8163 bytes (949.2%)
+  Compressed: 3072 bytes (357.2%)
+Generated: src/network/html/js/jszip_minJs.generated.h
+  Original: 97630 bytes
+  Minified: 97630 bytes (100.0%)
+  Compressed: 28379 bytes (29.1%)
+Generated: src/network/html/zh-CN/HomePageHtml.generated.h
+  Original: 5986 bytes
+  Minified: 5745 bytes (96.0%)
+  Compressed: 2074 bytes (34.6%)
+Generated: src/network/html/zh-CN/SettingsPageHtml.generated.h
+  Original: 26519 bytes
+  Minified: 34035 bytes (128.3%)
+  Compressed: 8857 bytes (33.4%)
+Generated: src/network/html/zh-CN/FontsPageHtml.generated.h
+  Original: 11740 bytes
+  Minified: 11578 bytes (98.6%)
+  Compressed: 3793 bytes (32.3%)
+Generated: src/network/html/zh-CN/FilesPageHtml.generated.h
+  Original: 217941 bytes
+  Minified: 221347 bytes (101.6%)
+  Compressed: 54266 bytes (24.9%)
+Generated: src/network/html/en/HomePageHtml.generated.h
+  Original: 4523 bytes
+  Minified: 4235 bytes (93.6%)
+  Compressed: 1446 bytes (32.0%)
+Generated: src/network/html/en/SettingsPageHtml.generated.h
+  Original: 26564 bytes
+  Minified: 34054 bytes (128.2%)
+  Compressed: 8443 bytes (31.8%)
+Generated: src/network/html/en/FontsPageHtml.generated.h
+  Original: 10940 bytes
+  Minified: 10772 bytes (98.5%)
+  Compressed: 3285 bytes (30.0%)
+Generated: src/network/html/en/FilesPageHtml.generated.h
+  Original: 228566 bytes
+  Minified: 231945 bytes (101.5%)
+  Compressed: 54700 bytes (23.9%)
+Bundled user guides: 17077 / 131072 bytes
+[gen_i18n] unified firmware; building full i18n
+Language              Code   BCP47        Own   Fallback  Unused  Data (B)
+--------------------  -----  -----------  ----  --------  ------  --------
+English               EN     en           1345  0         45      23872   
+العربية               AR     ar           447   898       9       13486   
+Беларуская            BE     be           438   907       9       15189   
+Български             BG     bg           424   921       8       15386   
+Bosanski              BS     bs           438   907       9       9013    
+Català                CA     ca           519   826       14      11080   
+Valencià              CAV    ca-valencia  521   824       14      11034   
+Čeština               CS     cs           438   907       9       9411    
+Dansk                 DA     da           325   1020      5       5558    
+Deutsch               DE     de           518   827       14      9497    
+Español               ES     es           519   826       14      10516   
+فارسی                 FA     fa           460   885       11      14667   
+Suomi                 FI     fi           296   1049      5       5690    
+Français              FR     fr           497   848       15      9731    
+עברית                 HE     he           519   826       14      13154   
+Magyar                HU     hu           438   907       9       9880    
+Bahasa Indonesia      ID     id           438   907       9       8451    
+Italiano              IT     it           519   826       14      9765    
+Қазақша               KK     kk           438   907       9       15365   
+Lietuvių              LT     lt           438   907       9       7789    
+Norsk bokmål          NB     nb           438   907       9       8003    
+Nederlands            NL     nl           325   1020      5       5623    
+Orangutan             OOK    ook          331   1014      6       2609    
+Polski                PL     pl           438   907       9       8903    
+Português (Brasil)    PT     pt-BR        519   826       14      10116   
+Português (Portugal)  P2     pt-PT        519   826       14      10882   
+Română                RO     ro           325   1020      5       6363    
+Русский               RU     ru           519   826       14      16392   
+Slovenčina            SK     sk           438   907       9       9513    
+Slovenščina           SI     sl           438   907       9       8933    
+Svenska               SV     sv           459   886       11      8790    
+Türkçe                TR     tr           439   906       9       8931    
+Українська            UK     uk           440   905       9       15610   
+Tiếng Việt            VI     vi           519   826       14      11476   
+简体中文                  ZH_CN  zh-CN        1304  41        41      21680   
+
+  Total: 1345  |  Used in code: 1300  |  Never used: 45
+  Flash: 382,358 B strings (deduped)  +  94,150 B offset tables  =  476,508 B
+
+  Stripping 45 unused string(s) from output.
+
+Code generation complete!
+  Languages: 35
+  String keys: 1300
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-s3-devkitc1-n16r8.html
+PLATFORM: Espressif 32 (55.3.311) > Espressif ESP32-S3-DevKitC-1-N16R8V (16 MB Flash Quad, 8 MB PSRAM Octal)
+HARDWARE: ESP32S3 240MHz, 320KB RAM, 16MB Flash
+DEBUG: Current (esp-builtin) On-board (esp-builtin) External (cmsis-dap, esp-bridge, esp-prog, esp-prog-2, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.11 
+ - framework-arduinoespressif32-libs @ 5.5.5+sha.b774170ff46 
+ - framework-espidf @ 3.50505.0 (5.5.5) 
+ - tool-cmake @ 4.0.3 
+ - tool-cppcheck @ 2.20.1 
+ - tool-esp-rom-elfs @ 2024.10.11 
+ - tool-esptoolpy @ 5.3.0 
+ - tool-ninja @ 1.13.1 
+ - tool-xtensa-esp-elf-gdb @ 17.1.0+20260402 
+ - toolchain-xtensa-esp-elf @ 14.2.0+20260121
+[ComponentManager] BT/BLE protection enabled
+[ComponentManager] Protected BT library: bt
+[ComponentManager] Processed 1 ignored libraries
+[ComponentManager] Session completed with 3 changes
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 107 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- BatteryMonitor @ 2.0.0
+|-- InputManager @ 2.0.0
+|-- EInkDisplay @ 2.0.0
+|-- SDCardManager @ 2.0.0
+|-- UsbMassStorage @ 1.0.0
+|-- BoardConfig @ 2.0.0
+|-- XteinkDetect @ 1.0.0
+|-- PowerManager @ 1.0.0
+|-- BleKeyboardHost @ 1.0.0
+|-- MemoryManager @ 1.0.0
+|-- FrontlightManager @ 1.0.0
+|-- Rtc @ 1.0.0
+|-- Imu @ 1.0.0
+|-- SecureNet @ 1.0.0
+|-- JsonSax @ 1.0.0
+|-- CatalogList @ 1.0.0
+|-- ContentProtection @ 0.1.0
+|-- FreeInkUI @ 0.1.0
+|-- Icons @ 1.0.0
+|-- FreeInkFont @ 0.1.0
+|-- ArduinoJson @ 7.4.2
+|-- SdFat @ 2.3.1
+|-- QRCode @ 0.0.1
+|-- PNGdec @ 1.1.6
+|-- JPEGDEC @ 1.2.7+sha.8628297
+|-- WebSockets @ 2.7.3
+|-- PubSubClient @ 2.8.0
+|-- Arduino-wolfSSL @ 5.7.2
+|-- NimBLE-Arduino @ 2.3.8
+|-- BoardReadPico @ 0.1.0
+|-- EpdiyLcd @ 1.0.0
+|-- hal
+|-- I18n
+|-- Logging
+|-- GfxRenderer
+|-- Serialization
+|-- Memory
+|-- WiFi @ 3.3.11
+|-- FsHelpers
+|-- EpdFont
+|-- Epub
+|-- JpegToBmpConverter
+|-- AvatarGen
+|-- JjwxcApi @ 1.0.0
+|-- LibraryIndex
+|-- PngToBmpConverter
+|-- Txt
+|-- WeReadWebApi @ 1.0.0
+|-- Xtc
+|-- Utf8
+|-- KOReaderSync
+|-- OpdsParser
+|-- Pinyin
+|-- ESPmDNS @ 3.3.11
+|-- DNSServer @ 3.3.11
+|-- TrustedTime
+|-- MiniBidi
+|-- SPI @ 3.3.11
+|-- SoundFeedback
+|-- DeviceSecret
+|-- JsonParser
+|-- InflateReader
+|-- SloppyDigits
+|-- Networking @ 3.3.11
+|-- WebServer @ 3.3.11
+Building in release mode
+Compiling .pio/build/readpico_usbmsc/lib185/Wire/Wire.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/BatteryMonitor/BatteryMonitor.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib40d/InputManager/InputManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/libaa3/SPI/SPI.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/EpdiyLcd.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/e0470/e0470_epaper_waveform.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/e0470/e0470_waveform_trim.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/e0470_page_turn/e0470_page_turn.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/board/epd_board.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/diff.S.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/displays.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/epdiy.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/highlevel.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_common/line_queue.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_common/lut.S.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_common/lut.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_common/render_context.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_common/rmt_compat.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_lcd/lcd_driver.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/output_lcd/render_lcd.c.o
+Compiling .pio/build/readpico_usbmsc/lib698/EpdiyLcd/epdiy/src/render.c.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/FreeInkDisplay.cpp.o
+freeink-sdk/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c: In function 'init_dma_trans_link':
+freeink-sdk/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c:362:5: warning: 'gdma_new_channel' is deprecated: please use gdma_new_ahb_channel or gdma_new_axi_channel respectively [-Wdeprecated-declarations]
+  362 |     ESP_RETURN_ON_ERROR(
+      |     ^~~~~~~~~~~~~~~~~~~
+In file included from freeink-sdk/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c:33:
+/Users/hongbin/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_hw_support/dma/include/esp_private/gdma.h:502:11: note: declared here
+  502 | esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_channel_handle_t *ret_chan)
+      |           ^~~~~~~~~~~~~~~~
+freeink-sdk/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c:385:5: warning: 'gdma_set_transfer_ability' is deprecated: please use gdma_config_transfer instead [-Wdeprecated-declarations]
+  385 |     ESP_RETURN_ON_ERROR(gdma_set_transfer_ability(lcd.dma_chan, &ability), TAG, "dma setup error");
+      |     ^~~~~~~~~~~~~~~~~~~
+/Users/hongbin/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_hw_support/dma/include/esp_private/gdma.h:528:11: note: declared here
+  528 | esp_err_t gdma_set_transfer_ability(gdma_channel_handle_t dma_chan, const gdma_transfer_ability_t *ability)
+      |           ^~~~~~~~~~~~~~~~~~~~~~~~~
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/bus/EpdBus.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/CrossMuxSsd1677Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Ed2208M5Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/EpdiyLcdDriver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/It8951Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/LgfxEpdDriver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/M5OfficialDriver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/PaperMonoDriver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Ssd1677Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8179Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8253MurphyDriver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8253X3Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8279Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8279X4Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb98/FreeInkDisplay/driver/Uc8279cA4Driver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatDbg.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatFilePrint.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatFileWrite.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatFormatter.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatName.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatPartition.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/ExFatLib/ExFatVolume.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatDbg.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatFileLFN.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatFilePrint.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatFileSFN.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatFormatter.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatName.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatPartition.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FatLib/FatVolume.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FreeStack.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FsLib/FsFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FsLib/FsNew.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/FsLib/FsVolume.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/MinimumSerial.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/PioSdio/PioSdioCard.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdCardInfo.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdSpiCard/SpiDriver/SdSpiChipSelect.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdSpiCard/SdSpiCard.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdSpiCard/SpiDriver/SdSpiDue.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdSpiCard/SpiDriver/SdSpiSTM32Core.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/SdSpiCard/SpiDriver/SdSpiTeensy3.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/SdCard/TeensySdio/TeensySdio.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FmtNumber.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FsCache.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FsDateTime.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FsName.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FsStructs.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/FsUtf.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/PrintBasic.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/common/upcase.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/iostream/StdioStream.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/iostream/StreamBaseClass.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/iostream/istream.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf10/SdFat/iostream/ostream.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib8f8/SDCardManager/SDCardManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib8f8/SDCardManager/SdmmcBlockDevice.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib1dd/UsbMassStorage/UsbMassStorage.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a9/XteinkDetect/XteinkDetect.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib66e/PowerManager/PowerManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLE2904.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEAddress.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEAdvertisedDevice.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEAdvertisementData.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEAdvertising.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEAttValue.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEBeacon.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLECharacteristic.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEDescriptor.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEDevice.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEEddystoneTLM.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEExtAdvertising.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEHIDDevice.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEL2CAPChannel.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEL2CAPServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLERemoteCharacteristic.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLERemoteDescriptor.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLERemoteService.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLERemoteValueAttribute.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEScan.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEService.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEUUID.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/NimBLEUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/esp_port/esp-hci/src/esp_nimble_hci.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/esp_port/esp-hci/src/na_hci_driver.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/esp_port/esp-hci/src/na_hci_transport.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/esp_port/port/src/exp_nimble_mem.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/aes_decrypt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/aes_encrypt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/cbc_mode.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ccm_mode.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/cmac_mode.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ctr_mode.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ctr_prng.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ecc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ecc_dh.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ecc_dsa.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/ecc_platform_specific.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/hmac.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/hmac_prng.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/sha256.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/ext/tinycrypt/src/utils.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_adv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_conn.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_conn_hci.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_crypto.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_ctrl.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_dtm.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_hci.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_hci_ev.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_hci_supp_cmd.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_hci_vs.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_iso.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_iso_big.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_isoal.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_pdu.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_rand.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_resolv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_rfmgmt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_scan.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_scan_aux.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_sched.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_sync.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_trace.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_utils.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/controller/src/ble_ll_whitelist.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf51/src/ble_hw.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf51/src/ble_phy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf5x/src/ble_hw.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf5x/src/ble_phy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf5x/src/ble_phy_trace.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf5x/src/nrf52/phy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/drivers/nrf5x/src/nrf53/phy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/access.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/adv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/adv_ext.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/adv_legacy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/aes-ccm.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/app_keys.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/beacon.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/cdb.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/cfg.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/cfg_cli.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/cfg_srv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/crypto.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/friend.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/glue.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/health_cli.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/health_srv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/heartbeat.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/light_model.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/lpn.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/mesh.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/model_cli.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/model_srv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/msg.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/net.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/pb_adv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/pb_gatt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/pb_gatt_srv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/prov.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/prov_device.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/provisioner.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/proxy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/proxy_msg.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/proxy_srv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/rpl.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/settings.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/shell.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/subnet.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/testing.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/mesh/src/transport.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/services/gap/src/ble_svc_gap.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/services/gatt/src/ble_svc_gatt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_aes_ccm.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_att.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_att_clt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_att_cmd.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_att_svr.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_dtm.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_ead.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_eatt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_eddystone.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gap.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gattc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gattc_cache.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gattc_cache_conn.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gatts.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_gatts_lcl.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_adv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_atomic.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_cfg.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_conn.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_flow.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_hci.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_hci_cmd.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_hci_evt.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_hci_util.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_id.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_log.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_mbuf.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_misc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_mqueue.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_periodic_sync.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_pvcy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_resolv.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_shutdown.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_startup.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_hs_stop.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_ibeacon.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_l2cap.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_l2cap_coc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_l2cap_sig.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_l2cap_sig_cmd.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_sm.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_sm_alg.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_sm_cmd.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_sm_lgcy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_sm_sc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_store.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_store_util.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/src/ble_uuid.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/store/config/src/ble_store_config.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/store/config/src/ble_store_config_conf.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/store/config/src/ble_store_nvs.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/store/ram/src/ble_store_ram.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/host/util/src/addr.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/common/hci_h4/src/hci_h4.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/common/hci_ipc/src/hci_ipc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/esp_ipc/src/hci_esp_ipc.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/esp_ipc_legacy/src/hci_esp_ipc_legacy.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/nrf5340/src/nrf5340_ble_hci.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/nimble/transport/src/transport.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/endian.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/hal_timer.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/mem.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/nimble_port.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/os_cputime.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/os_cputime_pwr2.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/os_mbuf.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/os_mempool.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/nimble/src/os_msys_init.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/npl/freertos/src/nimble_port_freertos.c.o
+Compiling .pio/build/readpico_usbmsc/lib922/NimBLE-Arduino/nimble/porting/npl/freertos/src/npl_os_freertos.c.o
+Compiling .pio/build/readpico_usbmsc/lib43e/Preferences/Preferences.cpp.o
+Retrieved `.pio/build/readpico_usbmsc/ble-compat/BleKeyboardHost.cpp' from cache
+Compiling .pio/build/readpico_usbmsc/libabf/BleKeyboardHost/HidKeymap.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib0f2/MemoryManager/MemoryManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/ble-compat/BleKeyboardHost.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc70/Logging/Logging.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib122/FrontlightManager/FrontlightManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc6d/Rtc/Rtc.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib54e/Imu/Imu.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkEvents.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkInterface.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib764/Network/NetworkUdp.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/AP.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/STA.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFi.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFiAP.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFiGeneric.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFiMulti.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFiSTA.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3a5/WiFi/WiFiScan.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/PNGdec.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/adler32.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/crc32.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/infback.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/inffast.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/inflate.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/inftrees.c.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/s3_simd_rgb565.S.o
+Compiling .pio/build/readpico_usbmsc/lib3fb/PNGdec/zutil.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/bio.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/conf.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/bio.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/conf.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/crl.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/crl.c:39:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/dtls.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/dtls13.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/dtls.c:53:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/internal.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/dtls13.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/keys.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ocsp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/internal.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/pk.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/keys.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ocsp.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/quic.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/pk.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/sniffer.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/quic.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/sniffer.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_asn1.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_bn.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_certman.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_asn1.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_crypto.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_bn.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_load.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_certman.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_crypto.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_misc.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_load.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_p7p12.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/ssl_sess.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_misc.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/tls.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_p7p12.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/ssl_sess.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/tls13.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/tls.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/wolfio.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/tls13.c:95:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/x509.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/wolfio.c:31:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/src/x509_str.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/x509.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/aes.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/src/x509_str.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/arc4.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/asm.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/aes.c:35:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/arc4.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/asn.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/asm.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/async.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/bio.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/asn.c:41:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/blake2b.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/blake2s.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/bio.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/camellia.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/blake2s.c:40:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/chacha.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/blake2b.c:40:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/chacha20_poly1305.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/camellia.c:60:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/cmac.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/chacha.c:36:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/coding.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/chacha20_poly1305.c:34:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/compress.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/cmac.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/cpuid.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/coding.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/compress.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/cryptocb.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/curve25519.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/cpuid.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/curve448.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/cryptocb.c:43:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/curve25519.c:30:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/des3.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/curve448.c:32:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/dh.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/des3.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/dilithium.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/dh.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/dsa.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/dilithium.c:119:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ecc.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/dsa.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ecc_fp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ecc.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/eccsi.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ed25519.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ed448.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/eccsi.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ed25519.c:36:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/error.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ed448.c:38:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/evp.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ext_kyber.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/error.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ext_lms.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/evp.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ext_kyber.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ext_xmss.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ext_lms.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/falcon.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/fe_448.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ext_xmss.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/fe_low_mem.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/falcon.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/fe_448.c:31:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/fe_operations.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/fe_low_mem.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/fips.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/fips_test.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/fe_operations.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ge_448.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ge_low_mem.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ge_448.c:31:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ge_operations.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ge_low_mem.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/hash.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/hmac.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ge_operations.c:30:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/hpke.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/hash.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/integer.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/wc_port.h:29,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/hmac.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/kdf.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/hpke.c:30:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/integer.c:35:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/logging.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/wc_port.h:29,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/kdf.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/md2.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/md4.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/logging.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/md5.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/md2.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/memory.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/md4.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/misc.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/md5.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/types.h:34,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/memory.c:34:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/pkcs12.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/misc.c:32:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/pkcs7.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/poly1305.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/pkcs12.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/pkcs7.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp32_aes.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/poly1305.c:36:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp32_mp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp32_aes.c:33:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp32_sha.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp32_mp.c:47:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp32_sha.c:33:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp32_util.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp_sdk_mem_lib.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp32_util.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp_sdk_time_lib.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp_sdk_mem_lib.c:30:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/Espressif/esp_sdk_wifi_lib.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp_sdk_time_lib.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/port/atmel/atmel.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/Espressif/esp_sdk_wifi_lib.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/pwdbased.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/port/atmel/atmel.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/random.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/rc2.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/pwdbased.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/random.c:32:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/ripemd.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/rc2.c:32:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/rsa.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/ripemd.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sakke.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/selftest.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/rsa.c:33:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sha.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sakke.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sha256.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sha3.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sha.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sha512.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sha256.c:45:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/signature.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sha3.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/siphash.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sha512.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/signature.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sm2.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/siphash.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sm3.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sm2.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sm4.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_arm32.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sm3.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sm4.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_arm64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_arm32.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_armthumb.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_c32.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_arm64.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_c64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_armthumb.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_c32.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_cortexm.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_dsp32.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_int.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_cortexm.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_c64.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_arm32.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_dsp32.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_arm64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_int.c:33:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_arm32.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_armthumb.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_arm64.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_c32.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_armthumb.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_c64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_c32.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_cortexm.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_c64.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_sm2_x86_64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_cortexm.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sp_x86_64.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_sm2_x86_64.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/sphincs.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sp_x86_64.c:28:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/srp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/sphincs.c:29:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/tfm.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_dsp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/srp.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_encrypt.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/tfm.c:39:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_kyber.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_dsp.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_kyber_poly.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_encrypt.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_lms.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_kyber.c:31:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_lms_impl.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/types.h:34,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/wc_kyber.h:30,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_kyber_poly.c:60:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_lms.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_pkcs11.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/types.h:34,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/error-crypt.h:34,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_lms_impl.c:41:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_port.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_pkcs11.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_xmss.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_port.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wc_xmss_impl.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_xmss.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wolfcrypt_first.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wolfcrypt_last.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wc_xmss_impl.c:36:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wolfevent.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfcrypt/src/wolfmath.c.o
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfssl/bio.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wolfevent.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/libc8b/Arduino-wolfSSL/wolfssl/evp.c.o
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfcrypt/src/wolfmath.c:34:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/bio.c:26:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+In file included from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/wolfcrypt/settings.h:318,
+                 from .pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/wolfssl/evp.c:27:
+.pio/libdeps/readpico_usbmsc/Arduino-wolfSSL/src/user_settings.h:297:13: warning: "NO_WOLFSSL_ESP32_CRYPT_RSA_PRI" redefined
+  297 |     #define NO_WOLFSSL_ESP32_CRYPT_RSA_PRI
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+<command-line>: note: this is the location of the previous definition
+Compiling .pio/build/readpico_usbmsc/lib155/SecureNet/SecureClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib361/JsonSax/StreamingJsonParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib15b/expat/xmlparse.c.o
+Compiling .pio/build/readpico_usbmsc/lib15b/expat/xmlrole.c.o
+Compiling .pio/build/readpico_usbmsc/lib15b/expat/xmltok.c.o
+Compiling .pio/build/readpico_usbmsc/lib641/CatalogList/JsonListParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib641/CatalogList/XmlListParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib726/ContentProtection/ProtectedBook.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib726/ContentProtection/WolfsslCrypto.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib726/ContentProtection/Zip.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib726/ContentProtection/vendor/miniz_impl.c.o
+Compiling .pio/build/readpico_usbmsc/lib08c/Utf8/Utf8.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib358/BoardReadPico/BoardReadPico.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib358/BoardReadPico/ReadPicoEpdiyConfig.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib358/BoardReadPico/ReadPicoPower.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5bc/FS/FS.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5bc/FS/vfs_api.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbb9/Memory/BuildScratch.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalAudioOutput.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalClock.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalDisplay.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalFrontlight.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalGPIO.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalMemory.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalOtaSlot.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalPowerManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalStorage.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalSystem.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/HalTiltSensor.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib93c/hal/Waveshare397Power.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib425/uzlib/tinflate.c.o
+Compiling .pio/build/readpico_usbmsc/lib160/InflateReader/InflateReader.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/FontAlloc.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/FtFont.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/Gpos.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/Gsub.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/TtfFont.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_autofit.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftbase.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftbitmap.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftdebug.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftglyph.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftgzip.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftinit.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftmm.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_ftsystem.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_psnames.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_raster.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_sfnt.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_smooth.c.o
+Compiling .pio/build/readpico_usbmsc/lib041/FreeInkFont/freetype/ft_truetype.c.o
+Compiling .pio/build/readpico_usbmsc/lib827/MiniBidi/BidiUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib827/MiniBidi/minibidi.c.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/EpdFont.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/EpdFontFamily.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/FontDecompressor.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/SdCardFont.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/SdCardFontCache.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/SdCardFontManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/SdCardFontRegistry.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5e7/EpdFont/TtfEpdFont.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3c6/GfxRenderer/Bitmap.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3c6/GfxRenderer/BitmapHelpers.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3c6/GfxRenderer/FontCacheManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib3c6/GfxRenderer/GfxRenderer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib188/FreeInkUI/FreeInkUI.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib7d0/QRCode/qrcode.c.o
+Compiling .pio/build/readpico_usbmsc/lib640/JPEGDEC/JPEGDEC.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib640/JPEGDEC/s3_simd_420.S.o
+Compiling .pio/build/readpico_usbmsc/lib640/JPEGDEC/s3_simd_444.S.o
+Compiling .pio/build/readpico_usbmsc/lib640/JPEGDEC/s3_simd_dequant.S.o
+Compiling .pio/build/readpico_usbmsc/lib01e/Ethernet/ETH.cpp.o
+Compiling .pio/build/readpico_usbmsc/libedc/NetworkClientSecure/NetworkClientSecure.cpp.o
+Compiling .pio/build/readpico_usbmsc/libedc/NetworkClientSecure/ssl_client.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/SocketIOclient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/WebSockets.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/WebSocketsClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/WebSocketsServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/libb64/cdecode.c.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/libb64/cencode.c.o
+Compiling .pio/build/readpico_usbmsc/lib00c/WebSockets/libsha1/libsha1.c.o
+Compiling .pio/build/readpico_usbmsc/libfea/PubSubClient/PubSubClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/liba2d/I18n/I18n.cpp.o
+Compiling .pio/build/readpico_usbmsc/liba2d/I18n/I18nStrings.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib74f/Serialization/ObfuscationUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib74f/Serialization/PersistableStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib87f/FsHelpers/FsHelpers.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbed/miniz/InflateStream.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbed/miniz/miniz_impl.c.o
+Compiling .pio/build/readpico_usbmsc/lib01c/ZipFile/ZipFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/libe53/JpegToBmpConverter/JpegToBmpConverter.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5aa/PngToBmpConverter/PngToBmpConverter.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/Txt.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/TxtCache.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/TxtChapterIndex.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/TxtEncoding.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/TxtProgress.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib691/Txt/TxtToHtml.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib556/DeviceSecret/DeviceSecret.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5f5/TrustedTime/TrustedTime.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/BookKey.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/ContentProtection.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/BookMetadataCache.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/Page.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/ParsedText.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/Section.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/WordStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/blocks/ImageBlock.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/blocks/TextBlock.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/converters/ImageDecoderFactory.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/converters/ImageDimsProbe.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/converters/ImageToFramebufferDecoder.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/converters/JpegToFramebufferConverter.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/converters/PngToFramebufferConverter.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/css/CssParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/htmlEntities.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/hyphenation/HyphenationCommon.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/hyphenation/HyphenationStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/hyphenation/Hyphenator.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/hyphenation/LanguageRegistry.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/hyphenation/LiangHyphenation.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/parsers/ContainerParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/parsers/ContentOpfParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/parsers/TocNavParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib14d/Epub/Epub/parsers/TocNcxParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/AvatarGen.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/AvatarGenerator.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/Bezier.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/EyeShape.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/FaceShape.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/HairLines.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/MouthShape.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/Nose.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib39a/AvatarGen/Render.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcCookies.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcCrypto.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcFontMap.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcProtocol.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcWap.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcWapClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcWapLogin.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc48/JjwxcApi/JjwxcWapShelf.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib6ae/LibraryIndex/LibraryBuilder.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib6ae/LibraryIndex/LibraryFormat.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib6ae/LibraryIndex/LibraryIndexFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib6ae/LibraryIndex/LibraryText.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadBrowse.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadHttpClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadProtocol.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib314/WeReadWebApi/WeReadXhtmlCodec.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5bc/Xtc/Xtc.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5bc/Xtc/Xtc/XtcParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/ChapterXPathResolver.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/KOReaderCredentialStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/KOReaderDocumentId.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/KOReaderSyncClient.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/ProgressComparison.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc4c/KOReaderSync/ProgressMapper.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb5c/OpdsParser/OpdsParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/libb5c/OpdsParser/OpdsStream.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf31/Pinyin/PinyinDb.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf31/Pinyin/PinyinFormat.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf31/Pinyin/PinyinIme.cpp.o
+Compiling .pio/build/readpico_usbmsc/libf31/Pinyin/PinyinTables.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib959/ESPmDNS/ESPmDNS.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib7e7/AsyncUDP/AsyncUDP.cpp.o
+Compiling .pio/build/readpico_usbmsc/liba37/DNSServer/DNSServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib33c/SoundFeedback/SoundFeedback.cpp.o
+Compiling .pio/build/readpico_usbmsc/libc8f/JsonParser/ReleaseJsonParser.cpp.o
+Compiling .pio/build/readpico_usbmsc/libaca/SloppyDigits/SloppyDigitAlphabets.cpp.o
+Compiling .pio/build/readpico_usbmsc/libaca/SloppyDigits/SloppyDigits.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbfe/Hash/PBKDF2_HMACBuilder.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbfe/Hash/SHA1Builder.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbfe/Hash/SHA2Builder.cpp.o
+Compiling .pio/build/readpico_usbmsc/libbfe/Hash/SHA3Builder.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/Parsing.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/WebServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/detail/mimetable.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/middleware/AuthenticationMiddleware.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/middleware/CorsMiddleware.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/middleware/LoggingMiddleware.cpp.o
+Compiling .pio/build/readpico_usbmsc/lib5a5/WebServer/middleware/MiddlewareChain.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/AchievementsStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/BleInput.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/CrossPointSettings.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/CrossPointState.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/FontInstaller.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/JsonSettingsIO.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/MappedInputManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/NetworkStartup.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/OpdsServerStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/ReaderFontSizes.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/ReadingStatsStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/RecentBooksStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/SdCardFontSystem.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/WifiCredentialStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/Activity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/ActivityManager.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/CatalogActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/UiListActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/UiTabListActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/2048/Game2048Activity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/2048/Game2048Board.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/2048/Game2048Store.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/AppsMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/GameUi.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageConnection.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageDeviceId.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageImageRenderer.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageImageStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/airpage/AirPageWallpaper.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/avatar/UglyAvatarActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/buddy/BuddyActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/buddy/BuddyGenerator.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/calculator/CalculatorActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/calculator/CalculatorState.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/chinese-chess/ChineseChessAI.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/chinese-chess/ChineseChessBoard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/chinese-chess/ChineseChessGameActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/chinese-chess/ChineseChessMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/chinese-chess/ChineseChessStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/gomoku/GomokuAI.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/gomoku/GomokuBoard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/gomoku/GomokuGameActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/gomoku/GomokuMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/gomoku/GomokuStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/jjwxc/JjwxcActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/jjwxc/JjwxcEpub.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/jjwxc/JjwxcHttpTransport.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/jjwxc/JjwxcStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/minesweeper/MinesweeperBoard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/minesweeper/MinesweeperGameActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/minesweeper/MinesweeperGenerator.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/minesweeper/MinesweeperMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/minesweeper/MinesweeperStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/pixel-switch/PixelSwitchActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/pixel-switch/PixelSwitchState.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/AchievementsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/AppMetricCard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/BookReadingAdjustmentActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingDateSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingDayDetailActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingHeatmapActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingProfileActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingStatsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingStatsDetailActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingStatsExtendedActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/reading-stats/ReadingStatsMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sokoban/SokobanBoard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sokoban/SokobanGameActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sokoban/SokobanStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/ChineseAlmanac.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/ChineseCalendarFace.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/DuckSleepFace.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/SloppyClockFace.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/StandbyActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/standby/StandbyTime.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sudoku/SudokuBoard.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sudoku/SudokuGameActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sudoku/SudokuGenerator.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sudoku/SudokuMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/sudoku/SudokuStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/weread/webapi/WeReadActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/weread/webapi/WeReadBrowseActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/weread/webapi/WeReadProgressSyncActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/woodfish/WoodfishActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/apps/woodfish/WoodfishStore.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/boot_sleep/BootActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/boot_sleep/SleepActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/browser/OpdsBookBrowserActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/home/CrashActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/home/FileBrowserActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/home/HomeActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/home/InxRecentActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/home/RecentBooksActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/library/LibraryListActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/network/CalibreConnectActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/network/CrossPointWebServerActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/network/NetworkModeSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/network/UsbDriveActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/network/WifiSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/plugins/PluginCatalogActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/DictionaryDefinitionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/DictionaryWordSelectActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EndOfBookOptions.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderBookmarksActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderChapterSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderFootnoteSelectActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderFootnotesActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderMenuActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/EpubReaderPercentSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/KOReaderSyncActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/QrDisplayActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/ReaderActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/ReaderSession.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/ReaderToolbarUi.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/XtcReaderActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/reader/XtcReaderChapterSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/AboutActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/AppVisibilitySettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/BleButtonMapActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/BluetoothSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/ButtonRemapActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/ClearCacheActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/ClockSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/ClockSyncActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/DateTimeSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/DictionaryDownloadActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/FontDownloadActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/HomeButtonSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/KOReaderAuthActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/KOReaderSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/KeyboardLayoutsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/LanguageSelectActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/OpdsServerListActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/OpdsSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/OtaUpdateActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/ReadingStatsSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/SdFirmwareUpdateActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/SettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/StatusBarSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/TextSettingsActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/TextSettingsPreview.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/settings/TimezonePickerActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/ConfirmationActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/FrontlightPanelActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/FullScreenMessageActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/ImageViewerActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/IntervalSelectionActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/KeyboardEntryActivity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/activities/util/KeyboardLayoutSet.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/CatalogScreens.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/FontPreloadView.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/HomeCoverCache.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/UITheme.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/UiAppHost.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/themes/BaseTheme.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/themes/cpy/CpyTheme.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/themes/inx/InxTheme.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/components/themes/lyra/LyraTheme.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/main.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/CrossPointWebServer.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/FirmwareBoardTag.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/FirmwareFlasher.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/HttpDownloader.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/OtaBootSwitch.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/OtaUpdater.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/network/WebDAVHandler.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/platform/UsbSerialJtagHandoff.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/platform/skip_efuse_blk_check.c.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookCacheUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookCoverLoader.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookIdentity.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookProgress.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookmarkFile.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/BookmarkUtil.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/ButtonNavigator.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/DictHtmlPages.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/DictZip.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/Dictionary.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/DictionaryRegistry.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/FileEditUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/HeaderDateUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/HtmlToPlainText.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/NextBookFinder.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/OpdsFilename.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/PluginEvents.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/PluginHttp.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/PluginLocations.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/QrUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/ReadingBackground.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/ReadingStatsAnalytics.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/ScreenshotUtil.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/StringUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/SystemSettingsReset.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/TimeUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/Timezones.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/UrlUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/src/util/UserGuide.cpp.o
+Retrieved `.pio/build/readpico_usbmsc/bootloader.bin' from cache
+Retrieved `.pio/build/readpico_usbmsc/partitions.bin' from cache
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/ColorFormat.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/Esp.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/FirmwareMSC.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/FunctionalInterrupt.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/HEXBuilder.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/HWCDC.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/HardwareSerial.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/HashBuilder.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/IPAddress.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/MD5Builder.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/MacAddress.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/Print.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/Stream.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/StreamString.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/StringUtils.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/Tone.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/USB.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/USBCDC.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/USBMSC.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/WMath.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/WString.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/base64.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/cbuf.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/chip-debug-report.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-adc.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-bt.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-cpu.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-dac.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-gpio.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-hosted.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-i2c-ng.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-i2c-slave.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-i2c.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-ldo.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-ledc.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-log-wrapper.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-matrix.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-misc.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-periman.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-psram.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-rgb-led.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-rmt.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-sigmadelta.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-spi.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-time.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-timer.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-tinyusb.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-touch-ng.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-touch.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/esp32-hal-uart.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/firmware_msc_fat.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/freertos_stats.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/idf_openthread_mpool_wrapper.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/libb64/cdecode.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/libb64/cencode.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/main.cpp.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/stdlib_noniso.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/wiring_pulse.c.o
+Compiling .pio/build/readpico_usbmsc/FrameworkArduino/wiring_shift.c.o
+Archiving .pio/build/readpico_usbmsc/libFrameworkArduino.a
+Indexing .pio/build/readpico_usbmsc/libFrameworkArduino.a
+Linking .pio/build/readpico_usbmsc/firmware.elf
+                            Memory Type Usage Summary                             
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Memory Type/Section ┃ Used [bytes] ┃ Used [%] ┃ Remain [bytes] ┃ Total [bytes] ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Flash Code          │      3150176 │          │                │               │
+│    .text            │      3150176 │          │                │               │
+│ Flash Data          │      2894752 │          │                │               │
+│    .rodata          │      2889740 │          │                │               │
+│    .eh_frame        │         4756 │          │                │               │
+│    .appdesc         │          256 │          │                │               │
+│ DIRAM               │       216875 │    63.46 │         124885 │        341760 │
+│    .text            │        96747 │    28.31 │                │               │
+│    .bss             │        87040 │    25.47 │                │               │
+│    .data            │        33088 │     9.68 │                │               │
+│ IRAM                │        16384 │    100.0 │              0 │         16384 │
+│    .text            │        15356 │    93.73 │                │               │
+│    .vectors         │         1028 │     6.27 │                │               │
+│ External RAM        │        15088 │          │                │               │
+│    .bss             │        15088 │          │                │               │
+│ RTC SLOW            │         5532 │    72.03 │           2148 │          7680 │
+│    .rtc_noinit      │         5532 │    72.03 │                │               │
+│ RTC FAST            │           92 │     1.12 │           8100 │          8192 │
+│    .text            │           92 │     1.12 │                │               │
+└─────────────────────┴──────────────┴──────────┴────────────────┴───────────────┘
+Total image size: 6191239 bytes (.bin may be padded larger)
+Note: The reported total sizes may be smaller than those in the technical reference manual due to reserved memory and application configuration. The total flash size available for the application is not included by default, as it cannot be reliably determined due to the presence of other data like the bootloader, partition table, and application partition size. The total external RAM size is not included either, because the amount of RAM connected to the chip is detected at boot and is not known during the build.
+Retrieving maximum program size .pio/build/readpico_usbmsc/firmware.elf
+Checking size .pio/build/readpico_usbmsc/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [====      ]  36.7% (used 120128 bytes from 327680 bytes)
+Flash: [========= ]  94.4% (used 6186135 bytes from 6553600 bytes)
+Building .pio/build/readpico_usbmsc/firmware.bin with action:
+  $ERASETOOL --chip esp32s3 elf2image --flash-mode ${__get_board_flash_mode(__env__)} --flash-freq ${__get_board_f_image(__env__)} --flash-size 16MB --elf-sha256-offset 0xb0 -o "$TARGET" "$SOURCES"
+Building .pio/build/readpico_usbmsc/firmware.bin
+esptool v5.3.0
+Creating ESP32-S3 image...
+Merged 4 ELF sections.
+Successfully created ESP32-S3 image.
+Creating binary "firmware.factory.bin" with:
+    Offset   | File
+ -  0x0000   | bootloader.bin
+ -  0x8000   | partitions.bin
+ -  0xe000   | boot_app0.bin
+ -  0x10000  | firmware.bin
+Successfully created combined binary image.
+======================== [SUCCESS] Took 190.38 seconds ========================
+
+Environment      Status    Duration
+---------------  --------  ------------
+readpico_usbmsc  SUCCESS   00:03:10.377
+========================= 1 succeeded in 00:03:10.377 =========================

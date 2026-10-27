@@ -139,6 +139,7 @@ def main():
         "CROSSPOINT_CAP_SOUND_FEEDBACK",
         "FREEINK_CAP_HAPTIC",
         "FREEINK_CAP_WARMLIGHT",
+        "FREEINK_DEVICE_READPICO",
     )
     for values in product((False, True), repeat=len(capability_names)):
         capabilities = dict(zip(capability_names, values))

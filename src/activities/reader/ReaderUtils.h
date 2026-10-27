@@ -60,13 +60,13 @@ inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
 struct PageTurnResult {
   bool prev;
   bool next;
-  bool fromTilt;
+  bool fromMotion;
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
-  const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
-  const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
+  const bool motionNext = SETTINGS.motionPageTurn && halTiltSensor.wasMotionForward();
+  const bool motionPrev = SETTINGS.motionPageTurn && halTiltSensor.wasMotionBack();
   const bool swapFront = input.isNavDirectionSwapped();
   const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
   const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
@@ -74,14 +74,14 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
-  const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
+  const bool prev = motionPrev ||
+                    (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
+  const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || motionNext ||
                     pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
                     pageButtonTriggered(nextButton);
-  return {prev, next, tiltPrev || tiltNext};
+  return {prev, next, motionPrev || motionNext};
 }
 
 struct TouchPageTurn {

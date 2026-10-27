@@ -50,10 +50,13 @@ namespace {
 //   72 / 73 - missing glyphs reserve space for a visible outline placeholder
 //   74 / 75 - character and word spacing in the render spec and cached text
 //   76 / 77 - independent Western paragraph indentation width
+//   77 / 78 - TextBlock stores the source <p> index for JJWXC paragraph comments
+//   78 / 79 - latched paragraph index (the first version stored 0xFFFF on every line)
+//   79 / 80 - TextBlock stores the line's first visibleTextOffset (annotations)
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 77;
+constexpr uint8_t SECTION_FILE_VERSION = 81;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 76;
+constexpr uint8_t SECTION_FILE_VERSION = 80;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
@@ -75,7 +78,8 @@ constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(uint8_t) + sizeof(uint8_t) +
                                  sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint32_t) * 5 + sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t);
+                                 sizeof(uint32_t) * 5 + sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t) +
+                                 sizeof(uint8_t);  // verticalText
 // Called only between layout/render operations; no borrowed glyph pointer is live.
 void reclaimLayoutCaches(GfxRenderer& renderer, const char* stage) {
 #ifndef BOARD_HAS_PSRAM
@@ -139,7 +143,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
-                                   sizeof(spec.collectTouchLinks) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                   sizeof(spec.collectTouchLinks) + sizeof(spec.verticalText) + sizeof(uint32_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
                                    sizeof(spec.characterSpacing) + sizeof(spec.wordSpacingPercent),
                 "Header size mismatch");
@@ -161,6 +165,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.collectTouchLinks);
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
+  serialization::writePod(file, spec.verticalText);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -206,6 +211,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileCollectTouchLinks = false;
     int8_t fileCharacterSpacing = 0;
     uint8_t fileWordSpacingPercent = 100;
+    uint8_t fileVerticalText = 0;
     const bool headerValid =
         serialization::readPod(file, fileFontId) && serialization::readPod(file, fileLineCompression) &&
         serialization::readPod(file, fileExtraParagraphSpacing) && serialization::readPod(file, fileFirstLineIndent) &&
@@ -214,7 +220,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         serialization::readPod(file, fileViewportHeight) && serialization::readPod(file, fileHyphenationEnabled) &&
         serialization::readPod(file, fileEmbeddedStyle) && serialization::readPod(file, fileImageRendering) &&
         serialization::readPod(file, fileFocusReadingEnabled) && serialization::readPod(file, fileCollectTouchLinks) &&
-        serialization::readPod(file, fileCharacterSpacing) && serialization::readPod(file, fileWordSpacingPercent);
+        serialization::readPod(file, fileCharacterSpacing) && serialization::readPod(file, fileWordSpacingPercent) &&
+        serialization::readPod(file, fileVerticalText);
 
     if (!headerValid || spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.firstLineIndent != fileFirstLineIndent ||
@@ -223,7 +230,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
         spec.collectTouchLinks != fileCollectTouchLinks || spec.characterSpacing != fileCharacterSpacing ||
-        spec.wordSpacingPercent != fileWordSpacingPercent) {
+        spec.wordSpacingPercent != fileWordSpacingPercent || spec.verticalText != fileVerticalText) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -477,8 +484,10 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
-      spec.firstLineIndent, spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
-      spec.focusReadingEnabled,
+      spec.firstLineIndent, spec.firstLineIndentPx, spec.paragraphAlignment,
+      static_cast<uint16_t>(spec.verticalText ? spec.viewportHeight : spec.viewportWidth),
+      static_cast<uint16_t>(spec.verticalText ? spec.viewportWidth : spec.viewportHeight),
+      spec.hyphenationEnabled, spec.focusReadingEnabled,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
                      const uint32_t visibleTextOffset) {
         const uint32_t position = this->onPageComplete(std::move(page));
@@ -503,7 +512,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   ctx->parser->setTxtChapterBoundaries(txtChapterBoundaries);
   ctx->parser->setTextSpacing(spec.characterSpacing, spec.wordSpacingPercent);
   ctx->parser->setParagraphIndentSpaces(spec.paragraphIndentSpaces);
-  Hyphenator::setPreferredLanguage(epub->getLanguage());
+  // Resolving the hyphenator is what makes a storage-loading build read a trie off
+  // the card (see LanguageRegistry.cpp), so it is gated on the same flag that
+  // decides whether breaks are ever computed. Hyphenation is off by default, and
+  // nothing consumes cachedHyphenator_ when it is: ParsedText only calls
+  // Hyphenator::breakOffsets inside its hyphenationEnabled branch. Passing an empty
+  // tag resolves to nullptr, which is the answer an unsupported language gets.
+  Hyphenator::setPreferredLanguage(spec.hyphenationEnabled ? epub->getLanguage() : std::string{});
 
   if (!build_->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin parse");

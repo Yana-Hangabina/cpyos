@@ -102,6 +102,9 @@ inline freeink::ui::BitmapRef listIconFor(const UIIcon icon, const int size = 24
       case UIIcon::Image:
         return freeink::ui::bitmapFromIcon(icon_image_48);
       case UIIcon::Book:
+#ifdef ENABLE_CHINESE_VERSION
+      case UIIcon::Jjwxc:
+#endif
         return freeink::ui::bitmapFromIcon(icon_book_48);
       case UIIcon::File:
         return freeink::ui::bitmapFromIcon(icon_file_48);
@@ -131,6 +134,9 @@ inline freeink::ui::BitmapRef listIconFor(const UIIcon icon, const int size = 24
       case UIIcon::Image:
         return freeink::ui::bitmapFromIcon(icon_image_32);
       case UIIcon::Book:
+#ifdef ENABLE_CHINESE_VERSION
+      case UIIcon::Jjwxc:
+#endif
         return freeink::ui::bitmapFromIcon(icon_book_32);
       case UIIcon::File:
         return freeink::ui::bitmapFromIcon(icon_file_32);

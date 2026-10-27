@@ -23,8 +23,8 @@ class UserGuideEpubTest(unittest.TestCase):
             before = header.read_bytes()
             total = 0
             for language, filename, title in (
-                ('zh-CN', 'CrossMux用户手册.epub', 'CrossMux用户手册'),
-                ('en', 'CrossMux User Guide.epub', 'CrossMux User Guide'),
+                ('zh-CN', '脆皮鸭用户手册.epub', '脆皮鸭用户手册'),
+                ('en', 'CPYOS User Guide.epub', 'CPYOS User Guide'),
             ):
                 data = (output / filename).read_bytes()
                 total += len(data)

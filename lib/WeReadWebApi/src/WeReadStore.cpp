@@ -995,11 +995,11 @@ bool StoreOnlyZipWriter::begin(const std::string& outputPath, const std::string&
 }
 
 bool StoreOnlyZipWriter::writeLocalHeader(const char* name, const uint16_t flags, const uint32_t crc,
-                                          const uint32_t size) {
+                                          const uint32_t compressedSize, const uint32_t uncompressedSize) {
   const size_t nameLen = strlen(name);
   return nameLen < sizeof(CentralRecord{}.name) && writeU32(output_, 0x04034B50) && writeU16(output_, 20) &&
          writeU16(output_, flags) && writeU16(output_, 0) && writeU16(output_, 0) && writeU16(output_, 0) &&
-         writeU32(output_, crc) && writeU32(output_, size) && writeU32(output_, size) &&
+         writeU32(output_, crc) && writeU32(output_, compressedSize) && writeU32(output_, uncompressedSize) &&
          writeU16(output_, static_cast<uint16_t>(nameLen)) && writeU16(output_, 0) &&
          writeBytes(output_, name, nameLen);
 }
@@ -1017,11 +1017,29 @@ bool StoreOnlyZipWriter::addBuffer(const char* name, const uint8_t* data, const 
   if (strlen(name) >= sizeof(record.name)) return false;
   strcpy(record.name, name);
   record.crc = crc;
-  record.size = static_cast<uint32_t>(len);
+  record.compressedSize = static_cast<uint32_t>(len);
+  record.uncompressedSize = static_cast<uint32_t>(len);
   record.localOffset = static_cast<uint32_t>(output_.position());
   record.flags = 0x0800;  // UTF-8 names
-  return writeLocalHeader(name, record.flags, crc, record.size) && writeBytes(output_, data, len) &&
-         appendCentral(record);
+  return writeLocalHeader(name, record.flags, crc, record.compressedSize, record.uncompressedSize) &&
+         writeBytes(output_, data, len) && appendCentral(record);
+}
+
+bool StoreOnlyZipWriter::addStoredEntry(const char* name, const uint8_t* data, const size_t storedSize,
+                                        const uint32_t uncompressedSize, const uint32_t plainCrc) {
+  if (!active_ || !name || (!data && storedSize != 0) || storedSize > UINT32_MAX || output_.position() > UINT32_MAX) {
+    return false;
+  }
+  CentralRecord record;
+  if (strlen(name) >= sizeof(record.name)) return false;
+  strcpy(record.name, name);
+  record.crc = plainCrc;
+  record.compressedSize = static_cast<uint32_t>(storedSize);
+  record.uncompressedSize = uncompressedSize;
+  record.localOffset = static_cast<uint32_t>(output_.position());
+  record.flags = 0x0800;  // UTF-8 names
+  return writeLocalHeader(name, record.flags, record.crc, record.compressedSize, record.uncompressedSize) &&
+         writeBytes(output_, data, storedSize) && appendCentral(record);
 }
 
 bool StoreOnlyZipWriter::addFile(const char* name, const std::string& sourcePath, const WorkCallback callback,
@@ -1033,15 +1051,16 @@ bool StoreOnlyZipWriter::addFile(const char* name, const std::string& sourcePath
   CentralRecord record;
   if (strlen(name) >= sizeof(record.name)) return false;
   strcpy(record.name, name);
-  record.size = static_cast<uint32_t>(source.fileSize64());
+  record.compressedSize = static_cast<uint32_t>(source.fileSize64());
+  record.uncompressedSize = record.compressedSize;
   record.localOffset = static_cast<uint32_t>(output_.position());
   record.flags = 0x0808;  // UTF-8 + data descriptor
-  if (!writeLocalHeader(name, record.flags, 0, 0)) return false;
+  if (!writeLocalHeader(name, record.flags, 0, 0, 0)) return false;
 
   uint32_t crc = 0xFFFFFFFF;
   uint32_t copied = 0;
-  while (copied < record.size) {
-    const size_t wanted = std::min<size_t>(bufferSize_, record.size - copied);
+  while (copied < record.uncompressedSize) {
+    const size_t wanted = std::min<size_t>(bufferSize_, record.uncompressedSize - copied);
     const int got = source.read(buffer_, wanted);
     if (got <= 0 || !writeBytes(output_, buffer_, static_cast<size_t>(got))) return false;
     crc = WeReadProtocol::crc32Update(crc, buffer_, static_cast<size_t>(got));
@@ -1049,18 +1068,18 @@ bool StoreOnlyZipWriter::addFile(const char* name, const std::string& sourcePath
     if (callback) callback(callbackContext);
   }
   record.crc = crc ^ 0xFFFFFFFF;
-  return writeU32(output_, 0x08074B50) && writeU32(output_, record.crc) && writeU32(output_, record.size) &&
-         writeU32(output_, record.size) && appendCentral(record);
+  return writeU32(output_, 0x08074B50) && writeU32(output_, record.crc) && writeU32(output_, record.compressedSize) &&
+         writeU32(output_, record.uncompressedSize) && appendCentral(record);
 }
 
 bool StoreOnlyZipWriter::writeCentralHeader(const CentralRecord& record) {
   const size_t nameLen = strlen(record.name);
   return writeU32(output_, 0x02014B50) && writeU16(output_, 20) && writeU16(output_, 20) &&
          writeU16(output_, record.flags) && writeU16(output_, 0) && writeU16(output_, 0) && writeU16(output_, 0) &&
-         writeU32(output_, record.crc) && writeU32(output_, record.size) && writeU32(output_, record.size) &&
-         writeU16(output_, static_cast<uint16_t>(nameLen)) && writeU16(output_, 0) && writeU16(output_, 0) &&
-         writeU16(output_, 0) && writeU16(output_, 0) && writeU32(output_, 0) &&
-         writeU32(output_, record.localOffset) && writeBytes(output_, record.name, nameLen);
+         writeU32(output_, record.crc) && writeU32(output_, record.compressedSize) &&
+         writeU32(output_, record.uncompressedSize) && writeU16(output_, static_cast<uint16_t>(nameLen)) &&
+         writeU16(output_, 0) && writeU16(output_, 0) && writeU16(output_, 0) && writeU16(output_, 0) &&
+         writeU32(output_, 0) && writeU32(output_, record.localOffset) && writeBytes(output_, record.name, nameLen);
 }
 
 bool StoreOnlyZipWriter::finish(const WorkCallback callback, void* const callbackContext) {

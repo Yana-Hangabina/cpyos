@@ -800,6 +800,8 @@ bool WebDAVHandler::getOverwrite(WebServer& s) const {
 
 String WebDAVHandler::getMimeType(const String& path) {
   if (FsHelpers::hasEpubExtension(path)) return "application/epub+zip";
+  if (FsHelpers::hasCbzExtension(path)) return "application/vnd.comicbook+zip";
+  if (FsHelpers::hasFb2Extension(path)) return "application/x-fictionbook+xml";
   if (FsHelpers::checkFileExtension(path, ".pdf")) return "application/pdf";
   if (FsHelpers::hasTxtExtension(path)) return "text/plain";
   if (FsHelpers::checkFileExtension(path, ".html") || FsHelpers::checkFileExtension(path, ".htm")) return "text/html";

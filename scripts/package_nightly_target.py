@@ -33,11 +33,12 @@ STABLE_C3_SEGMENTS = (
     ('firmware', 'firmware.bin', 0x10000),
 )
 OTA_SEGMENT = (('firmware', 'firmware.bin', 0x10000),)
-EXPECTED_PARTITIONS = {
-    'otadata': (0xE000, 0x2000),
-    'app0': (0x10000, 0x640000),
-    'app1': (0x650000, 0x640000),
-}
+# Offsets/sizes are read from the target's own partition table (see
+# nightly_targets.TARGETS['partitionsCsv']), not pinned here: readpico grew to
+# 7.19 MiB slots for MuPDF while the shared partitions.csv kept 6.25 MiB, and a
+# second copy of the map is exactly the drift this check exists to catch.
+PARTITION_LAYOUT_ROWS = ('otadata', 'app0', 'app1')
+FLASH_BYTES = 16 * 1024 * 1024
 
 
 def sha256(path):
@@ -52,17 +53,33 @@ def git_value(root, *args):
     return subprocess.check_output(['git', *args], cwd=root, text=True).strip()
 
 
-def verify_partition_csv(root):
+def verify_partition_csv(root, csv_name='partitions.csv'):
+    """Return {'otadata'|'app0'|'app1': (offset, size)} from the table this target flashes.
+
+    Structural checks only, because the numbers legitimately differ per target:
+    the two OTA slots must be adjacent, the map must end inside the flash, and a
+    slot must be non-empty. That is what makes a wrong or truncated table fail
+    here instead of on a user's device.
+    """
     found = {}
-    with (root / 'partitions.csv').open(newline='') as stream:
+    with (root / csv_name).open(newline='') as stream:
         for row in csv.reader(line for line in stream if not line.lstrip().startswith('#')):
             if len(row) < 5:
                 continue
             name = row[0].strip()
-            if name in EXPECTED_PARTITIONS:
+            if name in PARTITION_LAYOUT_ROWS:
                 found[name] = (int(row[3].strip(), 0), int(row[4].strip(), 0))
-    if found != EXPECTED_PARTITIONS:
-        raise SystemExit(f'partitions.csv has an unsupported OTA layout: {found!r}')
+    missing = [name for name in PARTITION_LAYOUT_ROWS if name not in found]
+    if missing:
+        raise SystemExit(f'{csv_name} is missing partition row(s): {missing!r}')
+    app0, app1 = found['app0'], found['app1']
+    if app0[1] == 0 or app1[1] == 0:
+        raise SystemExit(f'{csv_name} has an empty OTA slot: {found!r}')
+    if app0[0] + app0[1] != app1[0]:
+        raise SystemExit(f'{csv_name} has a gap or overlap between the OTA slots: {found!r}')
+    if app1[0] + app1[1] > FLASH_BYTES:
+        raise SystemExit(f'{csv_name} runs past the {FLASH_BYTES} byte flash: {found!r}')
+    return found
 
 
 def find_boot_app0():
@@ -100,6 +117,22 @@ def verify_firmware(path, chip_id, board_tag):
     raise SystemExit(f'{path.name} does not contain board tag {board_tag!r}')
 
 
+def firmware_uses_data_packs(path):
+    """True when this image contains the on-flash pack readers.
+
+    Accepts a Path or a string; package_target passes a Path, but a small test
+    or a release script may pass a string.
+
+    The JILP/CWP1 magic constants are compiled only when the corresponding
+    CROSSPOINT_*_PACK macro is set. A full-install package that never writes
+    the spiffs blobs would boot, then silently fall back to English and the web
+    recovery page. Fail the package instead of shipping that.
+    """
+    path = Path(path)
+    data = path.read_bytes()
+    return b'JILP' in data or b'CWP1' in data
+
+
 def package_target(root, target_id, channel, output):
     target = TARGETS[target_id]
     if channel not in target['supportedChannels']:
@@ -107,7 +140,7 @@ def package_target(root, target_id, channel, output):
     environment = environment_for(target_id, channel, 'global')
     build = root / '.pio/build' / environment
     output.mkdir(parents=True, exist_ok=True)
-    verify_partition_csv(root)
+    partitions = verify_partition_csv(root, target.get('partitionsCsv', 'partitions.csv'))
 
     segments = (
         FULL_INSTALL_SEGMENTS
@@ -130,9 +163,30 @@ def package_target(root, target_id, channel, output):
         })
 
     firmware = next(output / asset['name'] for asset in assets if asset['role'] == 'firmware')
-    if firmware.stat().st_size > EXPECTED_PARTITIONS['app0'][1]:
+    if firmware.stat().st_size > partitions['app0'][1]:
         raise SystemExit(f'{firmware.name} exceeds the OTA app slot')
     verify_firmware(firmware, target['chipId'], target['boardTag'])
+
+    # A full-install package must carry the data blobs when its firmware reads
+    # them. readpico_nightly unflags both pack macros and stays fully embedded;
+    # a future pack-using release target without spiffs assets fails here rather
+    # than shipping an app-only image that silently degrades.
+    if firmware_uses_data_packs(firmware):
+        data_roles = {'pinyin', 'hyphen', 'i18n', 'web'}
+        has_data_assets = any(asset['role'] in data_roles for asset in assets)
+        if not has_data_assets:
+            if target['fullInstall']:
+                raise SystemExit(
+                    f'{target_id}: firmware reads data/spiffs packs but this '
+                    'full-install package has no data assets. Add pinyin/hyphen/'
+                    'i18n/web at their manifest offsets, or build without '
+                    'CROSSPOINT_I18N_PACK / CROSSPOINT_WEB_ASSETS_FROM_PARTITION.'
+                )
+            print(
+                f'warning: {target_id}: OTA artifact uses data/spiffs packs; the '
+                "device's data partition must already match or the app falls back "
+                'to English / the web recovery page.'
+            )
 
     config = configparser.ConfigParser()
     config.read(root / 'platformio.ini')

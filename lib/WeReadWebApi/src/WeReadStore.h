@@ -230,6 +230,12 @@ class StoreOnlyZipWriter {
  public:
   bool begin(const std::string& outputPath, const std::string& centralPath, uint8_t* buffer, size_t bufferSize);
   bool addBuffer(const char* name, const uint8_t* data, size_t len);
+  // A stored entry whose compressed and uncompressed sizes differ. Used by the
+  // protected-EPUB writer: the bytes are an encrypted, stored-block deflate
+  // stream while the central directory must still report the plaintext size.
+  // The caller supplies the plaintext CRC.
+  bool addStoredEntry(const char* name, const uint8_t* data, size_t storedSize, uint32_t uncompressedSize,
+                      uint32_t plainCrc);
   bool addFile(const char* name, const std::string& sourcePath, WorkCallback callback = nullptr,
                void* callbackContext = nullptr);
   bool finish(WorkCallback callback = nullptr, void* callbackContext = nullptr);
@@ -239,12 +245,14 @@ class StoreOnlyZipWriter {
   struct CentralRecord {
     char name[96] = {};
     uint32_t crc = 0;
-    uint32_t size = 0;
+    uint32_t compressedSize = 0;
+    uint32_t uncompressedSize = 0;
     uint32_t localOffset = 0;
     uint16_t flags = 0;
   };
 
-  bool writeLocalHeader(const char* name, uint16_t flags, uint32_t crc, uint32_t size);
+  bool writeLocalHeader(const char* name, uint16_t flags, uint32_t crc, uint32_t compressedSize,
+                        uint32_t uncompressedSize);
   bool appendCentral(const CentralRecord& record);
   bool writeCentralHeader(const CentralRecord& record);
   bool writeU16(HalFile& file, uint16_t value);

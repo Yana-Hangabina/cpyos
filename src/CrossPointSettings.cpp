@@ -228,7 +228,15 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
 
   doc["fakeBoldVersion"] = FAKE_BOLD_VERSION;
+  // Not in SettingsList (signed fine adjustment paired with firstLineIndent).
+  if (firstLineIndentPx != 0) {
+    doc["firstLineIndentPx"] = firstLineIndentPx;
+  }
+  if (verticalText != 0) {
+    doc["verticalText"] = verticalText;
+  }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
+  doc["readerGestureHintSeen"] = readerGestureHintSeen;
   doc["frontButtonBack"] = frontButtonBack;
   doc["frontButtonConfirm"] = frontButtonConfirm;
   doc["frontButtonLeft"] = frontButtonLeft;
@@ -288,6 +296,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   CrossPointSettings& s = *this;
   bool needsResave = false;
 
+  // Fine first-line-indent adjustment (paired with firstLineIndent above).
+  firstLineIndentPx = static_cast<int8_t>(std::clamp(doc["firstLineIndentPx"] | 0, -12, 12));
+  verticalText = static_cast<uint8_t>(std::clamp(doc["verticalText"] | 0, 0, 1));
+
   auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
 
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
@@ -296,6 +308,68 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
 #endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+  // The first builds stored a theme list (0 Crisp, 1 Soft, 2 Deep, 3 Whisper
+  // 300 us, 4-8 whisper pulses). Map it onto the continuous pitch/strength
+  // pair so an existing choice survives the switch to the slider.
+  if (doc["buzzerStrength"].isNull() && !doc["buzzerFeedbackTheme"].isNull()) {
+    static constexpr uint8_t kOldPitch[9] = {2, 1, 0, 1, 1, 1, 1, 1, 1};
+    static constexpr uint8_t kOldStrength[9] = {80, 62, 70, 50, 6, 4, 3, 1, 0};
+    const uint8_t old = doc["buzzerFeedbackTheme"] | static_cast<uint8_t>(1);
+    const uint8_t idx = old < 9 ? old : 1;
+    buzzerPitch = kOldPitch[idx];
+    buzzerStrength = kOldStrength[idx];
+    needsResave = true;
+  }
+#endif
+
+  // Legacy migration: motion page turn used to be two entries (tiltPageTurn,
+  // briefly joined by shakePageTurn). Map either onto the merged setting.
+  if (doc["motionPageTurn"].isNull()) {
+    const uint8_t legacyTilt = doc["tiltPageTurn"] | static_cast<uint8_t>(MOTION_OFF);
+    const uint8_t legacyShake = doc["shakePageTurn"] | static_cast<uint8_t>(MOTION_OFF);
+    if (legacyShake == 1) {
+      motionPageTurn = MOTION_SHAKE;
+    } else if (legacyShake == 2) {
+      motionPageTurn = MOTION_SHAKE_REVERSED;
+    } else if (legacyTilt == 1) {
+      motionPageTurn = MOTION_TILT;
+    } else if (legacyTilt == 2) {
+      motionPageTurn = MOTION_TILT_REVERSED;
+    }
+    if (legacyTilt != MOTION_OFF || legacyShake != MOTION_OFF) {
+      needsResave = true;
+    }
+  }
+
+  // Legacy migration: the refresh cadence used to be a numeric page-count
+  // enum (0=1p, 1=5p, 2=10p, 3=15p, 4=30p, 5=never) under the
+  // "refreshFrequency" key. Map onto the named tiers, nearest cadence wins
+  // (5p→Clear, 10p→Standard). The renamed key keeps the old encoding from
+  // ever being misread as a tier index.
+  if (doc["refreshProfile"].isNull() && !doc["refreshFrequency"].isNull()) {
+    const uint8_t legacyRefresh = doc["refreshFrequency"] | static_cast<uint8_t>(REFRESH_STANDARD);
+    switch (legacyRefresh) {
+      case 0:
+      case 1:
+        refreshFrequency = REFRESH_CLEAR;
+        break;
+      case 2:
+      case 3:
+        refreshFrequency = REFRESH_STANDARD;
+        break;
+      case 4:
+        refreshFrequency = REFRESH_RELAXED;
+        break;
+      case 5:
+        refreshFrequency = REFRESH_NEVER;
+        break;
+      default:
+        refreshFrequency = REFRESH_STANDARD;
+        break;
+    }
+    needsResave = true;
+  }
 
   // Legacy migration: the aggregate statusBar field predates the split fields.
   if (doc["statusBarChapterPageCount"].isNull()) {
@@ -359,7 +433,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       uint8_t v = doc[info.key] | fieldDefault;
       if (info.type == SettingType::ENUM) {
         const uint8_t count = info.valuePtr == &CrossPointSettings::uiTheme
-                                  ? static_cast<uint8_t>(COVER_GRID + 1)
+                                  ? static_cast<uint8_t>(UI_THEME_COUNT)
                                   : static_cast<uint8_t>(info.enumLabels().size());
         v = clamp(v, count, fieldDefault);
       } else if (info.type == SettingType::TOGGLE) {
@@ -411,6 +485,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
+  readerGestureHintSeen = clamp(doc["readerGestureHintSeen"] | static_cast<uint8_t>(0), static_cast<uint8_t>(1), 0);
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
       clamp(doc["frontButtonConfirm"] | (uint8_t)FRONT_HW_CONFIRM, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_CONFIRM);
@@ -659,6 +734,7 @@ bool CrossPointSettings::loadFromBinaryFile() {
   hyphenationEnabled = value(18, hyphenationEnabled);
   sleepScreenCoverFilter = validated(19, sleepScreenCoverFilter, SLEEP_SCREEN_COVER_FILTER_COUNT);
   uiTheme = value(20, uiTheme);
+  if (uiTheme >= UI_THEME_COUNT) uiTheme = CPY;  // 2026-10-16: legacy theme ids all migrate to CPY
   frontButtonBack = validated(21, frontButtonBack, FRONT_BUTTON_HARDWARE_COUNT);
   frontButtonConfirm = validated(22, frontButtonConfirm, FRONT_BUTTON_HARDWARE_COUNT);
   frontButtonLeft = validated(23, frontButtonLeft, FRONT_BUTTON_HARDWARE_COUNT);
@@ -701,6 +777,8 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.lineCompression = getReaderLineCompression();
   spec.extraParagraphSpacing = extraParagraphSpacing;
   spec.firstLineIndent = firstLineIndent;
+  spec.firstLineIndentPx = firstLineIndentPx;
+  spec.verticalText = verticalText;
   spec.paragraphIndentSpaces = paragraphIndentSpaces;
   spec.characterSpacing = getCharacterSpacing();
   spec.wordSpacingPercent = wordSpacing;
@@ -786,21 +864,38 @@ uint64_t CrossPointSettings::getDailyGoalMs() const {
 
 int CrossPointSettings::getRefreshFrequency() const {
   switch (refreshFrequency) {
-    case REFRESH_1:
+    case REFRESH_CLEAR:
       return 1;
-    case REFRESH_5:
-      return 5;
-    case REFRESH_10:
-      return 10;
-    case REFRESH_15:
+    case REFRESH_STANDARD:
     default:
       return 15;
-    case REFRESH_30:
+    case REFRESH_RELAXED:
       return 30;
     case REFRESH_NEVER:
       // Effectively disables the periodic full refresh; the page counter
       // counts down from here and never reaches the threshold in practice.
       return std::numeric_limits<int>::max();
+  }
+}
+
+uint8_t CrossPointSettings::getUiRefreshInterval() const {
+  // Reader tiers count pages; the UI counter counts pushes (a settings page
+  // flip and a standby face tick each count once), so each tier maps to its
+  // own interval. Standard keeps the historic constant, and the UI side never
+  // fully disables the periodic GC16 sweep: an unbounded GL16 chain
+  // accumulates residue that no later GC16 reliably removes (see
+  // GfxRenderer::displayBuffer and
+  // docs/engineering/read-pico-refresh-stability.md).
+  switch (refreshFrequency) {
+    case REFRESH_CLEAR:
+      return 2;
+    case REFRESH_RELAXED:
+      return 10;
+    case REFRESH_NEVER:
+      return 16;
+    case REFRESH_STANDARD:
+    default:
+      return 6;
   }
 }
 
@@ -816,6 +911,10 @@ void CrossPointSettings::clearSdFontFamily() {
 }
 
 int CrossPointSettings::getReaderFontId() const {
+  // A book that carries a loadable embedded font overrides the settings font for
+  // its reading session (A5). Cleared on reader exit, so this is book-scoped.
+  if (readerFontOverrideId != 0) return readerFontOverrideId;
+
   // Check SD card font first
   if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
     int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontPointSize);

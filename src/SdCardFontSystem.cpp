@@ -61,6 +61,9 @@ struct UiFontSize {
 };
 constexpr UiFontSize kUiFontSizes[] = {
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+    // The SD face loads at the size the slot was designed for; the built-in
+    // fallback is the size-matched CJK subset (UI_10 -> 14pt, UI_12 -> 16pt),
+    // whose own fallback is the wide 12pt face.
     {SMALL_FONT_ID, 12, CJK_UI_12_FONT_ID},         {UI_10_FONT_ID, 14, CJK_UI_14_FONT_ID},
     {UI_12_FONT_ID, 16, CJK_UI_16_FONT_ID},
 #else
@@ -674,5 +677,9 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   setupTtfUiFallbacks(renderer);  // CJK/script UI fallback at the built-in UI sizes
   LOG_DBG("SDFS", "Loaded TTF font: %s @ %upt (id %d)", family.name.c_str(), size, ttfFontId_);
 }
+
+// Public wrapper (distinct name) so a caller can mint an id with the SD font
+// system's scheme even though the implementation is internal to this file.
+int readerVectorFontId(const char* familyName, uint8_t pointSize) { return computeTtfFontId(familyName, pointSize); }
 
 #endif  // CROSSPOINT_VECTOR_FONTS

@@ -1,7 +1,9 @@
 #include "BookCoverLoader.h"
 
 #include <Bitmap.h>
+#include <Cbz.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -72,6 +74,60 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
     });
   }
 
+  if (FsHelpers::hasCbzExtension(bookPath)) {
+    Cbz cbz(bookPath, "/.crosspoint");
+    const std::string path = cbz.getThumbBmpPath(height);
+    return ensureCachedCover(path, false, generated, [&]() {
+      if (!cbz.load()) return false;
+      cbz.setupCacheDir();
+      return cbz.generateThumbBmp(height);
+    });
+  }
+
+  if (FsHelpers::hasFb2Extension(bookPath)) {
+    const Fb2 fb2(bookPath, "/.crosspoint");
+    if (!Storage.exists(fb2.getEpubPath().c_str())) return "";
+    Epub epub(fb2.getEpubPath(), "/.crosspoint");
+    const std::string path = epub.getThumbBmpPath(height);
+    return ensureCachedCover(path, false, generated, [&]() {
+      if (!epub.load(true, true)) return false;
+      epub.setupCacheDir();
+      return epub.generateThumbBmp(height);
+    });
+  }
+
+  return "";
+}
+
+std::string cachedThumbnail(const std::string& bookPath, const int height) {
+  if (height <= 0 || !Storage.exists(bookPath.c_str())) return "";
+
+  if (FsHelpers::hasEpubExtension(bookPath)) {
+    Epub epub(bookPath, "/.crosspoint");
+    const std::string path = epub.getThumbBmpPath(height);
+    return inspectCachedCover(path, false) == CachedCoverState::Ready ? path : "";
+  }
+
+  if (FsHelpers::hasXtcExtension(bookPath)) {
+    Xtc xtc(bookPath, "/.crosspoint");
+    const std::string path = xtc.getThumbBmpPath(height);
+    return inspectCachedCover(path, false) == CachedCoverState::Ready ? path : "";
+  }
+
+  if (FsHelpers::hasCbzExtension(bookPath)) {
+    const Cbz cbz(bookPath, "/.crosspoint");
+    const std::string path = cbz.getThumbBmpPath(height);
+    return inspectCachedCover(path, false) == CachedCoverState::Ready ? path : "";
+  }
+
+  if (FsHelpers::hasFb2Extension(bookPath)) {
+    const Fb2 fb2(bookPath, "/.crosspoint");
+    if (!Storage.exists(fb2.getEpubPath().c_str())) return "";
+    const Epub epub(fb2.getEpubPath(), "/.crosspoint");
+    const std::string path = epub.getThumbBmpPath(height);
+    return inspectCachedCover(path, false) == CachedCoverState::Ready ? path : "";
+  }
+
   return "";
 }
 
@@ -102,6 +158,32 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
       if (title) *title = xtc.getTitle();
       if (author) *author = xtc.getAuthor();
       return xtc.generateCoverBmp();
+    });
+  }
+
+  if (FsHelpers::hasCbzExtension(bookPath)) {
+    Cbz cbz(bookPath, "/.crosspoint");
+    const std::string path = cbz.getCoverBmpPath();
+    return ensureCachedCover(path, false, generated, [&]() {
+      if (!cbz.load()) return false;
+      cbz.setupCacheDir();
+      if (title) *title = cbz.getTitle();
+      return cbz.generateCoverBmp();
+    });
+  }
+
+  if (FsHelpers::hasFb2Extension(bookPath)) {
+    const Fb2 fb2(bookPath, "/.crosspoint");
+    if (!Storage.exists(fb2.getEpubPath().c_str())) return "";
+    const Epub cached(fb2.getEpubPath(), "/.crosspoint");
+    const std::string path = cached.getCoverBmpPath();
+    return ensureCachedCover(path, false, generated, [&]() {
+      Epub epub(fb2.getEpubPath(), "/.crosspoint");
+      if (!epub.load(true, true)) return false;
+      epub.setupCacheDir();
+      if (title) *title = epub.getTitle();
+      if (author) *author = epub.getAuthor();
+      return epub.generateCoverBmp();
     });
   }
 

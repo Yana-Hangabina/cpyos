@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "Epub/BookMetadataCache.h"
+#include "Epub/FontManifest.h"
 
 namespace {
 constexpr char MEDIA_TYPE_NCX[] = "application/x-dtbncx+xml";
@@ -287,6 +288,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     // Collect CSS files
     if (mediaType == MEDIA_TYPE_CSS) {
       self->cssFiles.push_back(href);
+    }
+
+    // Collect embedded font files (A5). Bounded: the reader loads one, and a
+    // manifest with hundreds of items must not grow this vector without limit.
+    if ((epubfont::isFontMediaType(mediaType) || epubfont::hasFontExtension(href)) &&
+        self->fontFiles.size() < 8) {
+      self->fontFiles.push_back(href);
     }
 
     // EPUB 3: Check for nav document (properties contains "nav")

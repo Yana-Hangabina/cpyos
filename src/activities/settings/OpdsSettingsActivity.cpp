@@ -133,7 +133,7 @@ void OpdsSettingsActivity::handleSelection() {
       }
     };
     startActivityForResultWith<KeyboardEntryActivity>(handler, tr(STR_USERNAME), editServer.username, 63,
-                                                      InputType::Text);
+                                                      InputType::Ascii);
   } else if (nav.selected == 3) {
     // Password
     auto handler = [this](const ActivityResult& result) {
@@ -145,7 +145,7 @@ void OpdsSettingsActivity::handleSelection() {
       }
     };
     startActivityForResultWith<KeyboardEntryActivity>(handler, tr(STR_PASSWORD), editServer.password, 63,
-                                                      InputType::Text);
+                                                      InputType::Ascii);
   } else if (nav.selected == 4 && !isNewServer) {
     // Delete flow is only available for existing servers.
     if (!OPDS_STORE.removeServer(static_cast<size_t>(serverIndex))) {
@@ -189,10 +189,8 @@ void OpdsSettingsActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   props.valueInset = 8;               // air between the value and the row edge
-  if (SETTINGS.uiTheme != CrossPointSettings::INX) {
-    props.labelText = screen.theme().smallText;
-    props.labelText.maxLines = 2;
-  }
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
   syncListViewport(screen, props);
   screen.list(props);
 }

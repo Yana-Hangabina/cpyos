@@ -518,8 +518,14 @@ void WeReadActivity::onEnter() {
   enterApp();
 }
 
+WeReadActivity::Shortcut WeReadActivity::pendingShortcut_ = WeReadActivity::Shortcut::None;
+
+void WeReadActivity::requestShortcut(const Shortcut shortcut) { pendingShortcut_ = shortcut; }
+
 void WeReadActivity::enterApp() {
   disclaimerSaveFailed_ = false;
+  const Shortcut shortcut = pendingShortcut_;
+  pendingShortcut_ = Shortcut::None;
   // This bounded 832-byte probe is gone before TLS and avoids a transient heap
   // allocation that could fragment the ESP32-C3 heap.
   WeReadStore::Session session;
@@ -527,7 +533,14 @@ void WeReadActivity::enterApp() {
   session.clear();
   if (loggedIn) {
     openShelf();
+    if (shortcut == Shortcut::Manage) {
+      mainTab_.store(MainTab::Manage);
+      mainFocus_.store(MainFocus::Content);
+      state_.store(State::Home);
+      requestUpdate();
+    }
   } else {
+    // No session: the QR page is both the login and the only honest landing.
     syncShelf();
   }
 }
@@ -676,6 +689,7 @@ bool isPostProcessStage(const WeReadClient::Operation::ProgressStage stage) {
 void WeReadActivity::connectThen(const Job job, const WeReadStore::ShelfRecord* book) {
   retryJob_ = job;
   if (book) pendingBook_ = *book;
+  const State previousState = state_.load();
   auto wifi = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, true);
   if (!wifi) {
     LOG_ERR("WR", "OOM: Wi-Fi activity");
@@ -685,7 +699,7 @@ void WeReadActivity::connectThen(const Job job, const WeReadStore::ShelfRecord* 
     return;
   }
   wifiSessionActive_ = true;
-  startActivityForResult(std::move(wifi), [this, job](const ActivityResult& result) {
+  startActivityForResult(std::move(wifi), [this, job, previousState](const ActivityResult& result) {
     wifiReleasePending_ = mappedInput.isPressed(MappedInputManager::Button::Back) ||
                           mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
                           mappedInput.isPressed(MappedInputManager::Button::NavPrevious) ||
@@ -694,8 +708,10 @@ void WeReadActivity::connectThen(const Job job, const WeReadStore::ShelfRecord* 
       startJob(job, job == Job::Sync ? nullptr : &pendingBook_);
       return;
     }
-    error_ = WeReadClient::Error::Network;
-    state_.store(State::Error);
+    // Cancelling the Wi-Fi sheet returns to the page the user was on. A
+    // full-screen error made a deliberate cancel look like a failure.
+    error_ = WeReadClient::Error::Ok;
+    state_.store(previousState);
     requestJobUpdate();
   });
 }
@@ -2459,6 +2475,23 @@ void WeReadActivity::render(RenderLock&&) {
       }
       const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
       const int textGap = metrics.verticalSpacing;
+      if (UITheme::getInstance().usesCpyLayout()) {
+        // Design frame 11: the QR sits in a card with the two copy lines
+        // under it (the app-wide card frame, not a bare QR on white).
+        constexpr int kQrSize = 300;
+        constexpr int kPad = 20;
+        const int cardSide = kQrSize + 2 * kPad;
+        const int groupHeight = cardSide + textGap + lineHeight * 2;
+        const int cardY = content.y + std::max(0, (content.height - groupHeight) / 2);
+        const Rect card{content.x + (content.width - cardSide) / 2, cardY, cardSide, cardSide};
+        GUI.drawCardFrame(renderer, card, false);
+        QrUtils::drawQrCode(renderer, Rect{card.x + kPad, card.y + kPad, kQrSize, kQrSize}, qrUrl_);
+        renderer.drawCenteredText(UI_10_FONT_ID, card.y + card.height + textGap, tr(STR_WEREAD_SCAN_LOGIN));
+        char target[64];
+        snprintf(target, sizeof(target), "\"%s\"", tr(STR_WEREAD_TITLE));
+        renderer.drawCenteredText(UI_10_FONT_ID, card.y + card.height + textGap + lineHeight, target);
+        break;
+      }
       const int qrLimit = content.height - textGap - lineHeight * 2;
       const int qrSide = std::max(1, std::min(content.width * 4 / 5, qrLimit));
       const int groupHeight = qrSide + textGap + lineHeight * 2;

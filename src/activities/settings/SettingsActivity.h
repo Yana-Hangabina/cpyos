@@ -20,6 +20,7 @@ enum class SettingAction {
   CustomiseStatusBar,
   ReadingStatsSettings,
   AppVisibility,
+  Apps,
   ClockSettings,
   KOReaderSync,
   OPDSBrowser,
@@ -28,6 +29,7 @@ enum class SettingAction {
   RestoreSystemSettings,
   CheckForUpdates,
   SdFirmwareUpdate,
+  ScreenRepair,
   Language,
   DownloadFonts,
   ManageDictionaries,
@@ -204,9 +206,15 @@ struct SettingInfo {
 };
 
 class SettingsActivity final : public UiTabListActivity {
+ public:
+  // The settings tabs render as shelf-style capsules (design frame 06).
+  bool cpyCapsuleTabs() const override { return true; }
+
+ private:
   int selectedCategoryIndex = 0;  // Currently selected category
+  int initialCategory_ = 0;       // Entry tab: the My card opens a category directly
+  bool subpage_ = false;          // Opened from My/Search: back header + pop, no root tab
   int settingsCount = 0;
-  uint8_t expandedCategories = 0;
 
   // Per-category settings derived from shared list + device-only actions
   std::vector<SettingInfo> displaySettings;
@@ -217,7 +225,6 @@ class SettingsActivity final : public UiTabListActivity {
 
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
-  bool dictionariesLoaded = false;
 
   OptionPopup optionPopup;
 
@@ -228,10 +235,21 @@ class SettingsActivity final : public UiTabListActivity {
   // refreshed every buildScreen() call by assigning into the existing
   // strings (no vector growth).
   std::vector<std::string> rowValues_;
-  std::vector<std::string> rowLabels_;
   std::vector<freeink::ui::ListItem> rowItems_;
+  // List row -> index into *currentSettings; -1 marks a group header row.
+  // Group headers make the list no longer 1:1 with the setting vector, so
+  // every action/selection path goes through this map.
+  std::vector<int16_t> rowSettingIndex_;
   void rebuildRowItems();
-  void rebuildAccordionRows();
+  int settingIndexAtRow(int row) const;
+  int firstSelectableRing() const;
+  int lastSelectableRing() const;
+  int nextSelectableRing(int from, int direction) const;
+  // Geometry captured in buildScreen() for the per-group card rings drawn in
+  // drawFooter() after the list pass.
+  int16_t listTop_ = 0;
+  int16_t listBottom_ = 0;
+  int16_t listRowH_ = 0;
 
   static constexpr int categoryCount = 4;
   static constexpr StrId categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
@@ -243,6 +261,7 @@ class SettingsActivity final : public UiTabListActivity {
   int activeTab() const override { return selectedCategoryIndex; }
   const char* tabLabel(int index) const override { return I18N.get(categoryNames[index]); }
   void buildScreen(UiScreen& screen) override;
+  void buildTabBar(UiScreen& screen, bool boldLabels = false) override;
   void activateIndex(int index) override;
   freeink::ui::ListNav& activeNav() override;
   void onRowAction(const freeink::ui::ActionEvent& event) override;
@@ -254,16 +273,12 @@ class SettingsActivity final : public UiTabListActivity {
 
   static std::string settingValueText(const SettingInfo& setting);
   void selectCategory(int categoryIndex);
-  void applyUiSettingChange(uint8_t CrossPointSettings::* valuePtr);
 
   void toggleCurrentSetting();
-  void toggleAccordionSetting(int categoryIndex, int settingIndex);
-  void toggleAccordionCategory(int categoryIndex);
-  bool usesAccordion() const;
-  const std::vector<SettingInfo>& settingsForCategory(int categoryIndex) const;
-  std::array<int, categoryCount> accordionSettingCounts() const;
   void openOtaUpdate();
   void openSleepTimeoutPicker();
+  void openBuzzerStrengthPicker();
+  unsigned long lastBuzzerPreviewMs_ = 0;
   void openReadingBackgroundMenu();
   void openReadingBackgroundPicker();
   void confirmRestoreSystemSettings();
@@ -275,11 +290,15 @@ class SettingsActivity final : public UiTabListActivity {
   void drawFooter() override;
 
  public:
-  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, int initialCategory = 0,
+                            bool subpage = false);
   void onEnter() override;
   void onExit() override;
   void render(RenderLock&&) override;
-  MainTab mainTab() const override { return MainTab::Settings; }
-  bool mainTabBackReturnsToTabs() const override { return !usesAccordion() || expandedCategories == 0; }
+  // A category page opened from My (or settings search) is a child screen: it
+  // keeps the four-category strip but wears a back header and pops to its
+  // parent. Only the main-tab entry (goToSettings) is a root tab.
+  MainTab mainTab() const override { return subpage_ ? MainTab::None : MainTab::Settings; }
+  bool mainTabBackReturnsToTabs() const override { return !subpage_; }
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
 };

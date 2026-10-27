@@ -115,10 +115,48 @@ bool TxtToHtml::stream(std::string_view filename, void* readerCtx, int (*readFn)
     const uint32_t begin = source;
     const int first = readByte();
     if (first < 0) break;
-    uint8_t character[8] = {static_cast<uint8_t>(first)};
+    uint8_t character[16] = {static_cast<uint8_t>(first)};
     uint8_t width = 1;
     size_t utf8Length = 1;
-    if (first >= 0x80) {
+    if (options.encoding == txt_encoding::Encoding::Utf16Le ||
+        options.encoding == txt_encoding::Encoding::Utf16Be) {
+      // UTF-16 is decoded here rather than through transcodeInPlace because a
+      // UTF-16LE ASCII unit starts with a plain ASCII byte, which the UTF-8
+      // branch below would accept as a one-byte character.
+      const bool bigEndian = options.encoding == txt_encoding::Encoding::Utf16Be;
+      const int second = readByte();
+      if (second < 0) {
+        readError = true;
+        break;
+      }
+      character[1] = static_cast<uint8_t>(second);
+      width = 2;
+      uint32_t codepoint = bigEndian ? static_cast<uint32_t>((character[0] << 8) | character[1])
+                                     : static_cast<uint32_t>(character[0] | (character[1] << 8));
+      if (codepoint >= 0xD800 && codepoint <= 0xDBFF) {
+        const int third = readByte();
+        const int fourth = readByte();
+        if (third < 0 || fourth < 0) {
+          readError = true;
+          break;
+        }
+        character[2] = static_cast<uint8_t>(third);
+        character[3] = static_cast<uint8_t>(fourth);
+        width = 4;
+        const uint16_t low = bigEndian ? static_cast<uint16_t>((character[2] << 8) | character[3])
+                                       : static_cast<uint16_t>(character[2] | (character[3] << 8));
+        if (low < 0xDC00 || low > 0xDFFF) {
+          readError = true;
+          break;
+        }
+        codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00);
+      } else if (codepoint >= 0xDC00 && codepoint <= 0xDFFF) {
+        readError = true;  // lone low surrogate
+        break;
+      }
+      if (codepoint == 0xFEFF) continue;  // BOM: emit nothing
+      utf8Length = txt_encoding::encodeUtf8(codepoint, character);
+    } else if (first >= 0x80) {
       if (options.encoding == txt_encoding::Encoding::Gbk) {
         const int second = readByte();
         if (second < 0) {

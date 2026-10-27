@@ -1,7 +1,9 @@
 #include "BaseTheme.h"
 
+#include <ChangedRegion.h>
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
+#include <Memory.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -37,7 +39,14 @@ freeink::ui::BitmapRef BaseTheme::checkboxIcon(const bool checked) {
   return freeink::ui::bitmapFromIcon(checked ? icon_checkbox_on_32 : icon_checkbox_off_32);
 }
 
-void BaseTheme::drawSplash(const GfxRenderer& renderer, const char* status, const char* version) {
+void BaseTheme::drawSleepScreen(const GfxRenderer& renderer, const char* status, const char* bookTitle,
+                                const int readPercent) const {
+  (void)bookTitle;
+  (void)readPercent;
+  drawSplash(renderer, status);
+}
+
+void BaseTheme::drawSplash(const GfxRenderer& renderer, const char* status, const char* version) const {
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
   renderer.clearScreen();
@@ -131,6 +140,13 @@ void drawBluetoothStatusIcon(const GfxRenderer& renderer, const int x, const int
 }  // namespace
 
 void BaseTheme::drawBatteryOutline(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight) {
+  // CPY paints the fill as a rounded capsule (CpyTheme::fillBatteryIcon); the
+  // classic rectangle + nub outline around it read as a stray ring (reader
+  // status, device feedback 2026-10-17). Outline the same capsule instead.
+  if (UITheme::getInstance().usesCpyLayout()) {
+    renderer.drawRoundedRect(x, y, battWidth, rectHeight, 2, rectHeight / 2, true);
+    return;
+  }
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   if (battWidth == UiHighDpiProfile::batteryWidth && rectHeight == UiHighDpiProfile::batteryHeight) {
     drawTransparentBitmap(renderer, icon_battery_32x20, x, y, true);
@@ -223,6 +239,19 @@ void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bo
   fillBatteryIcon(renderer, iconRect, percentage);
 }
 
+int BaseTheme::drawStatusBarBattery(const GfxRenderer& renderer, const int x, const int y,
+                                    const bool showPercent) const {
+  const auto metrics = UITheme::getInstance().getMetrics();
+  drawBatteryLeft(renderer, Rect{x, y, metrics.batteryWidth, metrics.batteryHeight}, showPercent);
+  int width = metrics.batteryWidth;
+  if (showPercent) {
+    const uint16_t percentage = powerManager.getBatteryPercentage();
+    width += batteryPercentSpacing +
+             renderer.getTextWidth(STATUS_NUMERIC_FONT_ID, (std::to_string(percentage) + "%").c_str());
+  }
+  return width;
+}
+
 void BaseTheme::drawCoverPlaceholder(const GfxRenderer& renderer, Rect rect) {
   if (rect.width <= 0 || rect.height <= 0) return;
   const int topHeight = rect.height / 3;
@@ -278,6 +307,10 @@ int BaseTheme::measureProgressBarHeight(const GfxRenderer& renderer, const int b
   return barHeight <= 0 ? 0 : barHeight + (showPercentage ? percentageGap + renderer.getLineHeight(UI_10_FONT_ID) : 0);
 }
 
+void BaseTheme::drawEmptyState(const GfxRenderer& renderer, const Rect rect, const char* message) const {
+  UITheme::drawCenteredWrappedText(renderer, rect, UI_12_FONT_ID, message, 2);
+}
+
 int BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const size_t current, const size_t total,
                                const bool showPercentage) const {
   if (total == 0) return rect.y;
@@ -326,11 +359,8 @@ void BaseTheme::drawHintLabel(const GfxRenderer& renderer, const int fontId, con
 
 void BaseTheme::drawButtonHintsWithStyle(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                          const char* btn4, const bool upstreamStyle) const {
-  if (upstreamStyle && SETTINGS.uiTheme == CrossPointSettings::INX) {
-    static const LyraTheme theme;
-    theme.drawButtonHints(renderer, btn1, btn2, btn3, btn4);
-    return;
-  }
+  // The upstream-style hint row only ever drew for the retired INX theme.
+  (void)upstreamStyle;
   drawButtonHints(renderer, btn1, btn2, btn3, btn4);
 }
 
@@ -1030,6 +1060,19 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   const int h = textHeight + marginY * 2;
   const int x = (renderer.getScreenWidth() - w) / 2;
 
+#if !FREEINK_DEVICE_READPICO
+  // Snapshot the page so the popup can be pushed as a changed region instead of
+  // a full-panel scan. Allocation failure falls back to the blocking push.
+  // Read Pico: displayWindow degrades to a full-page differential push (area
+  // scans latch this panel), so the snapshot + byte-wise diff would be pure dead
+  // work -- a 104 KB PSRAM alloc and a ~208 KB scan whose region is discarded.
+  // Skip straight to the single push there.
+  auto before = memory::makePsramByteBufferUninitializedNoThrow(renderer.getBufferSize());
+  if (before) {
+    memcpy(before.get(), renderer.getFrameBuffer(), renderer.getBufferSize());
+  }
+#endif
+
   const bool useRoundedPopup = metrics.popupCornerRadius > 0;
   if (useRoundedPopup) {
     renderer.fillRoundedRect(x - frameThickness, y - frameThickness, w + frameThickness * 2, h + frameThickness * 2,
@@ -1043,6 +1086,16 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   const int textX = x + (w - textWidth) / 2;
   const int textY = y + marginY + metrics.popupTextBaselineOffsetY;
   renderer.drawText(UI_12_FONT_ID, textX, textY, message, metrics.popupTextInverted, popupFontFamily);
+#if !FREEINK_DEVICE_READPICO
+  if (before) {
+    const auto region = readerutil::changedRegion(before.get(), renderer.getFrameBuffer(),
+                                                  renderer.getDisplayHeight(), renderer.getDisplayWidthBytes());
+    if (region.valid) {
+      renderer.displayWindow(region.x, region.y, region.width, region.height);
+      return Rect{x, y, w, h};
+    }
+  }
+#endif
   renderer.displayBuffer();
   return Rect{x, y, w, h};
 }
@@ -1055,7 +1108,7 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
   const int barX = layout.x + (layout.width - barWidth) / 2;
   const int barY = layout.y + layout.height - metrics.popupMarginY / 2 - barHeight / 2 - 1;
   if (barWidth <= 0 || barHeight <= 0) {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
     return;
   }
 
@@ -1069,7 +1122,10 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
     renderer.fillRect(barX, barY, fillWidth, barHeight, metrics.popupProgressFillInverted);
   }
 
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  // TransientUi: a loading bar stepping 20% -> 50% -> done is a short-lived
+  // overlay; its pushes must not feed the periodic GC16 sweep (the screen the
+  // load finishes into sweeps right after).
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
@@ -1175,19 +1231,11 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   const bool showBatteryPercentage = sb.showBatteryPercent;
 
   if (sb.showBattery) {
-    GUI.drawBatteryLeft(renderer,
-                        Rect{leftClusterX + leftClusterWidth, textY, metrics.batteryWidth, metrics.batteryHeight},
-                        showBatteryPercentage);
-    int batteryWidth = metrics.batteryWidth;
-
-    if (showBatteryPercentage) {
-      const uint16_t percentage = powerManager.getBatteryPercentage();
-      // width of icon + spacing + text for layout purposes
-      batteryWidth += batteryPercentSpacing +
-                      renderer.getTextWidth(STATUS_NUMERIC_FONT_ID, (std::to_string(percentage) + "%").c_str());
-    }
-
-    leftClusterWidth += batteryWidth;
+    // The theme owns the presentation and reports the width it used: CPY draws the
+    // same capsule as the home header (number inside), other themes keep the
+    // classic outline + text beside it.
+    leftClusterWidth +=
+        GUI.drawStatusBarBattery(renderer, leftClusterX + leftClusterWidth, textY, showBatteryPercentage);
   }
 
   // Draw the system clock on every board; an external RTC is optional.
@@ -1205,7 +1253,13 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       clockX = rightClusterX - rightClusterWidth - (rightClusterWidth > 0 ? 10 : 0) - clockTextWidth;
       rightClusterWidth += clockTextWidth + 10;
     }
-    renderer.drawText(STATUS_NUMERIC_FONT_ID, clockX, textY, timeBuf);
+    // The numeric face's ascent differs from the status text face, so drawing both
+    // at textY leaves the clock sitting high (device feedback 2026-10-17). Align
+    // the two baselines instead: drawText's y is the ascent top, so the baseline is
+    // y + ascender.
+    const int clockY = textY + renderer.getFontAscenderSize(textFontId) -
+                       renderer.getFontAscenderSize(STATUS_NUMERIC_FONT_ID);
+    renderer.drawText(STATUS_NUMERIC_FONT_ID, clockX, clockY, timeBuf);
   }
 
   if (showStatusBarTextLane && bleinput::isConnected()) {
@@ -1308,8 +1362,14 @@ void BaseTheme::drawActionButton(const GfxRenderer& renderer, const Rect rect, c
   renderer.drawText(UI_10_FONT_ID, textX, textY, label, foregroundBlack, EpdFontFamily::BOLD);
 }
 
-void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, const std::vector<std::string>& options,
+void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, const char* headline,
+                                int headlineHeight, const std::vector<std::string>& options,
                                 int selectedIndex) const {
+  // This base fallback is not reached on Read Pico: OptionPopup's dialog path runs
+  // only for the CPY theme (which overrides this and renders the headline inside the
+  // card). Kept signature-compatible; the headline band is ignored here.
+  (void)headline;
+  (void)headlineHeight;
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();

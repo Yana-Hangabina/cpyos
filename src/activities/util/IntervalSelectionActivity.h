@@ -3,6 +3,7 @@
 #include <I18n.h>
 
 #include <cstddef>
+#include <functional>
 
 #include "MappedInputManager.h"
 #include "activities/Activity.h"
@@ -16,7 +17,8 @@ class IntervalSelectionActivity final : public Activity, private UiAppHost {
   explicit IntervalSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* activityName,
                                      StrId titleId, int initialValue, int minValue, int maxValue, int smallStep,
                                      int largeStep, StrId valueFormatId = StrId::STR_NONE_OPT,
-                                     bool readerActivity = false, StrId maxBoundaryLabelId = StrId::STR_NONE_OPT);
+                                     bool readerActivity = false, StrId maxBoundaryLabelId = StrId::STR_NONE_OPT,
+                                     std::function<void(int)> valueChanged = nullptr);
 
   void onEnter() override;
   void loop() override;
@@ -41,6 +43,8 @@ class IntervalSelectionActivity final : public Activity, private UiAppHost {
   int smallStep;
   int largeStep;
   bool readerActivity;
+  // Optional live preview hook; runs after the value actually changes.
+  std::function<void(int)> valueChanged;
   ButtonNavigator buttonNavigator;
 
   // Swallow the swipe/tap fallout of a slider drag so its release can't trigger

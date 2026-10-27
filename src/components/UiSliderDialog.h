@@ -8,7 +8,7 @@
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
 #include "components/UiAppHost.h"
-#include "components/themes/lyra/LyraTheme.h"
+#include "components/themes/upstream/UpstreamStyleTheme.h"
 #include "fontIds.h"
 
 // Shared slider-dialog popup, drawn over the current screen (no clear) via
@@ -42,20 +42,13 @@ inline void buildSliderDialogScreen(UiAppHost::UiScreen& screen, freeink::ui::Gf
                                     const MappedInputManager& mappedInput, const UiSliderDialogSpec& spec,
                                     bool upstreamStyle = false) {
   namespace fui = freeink::ui;
-  const bool inx = !upstreamStyle && SETTINGS.uiTheme == CrossPointSettings::INX;
-  const auto& metrics = inx ? LyraMetrics::values : uiThemeMetrics(upstreamStyle);
-  if (inx) {
-    uiTarget.setFont(fui::GfxRendererTarget::FONT_SMALL, UI_10_FONT_ID);
-    uiTarget.setFont(fui::GfxRendererTarget::FONT_BODY, UI_12_FONT_ID);
-    uiTarget.setTextCentering(fui::TextCentering::InkBounds);
-  }
-  // Reuse the shared token pool after binding the common control fonts.
-  // The underlying INX page rebinds its own scale on its next render.
-  const auto& theme = inx ? refreshSharedUiThemeTokens(uiTarget) : screen.theme();
+  const auto& metrics = uiThemeMetrics(upstreamStyle);
+  // Reuse the shared token pool: the screen's own theme tokens are the source.
+  const auto& theme = screen.theme();
 
   // The readout is the dialog's hero: remap the title slot to the large sans
   // so it reads at a glance.
-  uiTarget.setFont(fui::GfxRendererTarget::FONT_TITLE, inx ? CONTROL_18_FONT_ID : NOTOSANS_18_FONT_ID);
+  uiTarget.setFont(fui::GfxRendererTarget::FONT_TITLE, NOTOSANS_18_FONT_ID);
 
   const bool touch = mappedInput.hasTouch();
   // Touch boards get the finger-sized pill (same as the frontlight rows); on
@@ -161,7 +154,7 @@ inline void buildSliderDialogScreen(UiAppHost::UiScreen& screen, freeink::ui::Gf
   capsule.value = spec.value;
   capsule.max = spec.max;
   capsule.action = spec.sliderAction;
-  capsule.radius = inx ? LyraMetrics::values.capsuleRadius : theme.capsuleRadius;
+  capsule.radius = theme.capsuleRadius;
   fui::capsuleSlider(screen.frame(),
                      fui::Rect{band.x, static_cast<int16_t>(band.y + capLh + theme.spaceMd), band.width, bandHeight},
                      capsule);

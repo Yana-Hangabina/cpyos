@@ -6,6 +6,9 @@
 #include <cstdint>
 
 #include "components/themes/BaseTheme.h"
+#include "folder.h"
+#include "inx_modern.h"
+#include "wifi.h"
 
 namespace InxAppIcons {
 inline constexpr int size = 32;
@@ -51,6 +54,19 @@ inline constexpr Icon WeRead = {
     0x00, 0x0f, 0xbf, 0xe0, 0x00, 0x0f, 0xff, 0xe0, 0x00, 0x0f, 0xff, 0xe0, 0x00, 0x07, 0xf7, 0xe0, 0x00, 0x07, 0xe7,
     0xe0, 0x00, 0x00, 0x07, 0xe0, 0x00, 0x00, 0x07, 0xe0, 0x00, 0x00, 0x07, 0xe0, 0x00, 0x00, 0x07, 0xff, 0xfe, 0x7f,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
+// JJWXC app mark: a lowercase j whose stem is the spine of an open book with
+// fanned page panels on a base stroke sweeping right. Area-averaged from the
+// flat white-on-green source artwork onto 32x32, centered, threshold 0.5 on the
+// unmixed alpha; zero bits are ink.
+inline constexpr Icon Jjwxc = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0x3f, 0xfd, 0xff, 0xfc, 0x1e, 0x71,
+    0xff, 0xfc, 0x1c, 0x41, 0xff, 0xfc, 0x1c, 0x41, 0xff, 0xfc, 0x38, 0x41, 0xff, 0xff, 0xf0, 0x41, 0x9f, 0xff, 0xb0,
+    0x41, 0x1f, 0xff, 0x10, 0x41, 0x1f, 0xf8, 0x10, 0x41, 0x1f, 0xfe, 0x10, 0x41, 0x1f, 0xff, 0x10, 0x41, 0x1f, 0xff,
+    0x10, 0x41, 0x1f, 0xff, 0x10, 0x41, 0x1f, 0xff, 0x11, 0x81, 0x1f, 0xff, 0x13, 0x01, 0x1f, 0xff, 0x12, 0x0f, 0x1f,
+    0xff, 0x14, 0x7c, 0x1f, 0xff, 0x11, 0xc0, 0x1f, 0xff, 0x1b, 0x00, 0x1f, 0xff, 0x1f, 0xff, 0x9f, 0xff, 0x1f, 0xff,
+    0xff, 0xff, 0x3f, 0xff, 0xff, 0xfe, 0x3f, 0xff, 0xff, 0xfe, 0x7f, 0xff, 0xff, 0xfc, 0xff, 0xff, 0xff, 0xf9, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 inline constexpr Icon ReadingStats = {
@@ -275,6 +291,14 @@ constexpr const uint8_t* get(const UIIcon icon) {
   switch (icon) {
     case UIIcon::Transfer:
       return Transfer.data();
+    // The home quick tiles drew Wifi/File as nothing at all: these enum values
+    // had no case here (the switch fell to `default: return nullptr`) even
+    // though the project owns 32x32 bitmaps for both (device feedback,
+    // 2026-10-17).
+    case UIIcon::Wifi:
+      return WifiIcon;
+    case UIIcon::File:
+      return FolderIcon;
     case UIIcon::Opds:
       return Opds.data();
     case UIIcon::ReadingStats:
@@ -296,6 +320,8 @@ constexpr const uint8_t* get(const UIIcon icon) {
       return ChineseChess.data();
     case UIIcon::WeRead:
       return WeRead.data();
+    case UIIcon::Jjwxc:
+      return Jjwxc.data();
 #endif
     case UIIcon::Minesweeper:
       return Minesweeper.data();
@@ -320,8 +346,75 @@ constexpr const uint8_t* get(const UIIcon icon) {
   }
 }
 
+inline uint8_t modernLevelDirect(const uint8_t* data, const int x, const int y) {
+  const int index = y * (ModernAppIcons::kSize / 4) + x / 4;
+  return static_cast<uint8_t>((data[index] >> (6 - 2 * (x & 3))) & 3);
+}
+
+inline uint8_t modernLevelAt(const uint8_t* data, const int x, const int y, const int size) {
+  if (size <= 0 || x < 0 || y < 0 || x >= size || y >= size) return 0;
+  if (size == ModernAppIcons::kSize) return modernLevelDirect(data, x, y);
+  // Box-average the source rectangle, so 32 px and the 56 px tab bar keep the
+  // anti-aliased edges instead of sampling one jagged source pixel.
+  int x0 = x * ModernAppIcons::kSize / size;
+  int y0 = y * ModernAppIcons::kSize / size;
+  int x1 = (x + 1) * ModernAppIcons::kSize / size;
+  int y1 = (y + 1) * ModernAppIcons::kSize / size;
+  if (x1 <= x0) x1 = x0 + 1;
+  if (y1 <= y0) y1 = y0 + 1;
+  if (x1 > ModernAppIcons::kSize) x1 = ModernAppIcons::kSize;
+  if (y1 > ModernAppIcons::kSize) y1 = ModernAppIcons::kSize;
+  int sum = 0;
+  int count = 0;
+  for (int sy = y0; sy < y1; ++sy) {
+    for (int sx = x0; sx < x1; ++sx) {
+      sum += modernLevelDirect(data, sx, sy);
+      ++count;
+    }
+  }
+  return count > 0 ? static_cast<uint8_t>((sum + count / 2) / count) : 0;
+}
+
+inline bool drawModern(const GfxRenderer& renderer, const UIIcon icon, const int x, const int y, const int size,
+                       const bool inverted) {
+  const uint8_t* data = ModernAppIcons::dataFor(icon);
+  if (!data || size <= 0) return false;
+  for (int oy = 0; oy < size; ++oy) {
+    int runStart = -1;
+    for (int ox = 0; ox <= size; ++ox) {
+      const bool ink = ox < size && modernLevelAt(data, ox, oy, size) >= 2;
+      if (ink && runStart < 0) {
+        runStart = ox;
+      } else if (!ink && runStart >= 0) {
+        renderer.fillRect(x + runStart, y + oy, ox - runStart, 1, !inverted);
+        runStart = -1;
+      }
+    }
+  }
+  return true;
+}
+
+// Native-gray pass for a page that already started a 16-level canvas. The
+// four source levels map to four panel tones; drawGrayscale16Pixel also keeps
+// the 1-bit proxy in sync at the 50% threshold.
+inline bool drawModernGray(const GfxRenderer& renderer, const UIIcon icon, const int x, const int y, const int size,
+                           const bool inverted) {
+  const uint8_t* data = ModernAppIcons::dataFor(icon);
+  if (!data || size <= 0 || !renderer.isGrayscale16Active()) return false;
+  for (int oy = 0; oy < size; ++oy) {
+    for (int ox = 0; ox < size; ++ox) {
+      const uint8_t level = modernLevelAt(data, ox, oy, size);
+      const uint8_t gray = inverted ? static_cast<uint8_t>(level * 85)
+                                    : static_cast<uint8_t>((3 - level) * 85);
+      renderer.drawGrayscale16Pixel(x + ox, y + oy, gray);
+    }
+  }
+  return true;
+}
+
 inline void draw(const GfxRenderer& renderer, const UIIcon icon, const int x, const int y, const int scale,
                  const bool inverted) {
+  if (scale > 0 && drawModern(renderer, icon, x, y, size * scale, inverted)) return;
   const uint8_t* bitmap = get(icon);
   if (!bitmap || scale <= 0) return;
   constexpr int rowBytes = size / 8;

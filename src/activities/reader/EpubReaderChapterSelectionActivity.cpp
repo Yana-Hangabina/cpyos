@@ -4,7 +4,9 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <cstdio>
 #include <string>
+#include <utility>
 
 #include "MappedInputManager.h"
 #include "components/UIScale.h"
@@ -17,11 +19,13 @@ EpubReaderChapterSelectionActivity::EpubReaderChapterSelectionActivity(GfxRender
                                                                        MappedInputManager& mappedInput,
                                                                        const std::shared_ptr<Epub>& epub,
                                                                        const int currentSpineIndex,
-                                                                       const int currentTocIndex)
+                                                                       const int currentTocIndex,
+                                                                       const bool showOrdinals)
     : UiListActivity("EpubReaderChapterSelection", renderer, mappedInput, false, true),
       epub(epub),
       currentSpineIndex(currentSpineIndex),
-      currentTocIndex(currentTocIndex) {}
+      currentTocIndex(currentTocIndex),
+      showOrdinals(showOrdinals) {}
 
 void EpubReaderChapterSelectionActivity::onEnter() {
   UiListActivity::onEnter();
@@ -65,13 +69,26 @@ void EpubReaderChapterSelectionActivity::refreshTocWindow(const int start) {
   if (clamped == windowStart) return;
 
   windowCount = total - clamped < TOC_WINDOW ? total - clamped : TOC_WINDOW;
+  // CPY (frame 10): the chapter being read stays marked even when the cursor
+  // moves away -- the list's own inversion only tracks the cursor.
+  const int currentToc = currentTocIndex >= 0 && currentTocIndex < total
+                             ? currentTocIndex
+                             : epub->getTocIndexForSpineIndex(currentSpineIndex);
+  const bool cpy = UITheme::getInstance().usesCpyLayout();
   for (int i = 0; i < windowCount; i++) {
     const auto tocItem = epub->getTocItem(clamped + i);
     std::string indent(tocItem.level > 0 ? (tocItem.level - 1) * 2 : 0, ' ');
-    windowLabels[i] = indent + tocItem.title;
+    std::string label = indent + tocItem.title;
+    if (showOrdinals) {
+      char prefix[12];
+      snprintf(prefix, sizeof(prefix), "%d. ", clamped + i + 1);
+      label.insert(0, prefix);
+    }
+    windowLabels[i] = std::move(label);
     fui::ListItem item;
     item.label = windowLabels[i].c_str();
     item.actionValue = static_cast<int16_t>(clamped + i);
+    if (cpy && clamped + i == currentToc) item.value = tr(STR_CURRENT_CHAPTER);
     windowItems[i] = item;
   }
   windowStart = clamped;

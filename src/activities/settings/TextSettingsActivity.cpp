@@ -38,8 +38,11 @@ constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_L
 
 constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,      StrId::STR_WORD_SPACING,
                                          StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
-                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_PARAGRAPH_INDENTATION,
-                                         StrId::STR_ALIGNMENT,         StrId::STR_SCREEN_MARGIN};
+                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_FIRST_LINE_INDENT,
+                                         StrId::STR_PARAGRAPH_INDENTATION,
+                                         StrId::STR_ALIGNMENT,         StrId::STR_SCREEN_MARGIN,
+                                         StrId::STR_VERTICAL_TEXT};
+constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_OFF, StrId::STR_VERTICAL_ON};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING,
                                         StrId::STR_READING_GUIDE_LINE,
                                         StrId::STR_READING_GUIDE_LINE_STYLE,
@@ -139,9 +142,14 @@ void TextSettingsActivity::onEnter() {
       entry.settingIndex = static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i);
       // 矢量字体（.ttf/.otf/.ttc）是运行时光栅化的，任意字号都能显示；其余是预烤好的
       // .cpfont 字集。标记只进 label，不进 name —— 见 FontEntry::label 的说明。
+      // 标记按真实扩展名（TTF/OTF/TTC），不能把所有矢量字体都标成 TTF。
       // / Vector families are rasterized at runtime and work at any size; the rest are
-      // pre-rasterized .cpfont sets. The marker goes into `label`, never into `name`.
-      if (families[i].vector) entry.label = entry.name + "  " + I18N.get(StrId::STR_VECTOR_FONT_TAG);
+      // pre-rasterized .cpfont sets. The marker goes into `label`, never into `name`,
+      // and follows the file's real extension — an .otf is not a "TTF".
+      if (families[i].vector) {
+        const char* tag = families[i].formatTag();
+        entry.label = entry.name + "  " + (tag ? tag : I18N.get(StrId::STR_VECTOR_FONT_TAG));
+      }
       fonts_.push_back(std::move(entry));
     }
   }
@@ -315,6 +323,38 @@ bool TextSettingsActivity::handleButtons() {
   return false;
 }
 
+void TextSettingsActivity::buildTabBar(UiScreen& screen, const bool boldLabels) {
+  if (!UITheme::getInstance().usesCpyLayout()) {
+    UiTabListActivity::buildTabBar(screen, boldLabels);
+    return;
+  }
+  // Same tab language as My -> Settings (plain text + 4 px underline + a
+  // full-width rule). The SDK's default capsule strip made this subgroup look
+  // like a different app from the page that opened it.
+  const auto& tokens = screen.theme();
+  const fui::Rect band = screen.takeTop(72, 8).inset(fui::Insets{0, 40, 0, 40});
+  fui::Paint ink = fui::Paint::solid(fui::Color::Black);
+  int x = band.x;
+  for (int i = 0; i < tabCount(); ++i) {
+    fui::TextStyle style = tokens.bodyText;
+    const bool active = i == activeTab();
+    style.bold = active;
+    const char* label = tabLabel(i);
+    const int16_t textW = screen.target().measureText(style.font, label, style).width;
+    screen.target().text(fui::Rect{static_cast<int16_t>(x), band.y, textW, band.height}, label, style);
+    if (active) {
+      const int16_t lineH = screen.target().lineHeight(style.font);
+      const int16_t underlineY = static_cast<int16_t>(band.y + (band.height + lineH) / 2 + 4);
+      screen.target().fill(fui::Rect{static_cast<int16_t>(x), underlineY, textW, 4}, ink, 2);
+    }
+    screen.frame().hit(fui::Rect{static_cast<int16_t>(x - 8), band.y, static_cast<int16_t>(textW + 16), band.height},
+                       ACTION_TAB, static_cast<int16_t>(i), fui::InputTouch);
+    x += textW + 36;
+  }
+  const int16_t ruleY = static_cast<int16_t>(band.bottom() - 1);
+  screen.target().fill(fui::Rect{40, ruleY, static_cast<int16_t>(renderer.getScreenWidth() - 80), 1}, ink);
+}
+
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // Content sits below the preview pane (render() draws header + preview
   // directly) and above the caption band + button hints.
@@ -378,6 +418,35 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // Keep titles and values at the same list font size; long labels may wrap.
   props.labelText = UITheme::getInstance().hasMainTabs() ? screen.theme().bodyText : screen.theme().smallText;
   props.labelText.maxLines = 2;
+  // CPY: the same row rhythm and group card as My -> Settings. Without this
+  // the text-settings subgroup fell back to the legacy full-width list, which
+  // is what made it look like a different app from the page that opened it.
+  if (UITheme::getInstance().usesCpyLayout()) {
+    props.rowHeight = 80;
+    props.rowGap = 0;
+    props.labelText = screen.theme().smallText;
+    props.labelText.maxLines = 1;
+    props.sidePadding = 24;
+    props.valueInset = 0;
+    props.iconSize = 40;
+    props.textGap = 18;
+    props.rowInset = 34;
+    props.scrollIndicatorInset = 6;
+    props.partialTrailingRow = true;
+    props.partialTrailingMinHeight = 24;
+    props.separator = fui::SeparatorStyle::None;
+    props.toggleCheckbox = false;
+    props.toggleWidth = 56;
+    props.toggleHeight = 32;
+    props.toggleRadius = 16;
+    props.toggleKnobRadius = 12;
+    props.toggleKnobInset = 3;
+    props.toggleBorderWidth = 2;
+  }
+  const fui::Rect listBody = screen.body();
+  listTop_ = static_cast<int16_t>(listBody.y);
+  listBottom_ = static_cast<int16_t>(listBody.bottom());
+  listRowH_ = props.rowHeight;
   syncTabListViewport(screen, props);
   screen.list(props);
 }
@@ -420,6 +489,21 @@ void TextSettingsActivity::drawChrome() {
 }
 
 void TextSettingsActivity::drawFooter() {
+  // The group card ring, drawn after the list pass so the rows cannot cover
+  // its side strokes (same ordering as SettingsActivity::drawFooter). An open
+  // end past the viewport keeps a long list from looking like a closed box.
+  if (UITheme::getInstance().usesCpyLayout() && listRowH_ > 0 && listBottom_ > listTop_ && listCount() > 0) {
+    const Rect content = pageContentRect();
+    constexpr int kCardMargin = 32;
+    const int rx = content.x + kCardMargin;
+    const int rw = content.width - kCardMargin * 2;
+    const int bandH = listBottom_ - listTop_;
+    const int used = listCount() * listRowH_;
+    const int drawH = used <= bandH ? used : bandH + 24;
+    const GfxRenderer::ClipScope clip(renderer, content.x, listTop_, content.width, bandH);
+    renderer.drawRoundedRect(rx, listTop_, rw, drawH, 2, 20, true);
+  }
+
   if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
@@ -544,6 +628,14 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::VerticalText:
+      optionPopup_.show(StrId::STR_VERTICAL_TEXT, VERTICAL_TEXT_IDS,
+                        static_cast<int>(std::size(VERTICAL_TEXT_IDS)), SETTINGS.verticalText ? 1 : 0, [](int idx) {
+                          SETTINGS.verticalText = static_cast<uint8_t>(idx);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
     case LayoutRow::FirstLineIndent:
       optionPopup_.show(StrId::STR_FIRST_LINE_INDENT, FIRST_LINE_INDENT_IDS,
                         static_cast<int>(std::size(FIRST_LINE_INDENT_IDS)), SETTINGS.firstLineIndent, [](int idx) {
@@ -552,6 +644,28 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::IndentAdjust: {
+      // Reuses the first-line-indent label (no new i18n key) and shows the
+      // signed pixel value as the row's value text.
+      static constexpr int8_t kSteps[] = {-12, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12};
+      std::vector<std::string> options;
+      options.reserve(std::size(kSteps));
+      for (const int8_t px : kSteps) options.push_back(std::to_string(px) + " px");
+      const int current = static_cast<int>(SETTINGS.firstLineIndentPx);
+      int selected = 0;
+      for (size_t i = 0; i < std::size(kSteps); ++i) {
+        if (kSteps[i] == current) selected = static_cast<int>(i);
+      }
+      optionPopup_.show(StrId::STR_FIRST_LINE_INDENT, options, selected, [](int idx) {
+        static constexpr int8_t kStepsInner[] = {-12, -10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10, 12};
+        if (idx >= 0 && idx < static_cast<int>(std::size(kStepsInner))) {
+          SETTINGS.firstLineIndentPx = kStepsInner[idx];
+          SETTINGS.saveToFile();
+        }
+      });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::ParaIndentation: {
       std::vector<std::string> options;
       options.reserve(6);
@@ -626,6 +740,10 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       const uint8_t v = SETTINGS.extraParagraphSpacing;
       return v < std::size(EXTRA_SPACING_IDS) ? I18N.get(EXTRA_SPACING_IDS[v]) : I18N.get(StrId::STR_EXTRA_SPACING_OFF);
     }
+    case LayoutRow::IndentAdjust: {
+      const int px = SETTINGS.firstLineIndentPx;
+      return (px > 0 ? std::string("+") : std::string()) + std::to_string(px) + " px";
+    }
     case LayoutRow::ParaIndentation:
       return std::to_string(SETTINGS.paragraphIndentSpaces);
     case LayoutRow::FirstLineIndent: {
@@ -633,6 +751,8 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       return v < std::size(FIRST_LINE_INDENT_IDS) ? I18N.get(FIRST_LINE_INDENT_IDS[v])
                                                   : I18N.get(StrId::STR_FIRST_LINE_INDENT_AUTO);
     }
+    case LayoutRow::VerticalText:
+      return I18N.get(SETTINGS.verticalText ? StrId::STR_VERTICAL_ON : StrId::STR_VERTICAL_OFF);
     case LayoutRow::Alignment: {
       const uint8_t v = SETTINGS.paragraphAlignment;
       return v < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[v]) : I18N.get(StrId::STR_JUSTIFY);

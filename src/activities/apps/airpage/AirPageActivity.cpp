@@ -418,6 +418,19 @@ void AirPageActivity::buildTouchScreen(UiScreen& screen) {
           {refreshActionText(), ACTION_TOUCH, static_cast<int16_t>(TouchAction::Refresh)},
       };
       screen.footer(actions, 4);
+      // The inline rows are custom-painted by renderQr; register their touch
+      // rects from the SAME layout so paint and hit cannot drift.
+      if (UITheme::getInstance().usesCpyLayout()) {
+        const CpyMainLayout layout = cpyMainLayout();
+        static constexpr TouchAction kRowActions[3] = {TouchAction::ToggleMode, TouchAction::ToggleWallpaper,
+                                                       TouchAction::Images};
+        for (int i = 0; i < 3; ++i) {
+          screen.frame().hit(
+              fui::Rect{static_cast<int16_t>(layout.rows[i].x), static_cast<int16_t>(layout.rows[i].y),
+                        static_cast<int16_t>(layout.rows[i].width), static_cast<int16_t>(layout.rows[i].height)},
+              ACTION_TOUCH, static_cast<int16_t>(kRowActions[i]), fui::InputTouch);
+        }
+      }
       return;
     }
     case Screen::Image: {
@@ -523,6 +536,18 @@ void AirPageActivity::applyTouchAction(const TouchAction action) {
       return;
     case TouchAction::Refresh:
       handleRefresh();
+      return;
+    case TouchAction::ToggleMode:
+      // The frame-30 inline row toggles the same setting the settings
+      // screen's Mode row does, through the same apply path.
+      if (screen_ != Screen::Qr) return;
+      settingsSelection_ = static_cast<int>(SettingRow::Mode);
+      applySettingsSelection();
+      return;
+    case TouchAction::ToggleWallpaper:
+      if (screen_ != Screen::Qr) return;
+      settingsSelection_ = static_cast<int>(SettingRow::AutoWallpaper);
+      applySettingsSelection();
       return;
     case TouchAction::SetWallpaper:
       openWallpaperConfirmation();
@@ -1046,10 +1071,118 @@ const char* AirPageActivity::refreshActionText() const {
   return tr(STR_AIRPAGE_REFRESH);
 }
 
+AirPageActivity::CpyMainLayout AirPageActivity::cpyMainLayout() const {
+  constexpr int kSide = 32;
+  constexpr int kPad = 20;
+  constexpr int kQrSize = 180;
+  constexpr int kRowHeight = 96;
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect viewport = contentViewport();
+  CpyMainLayout layout;
+  const int titleLine = renderer.getLineHeight(UI_12_FONT_ID);
+  layout.textX = viewport.x + kSide + kPad + kQrSize + 24;
+  layout.textWidth = std::max(1, viewport.x + viewport.width - kSide - kPad - layout.textX);
+  const auto lines = renderer.wrappedText(UI_12_FONT_ID, tr(STR_AIRPAGE_QR_HINT), layout.textWidth, 3);
+  const int textBlock =
+      static_cast<int>(lines.size()) * titleLine + static_cast<int>(lines.size() - 1) * metrics.verticalSpacing;
+  const int cardHeight = kPad * 2 + std::max(kQrSize, textBlock);
+  layout.card = Rect{viewport.x + kSide, viewport.y, viewport.width - 2 * kSide, cardHeight};
+  layout.qr = Rect{layout.card.x + kPad, layout.card.y + (cardHeight - kQrSize) / 2, kQrSize, kQrSize};
+
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  int y = layout.card.y + layout.card.height + metrics.verticalSpacing * 2;
+  layout.statusTop = y;
+  if (noticeText()[0] != '\0') y += lineHeight + metrics.verticalSpacing;
+  const char* state = connectionText();
+  if (state[0] != '\0') y += lineHeight + metrics.verticalSpacing;
+  y += metrics.verticalSpacing;
+  for (auto& row : layout.rows) {
+    row = Rect{viewport.x + kSide, y, viewport.width - 2 * kSide, kRowHeight};
+    y += kRowHeight;
+  }
+  return layout;
+}
+
+void AirPageActivity::drawCpyMainRows(const CpyMainLayout& layout) const {
+  const int labelLine = renderer.getLineHeight(UI_10_FONT_ID);
+  const auto rowTextY = [&](const Rect& row) { return row.y + (row.height - labelLine) / 2; };
+
+  // Mode row: label + current value + chevron.
+  {
+    const Rect& row = layout.rows[0];
+    renderer.drawLine(row.x, row.y, row.x + row.width - 1, row.y, true);
+    renderer.drawText(UI_10_FONT_ID, row.x, rowTextY(row), tr(STR_AIRPAGE_MODE_SETTING));
+    const char* value = connection_.realtime() ? tr(STR_AIRPAGE_MODE_REALTIME) : tr(STR_AIRPAGE_MODE_MANUAL);
+    const int valueWidth = renderer.getTextWidth(UI_10_FONT_ID, value);
+    const int valueX = row.x + row.width - valueWidth - 18;
+    renderer.drawText(UI_10_FONT_ID, valueX, rowTextY(row), value);
+    const int cy = row.y + row.height / 2;
+    renderer.drawLine(valueX + valueWidth + 6, cy - 7, valueX + valueWidth + 12, cy, 2, true);
+    renderer.drawLine(valueX + valueWidth + 12, cy, valueX + valueWidth + 6, cy + 7, 2, true);
+  }
+
+  // Auto-wallpaper row: label + switch.
+  {
+    const Rect& row = layout.rows[1];
+    renderer.drawLine(row.x, row.y, row.x + row.width - 1, row.y, true);
+    renderer.drawText(UI_10_FONT_ID, row.x, rowTextY(row), tr(STR_AIRPAGE_AUTO_WALLPAPER));
+    constexpr int kSwW = 56;
+    constexpr int kSwH = 32;
+    const Rect sw{row.x + row.width - kSwW, row.y + (row.height - kSwH) / 2, kSwW, kSwH};
+    renderer.drawRoundedRect(sw.x, sw.y, sw.width, sw.height, 1, kSwH / 2, true);
+    constexpr int kKnob = 24;
+    const int knobX = autoSleepWallpaper_ ? sw.x + sw.width - 4 - kKnob : sw.x + 4;
+    renderer.fillRoundedRect(knobX, sw.y + 4, kKnob, kKnob, kKnob / 2,
+                             autoSleepWallpaper_ ? Color::Black : Color::White);
+    if (!autoSleepWallpaper_) renderer.drawRoundedRect(knobX, sw.y + 4, kKnob, kKnob, 1, kKnob / 2, true);
+  }
+
+  // History row: label + chevron (the count lives on the history screen's
+  // own paging; the store only counts the loaded page).
+  {
+    const Rect& row = layout.rows[2];
+    renderer.drawLine(row.x, row.y, row.x + row.width - 1, row.y, true);
+    renderer.drawText(UI_10_FONT_ID, row.x, rowTextY(row), tr(STR_AIRPAGE_HISTORY_TITLE));
+    const int cy = row.y + row.height / 2;
+    const int chevX = row.x + row.width - 12;
+    renderer.drawLine(chevX - 6, cy - 7, chevX, cy, 2, true);
+    renderer.drawLine(chevX, cy, chevX - 6, cy + 7, 2, true);
+  }
+}
+
 void AirPageActivity::renderQr(const Rect& viewport) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int reservedTextHeight = lineHeight * 2 + metrics.verticalSpacing * 2;
+
+  if (UITheme::getInstance().usesCpyLayout()) {
+    // Design frame 30: pairing card, status lines, then the inline rows.
+    const CpyMainLayout layout = cpyMainLayout();
+    GUI.drawCardFrame(renderer, layout.card, false);
+    QrUtils::drawQrCode(renderer, layout.qr, uploadUrl_);
+    const int titleLine = renderer.getLineHeight(UI_12_FONT_ID);
+    const auto lines = renderer.wrappedText(UI_12_FONT_ID, tr(STR_AIRPAGE_QR_HINT), layout.textWidth, 3);
+    const int textBlock =
+        static_cast<int>(lines.size()) * titleLine + static_cast<int>(lines.size() - 1) * metrics.verticalSpacing;
+    int textY = layout.card.y + (layout.card.height - textBlock) / 2;
+    for (const auto& line : lines) {
+      renderer.drawText(UI_12_FONT_ID, layout.textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
+      textY += titleLine + metrics.verticalSpacing;
+    }
+
+    int hintY = layout.statusTop;
+    GUI.drawHelpText(renderer, Rect{viewport.x, hintY, viewport.width, lineHeight}, noticeText());
+    const char* state = connectionText();
+    if (state[0] != '\0') {
+      GUI.drawHelpText(renderer,
+                       Rect{viewport.x, hintY + lineHeight + metrics.verticalSpacing, viewport.width, lineHeight}, state);
+    }
+
+    drawCpyMainRows(layout);
+    return;
+  }
+
   const int qrSize =
       std::max(1, std::min(viewport.width - metrics.contentSidePadding * 2, viewport.height - reservedTextHeight));
   const Rect qrBounds{viewport.x + (viewport.width - qrSize) / 2, viewport.y, qrSize, qrSize};

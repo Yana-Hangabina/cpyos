@@ -1,0 +1,9 @@
+{
+  "name": "JjwxcApi",
+  "version": "1.0.0",
+  "description": "JJWXC (晋江文学城) Web API protocol backend",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "src"
+  }
+}

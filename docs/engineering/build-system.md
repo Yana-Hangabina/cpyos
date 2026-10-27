@@ -54,6 +54,65 @@ X4 Pro, X4 Classic, Murphy M4, Waveshare 3.97 and PaperMono use application LTO 
 to keep the complete reader inside the existing 6.25 MiB OTA partitions. Their
 prebuilt `dio_opi` core continues to supply the TinyUSB CDC/MSC component graph.
 
+### Missing `framework-arduinoespressif32-libs/<chip>/sdkconfig.orig` and the TinyUSB include loss
+
+Symptom: builds fail while compiling the Arduino core with
+`esp32-hal-tinyusb.h:27: fatal error: tusb.h: No such file or directory`,
+usually on a wiped `.pio/build` or when a second environment with a different
+`custom_sdkconfig` exists; incremental builds of a previously-working tree can
+keep passing, which makes it look source-related. It is not.
+
+Two interacting mechanisms, both in pioarduino 55.03.311:
+
+1. `scripts/patch_pioarduino_cache.py` uses `<chip>/sdkconfig.orig` as its
+   per-chip "libs carry a custom configuration" marker (the stock platform
+   tests a global `sdkconfig` instead). When a run sees a different cached
+   `custom_sdkconfig` request it MOVES `sdkconfig.orig` onto `sdkconfig`
+   (`Path.replace`) and expects PlatformIO's restoration step to bring the
+   original back. Nothing in the project restored it, so after the first
+   request switch the marker was gone for every later run.
+2. With the marker gone the platform path decides the prebuilt core has to be
+   rebuilt per request; during that path the core compile (both the SCons core
+   library and the IDF component pass) runs without the
+   `arduino_tinyusb/{tinyusb/src,include}` include dirs that the per-chip
+   `pioarduino-build.py` normally supplies, and `esp32-hal-tinyusb.c` cannot
+   find `tusb.h`.
+
+Fixes (both are in the repository, applied automatically — nothing to do by hand):
+
+- `scripts/patch_pioarduino_cache.py` now re-supplies the two
+  `arduino_tinyusb` include dirs via `CPPPATH` and `BUILD_FLAGS` for any chip
+  whose libs package ships them. Guarded by directory existence (chips without
+  TinyUSB are untouched) and idempotent if the platform ever supplies them
+  itself.
+- The same script restores `sdkconfig.orig` immediately after the
+  `Path.replace` hop and self-heals a chip whose `sdkconfig.orig` went missing
+  (with `sdkconfig` present, orig is a copy of it either way), so the marker
+  survives runs that die in between and two environments with different
+  requests alternating.
+- The script no longer deletes the generated `sdkconfig.<env>` on a request
+  change: that deletion raced the parallel ninja targets (ldgen could read the
+  just-removed file before the reconfigure regenerated it, failing with
+  `Could not open .../sdkconfig.<env>`). The upstream password-marker check in
+  `sdkconfig.defaults` already forces a reconfigure when the request changed.
+- If `sdkconfig.orig` is missing for a chip (check
+  `~/.platformio/packages/framework-arduinoespressif32-libs/<chip>/`), restore
+  it from the pristine template that ships with the package (the `sdkconfig`
+  file whose mtime dates from the package install):
+
+  ```bash
+  D=~/.platformio/packages/framework-arduinoespressif32-libs
+  cp -p "$D/<chip>/sdkconfig" "$D/<chip>/sdkconfig.orig"
+  ```
+
+Do not delete the file: it must exist even for prebuilt targets (the platform
+uses it to reinstall the original libraries, not just their configuration
+header). Note there can be two platform directories under
+`~/.platformio/platforms/` (`espressif32` and an `espressif32@src-*` copy);
+verify which one a build actually loads with
+`pio run -e <env> -t envdump | grep BUILD_SCRIPT` before patching anything by
+hand.
+
 ## Build Environment
 * **Standard**: C++20 (`-std=c++2a`). No Exceptions, No RTTI.
 * **Logging**: ALWAYS use `LOG_INF`, `LOG_DBG`, or `LOG_ERR` from `Logging.h`. Raw Serial output is deprecated.

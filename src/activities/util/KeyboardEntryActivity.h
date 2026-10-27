@@ -1,16 +1,27 @@
 #pragma once
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
+#include <PinyinDb.h>
+#include <PinyinIme.h>
 
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <utility>
 
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
-enum class InputType { Text, Password, Url };
+enum class InputType {
+  Text,  // free-form text; Chinese entry is offered where the platform supports it
+  // Accounts, device codes, numbers: the plain keyboard, and never the
+  // Chinese toggle -- a field whose content is ASCII by construction has no
+  // use for Pinyin, and the narrower keys are worth more than the option.
+  Ascii,
+  Password,
+  Url,
+};
 
 // Text entry on the FreeInkUI keyboard component: the SDK layout tables and
 // keyboard() do the key rendering and hit-rect registration, InteractionBuffer
@@ -33,6 +44,17 @@ class KeyboardEntryActivity : public Activity {
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
 
+  // Optional live preview above the keyboard (library search). The callback
+  // returns the first few matching titles for the current query; it is called
+  // from render, so it must be cheap and must not touch SD.
+  using LiveResultsFn = std::vector<std::string> (*)(void* ctx, const char* query);
+  using JjwxcSearchFn = void (*)(void* ctx, const char* query);
+  void setLiveResults(LiveResultsFn fn, void* ctx);
+  void setJjwxcSearch(JjwxcSearchFn fn, void* ctx) {
+    jjwxcSearchFn_ = fn;
+    jjwxcSearchCtx_ = ctx;
+  }
+
  private:
   std::string title;
   std::string text;
@@ -40,6 +62,65 @@ class KeyboardEntryActivity : public Activity {
   InputType inputType;
   bool passwordVisible = false;
 
+  // --- Chinese Pinyin entry -------------------------------------------------
+  // Available when a Text field has the SD Pinyin database, PSRAM to hold it,
+  // and a touch panel to drive the candidate strip (the strip is the only way
+  // to choose a candidate, so no touch means no Chinese mode). English input
+  // is the untouched fallback in every other case.
+  bool chineseAvailable = false;
+  bool chineseMode = false;
+  bool imeActive = false;
+  freeink::ui::KeyboardLayoutId layoutBeforeChinese = freeink::ui::KeyboardLayoutId::QwertyEn;
+
+  // The globe key spliced into the bottom row while Chinese entry is
+  // available, in the slot left of the mode key. Kind Lang draws the SDK's
+  // globe glyph; the value is app-owned so activateValue() can claim it.
+  static constexpr int16_t CHINESE_KEY = -5;
+  // Caller-owned copy of the active layer with that key spliced in, rebuilt
+  // whenever the base layer changes (baseLayout() returns statics, so the
+  // pointer is a complete cache key).
+  mutable freeink::ui::KeyboardLayout chineseLayout_{};
+  mutable freeink::ui::KeyboardRow chineseRowCache_[6] = {};
+  mutable freeink::ui::KeyboardKey chineseKeyCache_[8] = {};
+  mutable const freeink::ui::KeyboardLayout* chineseBaseCache = nullptr;
+  // Raw lowercase Pinyin not yet committed; always a prefix of what the strip
+  // is showing candidates for.
+  std::string composition;
+  pinyin::PinyinIme ime;
+  // First item of the current candidate page (the engine's `skip`).
+  size_t candidateSkip = 0;
+
+  // The strip's geometry, computed once per paint and once per tap from the
+  // same measurements so drawing and hit-testing cannot disagree.
+  struct StripLayout {
+    freeink::ui::Rect strip{};
+    freeink::ui::Rect compose{};
+    const char* composeText = nullptr;  // tail of `composition` that fits
+    freeink::ui::Rect prev{};
+    freeink::ui::Rect next{};
+    static constexpr size_t MAX_CELLS = 8;
+    freeink::ui::Rect cells[MAX_CELLS];
+    size_t cellItem[MAX_CELLS] = {};  // index into the IME result per cell
+    size_t cellCount = 0;
+  };
+
+  void layoutStrip(StripLayout& out) const;
+  void drawStrip(const StripLayout& layout);
+  // Ask the engine for a page starting at `skip`, with the committed text
+  // before the caret as the continuation context.
+  bool requestCandidates(size_t skip);
+  void refreshCandidates();
+  bool commitCandidateAt(size_t index);
+  void pageCandidates(int direction, size_t visibleCount);
+  bool handleStripTap(int x, int y);
+  void setChineseMode(bool enabled);
+
+
+  LiveResultsFn liveResultsFn_ = nullptr;
+  void* liveResultsCtx_ = nullptr;
+  JjwxcSearchFn jjwxcSearchFn_ = nullptr;
+  void* jjwxcSearchCtx_ = nullptr;
+  freeink::ui::Rect jjwxcSearchRect_{};
   ButtonNavigator buttonNavigator;
 
   // Keyboard layers. The letter/symbol layers come from the SDK's builtin
@@ -119,7 +200,14 @@ class KeyboardEntryActivity : public Activity {
   // one byte so an oversized glyph cannot stall the wrap loop.
   int lineBreakEnd(std::string& s, int start, int maxWidth) const;
 
+  // The layer the SDK builds for the current state, as-is.
+  const freeink::ui::KeyboardLayout& baseLayout() const;
+  // baseLayout(), plus the globe key when Chinese entry is available. Drawing,
+  // hit-testing and button navigation all read this one function.
   const freeink::ui::KeyboardLayout& currentLayout() const;
+  // Logical index of the globe key (first key of the last row) in
+  // currentLayout(), or -1 when there is no such row.
+  int globeLogicalIndex() const;
   const freeink::ui::KeyboardKey* selectedKey() const;
   int selectedLogicalIndex() const;
   void clampSelection();

@@ -180,6 +180,12 @@ bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(file
 
 bool hasMarkdownExtension(std::string_view fileName) { return checkFileExtension(fileName, ".md"); }
 
+bool hasCbzExtension(std::string_view fileName) { return checkFileExtension(fileName, ".cbz"); }
+
+bool hasFb2Extension(std::string_view fileName) { return checkFileExtension(fileName, ".fb2"); }
+
+bool hasPdfExtension(std::string_view fileName) { return checkFileExtension(fileName, ".pdf"); }
+
 bool hasReflowableBookExtension(std::string_view fileName) {
   return hasEpubExtension(fileName) || hasTxtExtension(fileName) || hasMarkdownExtension(fileName);
 }

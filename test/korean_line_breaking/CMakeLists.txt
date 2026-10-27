@@ -26,6 +26,13 @@ target_include_directories(KoreanLineBreakingTest PRIVATE
   ${REPO_ROOT}/lib/FsHelpers
 )
 
+target_compile_definitions(KoreanLineBreakingTest PRIVATE
+  # LanguageRegistry.cpp is compiled here, and in a host build there is no SD card
+  # or data partition for it to load tries from. Embedding them keeps the registry
+  # behaving as it does on a board that has no external dictionary.
+  CROSSPOINT_EMBED_HYPHENATION
+)
+
 target_link_libraries(KoreanLineBreakingTest PRIVATE
   crosspoint_test_common
   GTest::gtest_main
