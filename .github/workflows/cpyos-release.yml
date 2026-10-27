@@ -3,11 +3,13 @@ name: CPYOS Release
 on:
   push:
     tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
+      # Upstream CrossMux already published bare 0.x tags (0.1.1 ... 0.16.0),
+      # so CPYOS tags carry a prefix while the product version stays X.Y.Z.
+      - 'cpyos-[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Existing semver tag to rebuild and republish, e.g. 0.1.0'
+        description: 'Existing CPYOS tag or version to rebuild, e.g. cpyos-0.1.1 or 0.1.0'
         required: true
         type: string
 
@@ -33,17 +35,28 @@ jobs:
 
       - name: Check out the release tag
         env:
-          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          REF: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
+          git fetch --tags --force
+          TAG="$REF"
+          if [[ "$REF" == cpyos-* ]]; then
+            VERSION="${REF#cpyos-}"
+          else
+            VERSION="$REF"
+            # Prefer the prefixed tag: bare 0.x names belong to upstream history.
+            if git rev-parse --verify "refs/tags/cpyos-$VERSION^{commit}" >/dev/null 2>&1; then
+              TAG="cpyos-$VERSION"
+            fi
+          fi
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag $VERSION is not a semver release (expected X.Y.Z)"
+            echo "::error::tag $TAG is not a semver release (expected cpyos-X.Y.Z)"
             exit 1
           fi
-          git fetch --tags --force
-          git rev-parse --verify "refs/tags/$VERSION^{commit}" >/dev/null
-          git checkout --detach "refs/tags/$VERSION"
+          git rev-parse --verify "refs/tags/$TAG^{commit}" >/dev/null
+          git checkout --detach "refs/tags/$TAG"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Validate version and release notes
         run: |

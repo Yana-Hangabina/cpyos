@@ -3,8 +3,9 @@
 ## 版本号
 
 - 版本号唯一来源是 `platformio.ini` 的 `[crosspoint] version`。
-- Git tag 必须与它**逐字节相同**，不带 `v`：`0.1.0`，不是 `v0.1.0`。
-- 使用语义版本：`0.1.0` → `0.1.1`（修复）/ `0.2.0`（功能）/ `1.0.0`（不兼容）。OTA 只比较前三段，因此不要用 `0.1.0-cpyos.2` 这种 tag 做用户可见发布。
+- Git tag 使用 `cpyos-<version>`：例如版本 `0.1.1` 的 tag 是 `cpyos-0.1.1`。**上游 CrossMux 已占用裸 `0.x` tag**（`0.1.1` … `0.16.0` 是 2025 年的旧提交），所以 CPYOS 不再使用裸版本号做 tag；`platformio.ini`、OTA 清单和发布说明里的版本仍是 `0.1.1`。
+- 0.1.0 是唯一使用裸 tag 的历史版本（当时上游没有 `0.1.0` tag）；不要移动它。
+- 使用语义版本：`0.1.0` → `0.1.1`（修复）/ `0.2.0`（功能）/ `1.0.0`（不兼容）。OTA 只比较前三段。
 - CPYOS 从 `0.1.0` 开始独立计数，不再接续 CrossMux 的 `1.x`。首次安装用完整包；从 `0.1.0` 起的后续版本才通过 OTA 按 CPYOS 版本比较。
 
 ## 日常分支与合并
@@ -62,10 +63,10 @@ git remote add fork git@github.com:Yana-Hangabina/cpyos.git   # 首次
 git add platformio.ini CHANGELOG.md docs/releases/<v>.md docs/releases/<v>.ota.json
 git commit -m "release: <v>"
 
-# 2. tag 必须与 platformio.ini 的 version 完全一致，不带 v
-git tag -a <v> -m "脆皮鸭 CPYOS <v>"
+# 2. tag 用 cpyos- 前缀；<v> 必须与 platformio.ini 的 version 完全一致
+git tag -a cpyos-<v> -m "脆皮鸭 CPYOS <v>"
 git push fork cpyos
-git push fork <v>
+git push fork cpyos-<v>
 ```
 
 已发布的 tag 不再移动；修复发新的 patch 版本。
@@ -156,7 +157,7 @@ OTA 只写 app0，不写数据分区。语言包、Web 资源包、拼音和断�
 Tag "0.1.0" is not allowed to deploy to github-pages due to environment protection rules.
 ```
 
-在 **Settings → Environments → github-pages → Deployment branch and tag rules** 中添加一条 **tag `*`**（或只允许 `[0-9]*`）。分支 `cpyos` 的规则保留，这样 site-only 推送和 release 推送都能部署。这个设置只需要做一次；它不会放宽到其他环境。
+在 **Settings → Environments → github-pages → Deployment branch and tag rules** 中添加一条 **tag `*`**（或 `cpyos-*`）。分支 `cpyos` 的规则保留，这样 site-only 推送和 release 推送都能部署。这个设置只需要做一次；它不会放宽到其他环境。注意 `[0-9]*` 不再匹配 `cpyos-0.x.y`。
 
 ## 发布后验收
 
