@@ -1,0 +1,14 @@
+{
+  "en": [
+    "OTA mirrors: ghfast.top and gh-proxy.com",
+    "Automatic speed test picks the fastest route",
+    "Much faster updates from mainland China",
+    "CMD:OTAPROBE prints the measurements"
+  ],
+  "zh": [
+    "OTA 支持国内 GitHub 镜像加速",
+    "自动测速并选择最快线路",
+    "国内更新速度大幅提升",
+    "串口命令查看测速结果"
+  ]
+}

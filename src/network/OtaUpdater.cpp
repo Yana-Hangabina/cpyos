@@ -14,10 +14,12 @@
 // clang-format on
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "CrossMuxEndpoints.h"
 #include "FirmwareBoardTag.h"
@@ -58,6 +60,85 @@ static_assert(!isSameNightlyBuild("1.5.2-rc+5064d90", "nightly"));
 // path to api.github.com.
 constexpr size_t releaseUrlCapacity = 192;
 static_assert(releaseUrlCapacity < 256);
+
+#ifdef CPYOS_OTA_MANIFEST_URL
+struct DownloadCandidate {
+  const char* label;
+  std::string url;
+};
+
+bool startsWith(const std::string& value, const char* prefix) {
+  const size_t length = std::strlen(prefix);
+  return value.size() >= length && value.compare(0, length, prefix) == 0;
+}
+
+bool isGithubHosted(const std::string& url) {
+  return startsWith(url, "https://github.com/") || startsWith(url, "https://raw.githubusercontent.com/") ||
+         startsWith(url, "https://objects.githubusercontent.com/");
+}
+
+// The release manifest advertises a mirror-prefixed URL so firmware that
+// predates this probe (0.1.1 and earlier) also gets a fast download. Strip the
+// prefix to recover the canonical GitHub asset, then measure every route.
+std::string selectFastestDownloadUrl(const std::string& advertised) {
+  std::string origin = advertised;
+  for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
+    const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
+    if (startsWith(origin, prefix)) {
+      origin = origin.substr(std::strlen(prefix));
+      break;
+    }
+  }
+
+  std::vector<DownloadCandidate> candidates;
+  const auto add = [&candidates](const char* label, const std::string& url) {
+    for (const auto& existing : candidates) {
+      if (existing.url == url) return;
+    }
+    candidates.push_back({label, url});
+  };
+  add("direct", origin);
+  if (isGithubHosted(origin)) {
+    // Keep these in the same order as CPYOS_DOWNLOAD_MIRRORS.
+    static constexpr const char* kMirrorLabels[] = {"ghfast.top", "gh-proxy.com"};
+    static_assert(sizeof(kMirrorLabels) / sizeof(kMirrorLabels[0]) ==
+                  CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT);
+    for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
+      add(kMirrorLabels[i], std::string(CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i]) + origin);
+    }
+  }
+  add("advertised", advertised);
+
+  if (candidates.size() == 1) return candidates.front().url;
+
+  size_t best = SIZE_MAX;
+  uint32_t bestBps = 0;
+  uint32_t bestFirstByte = UINT32_MAX;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    const auto probe = HttpDownloader::probeUrl(candidates[i].url, 32768, 6000);
+    if (!probe.ok) {
+      LOG_INF("OTA", "probe %s: failed after %u ms", candidates[i].label, static_cast<unsigned>(probe.elapsedMs));
+      continue;
+    }
+    const uint32_t bps = probe.bytesPerSecond();
+    LOG_INF("OTA", "probe %s: %u KB in %u ms (%u KB/s, first byte %u ms)", candidates[i].label,
+            static_cast<unsigned>(probe.bytes / 1024), static_cast<unsigned>(probe.elapsedMs),
+            static_cast<unsigned>(bps / 1024), static_cast<unsigned>(probe.firstByteMs));
+    if (best == SIZE_MAX || bps > bestBps || (bps == bestBps && probe.firstByteMs < bestFirstByte)) {
+      best = i;
+      bestBps = bps;
+      bestFirstByte = probe.firstByteMs;
+    }
+  }
+  if (best == SIZE_MAX) {
+    LOG_ERR("OTA", "all download routes failed to probe; falling back to %s", advertised.c_str());
+    return advertised;
+  }
+  LOG_INF("OTA", "download route: %s (%u KB/s)", candidates[best].label,
+          static_cast<unsigned>(bestBps / 1024));
+  return candidates[best].url;
+}
+#endif
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
@@ -218,10 +299,26 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
+void OtaUpdater::debugProbeDownloadMirrors() {
+#ifdef CPYOS_OTA_MANIFEST_URL
+  if (otaUrl.empty()) {
+    LOG_ERR("OTA", "probe: no firmware URL; run checkForUpdate first");
+    return;
+  }
+  selectFastestDownloadUrl(otaUrl);
+#else
+  LOG_INF("OTA", "probe: this build has no CPYOS mirror list");
+#endif
+}
+
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }
+
+#ifdef CPYOS_OTA_MANIFEST_URL
+  otaUrl = selectFastestDownloadUrl(otaUrl);
+#endif
 
   // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this
   // package can't negotiate TLS 1.3 (see SecureClient.h). Drive the OTA partition

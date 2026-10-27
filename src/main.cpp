@@ -51,6 +51,7 @@
 #include "ExternalFontPackStorage.h"
 #endif
 #include "WifiCredentialStore.h"
+#include "network/OtaUpdater.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/home/FindBooksActivity.h"
@@ -1404,6 +1405,17 @@ void loop() {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false));
       } else if (cmd == "SLEEP") {
         activityManager.goToSleep(false);
+      } else if (cmd == "OTAPROBE") {
+        // Diagnostics only: fetch the release manifest, then measure every OTA
+        // download route and print the winner. Requires an active Wi-Fi link.
+        auto updater = makeUniqueNoThrow<OtaUpdater>();
+        if (!updater) {
+          logSerial.printf("OTAPROBE_ERR oom\n");
+        } else {
+          const auto result = updater->checkForUpdate(OtaUpdater::Channel::Stable);
+          logSerial.printf("OTAPROBE check=%d\n", static_cast<int>(result));
+          if (result == OtaUpdater::OK) updater->debugProbeDownloadMirrors();
+        }
       } else if (cmd.startsWith("CAT ")) {
         String path = cmd.substring(4);
         path.trim();

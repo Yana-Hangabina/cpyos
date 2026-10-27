@@ -14,6 +14,15 @@ inline constexpr char OTA_MANIFEST_FORMAT[] = "https://%s/api/ota/manifest?varia
 // (platformio.ini); other upstream targets keep the CrossMux endpoints.
 #ifdef CPYOS_OTA_MANIFEST_URL
 inline constexpr char CPYOS_OTA_URL[] = CPYOS_OTA_MANIFEST_URL;
+// Mainland-China GitHub mirrors. The release manifest points at a mirror-prefixed
+// release asset so older firmware (which cannot probe) also gets a fast path;
+// 0.1.2+ strips the prefix and measures every candidate before downloading.
+inline constexpr const char* CPYOS_DOWNLOAD_MIRRORS[] = {
+    "https://ghfast.top/",
+    "https://gh-proxy.com/",
+};
+inline constexpr size_t CPYOS_DOWNLOAD_MIRROR_COUNT =
+    sizeof(CPYOS_DOWNLOAD_MIRRORS) / sizeof(CPYOS_DOWNLOAD_MIRRORS[0]);
 #endif
 inline constexpr char FONT_MANIFEST_FORMAT[] = "https://%s/api/assets/fonts/m%s-b%s/fonts.json";
 inline constexpr char DICTIONARY_MANIFEST_FORMAT[] = "https://%s/api/assets/dictionaries/manifest?version=1&lang=%s";
