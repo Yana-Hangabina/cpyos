@@ -132,6 +132,16 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   // Whether to attempt auto-connect on entry
   const bool allowAutoConnect;
 
+  // Whether a successful connection is handed to the parent (web server, app
+  // session) or released when this screen closes. False for the Home status
+  // chip and the debug entry: those only configure/scan, and a left-behind STA
+  // keeps the modem powered and forces the CPU to full speed.
+  const bool keepRadioOnExit;
+
+  // Set by onComplete(); an unconnected exit always releases the radio even
+  // when the parent wanted to keep a successful session.
+  bool connected_ = false;
+
   // Whether we are attempting to auto-connect or auto-scan saved networks.
   bool autoConnecting = false;
 
@@ -194,7 +204,8 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void onComplete(bool connected);
 
  public:
-  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true);
+  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true,
+                                 bool keepRadioOnExit = true);
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -154,6 +154,12 @@ class EpubReaderActivity final : public ReaderActivity {
   // A tap that opened the book can still be mid-release when the first frame
   // lands; ignore input for a moment so the page is not dismissed unseen.
   uint32_t gestureHintShownAt = 0;
+  // Set by renderContents() the moment the hint is first shown, consumed once by
+  // loop(). The "seen" flag is persisted from the UI task, never from the render
+  // task: that stack lives in PSRAM, where an internal-flash write panics.
+  // Showing counts as seen so a power-off/flash before any input cannot bring
+  // the one-shot page back.
+  std::atomic<bool> hintPersistPending_{false};
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
   void drawGestureHint();

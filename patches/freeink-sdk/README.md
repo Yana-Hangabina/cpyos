@@ -100,8 +100,7 @@ gray, so each needs on-panel comparison, not just a host test.
    update), so a still/unchanged frame is not left driven. The panel image is bistable, so
    dropping the drive is not visible; a null hook keeps the old behaviour (drive held from
    power-on). This is the faithful port of rpr's "release pixel drive even after
-   unchanged/failed output"; rpr additionally holds the rails for an 8 s burst, which this
-   board does not need (it already keeps them between pushes by design).
+   unchanged/failed output".
    ★ **Needs an on-panel page-turn check** (rpr's frozen note applies): this is a board
    power-sequence change and only a live scan can confirm the panel still drives. Revert =
    drop the `releaseDrive` hook from the config (or set it to nullptr).
@@ -178,6 +177,20 @@ gray, so each needs on-panel comparison, not just a host test.
      disturbed frame can then no longer poison every later frame with out-of-order lines.
    Verification: `test/host/transactions.cpp` carries the waveform stubs and the
    async-prefill expectation now matches the shipped 96-line cushion.
+
+8. **Idle HV-rail drop — rpr's `rails_idle_check`.** `EpdiyLcd` now arms an 8 s
+   deadline on every successful push/area/gray commit (`boardReleaseDrive` is the
+   common tail) and `epdiyLcdIdleTick(nowMs)` drops the SY7636A/VCOM rails when it
+   expires. The host calls it from `main.cpp` under the render lock; the next push
+   repowers the rails (20 ms settle + PGOOD) and raises XOE. This mirrors rpr's
+   `display.c` `RAILS_IDLE_TIMEOUT_MS = 8000` / `rails_keepalive()` /
+   `rails_idle_check()` exactly; it is what makes the panel stop drawing its
+   charge-pump current during long pauses and in clock standby. The image is
+   bistable and the existing `releaseDrive` still runs at the end of each frame.
+   ★ **Panel-latch risk**: items 7's smear history means this must be soaked on the
+   real panel (hundreds of page turns with idle gaps > 8 s, plus standby wake).
+   Revert by making `EpdiyLcdDriver::idlePowerTick()` a no-op or removing the
+   `renderer.idlePowerTick(millis())` call in `main.cpp`.
 
 ## Upgrading an older tree
 

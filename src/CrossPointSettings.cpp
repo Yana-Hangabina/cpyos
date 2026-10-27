@@ -56,6 +56,19 @@ constexpr uint8_t migrateLegacySoundFeedback(const bool enabled) {
 static_assert(migrateLegacySoundFeedback(false) == CrossPointSettings::SOUND_FEEDBACK_OFF);
 static_assert(migrateLegacySoundFeedback(true) == CrossPointSettings::SOUND_FEEDBACK_MEDIUM);
 
+// Map a persisted JSON value onto a 0/1 flag. These flags are booleans, not enum
+// slots, so they must not go through the enum-style `clamp` lambda inside
+// fromJson(): that one is `val < maxVal ? val : def`, i.e. maxVal is an exclusive
+// count and the valid range is 0..maxVal-1. Passing maxVal=1 therefore declared
+// a stored 1 out of range and rewrote it to def=0 on every load, which is how
+// readerGestureHintSeen ended up 0 in memory while settings.json still said 1.
+constexpr uint8_t storedBoolFlag(const uint8_t value) { return value != 0 ? 1 : 0; }
+// Compile-time regression guard: a stored 1 must stay 1, and junk folds to 1.
+static_assert(storedBoolFlag(0) == 0);
+static_assert(storedBoolFlag(1) == 1);
+static_assert(storedBoolFlag(2) == 1);
+static_assert(storedBoolFlag(255) == 1);
+
 // Stack buffer for "<key>_obf" key construction — avoids a std::string
 // allocation per obfuscated setting on every save and load.
 constexpr size_t OBF_KEY_BUF = 64;
@@ -485,7 +498,10 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
-  readerGestureHintSeen = clamp(doc["readerGestureHintSeen"] | static_cast<uint8_t>(0), static_cast<uint8_t>(1), 0);
+  // Boolean, so use storedBoolFlag() rather than the enum-style `clamp` above:
+  // `clamp(value, 1, 0)` treats 1 as out of range and is why the one-shot hint
+  // returned after every reboot.
+  readerGestureHintSeen = storedBoolFlag(doc["readerGestureHintSeen"] | static_cast<uint8_t>(0));
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
       clamp(doc["frontButtonConfirm"] | (uint8_t)FRONT_HW_CONFIRM, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_CONFIRM);

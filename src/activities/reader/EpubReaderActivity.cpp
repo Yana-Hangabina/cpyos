@@ -25,6 +25,8 @@
 #include <WiFi.h>
 #include <esp_system.h>
 
+#include "NetworkStartup.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -353,6 +355,12 @@ EpubReaderActivity::~EpubReaderActivity() {
 }
 
 void EpubReaderActivity::onExit() {
+  // If the reader was closed before loop() got a chance to consume the
+  // show-time hint write, persist it here (onExit runs on the UI task too).
+  if (hintPersistPending_.exchange(false)) {
+    const bool persisted = SETTINGS.saveToFile();
+    LOG_INF("ERS", "gesture hint marked seen on exit; persisted=%d", persisted ? 1 : 0);
+  }
   waterTurnDirection = 0;  // 未消费的动画请求不跨 Activity 存活 / an unconsumed request never outlives the reader
   // A5: drop the book's embedded font (if any) before anything else is torn down,
   // so the renderer never keeps a pointer to a freed face.
@@ -2247,6 +2255,15 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // renderContents() marked the one-shot hint as seen on the render task; the
+  // settings write has to happen here, on the UI task. Exactly one write per
+  // device: the flag is consumed with exchange().
+  if (hintPersistPending_.exchange(false)) {
+    const bool persisted = SETTINGS.saveToFile();
+    LOG_INF("ERS", "gesture hint marked seen; persisted=%d", persisted ? 1 : 0);
+    if (!persisted) LOG_ERR("ERS", "gesture hint: could not persist seen flag");
+  }
+
   // The first-run page owns input until dismissed: any tap or Confirm/Back
   // closes it, and that same tap must not also turn the page. The bottom note
   // is the one exception -- it opens Settings -> Controls first and still
@@ -3263,13 +3280,16 @@ void EpubReaderActivity::beginLoanTimeSync() {
   }
   startActivityForResult(std::move(wifi), [this](const ActivityResult& result) {
     if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
+      NetworkStartup::releaseRadio();
       finish();
       return;
     }
     GUI.drawPopup(renderer, tr(STR_SYNCING_TIME));
     const bool synced = trustedtime::syncNow(5000);
-    WiFi.disconnect(false);
-    delay(30);
+    // The sync is the only reason this screen started the radio; hand it back
+    // on both outcomes. A failed sync offers a retry that opens the picker
+    // again, so nothing needs the driver to stay resident.
+    NetworkStartup::releaseRadio();
     if (!synced) {
       // Reopening would hit the same unverified-time refusal: offer a retry.
       const char* options[2] = {I18N.get(StrId::STR_RETRY), I18N.get(StrId::STR_OK_BUTTON)};
@@ -5030,6 +5050,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // visible=true with a zero timestamp (which would defeat the grace period).
     gestureHintShownAt = millis();
     gestureHintVisible = true;
+    // Showing it counts as seen. Persisting only on dismissal left the flag at 0
+    // whenever the device was powered off or reflashed while the page was up, so
+    // the "one-shot" hint returned on the next boot. The write itself is deferred
+    // to loop(): this runs on the render task, whose PSRAM stack must not touch
+    // internal flash.
+    SETTINGS.readerGestureHintSeen = 1;
+    hintPersistPending_ = true;
     LOG_INF("ERS", "gesture hint shown (seen flag=0)");
     forcedRefreshPending = true;  // the hint page is a full-screen frame
   }
