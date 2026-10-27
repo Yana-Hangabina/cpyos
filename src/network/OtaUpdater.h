@@ -70,4 +70,7 @@ class OtaUpdater {
 #endif
   OtaUpdaterError checkForUpdate(Channel requestedChannel);
   OtaUpdaterError installUpdate(ProgressCallback onProgress = nullptr, void* ctx = nullptr);
+  // Diagnostics for the mainland-China mirrors: measure every candidate for the
+  // last checked release asset and log the winner. Does not flash anything.
+  void debugProbeDownloadMirrors();
 };

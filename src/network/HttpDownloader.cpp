@@ -27,7 +27,8 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
                                            const std::string& password,
                                            const std::vector<HttpDownloader::Header>& headers,
                                            const freeink::FetchSink& sink, const bool* cancelFlag = nullptr,
-                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false) {
+                                           size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false,
+                                           const int timeoutMs = HTTP_TIMEOUT_MS) {
   char userAgent[80];
   const int length =
       snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
@@ -38,7 +39,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   const freeink::FetchResult result = freeink::fetchResumable(
       url, options,
       [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
-        http.setTimeout(HTTP_TIMEOUT_MS);
+        http.setTimeout(timeoutMs);
         http.setInsecure();
         // setUserAgent replaces SecureHttpClient's built-in UA; addHeader would
         // append a second User-Agent header, which strict servers reject (aiohttp
@@ -102,6 +103,25 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   freeink::FetchSink sink;
   sink.write = onData;
   return runGetSecure(url, username, password, {}, sink) == OK;
+}
+
+HttpDownloader::ProbeResult HttpDownloader::probeUrl(const std::string& url, const size_t maxBytes,
+                                                     const int timeoutMs) {
+  ProbeResult result;
+  const uint32_t started = millis();
+  freeink::FetchSink sink;
+  sink.write = [&result, started, maxBytes](const uint8_t* data, const size_t len) {
+    if (result.firstByteMs == 0) result.firstByteMs = millis() - started;
+    result.bytes += len;
+    // Stop as soon as we have a representative sample. fetchResumable marks the
+    // transfer stopped (not failed), so this does not trigger a Range resume.
+    return result.bytes < maxBytes;
+  };
+  LOG_DBG("HTTP", "Probing: %s", url.c_str());
+  runGetSecure(url, "", "", {}, sink, nullptr, nullptr, false, timeoutMs);
+  result.elapsedMs = millis() - started;
+  result.ok = result.bytes > 0;
+  return result;
 }
 
 HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& url, const std::string& destPath,

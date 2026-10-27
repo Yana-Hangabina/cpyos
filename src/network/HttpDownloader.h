@@ -36,6 +36,20 @@ class HttpDownloader {
   static constexpr uint32_t MIN_TLS_MAX_ALLOC = 20000;
   static bool hasMemoryForTls();
 
+  // Measures how fast a URL delivers the first `maxBytes`. Used to pick an OTA
+  // mirror: the body is aborted as soon as the sample is complete, so the
+  // probe costs a few dozen KB rather than the whole file.
+  struct ProbeResult {
+    bool ok = false;
+    size_t bytes = 0;
+    uint32_t elapsedMs = 0;
+    uint32_t firstByteMs = 0;
+    uint32_t bytesPerSecond() const {
+      return elapsedMs == 0 ? 0 : static_cast<uint32_t>((static_cast<uint64_t>(bytes) * 1000) / elapsedMs);
+    }
+  };
+  static ProbeResult probeUrl(const std::string& url, size_t maxBytes = 32768, int timeoutMs = 8000);
+
   /**
    * Fetch text content from a URL with optional credentials.
    */
