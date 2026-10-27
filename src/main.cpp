@@ -542,40 +542,46 @@ static void deliverSleepPluginEvents() {
 
 namespace {
 
-HalFile g_battLog;
+bool g_battLogActive = false;
 unsigned long g_battLogNext = 0;
 unsigned long g_battLogUntil = 0;
 constexpr unsigned long kBattLogIntervalMs = 60000;
+constexpr const char* kBattLogPath = "/.crosspoint/battlog.txt";
 
 void batteryLogStop() {
-  if (g_battLog) {
-    g_battLog.flush();
-    g_battLog.close();
-  }
+  // The log opens per sample instead of holding a handle: the SD card is also
+  // used by reading, file transfer and USB-MSC, and a writer left open for
+  // hours would outlive every one of those ownership boundaries.
+  g_battLogActive = false;
   g_battLogNext = 0;
   g_battLogUntil = 0;
+}
+
+bool batteryLogAppend(const char* data, const size_t len) {
+  HalFile file = Storage.open(kBattLogPath, O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) return false;
+  const bool ok = file.write(reinterpret_cast<const uint8_t*>(data), len) == len && file.close();
+  return ok;
 }
 
 bool batteryLogStart(const unsigned minutes) {
   batteryLogStop();
   if (minutes == 0) return true;
-  g_battLog = Storage.open("/.crosspoint/battlog.txt", O_WRONLY | O_CREAT | O_APPEND);
-  if (!g_battLog) {
-    LOG_ERR("BATT", "cannot open /.crosspoint/battlog.txt");
-    return false;
-  }
   char header[96];
   const int n = snprintf(header, sizeof(header), "# cpyos battlog boot_ms=%lu interval_ms=%lu\n", millis(),
                          kBattLogIntervalMs);
-  g_battLog.write(reinterpret_cast<const uint8_t*>(header), static_cast<size_t>(n));
-  g_battLog.flush();
+  if (!batteryLogAppend(header, static_cast<size_t>(n))) {
+    LOG_ERR("BATT", "cannot open %s", kBattLogPath);
+    return false;
+  }
+  g_battLogActive = true;
   g_battLogNext = millis();
   g_battLogUntil = millis() + minutes * 60000UL;
   return true;
 }
 
 void batteryLogService() {
-  if (!g_battLog) return;
+  if (!g_battLogActive) return;
   const unsigned long now = millis();
   if (static_cast<long>(now - g_battLogNext) < 0) return;
   if (static_cast<long>(now - g_battLogUntil) >= 0) {
@@ -589,8 +595,11 @@ void batteryLogService() {
                          static_cast<unsigned>(battery.chargeState), gpio.isUsbConnected() ? 1 : 0,
                          getCpuFrequencyMhz(), static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
                          activityManager.isReaderActivity() ? 1 : 0);
-  g_battLog.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
-  g_battLog.flush();
+  if (!batteryLogAppend(line, static_cast<size_t>(n))) {
+    LOG_ERR("BATT", "write failed; stopping battery log");
+    batteryLogStop();
+    return;
+  }
   logSerial.printf("[BATT] %s", line);
   g_battLogNext += kBattLogIntervalMs;
 }
