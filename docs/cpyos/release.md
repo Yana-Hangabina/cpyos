@@ -115,11 +115,11 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.1.0 --output _sit
 
 ```json
 {
-  "tag_name": "0.1.0",
+  "tag_name": "0.1.2",
   "assets": [
     {
       "name": "firmware.bin",
-      "browser_download_url": "https://yana-hangabina.github.io/cpyos/downloads/0.1.0/readpico-firmware.bin",
+      "browser_download_url": "https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-0.1.2/readpico-firmware.bin",
       "size": 6525840
     }
   ]
@@ -128,6 +128,9 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.1.0 --output _sit
 
 - `name` 必须是字面量 `firmware.bin`，即使 URL 指向 `readpico-firmware.bin`。
 - `tag_name` 不要带 `v`。
+- **固件 URL 是镜像前缀的 GitHub Release 资产**，不是 Pages：Pages 在国内实测约 9 KB/s，6.8 MB 要十几分钟。
+  0.1.1 及更早固件会原样下载该 URL；0.1.2+ 会剥离 `ghfast.top` / `gh-proxy.com` 前缀，再在直连与两个镜像间测速择优。
+  两个镜像常量在 `src/network/CrossMuxEndpoints.h`，清单前缀在 `scripts/build_cpyos_release.py` 的 `OTA_MIRROR_PREFIX`。
 - 可选 `release_notes` 数组：2–8 条，每条 < 97 字节且不含 `` `*_#<>[]{}\ ``；中文每条不超过 32 字。
 - 清单由 `scripts/build_cpyos_release.py` 生成，发布后自动写到 `/ota/readpico.json`。
 

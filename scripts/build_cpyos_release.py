@@ -48,6 +48,13 @@ TARGET_ID = 'readpico'
 ENVIRONMENT = 'readpico'
 PRODUCT = '脆皮鸭 CPYOS'
 PAGES_BASE = 'https://yana-hangabina.github.io/cpyos'
+# Device OTA downloads the GitHub release asset, not the Pages copy: Pages is
+# ~9 KB/s from mainland China, while the GitHub mirrors below deliver far more.
+GITHUB_RELEASES = 'https://github.com/Yana-Hangabina/cpyos/releases/download'
+# Firmware up to 0.1.1 downloads the manifest URL verbatim, so advertise a
+# working mirror. 0.1.2+ strips this prefix, probes direct/ghfast/gh-proxy and
+# downloads through the fastest route.
+OTA_MIRROR_PREFIX = 'https://gh-proxy.com/'
 
 DATA_FILES = {
     'pinyin': 'pinyin.dat',
@@ -241,13 +248,14 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     write_json(output / 'manifest-app.json', build_manifest('app', version, app_only, False))
 
     download_base = f'{pages_base.rstrip("/")}/downloads/{version}'
+    github_asset = f'{GITHUB_RELEASES}/cpyos-{version}/{firmware_asset["name"]}'
     ota = {
         'tag_name': version,
         'name': f'{PRODUCT} {version}',
         'release_notes': notes['zh'],
         'assets': [{
             'name': 'firmware.bin',
-            'browser_download_url': f'{download_base}/{firmware_asset["name"]}',
+            'browser_download_url': f'{OTA_MIRROR_PREFIX}{github_asset}',
             'size': firmware_asset['size'],
             'sha256': firmware_asset['sha256'],
         }],

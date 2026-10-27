@@ -2,6 +2,18 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.1.2 — 2026-10-27
+
+### 新增
+
+- 设备 OTA 改走 GitHub Release 资产，并内置 `ghfast.top` / `gh-proxy.com` 两个镜像；先各取 32 KB 测速，再选最快线路下载，失败自动回退。
+- 发布清单的固件地址改为镜像前缀 URL，0.1.1 及更早固件也能直接享受加速；0.1.2 会剥离前缀并在直连与两个镜像之间重新择优。
+- 串口诊断 `CMD:OTAPROBE` 打印三条线路的测速结果。
+
+### 升级说明
+
+- 数据分区未变化，可直接 OTA，无需重刷数据包。
+
 ## 0.1.1 — 2026-10-27
 
 修复版本，基于 0.1.0。
