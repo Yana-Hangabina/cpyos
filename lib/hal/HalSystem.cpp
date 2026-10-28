@@ -93,7 +93,21 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
 
 namespace HalSystem {
 
+namespace {
+// Snapshot taken before begin() clears or checkPanic() consumes the panic
+// marker. Reader recovery routing needs a stable answer later in setup(),
+// after checkPanic() has already zeroed the live marker.
+esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
+bool bootHadPanicMarker = false;
+}  // namespace
+
+static const char* resetReasonName(esp_reset_reason_t reason);
+
 void begin() {
+  bootResetReason = esp_reset_reason();
+  bootHadPanicMarker = (panicCaptureMarker == PANIC_CAPTURE_MAGIC);
+  LOG_INF("SYS", "Reset reason: %s (%d)", resetReasonName(bootResetReason), static_cast<int>(bootResetReason));
+
   // On a panic reboot, preserve diagnostics until checkPanic() has tried to write them to the SD card.
   // Ordinary boots clear any stale retained diagnostics.
   if (!isRebootFromPanic()) {
@@ -221,6 +235,18 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
       return "SW";
     case ESP_RST_DEEPSLEEP:
       return "DEEPSLEEP";
+    case ESP_RST_EXT:
+      return "EXT";
+    case ESP_RST_USB:
+      return "USB";
+    case ESP_RST_JTAG:
+      return "JTAG";
+    case ESP_RST_SDIO:
+      return "SDIO";
+    case ESP_RST_EFUSE:
+      return "EFUSE";
+    case ESP_RST_UNKNOWN:
+      return "UNKNOWN";
     default:
       return "OTHER";
   }
@@ -270,6 +296,27 @@ bool isRebootFromPanic() {
   const bool watchdogReset =
       resetReason == ESP_RST_INT_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT;
   return watchdogReset && panicCaptureMarker == PANIC_CAPTURE_MAGIC;
+}
+
+bool isRebootDeliberate() {
+  // A captured panic wins even when the chip reports the final reset as SW:
+  // that state must stay recoverable, not be mistaken for a flash/OTA reset.
+  if (bootHadPanicMarker) return false;
+
+  switch (bootResetReason) {
+    case ESP_RST_USB:
+    case ESP_RST_JTAG:
+    case ESP_RST_EXT:
+    case ESP_RST_SW:
+    case ESP_RST_DEEPSLEEP:
+    case ESP_RST_SDIO:
+    case ESP_RST_EFUSE:
+      return true;
+    default:
+      // POWERON, BROWNOUT, PWR_GLITCH, PANIC, CPU_LOCKUP, WDT*, UNKNOWN:
+      // treat as an interruption and keep the reader recovery path.
+      return false;
+  }
 }
 
 }  // namespace HalSystem

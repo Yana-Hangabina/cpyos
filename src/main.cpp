@@ -1207,8 +1207,8 @@ void setup() {
     // book fault: the old "opening this book was interrupted" modal interrupted
     // every ordinary flash. Drop the resume marker and go Home; a real panic is
     // already routed to the crash report above.
-    LOG_INF("RECOVERY", "clearing stale interrupted-reader state for '%s' (attempts=%u)",
-            APP_STATE.openEpubPath.c_str(), static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+    LOG_INF("RECOVERY", "dropping stale reader resume state for '%s' (%s reboot)",
+            APP_STATE.openEpubPath.c_str(), HalSystem::isRebootDeliberate() ? "deliberate" : "interrupted");
     APP_STATE.openEpubPath.clear();
     APP_STATE.readerActivityLoadCount = 0;
     APP_STATE.saveToFile();
@@ -1216,8 +1216,13 @@ void setup() {
     activityManager.goHome();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
-    // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
-    // crashed (indicated by readerActivityLoadCount > 0)
+    // Boot to home screen if no book is open, last sleep was not from reader,
+    // back is held, or the removed recovery page left a stale count. Clear that
+    // count so a later boot is not held on Home by it.
+    if (APP_STATE.readerActivityLoadCount > 0) {
+      APP_STATE.readerActivityLoadCount = 0;
+      APP_STATE.saveToFile();
+    }
     if (needsWakeRefresh) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
     activityManager.goHome();
   } else {

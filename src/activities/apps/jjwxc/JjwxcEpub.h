@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HalStorage.h>
+#include <JjwxcBookCrypto.h>
 #include <WeReadStore.h>
 
 #include <cstddef>
@@ -62,11 +63,13 @@ size_t xmlEscapeInto(char* dst, size_t dstSize, const char* src);
 // the wrong chapter file (the failure mode abort() exists for).
 class ChapterWriter {
  public:
-  // Writes to `finalPath + ".part"`; finish() atomically replaces.
+  // Writes encrypted to `finalPath + ".part"`; finish() patches the header and
+  // atomically replaces. The partial file is ciphertext from the first byte, so
+  // a crash cannot leave a readable chapter behind.
   bool begin(const std::string& finalPath, const char* title);
   // Feed decoded UTF-8 as it arrives from jjwxc::fetchChapter().
   bool feed(const char* data, size_t len);
-  // Closes the document, replaces the target and reports its size in bytes.
+  // Closes the document, replaces the target and reports its plaintext size.
   bool finish(uint32_t& outBytes);
   // Discards the partial file. Safe to call when not active.
   void abort();
@@ -89,6 +92,12 @@ class ChapterWriter {
   size_t outLen_ = 0;
   bool paragraphOpen_ = false;
   bool active_ = false;
+  // Encryption state. The header is written with zero length/CRC at begin and
+  // patched in place at finish, after the ciphertext has been streamed.
+  jjwxc::BookCrypto::CtrStream stream_ = {};
+  uint8_t nonce_[jjwxc::BookCrypto::kNonceLen] = {};
+  uint32_t plainBytes_ = 0;
+  uint32_t crc_ = 0xFFFFFFFFu;
 };
 
 // A chapter this account cannot read gets an explicit stub instead of a body, so

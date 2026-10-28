@@ -248,15 +248,20 @@ std::string coverSourcePath(const char* novelId);
 // job. The packager receives the raw bytes from the caller.
 bool ensureBookContentKey(const std::string& epubPath, uint8_t (&key)[16]);
 
-// Device-bound key for the on-card chapter cache. The salt lives at
-// /.crosspoint/jjwxc/cachekey; key+nonceSeed are derived from the eFuse MAC and
-// that salt (JjwxcBookCrypto). Safe to call from the cache job: it touches SD
-// and eFuse only, never NVS.
-bool ensureCacheCrypto(uint8_t (&key)[16], uint8_t (&nonceSeed)[8]);
-// Replaces a plaintext chapters/<id>.xhtml with a JJX1 blob. Already-sealed
-// files are left untouched. Best effort at the call sites: a failed seal leaves
-// the chapter readable (the finished EPUB is protected independently).
-bool sealChapterFile(const std::string& path);
+// Version-2 key for the on-card chapter cache. The salt lives at
+// /.crosspoint/jjwxc/cachekey; the key is HMAC-SHA256(device secret, label ||
+// eFuse MAC || salt) (JjwxcBookCrypto). The secret is preloaded on the main
+// task at boot (main.cpp), so this is safe from the PSRAM-stack cache job.
+// Failure is fail-closed: without the secret, chapters are neither sealed nor
+// decrypted.
+bool ensureCacheCrypto(uint8_t (&key)[16]);
+// Version-1 key, for reading caches written by the first release. Read path
+// only: it is derived from the public MAC and the on-card salt.
+bool ensureLegacyCacheCrypto(uint8_t (&key)[16]);
+// Encrypts a plaintext chapter buffer with the v2 key and atomically replaces
+// `path`. The intermediate file is ciphertext, so a crash cannot leave a
+// readable chapter behind. Used to migrate plaintext/v1 files on first read.
+bool sealPlainBufferToFile(const std::string& path, const uint8_t* plain, size_t len);
 // The detail page's drawable cover: cover.source.jpg run through the same
 // JPEG/PNG -> BMP converter WeRead uses for its shelf covers
 // (WeReadClient.cpp:3427-3430), at the size the page lays out. It is a derived
