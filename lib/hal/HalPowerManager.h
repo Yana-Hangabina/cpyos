@@ -57,6 +57,14 @@ class HalPowerManager {
 
   // Enter one light-sleep cycle. GPIO and timer wake sources are removed before returning.
   LightSleepWakeReason lightSleepFor(uint32_t seconds) const;
+  // Why the most recent light-sleep attempt returned Failed (0 = not a failure):
+  // 1 invalid request, 2 board not ready, 3 failed to arm GPIO wake,
+  // 4 failed to arm the timer, 5 esp_light_sleep_start() error,
+  // 6 too many non-key GPIO wakes, 7 unexpected wake cause,
+  // 8 IOE INT# still asserted after draining.
+  static uint8_t lastLightSleepFailure();
+  // Raw esp_err_t from the last light-sleep failure (0 when none).
+  static int lastLightSleepError();
 
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
