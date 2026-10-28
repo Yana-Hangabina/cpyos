@@ -62,7 +62,6 @@
 #ifdef BOARD_HAS_PSRAM
 #include "activities/apps/jjwxc/JjwxcActivity.h"
 #endif
-#include "activities/home/ReaderRecoveryActivity.h"
 #if defined(CROSSPOINT_MUPDF)
 #include "activities/reader/PdfReaderActivity.h"
 #endif
@@ -1204,9 +1203,17 @@ void setup() {
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
   } else if (APP_STATE.readerActivityLoadCount > 0 && !APP_STATE.openEpubPath.empty()) {
-    // A previous boot died while opening this book (docs/07 D8). Say so and let
-    // the user choose, instead of the silent fall-through to Home below.
-    activityManager.replaceActivityWith<ReaderRecoveryActivity>();
+    // A flash/reset while a book was open leaves this stale marker. It is not a
+    // book fault: the old "opening this book was interrupted" modal interrupted
+    // every ordinary flash. Drop the resume marker and go Home; a real panic is
+    // already routed to the crash report above.
+    LOG_INF("RECOVERY", "clearing stale interrupted-reader state for '%s' (attempts=%u)",
+            APP_STATE.openEpubPath.c_str(), static_cast<unsigned>(APP_STATE.readerActivityLoadCount));
+    APP_STATE.openEpubPath.clear();
+    APP_STATE.readerActivityLoadCount = 0;
+    APP_STATE.saveToFile();
+    if (needsWakeRefresh) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
+    activityManager.goHome();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
