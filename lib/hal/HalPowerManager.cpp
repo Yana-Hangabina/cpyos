@@ -35,6 +35,8 @@ HalPowerManager powerManager;  // Singleton instance
 static constexpr gpio_num_t XTEINK_C3_GPIO13 = GPIO_NUM_13;
 
 namespace {
+uint8_t g_lastLightSleepFailure = 0;
+int g_lastLightSleepError = 0;
 #if !FREEINK_DEVICE_READPICO
 struct StandbyRetention {
   int8_t pin;
@@ -96,14 +98,18 @@ void readPicoHostShutdown() {
 HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds) {
   using LightSleepWakeReason = HalPowerManager::LightSleepWakeReason;
   constexpr uint64_t kIoeIntMask = 1ULL << READPICO_IOE_INT;
+  g_lastLightSleepFailure = 0;
+  g_lastLightSleepError = 0;
 
   if (seconds == 0) {
+    g_lastLightSleepFailure = 1;
     LOG_ERR("PWR", "Invalid light-sleep request: seconds=0");
     return LightSleepWakeReason::Failed;
   }
   if (!BoardReadPico::ready()) {
     // Without the expander the INT# net has no driver and no reader, so there is
     // no wake source to arm and no way to attribute a wake.
+    g_lastLightSleepFailure = 2;
     LOG_ERR("PWR", "FCA9555 is not up; no light-sleep wake source available");
     return LightSleepWakeReason::Failed;
   }
@@ -114,9 +120,24 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   // events cannot make the first slice wake immediately.
   BoardReadPico::clearIoeInt();
   (void)BoardReadPico::pmuTakeKeyWakeup();
+  // The PMU's CW_INT is an input to the expander; ACKing the FIFO releases it,
+  // but the expander's own INT# latch is only released by reading Port 0. Do
+  // that again after the ACK, otherwise the GPIO wake source is still asserted
+  // and esp_light_sleep_start() rejects with ESP_ERR_SLEEP_REJECT.
+  for (int i = 0; i < 5 && BoardReadPico::ioeIntAsserted(); ++i) {
+    delay(10);
+    (void)BoardReadPico::pmuTakeKeyWakeup();
+    BoardReadPico::clearIoeInt();
+  }
+  if (BoardReadPico::ioeIntAsserted()) {
+    g_lastLightSleepFailure = 8;
+    LOG_ERR("PWR", "IOE INT is still asserted; refusing light sleep");
+    return LightSleepWakeReason::Failed;
+  }
   const uint16_t eventBaseline = BoardReadPico::pmuLastEventId();
 
   if (!freeink::PowerManager::armLightSleepWakeupLevels(kIoeIntMask, 0)) {
+    g_lastLightSleepFailure = 3;
     LOG_ERR("PWR", "Failed to arm the GPIO%d light-sleep wake", READPICO_IOE_INT);
     return LightSleepWakeReason::Failed;
   }
@@ -142,6 +163,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
     const esp_err_t timerError =
         esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(sliceMs) * 1000ULL);
     if (timerError != ESP_OK) {
+      g_lastLightSleepFailure = 4;
       cleanup();
       LOG_ERR("PWR", "Failed to arm the light-sleep timer: %d", static_cast<int>(timerError));
       return LightSleepWakeReason::Failed;
@@ -165,6 +187,8 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
       return LightSleepWakeReason::PowerButton;
     }
     if (sleepError != ESP_OK) {
+      g_lastLightSleepFailure = 5;
+      g_lastLightSleepError = static_cast<int>(sleepError);
       cleanup();
       LOG_ERR("PWR", "Light sleep failed: %d", static_cast<int>(sleepError));
       return LightSleepWakeReason::Failed;
@@ -175,6 +199,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
       // popping the reader out of standby. Bound the retries in case a line is
       // stuck asserted.
       if (++externalWakeCount > 20) {
+        g_lastLightSleepFailure = 6;
         cleanup();
         return LightSleepWakeReason::Failed;
       }
@@ -182,6 +207,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
       continue;
     }
     if (cause == ESP_SLEEP_WAKEUP_TIMER) continue;
+    g_lastLightSleepFailure = 7;
     cleanup();
     LOG_ERR("PWR", "Unexpected light-sleep wake cause: %d", static_cast<int>(cause));
     return LightSleepWakeReason::Failed;
@@ -478,6 +504,10 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   }
   return _batteryCachedPercent / 10;
 }
+
+uint8_t HalPowerManager::lastLightSleepFailure() { return g_lastLightSleepFailure; }
+
+int HalPowerManager::lastLightSleepError() { return g_lastLightSleepError; }
 
 HalPowerManager::BatteryTelemetry HalPowerManager::readBatteryTelemetry() const {
   BatteryTelemetry telemetry;

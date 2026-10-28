@@ -465,10 +465,15 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
       lastInputMs_ = millis();
       requestUpdate();
       return true;
-    case HalPowerManager::LightSleepWakeReason::Failed:
-      logStandbyWake("failed");
+    case HalPowerManager::LightSleepWakeReason::Failed: {
+      char reason[32];
+      const int n = snprintf(reason, sizeof(reason), "failed(%u/%d)",
+                             static_cast<unsigned>(HalPowerManager::lastLightSleepFailure()),
+                             HalPowerManager::lastLightSleepError());
+      if (n > 0) logStandbyWake(reason);
       lastInputMs_ = millis();
       return true;
+    }
   }
 #else
   (void)idleMs;
