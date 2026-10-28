@@ -111,14 +111,9 @@ bool buildProtectedEntry(const uint8_t* plain, const size_t n, const uint8_t (&k
   const size_t pad = cipherLen - deflated;
   memset(out + 16 + deflated, static_cast<int>(pad), pad);
 
-  uint8_t previous[16];
-  memcpy(previous, iv, sizeof(previous));
-  for (size_t off = 0; off < cipherLen; off += 16) {
-    uint8_t block[16];
-    for (size_t i = 0; i < sizeof(block); ++i) block[i] = out[16 + off + i] ^ previous[i];
-    jjwxc::BookCrypto::aes128EncryptBlock(key, block, out + 16 + off);
-    memcpy(previous, out + 16 + off, sizeof(previous));
-  }
+  // The key schedule is expanded once here instead of once per 16-byte block;
+  // a 4000-chapter book otherwise pays hundreds of thousands of expansions.
+  if (!jjwxc::BookCrypto::aes128CbcEncrypt(key, iv, out + 16, cipherLen, out + 16)) return false;
   storedLen = need;
   return true;
 }
@@ -139,22 +134,38 @@ bool readFileToPsram(const std::string& path, memory::ByteBuffer& buffer, size_t
 
 bool readChapterToPsram(const std::string& path, memory::ByteBuffer& buffer, size_t& len) {
   if (!readFileToPsram(path, buffer, len)) return false;
-  if (len < 4 || memcmp(buffer.get(), "JJX1", 4) != 0) {
+  const uint8_t version = jjwxc::BookCrypto::blobVersion(buffer.get(), len);
+  if (version == 0) {
+    // A JJX1 magic with an unknown version is not plaintext; refuse rather than
+    // hand ciphertext to the packager.
+    if (len >= 4 && memcmp(buffer.get(), "JJX1", 4) == 0) return false;
     // First protected repackage after the cache-encryption upgrade: seal the
     // plaintext source now so later card copies do not expose it. Best effort;
     // the buffer already holds what the package needs.
-    if (!JjwxcStore::sealChapterFile(path)) LOG_ERR(kTag, "chapter cache not sealed: %s", path.c_str());
+    if (!JjwxcStore::sealPlainBufferToFile(path, buffer.get(), len)) {
+      LOG_ERR(kTag, "chapter cache not sealed: %s", path.c_str());
+    }
     return true;
   }
-  uint8_t key[16] = {};
-  uint8_t nonceSeed[8] = {};
-  if (!JjwxcStore::ensureCacheCrypto(key, nonceSeed)) return false;
+  uint8_t key[jjwxc::BookCrypto::kKeyLen] = {};
+  if (version == jjwxc::BookCrypto::kVersionLegacy) {
+    if (!JjwxcStore::ensureLegacyCacheCrypto(key)) return false;
+  } else {
+    if (!JjwxcStore::ensureCacheCrypto(key)) return false;
+  }
   size_t plainLen = 0;
   if (!jjwxc::BookCrypto::decryptBookBlob(key, buffer.get(), len, buffer.get(), len, plainLen)) {
     LOG_ERR(kTag, "cache decrypt failed: %s", path.c_str());
     return false;
   }
   len = plainLen;
+  if (version == jjwxc::BookCrypto::kVersionLegacy) {
+    // Migrate on first read: re-encrypt under the v2 (device-secret) key so the
+    // public-MAC path stops being useful for this file.
+    if (!JjwxcStore::sealPlainBufferToFile(path, buffer.get(), len)) {
+      LOG_ERR(kTag, "legacy chapter not re-sealed: %s", path.c_str());
+    }
+  }
   return true;
 }
 
@@ -268,7 +279,15 @@ bool coverIsPng(const std::string& path) {
 
 bool ChapterWriter::flushOut() {
   if (outLen_ == 0) return true;
+  if (plainBytes_ > 0xFFFFFFFFu - static_cast<uint32_t>(outLen_)) {
+    LOG_ERR(kTag, "chapter too large: %s", partPath_.c_str());
+    return false;
+  }
   const size_t wanted = outLen_;
+  crc_ = jjwxc::BookCrypto::crc32Update(crc_, reinterpret_cast<const uint8_t*>(out_), outLen_);
+  plainBytes_ += static_cast<uint32_t>(outLen_);
+  jjwxc::BookCrypto::CtrStream::xorBytes(stream_, reinterpret_cast<const uint8_t*>(out_),
+                                         reinterpret_cast<uint8_t*>(out_), outLen_);
   const size_t written = file_.write(reinterpret_cast<const uint8_t*>(out_), wanted);
   outLen_ = 0;
   if (written == wanted) return true;
@@ -315,9 +334,28 @@ bool ChapterWriter::begin(const std::string& finalPath, const char* title) {
   abort();
   finalPath_ = finalPath;
   partPath_ = finalPath + ".part";
+  uint8_t key[jjwxc::BookCrypto::kKeyLen] = {};
+  if (!JjwxcStore::ensureCacheCrypto(key)) {
+    // Fail closed: without the device secret we can neither seal nor read the
+    // cache. Falling back to plaintext would silently re-open the copy path.
+    LOG_ERR(kTag, "cannot derive chapter cache key: %s", finalPath.c_str());
+    return false;
+  }
+  esp_fill_random(nonce_, sizeof(nonce_));
+  jjwxc::BookCrypto::CtrStream::init(stream_, key, nonce_);
+  plainBytes_ = 0;
+  crc_ = 0xFFFFFFFFu;
+
   if (Storage.exists(partPath_.c_str())) Storage.remove(partPath_.c_str());
   if (!Storage.openFileForWrite(kTag, partPath_, file_)) {
     LOG_ERR(kTag, "cannot open %s", partPath_.c_str());
+    return false;
+  }
+  uint8_t header[jjwxc::BookCrypto::kHeaderLen];
+  jjwxc::BookCrypto::writeHeader(header, nonce_, 0, 0);
+  if (file_.write(header, sizeof(header)) != sizeof(header)) {
+    LOG_ERR(kTag, "cannot write chapter header: %s", partPath_.c_str());
+    abort();
     return false;
   }
   active_ = true;
@@ -382,12 +420,19 @@ bool ChapterWriter::finish(uint32_t& outBytes) {
   outBytes = 0;
   if (!active_) return false;
   const bool ok = closeParagraph() && putLiteral("</body></html>") && flushOut();
+  uint8_t header[jjwxc::BookCrypto::kHeaderLen];
+  jjwxc::BookCrypto::writeHeader(header, nonce_, plainBytes_, crc_ ^ 0xFFFFFFFFu);
+  // The header went out with a zero length/CRC before the body; patch it now
+  // that the plaintext size and CRC are known. The header is not part of the
+  // keystream, so rewriting it does not touch the ciphertext.
+  const bool patched = ok && file_.seek64(0) && file_.write(header, sizeof(header)) == sizeof(header);
   file_.flush();
   // Explicit close: the handle is a member and atomicReplace() renames over the
   // destination (AGENTS.md rule #5).
   file_.close();
   active_ = false;
-  if (!ok) {
+  if (!ok || !patched) {
+    LOG_ERR(kTag, "chapter write failed: %s", finalPath_.c_str());
     Storage.remove(partPath_.c_str());
     return false;
   }
@@ -396,18 +441,7 @@ bool ChapterWriter::finish(uint32_t& outBytes) {
     Storage.remove(partPath_.c_str());
     return false;
   }
-  HalFile written;
-  if (Storage.openFileForRead(kTag, finalPath_, written)) {
-    const uint64_t size = written.fileSize64();
-    if (size <= UINT32_MAX) outBytes = static_cast<uint32_t>(size);
-  }
-  // Encrypt the chapter at rest. The finished EPUB is protected separately; this
-  // closes the plaintext copy under /.crosspoint/jjwxc/<id>/chapters/ that a card
-  // reader could otherwise open directly. A failure leaves the chapter readable
-  // and is reported, never turned into a lost chapter.
-  if (!JjwxcStore::sealChapterFile(finalPath_)) {
-    LOG_ERR(kTag, "chapter cache not sealed: %s", finalPath_.c_str());
-  }
+  outBytes = plainBytes_;
   return true;
 }
 

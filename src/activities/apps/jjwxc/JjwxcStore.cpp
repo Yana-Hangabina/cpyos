@@ -1,6 +1,7 @@
 #include "JjwxcStore.h"
 
 #include <BookKey.h>
+#include <DeviceSecret.h>
 #include <HalSystem.h>
 #include <JjwxcBookCrypto.h>
 #include <Logging.h>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #include "util/StringUtils.h"
@@ -671,69 +673,94 @@ bool ensureBookContentKey(const std::string& epubPath, uint8_t (&key)[16]) {
   return true;
 }
 
-bool ensureCacheCrypto(uint8_t (&key)[16], uint8_t (&nonceSeed)[8]) {
-  if (!ensureRoot()) return false;
+bool readCacheSalt(uint8_t (&salt)[jjwxc::BookCrypto::kSaltLen]) {
   const std::string saltPath = std::string(kRoot) + "/cachekey";
-  uint8_t salt[16] = {};
-  bool haveSalt = false;
-  if (Storage.exists(saltPath.c_str())) {
+  HalFile file;
+  if (!Storage.openFileForRead(kTag, saltPath, file)) return false;
+  return file.read(salt, sizeof(salt)) == static_cast<int>(sizeof(salt));
+}
+
+bool loadOrCreateCacheSalt(uint8_t (&salt)[jjwxc::BookCrypto::kSaltLen]) {
+  if (readCacheSalt(salt)) return true;
+  esp_fill_random(salt, sizeof(salt));
+  const std::string saltPath = std::string(kRoot) + "/cachekey";
+  const std::string tmp = saltPath + ".part";
+  {
     HalFile file;
-    if (Storage.openFileForRead(kTag, saltPath, file)) {
-      haveSalt = file.read(salt, sizeof(salt)) == static_cast<int>(sizeof(salt));
-    }
-  }
-  if (!haveSalt) {
-    esp_fill_random(salt, sizeof(salt));
-    const std::string tmp = saltPath + ".part";
-    {
-      HalFile file;
-      if (!Storage.openFileForWrite(kTag, tmp, file)) return false;
-      const size_t written = file.write(salt, sizeof(salt));
-      file.flush();
-      if (written != sizeof(salt)) {
-        Storage.remove(tmp.c_str());
-        return false;
-      }
-    }
-    if (!WeReadStore::atomicReplace(tmp, saltPath)) {
+    if (!Storage.openFileForWrite(kTag, tmp, file)) return false;
+    const size_t written = file.write(salt, sizeof(salt));
+    file.flush();
+    if (written != sizeof(salt)) {
       Storage.remove(tmp.c_str());
-      LOG_ERR(kTag, "cannot persist cache salt");
       return false;
     }
   }
-  HalSystem::DeviceId mac{};
-  if (!HalSystem::getDeviceId(mac)) return false;
-  return jjwxc::BookCrypto::deriveBookKey(mac.data(), salt, key, nonceSeed);
+  if (!WeReadStore::atomicReplace(tmp, saltPath)) {
+    Storage.remove(tmp.c_str());
+    LOG_ERR(kTag, "cannot persist cache salt");
+    return false;
+  }
+  return true;
 }
 
-bool sealChapterFile(const std::string& path) {
-  HalFile probe;
-  if (!Storage.openFileForRead(kTag, path, probe)) return false;
-  const uint64_t size = probe.fileSize64();
-  uint8_t magic[4] = {};
-  const bool sealed = size >= sizeof(magic) && probe.read(magic, sizeof(magic)) == static_cast<int>(sizeof(magic)) &&
-                      memcmp(magic, "JJX1", sizeof(magic)) == 0;
-  probe.close();
-  if (sealed) return true;
-  if (size == 0 || size > 8u * 1024u * 1024u) return false;
-
-  uint8_t key[16] = {};
-  uint8_t nonceSeed[8] = {};
-  if (!ensureCacheCrypto(key, nonceSeed)) return false;
-
-  auto plain = memory::makePsramByteBufferUninitializedNoThrow(static_cast<size_t>(size));
-  if (!plain) return false;
-  {
-    HalFile file;
-    if (!Storage.openFileForRead(kTag, path, file)) return false;
-    if (file.read(plain.get(), static_cast<size_t>(size)) != static_cast<int>(size)) return false;
+bool ensureCacheCrypto(uint8_t (&key)[jjwxc::BookCrypto::kKeyLen]) {
+  // Derived once per session: the salt is on SD and the KDF is an HMAC, so
+  // re-deriving per chapter would add a file open to every read for no gain.
+  static std::mutex lock;
+  static bool loaded = false;
+  static uint8_t cached[jjwxc::BookCrypto::kKeyLen] = {};
+  std::lock_guard<std::mutex> guard(lock);
+  if (loaded) {
+    memcpy(key, cached, sizeof(cached));
+    return true;
   }
-  const size_t cap = static_cast<size_t>(size) + jjwxc::BookCrypto::kHeaderLen;
+  if (!ensureRoot()) return false;
+  uint8_t salt[jjwxc::BookCrypto::kSaltLen] = {};
+  if (!loadOrCreateCacheSalt(salt)) return false;
+  HalSystem::DeviceId mac{};
+  if (!HalSystem::getDeviceId(mac)) return false;
+  uint8_t macBytes[jjwxc::BookCrypto::kMacLen] = {};
+  memcpy(macBytes, mac.data(), sizeof(macBytes));
+  uint8_t secret[jjwxc::BookCrypto::kSecretLen] = {};
+  if (!deviceSecret(secret)) {
+    // Fail closed. Falling back to the v1 MAC+salt key here would silently
+    // re-open the copy-the-card path this version exists to close.
+    LOG_ERR(kTag, "cache key unavailable: device secret missing");
+    return false;
+  }
+  if (!jjwxc::BookCrypto::deriveBookKey(secret, macBytes, salt, cached)) return false;
+  loaded = true;
+  memcpy(key, cached, sizeof(cached));
+  return true;
+}
+
+bool ensureLegacyCacheCrypto(uint8_t (&key)[jjwxc::BookCrypto::kKeyLen]) {
+  if (!ensureRoot()) return false;
+  uint8_t salt[jjwxc::BookCrypto::kSaltLen] = {};
+  // Do not create a salt here: a v1 blob encrypted under a different salt is
+  // already unrecoverable, and creating a fresh one would silently invalidate
+  // every other legacy chapter.
+  if (!readCacheSalt(salt)) return false;
+  HalSystem::DeviceId mac{};
+  if (!HalSystem::getDeviceId(mac)) return false;
+  uint8_t macBytes[jjwxc::BookCrypto::kMacLen] = {};
+  memcpy(macBytes, mac.data(), sizeof(macBytes));
+  return jjwxc::BookCrypto::deriveLegacyBookKey(macBytes, salt, key);
+}
+
+bool sealPlainBufferToFile(const std::string& path, const uint8_t* plain, size_t len) {
+  if (plain == nullptr && len != 0) return false;
+  if (len > 8u * 1024u * 1024u) return false;
+  uint8_t key[jjwxc::BookCrypto::kKeyLen] = {};
+  if (!ensureCacheCrypto(key)) return false;
+  uint8_t nonce[jjwxc::BookCrypto::kNonceLen] = {};
+  esp_fill_random(nonce, sizeof(nonce));
+
+  const size_t cap = len + jjwxc::BookCrypto::kHeaderLen;
   auto blob = memory::makePsramByteBufferNoThrow(cap);
   if (!blob) return false;
   size_t blobLen = 0;
-  if (!jjwxc::BookCrypto::encryptBookBlob(key, nonceSeed, plain.get(), static_cast<size_t>(size), blob.get(), cap,
-                                          blobLen)) {
+  if (!jjwxc::BookCrypto::encryptBookBlob(key, nonce, plain, len, blob.get(), cap, blobLen)) {
     LOG_ERR(kTag, "cache encryption failed for %s", path.c_str());
     return false;
   }
