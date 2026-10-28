@@ -35,4 +35,10 @@ HeapInfo getHeapInfo();
 
 std::string getPanicInfo(bool full = false);
 bool isRebootFromPanic();
+
+// True when this boot followed a reset that the firmware itself (or a flashing
+// tool) requested: USB/JTAG resets, ESP.restart, external reset, deep-sleep
+// wake, etc. Those must not be mistaken for a reader crash. Power loss,
+// brownout, panic and watchdog resets return false.
+bool isRebootDeliberate();
 }  // namespace HalSystem
