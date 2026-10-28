@@ -199,10 +199,12 @@ gray, so each needs on-panel comparison, not just a host test.
    acknowledges every event and reports key types (or a currently held key).
    `HalPowerManager::lightSleepReadPico` now sleeps in 2 s slices (matching rpr's
    `APP_LOCK_KEY_POLL_US`) and polls that function after each wake; a key event
-   returns `PowerButton` before the 60 s clock tick. A GPIO wake with no key
-   event (AC-in, card detect/PGOOD, or a non-key PMU event) is cleared and the
-   loop keeps sleeping: returning it as a user wake made the reader's clock
-   standby pop back to the reader by itself.
+   returns `PowerButton` before the 60 s clock tick. The caller passes the last
+   event id seen before sleeping, so the press that opened standby cannot be
+   replayed as a wake; events in the first 4 s of light sleep are also ignored
+   and ACKed. A GPIO wake with no key event (AC-in, card detect/PGOOD, or a
+   non-key PMU event) is cleared and the loop keeps sleeping: returning either
+   made the reader's clock standby pop back to the reader by itself.
 
 ## Upgrading an older tree
 

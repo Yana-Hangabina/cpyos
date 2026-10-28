@@ -114,6 +114,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   // events cannot make the first slice wake immediately.
   BoardReadPico::clearIoeInt();
   (void)BoardReadPico::pmuTakeKeyWakeup();
+  const uint16_t eventBaseline = BoardReadPico::pmuLastEventId();
 
   if (!freeink::PowerManager::armLightSleepWakeupLevels(kIoeIntMask, 0)) {
     LOG_ERR("PWR", "Failed to arm the GPIO%d light-sleep wake", READPICO_IOE_INT);
@@ -131,6 +132,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   // drain that FIFO; the clock face still only redraws at the requested minute.
   constexpr int64_t kKeyPollMs = 2000;
   const int64_t deadlineMs = static_cast<int64_t>(millis()) + static_cast<int64_t>(seconds) * 1000;
+  const int64_t sleepStartMs = static_cast<int64_t>(millis());
   int externalWakeCount = 0;
 
   while (static_cast<int64_t>(millis()) < deadlineMs) {
@@ -151,7 +153,14 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
 
     // The PMU event is authoritative even when the IOE edge was missed. This is
     // what turns a short key press into a wake before the 60 s clock tick.
-    if (BoardReadPico::pmuTakeKeyWakeup()) {
+    if (BoardReadPico::pmuTakeKeyWakeup(eventBaseline)) {
+      // The first poll after entering sleep can still see the release event of
+      // the press that opened standby. It is not a user request to leave the
+      // clock; ignore early events (they were ACKed above) and keep sleeping.
+      if (static_cast<int64_t>(millis()) - sleepStartMs < 4000) {
+        LOG_DBG("PWR", "Ignoring early PMU key event after light-sleep entry");
+        continue;
+      }
       cleanup();
       return LightSleepWakeReason::PowerButton;
     }
