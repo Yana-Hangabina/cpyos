@@ -147,7 +147,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   // PMU keeps KEY_SHORT in its event FIFO. A short slice wakes often enough to
   // drain that FIFO; the clock face still only redraws at the requested minute.
   constexpr int64_t kKeyPollMs = 2000;
-  constexpr int64_t kMinSleepMs = 2000;
+  constexpr int64_t kMinSleepMs = 500;
   const int64_t deadlineMs = static_cast<int64_t>(millis()) + static_cast<int64_t>(seconds) * 1000;
   const int64_t sleepStartMs = static_cast<int64_t>(millis());
   int externalWakeCount = 0;

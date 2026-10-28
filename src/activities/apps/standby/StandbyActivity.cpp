@@ -450,9 +450,6 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
   }
   switch (wakeReason) {
     case HalPowerManager::LightSleepWakeReason::Timer:
-      // A timer return proves the light-sleep path completed; keep one line per
-      // minute so an unplugged standby session is diagnosable from SD.
-      logStandbyWake("timer");
       processFaceTick(true);
       return true;
     case HalPowerManager::LightSleepWakeReason::PowerButton:
