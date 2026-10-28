@@ -97,7 +97,6 @@ void readPicoHostShutdown() {
 // primitive takes the high mask whenever a pickup-wake feature lands.
 HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds) {
   using LightSleepWakeReason = HalPowerManager::LightSleepWakeReason;
-  constexpr uint64_t kIoeIntMask = 1ULL << READPICO_IOE_INT;
   g_lastLightSleepFailure = 0;
   g_lastLightSleepError = 0;
 
@@ -136,28 +135,31 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   }
   const uint16_t eventBaseline = BoardReadPico::pmuLastEventId();
 
-  if (!freeink::PowerManager::armLightSleepWakeupLevels(kIoeIntMask, 0)) {
-    g_lastLightSleepFailure = 3;
-    LOG_ERR("PWR", "Failed to arm the GPIO%d light-sleep wake", READPICO_IOE_INT);
-    return LightSleepWakeReason::Failed;
-  }
-
-  const auto cleanup = [kIoeIntMask] {
-    freeink::PowerManager::clearLightSleepWakeup(kIoeIntMask);
-    (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
-  };
+  // Timer-only light sleep. Arming GPIO41 (FCA9555 INT#) as a wake source made
+  // esp_light_sleep_start() reject with ESP_ERR_SLEEP_REJECT (0x103) whenever
+  // CW_INT was already asserted at entry; the 2 s timer below polls the PMU event
+  // FIFO, which is what actually catches short key presses. A key wake can be up
+  // to one slice late, but it is reliable and does not leave the clock awake.
+  const auto cleanup = [] { (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER); };
 
   // read-pico-reader's lock loop uses a 2 s PMU poll: the IOE edge alone misses
   // a short key press (the line is released before the chip is awake), while the
   // PMU keeps KEY_SHORT in its event FIFO. A short slice wakes often enough to
   // drain that FIFO; the clock face still only redraws at the requested minute.
   constexpr int64_t kKeyPollMs = 2000;
+  constexpr int64_t kMinSleepMs = 2000;
   const int64_t deadlineMs = static_cast<int64_t>(millis()) + static_cast<int64_t>(seconds) * 1000;
   const int64_t sleepStartMs = static_cast<int64_t>(millis());
   int externalWakeCount = 0;
 
   while (static_cast<int64_t>(millis()) < deadlineMs) {
     const int64_t remainingMs = deadlineMs - static_cast<int64_t>(millis());
+    if (remainingMs < kMinSleepMs) {
+      // Too short for the RTC wake path; let Standby redraw and re-arm instead
+      // of risking ESP_ERR_SLEEP_TOO_SHORT_SLEEP_DURATION/REJECT.
+      cleanup();
+      return LightSleepWakeReason::Timer;
+    }
     const int64_t sliceMs = remainingMs < kKeyPollMs ? remainingMs : kKeyPollMs;
     if (sliceMs <= 0) break;
     const esp_err_t timerError =
@@ -194,10 +196,8 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
       return LightSleepWakeReason::Failed;
     }
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {
-      // Another expander input (AC-in, card detect, PGOOD) or a non-key PMU
-      // event. It is not a user wake: clear it and keep sleeping rather than
-      // popping the reader out of standby. Bound the retries in case a line is
-      // stuck asserted.
+      // Timer-only sleeper: GPIO should not be armed. Treat an unexpected GPIO
+      // wake as an external event and keep sleeping, with a bound.
       if (++externalWakeCount > 20) {
         g_lastLightSleepFailure = 6;
         cleanup();
