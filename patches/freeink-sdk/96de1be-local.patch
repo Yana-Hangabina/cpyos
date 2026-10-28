@@ -3169,7 +3169,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/BoardReadP
  constexpr uint8_t kPmuEvtShutdownRequested = 0x22;
  // STATUS.flags (read_pico_pmu.c `parse_status`: raw[4..7], u32 LE) bit 5. This is
  // a LEVEL, not an event: it stays set for the whole press, which is what the
-@@ -774,6 +777,26 @@
+@@ -774,6 +777,25 @@
    socPermille = (socValid && soc != kPmuSocUnknown) ? soc : 0;
    chargeState = raw[4];
    return mV != 0;
@@ -3180,7 +3180,6 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/BoardReadP
 +  bool wake = false;
 +  for (int i = 0; i < 8; ++i) {
 +    if (!pmuPoll()) break;
-+    if (g_pmuKeyDown) wake = true;
 +    if (g_pmuPendingEvents == 0) break;
 +    uint16_t id = 0;
 +    uint8_t type = 0;

@@ -13,9 +13,12 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
+#include <HalStorage.h>
+#include <fcntl.h>
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 
 #include "CrossPointSettings.h"
@@ -104,6 +107,25 @@ uint8_t rankOfAvailableFace(int sw, int sh, uint8_t faceIdx) {
 bool g_promptedForWifiThisSession = false;
 bool g_debugWakeRequested = false;
 
+// Diagnostic trail for "the clock returned to the reader by itself": light
+// sleep only happens while the cable is unplugged, so serial is gone. One
+// append per actual wake (never per timer tick), read back with
+// CMD:CAT /.crosspoint/wake.log.
+void logStandbyWake(const char* reason) {
+#if CROSSPOINT_EMULATED == 0
+  char line[96];
+  const int n = snprintf(line, sizeof(line), "%lu,%s\n", static_cast<unsigned long>(millis()), reason);
+  if (n <= 0) return;
+  HalFile file = Storage.open("/.crosspoint/wake.log", O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) return;
+  (void)file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
+  file.flush();
+  file.close();
+#else
+  (void)reason;
+#endif
+}
+
 // Bottom-center page indicator dots. One dot per face, filled for the current
 // face. Drawn only in Normal mode — hidden once we go Immersive. Shares the dot
 // style with the Apps menu via drawPaginationDots().
@@ -117,6 +139,7 @@ void drawFaceDots(const GfxRenderer& renderer, int sw, int sh, uint8_t total, ui
 
 void StandbyActivity::onEnter() {
   Activity::onEnter();
+  logStandbyWake(returnOnWake_ ? "enter-reader" : "enter");
   LOG_DBG("STANDBY", "onEnter free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
   // Normal standby starts on the duck face; the reader's power-key standby is a
   // clock screen, so start one rank later (Sloppy Clock).
@@ -432,6 +455,7 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
     case HalPowerManager::LightSleepWakeReason::PowerButton:
       // Swallow the rest of this press in main: a wake hold is not a new
       // in-app long-press, and it must not hand the host to the PMU.
+      logStandbyWake("power");
       mappedInput.notePowerWakeFromSleep();
       if (returnOnWake_) {
         finish();
@@ -441,18 +465,8 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
       lastInputMs_ = millis();
       requestUpdate();
       return true;
-    case HalPowerManager::LightSleepWakeReason::External:
-      // AC-in / card detect / PGOOD. Treat as an ordinary wake, but do not mark
-      // a power-key release: there is no key press to swallow.
-      if (returnOnWake_) {
-        finish();
-        return true;
-      }
-      mode_ = DisplayMode::Normal;
-      lastInputMs_ = millis();
-      requestUpdate();
-      return true;
     case HalPowerManager::LightSleepWakeReason::Failed:
+      logStandbyWake("failed");
       lastInputMs_ = millis();
       return true;
   }
@@ -472,12 +486,14 @@ void StandbyActivity::loop() {
   if (g_debugWakeRequested) {
     g_debugWakeRequested = false;
     if (returnOnWake_) {
+      logStandbyWake("debug");
       finish();
       return;
     }
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (returnOnWake_) {
+      logStandbyWake("back");
       finish();
     } else {
       activityManager.goHome();
@@ -563,6 +579,7 @@ void StandbyActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Power)) {
     lastInputMs_ = millis();
     if (returnOnWake_ && powerArmed_) {
+      logStandbyWake("power-release");
       finish();
       return;
     }
