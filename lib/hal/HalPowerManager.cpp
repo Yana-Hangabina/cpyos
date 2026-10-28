@@ -131,6 +131,7 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
   // drain that FIFO; the clock face still only redraws at the requested minute.
   constexpr int64_t kKeyPollMs = 2000;
   const int64_t deadlineMs = static_cast<int64_t>(millis()) + static_cast<int64_t>(seconds) * 1000;
+  int externalWakeCount = 0;
 
   while (static_cast<int64_t>(millis()) < deadlineMs) {
     const int64_t remainingMs = deadlineMs - static_cast<int64_t>(millis());
@@ -160,9 +161,16 @@ HalPowerManager::LightSleepWakeReason lightSleepReadPico(const uint32_t seconds)
       return LightSleepWakeReason::Failed;
     }
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {
-      cleanup();
-      // Another expander input (AC-in, card detect, PGOOD) ended the sleep.
-      return LightSleepWakeReason::External;
+      // Another expander input (AC-in, card detect, PGOOD) or a non-key PMU
+      // event. It is not a user wake: clear it and keep sleeping rather than
+      // popping the reader out of standby. Bound the retries in case a line is
+      // stuck asserted.
+      if (++externalWakeCount > 20) {
+        cleanup();
+        return LightSleepWakeReason::Failed;
+      }
+      delay(20);
+      continue;
     }
     if (cause == ESP_SLEEP_WAKEUP_TIMER) continue;
     cleanup();

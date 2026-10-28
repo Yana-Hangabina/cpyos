@@ -27,8 +27,7 @@ class HalPowerManager {
  public:
   enum class LightSleepWakeReason : uint8_t {
     Timer,        // the requested sleep window elapsed
-    PowerButton,  // the PMU key produced an event (or is held)
-    External,     // another FCA9555 input (AC-in, card detect, PGOOD)
+    PowerButton,  // the PMU key produced an event
     Failed
   };
 
