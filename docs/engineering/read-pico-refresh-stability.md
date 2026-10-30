@@ -72,8 +72,100 @@ The evidence supports a **scan-state latch**, not ordinary pigment ghosting:
    why only a reboot recovered it.
 
 The exact electrical/state-machine point is not proven. In particular, the
-successful soak cannot distinguish between "the queue reset fixed it" and "the
-36-phase/blocking/GL16 combination has not yet hit the trigger again".
+successful soak cannot distinguish between "the queue reset fixed it" and the
+"36-phase/blocking/GL16 combination has not yet hit the trigger again".
+
+★ Updated 2026-10-28 below: the latch is the 693-pulse gate ring losing a lap
+because the renderer's error path started the same physical frame twice. A
+partial-area update was a *trigger* (long multi-phase scans + underruns), not
+the intrinsic cause.
+
+## 2026-10-28: the error path starts the frame twice (verified on hardware)
+
+A CKV frame-boundary probe was added temporarily to `lcd_driver.c`. It records,
+for every `start_ckv_cycles()`, whether the previous finite RMT loop would still
+be running (`expected_end = start + 693 * line_time`). A second probe tags each
+start as `frame`, `frame-error` or `clear`, and `CMD:INJECTERR` injects one
+`EPD_DRAW_EMPTY_LINE_QUEUE` into the next prepared scan for a deterministic
+reproduction.
+
+**Pre-fix reproduction.** Entering the Library with a cold index (3.3 s of
+`LIBIDX` work) makes a feeder underrun. Once `ctx->error` is set,
+`lcd_calculate_frame()`'s error branch runs in **both** feeder tasks, and each
+one calls `epd_lcd_start_frame()`. The two calls are ~50 µs apart; the second
+resets the 693-cycle RMT loop at the start of the first one. Measurement over
+one such burst:
+
+```
+CKV early restart: prev=693 cycles, overlap=11038us, starts=... early=1..64
+line buffer underrun occurred!
+Frame failed (1024); clean retry required
+```
+
+`overlap ≈ 11038 µs` is one full frame (11 088 µs) minus the 50 µs between the
+two starts. The gate ring loses that frame's worth of CKV clocks; every
+remaining phase of the update repeats the truncation (`early` grew by one per
+phase), which is exactly the "gate-phase latch" the earlier experiments
+described.
+
+**Fix.** `RenderContext_t` now has `atomic_bool frame_started`, reset in
+`prepare_context_for_next_frame()`. Both the error branch and the normal
+trigger call `claim_frame_start()` (an atomic compare-exchange) and only the
+winner calls `epd_lcd_start_frame()`. This keeps the error path's blank frame
+(it still lets the panel complete its 693 clocks) while making it impossible for
+two feeders to start the same physical frame.
+
+**Post-fix verification (same hardware).**
+
+- `CMD:INJECTERR` + one page turn: `line buffer underrun` and `Frame failed
+  (1024)` still occur (the injected error is real), but `CKV diag: starts=256
+  early=0`.
+- The full mixed soak (Library / Home / Settings / 30 reader turns / Stats /
+  My) hit natural underruns four times; every summary reported `early=0`, e.g.
+  `CKV diag: starts=1280 early=0 max_overlap=0us gap_min=85us`. The frames still
+  fail and retry, but the CKV train is never truncated.
+
+**Temporary instrumentation (strip before shipping).** The `CKV early restart` /
+`CKV diag` counters, the `epd_lcd_set_ckv_tag()` calls in `render_lcd.c`, the
+`ckv_diag_*` block in `lcd_driver.c/h`, `epd_test_inject_error()` in
+`render.c`/`epdiy.h`, `epdiyLcdTestInjectError()` and `CMD:INJECTERR` are
+diagnostics. The atomic claim itself is the fix and should stay. Regenerate
+`patches/freeink-sdk/96de1be-local.patch` from the cleaned tree, not from the
+instrumented one.
+
+**Underrun and flash (same session).** The latch fix does not by itself stop the
+frame from failing; a feeder stall still underruns and the retry's clean-up is
+the visible flash. Two sources were found and fixed:
+
+- **Rapid page switching / 16-level scans:** with the old 32-line prefill, the
+  first underrun was exactly at **line 32** and in a late phase (21–31 of
+  36/37). 32 lines = 512 µs; the feeder stalls right after the frame starts.
+  Read Pico now prefills **96 lines (1.5 ms)**, still inside the 64-slot
+  per-thread queues and the `2*64-16=112` ceiling. The same aggressive soak
+  (4 rounds of Home/Library/Reader + 20 page turns) then reported
+  **0 underruns, 0 `Frame failed`, 0 early restarts**.
+- **Cold Library entry:** `CpyTheme::drawPopup()` calls `displayBuffer()`, so
+  the "rebuilding" popup starts a multi-phase scan, and `rebuildIndex()` / the
+  Library render ran concurrently with it. The first underrun was at **line
+  233** in phase 0. `LibraryListActivity::onEnter` now rebuilds the index
+  **before** the popup push (the manual-refresh and delete paths already hold
+  `RenderLock`; adding one in `onEnter` itself deadlocked, so it is an ordering
+  fix, not a lock). A cold rebuild (271 ms) followed by the popup/list scans
+  produced **0 underruns**.
+
+The temporary CKV counters/tags, `CMD:INJECTERR`, `CMD:RM` and the error
+injection hook were **stripped** before the final build. The permanent parts are
+the atomic claim, the global CKV wait, prefill 96, and the Library ordering.
+Clean build: `project_name=crossmux`, `version=d057b27c-dirty`, RAM 89,680 B,
+Flash 6,783,370 B (90.0%). Artifact:
+`artifacts/readpico_ckvclaim_clean_d057b27c_20261028.bin`. Host
+`test_transactions.py` passes.
+
+**Residual.** A mid-frame feeder stall longer than the 1.5 ms cushion (a long SD
+or WiFi burst) can still underrun. The latch is still prevented by the atomic
+claim + CKV wait, but the frame would retry and flash. A zero-underrun guarantee
+needs a bigger queue (internal RAM cost) or moving heavy SD work off the display
+path; treating the 96-line cushion as the tested envelope is honest.
 
 ## Final stable configuration
 

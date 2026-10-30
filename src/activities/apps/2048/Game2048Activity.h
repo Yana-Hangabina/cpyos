@@ -19,6 +19,9 @@ class Game2048Activity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  void debugGameMove(int direction) override;
+  // A slide changes the 4x4 grid only; the title, score and footer bands stay.
+  bool wantsBandUpdates() const override { return true; }
 
  private:
   // Portrait layout (480 wide). Grid: 4 cells × 96 + 3 gaps × 8 = 408, centered (left inset 36).

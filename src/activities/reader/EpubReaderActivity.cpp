@@ -1,5 +1,7 @@
 #include "EpubReaderActivity.h"
 
+#include "NetworkStartup.h"
+
 #include <Epub/Page.h>
 #include <Epub/FontManifest.h>
 #include <Epub/blocks/TextBlock.h>
@@ -23,9 +25,13 @@
 #include <TrustedTime.h>
 #include <Txt.h>
 #include <WiFi.h>
-#include <esp_system.h>
 
-#include "NetworkStartup.h"
+// The windowed-push watchdog lives in main.cpp: the area path has no bounded
+// wait inside epdiy, so callers arm a deadline and a stuck scan restarts instead
+// of hanging the device (this board has no reset button).
+extern void armScanWatchdog(uint32_t timeoutMs);
+extern void disarmScanWatchdog();
+#include <esp_system.h>
 
 #include <algorithm>
 #include <cmath>
@@ -362,6 +368,8 @@ void EpubReaderActivity::onExit() {
     LOG_INF("ERS", "gesture hint marked seen on exit; persisted=%d", persisted ? 1 : 0);
   }
   waterTurnDirection = 0;  // 未消费的动画请求不跨 Activity 存活 / an unconsumed request never outlives the reader
+  // The DU exemption is reader-page scoped; never leave it armed for other screens.
+  GfxRenderer::setExperimentalReaderDu(false);
   // A5: drop the book's embedded font (if any) before anything else is torn down,
   // so the renderer never keeps a pointer to a freed face.
   releaseEmbeddedFont();
@@ -825,7 +833,7 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
-  orientedMarginTop += SETTINGS.screenMargin;
+  orientedMarginTop = selectionMarginTop();
   orientedMarginLeft += SETTINGS.screenMargin;
 
   startActivityForResultWith<DictionaryWordSelectActivity>(
@@ -1300,13 +1308,13 @@ void EpubReaderActivity::updateSelectionDragTo(const int x, const int y) {
   if (!selectionActive || selectionDragHandle == 0) return;
   auto page = loadPageForSelection();
   if (!page) return;
-  int mt = 0;
+  int unusedTop = 0;
   int mr = 0;
   int mb = 0;
   int ml = 0;
-  renderer.getOrientedViewableTRBL(&mt, &mr, &mb, &ml);
-  mt += SETTINGS.screenMargin;
+  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
   ml += SETTINGS.screenMargin;
+  const int mt = selectionMarginTop();
   const int fontId = SETTINGS.getReaderFontId();
   const auto words = layoutPageWords(*page, fontId, ml, mt);
   const int hit = wordIndexAt(words, x, y);
@@ -1351,6 +1359,19 @@ bool EpubReaderActivity::handleSelectionTouch() {
   const bool held = mappedInput.isScreenTouchHeld(x, y);
 
   if (!selectionActive) {
+    // A real lift ends the press immediately. A quick tap that lands while the
+    // reader is blocked in a page render/scan would otherwise look like a
+    // 650 ms hold on the next loop pass (the release event arrives after the
+    // block) and open a selection instead of the intended tap/toolbar action.
+    // Only a genuinely missing sample (no release edge) may use the last-point
+    // fallback below.
+    int tapX = 0;
+    int tapY = 0;
+    if (mappedInput.wasScreenTouchReleased() || mappedInput.wasScreenTapped(tapX, tapY)) {
+      if (pressTracking) LOG_DBG("ERS", "selection: press ended by release");
+      pressTracking = false;
+      return false;
+    }
     // The SDK's 500 ms classifier is intentionally not consumed: its threshold
     // is short enough to catch ordinary reading taps, and consuming it would
     // also suppress the contact before our longer timer could decide. Let the
@@ -1443,13 +1464,13 @@ void EpubReaderActivity::beginSelection(const int x, const int y) {
     GUI.drawPopup(renderer, "selection: no page");
     return;
   }
-  int mt = 0;
+  int unusedTop = 0;
   int mr = 0;
   int mb = 0;
   int ml = 0;
-  renderer.getOrientedViewableTRBL(&mt, &mr, &mb, &ml);
-  mt += SETTINGS.screenMargin;
+  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
   ml += SETTINGS.screenMargin;
+  const int mt = selectionMarginTop();
   const int fontId = SETTINGS.getReaderFontId();
   const auto words = layoutPageWords(*page, fontId, ml, mt);
   if (words.empty()) {
@@ -1743,13 +1764,13 @@ bool EpubReaderActivity::handleSelectionInput() {
     endSelection();
     return true;
   }
-  int mt = 0;
+  int unusedTop = 0;
   int mr = 0;
   int mb = 0;
   int ml = 0;
-  renderer.getOrientedViewableTRBL(&mt, &mr, &mb, &ml);
-  mt += SETTINGS.screenMargin;
+  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
   ml += SETTINGS.screenMargin;
+  const int mt = selectionMarginTop();
   const int fontId = SETTINGS.getReaderFontId();
   const auto words = layoutPageWords(*page, fontId, ml, mt);
   if (words.empty()) {
@@ -1944,13 +1965,13 @@ void EpubReaderActivity::commitSelection(const bool asNote) {
     endSelection();
     return;
   }
-  int mt = 0;
+  int unusedTop = 0;
   int mr = 0;
   int mb = 0;
   int ml = 0;
-  renderer.getOrientedViewableTRBL(&mt, &mr, &mb, &ml);
-  mt += SETTINGS.screenMargin;
+  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
   ml += SETTINGS.screenMargin;
+  const int mt = selectionMarginTop();
   const int fontId = SETTINGS.getReaderFontId();
   const auto words = layoutPageWords(*page, fontId, ml, mt);
   bool haveStart = false;
@@ -2221,7 +2242,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
-  orientedMarginTop += SETTINGS.screenMargin;
+  orientedMarginTop = selectionMarginTop();
   orientedMarginLeft += SETTINGS.screenMargin;
   auto selector = makeUniqueNoThrow<EpubReaderFootnoteSelectActivity>(renderer, mappedInput, std::move(page),
                                                                       orientedMarginLeft, orientedMarginTop);
@@ -3280,15 +3301,13 @@ void EpubReaderActivity::beginLoanTimeSync() {
   }
   startActivityForResult(std::move(wifi), [this](const ActivityResult& result) {
     if (result.isCancelled || WiFi.status() != WL_CONNECTED) {
-      NetworkStartup::releaseRadio();
       finish();
       return;
     }
     GUI.drawPopup(renderer, tr(STR_SYNCING_TIME));
     const bool synced = trustedtime::syncNow(5000);
-    // The sync is the only reason this screen started the radio; hand it back
-    // on both outcomes. A failed sync offers a retry that opens the picker
-    // again, so nothing needs the driver to stay resident.
+    // The sync is the only reason this screen started the radio; hand it back on
+    // both outcomes (a failed sync offers a retry that opens the picker again).
     NetworkStartup::releaseRadio();
     if (!synced) {
       // Reopening would hit the same unverified-time refusal: offer a retry.
@@ -5165,9 +5184,17 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // skip the two gray-plane passes and the AA waveform; image pages keep their own
   // grayscale path.
   const bool fastPageTurn = SETTINGS.fastPageTurn != 0 && !pageHasImages;
-  // DU drives far less charge than GL16; at the default 15-page cadence ghosting
-  // is obvious. Cap the interval at 5 pages while fast turn is on.
-  if (fastPageTurn && pagesUntilFullRefresh > 5) pagesUntilFullRefresh = 5;
+  // Fast turn (B/W, no gray planes) is the only reader page that keeps the DU
+  // profile: 150 ms of panel time instead of 360 ms (GL16), and ~40% less drive.
+  // The latch that banned DU was the double frame start, fixed in this tree; the
+  // remaining residue is the faint left-edge shadow the owner accepted on
+  // 2026-10-30. Any other screen still promotes FAST to GL16.
+  GfxRenderer::setExperimentalReaderDu(fastPageTurn);
+  // Fast turn used to cap the cadence at 5 pages because DU drives less charge
+  // than GL16. On hardware the residue at 9-10 pages was faint and acceptable,
+  // and the owner asked for one control instead of two, so the profile's reader
+  // cadence (Display -> Refresh frequency: 1/15/30/off) governs fast turn too.
+  // Do not add a fast-turn-only cap back: it made the setting silently lie.
   // Modal chrome (action chips, annotation card, footnote card) is painted as
   // plain BW. On a 16-level page a white plate only writes the base plane, so a
   // card drawn over grayscale text came out as a black slab with invisible text.
@@ -5674,6 +5701,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
 }
 
+int EpubReaderActivity::selectionMarginTop() const {
+  int top = 0, right = 0, bottom = 0, left = 0;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  top += SETTINGS.screenMargin;
+  const ReaderChromeMetrics chrome = readerChromeMetrics();
+  return std::max(top, chrome.headerBottom + kChromeHeaderGap);
+}
+
 EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetrics() const {
   ReaderChromeMetrics m;
   int viewTop = 0, viewRight = 0, viewBottom = 0, viewLeft = 0;
@@ -5843,11 +5878,10 @@ void EpubReaderActivity::renderStatusBar() const {
 #if FREEINK_DEVICE_READPICO
 void EpubReaderActivity::refreshStatusBarClockIfDue() {
   if (!section || !epub) return;
-  if (!SETTINGS.statusBarSpec().showsClock()) return;
-  // "On page turn" is the default: the clock is already painted from the current
-  // time on every page render. A minute tick costs a full-page GL16 scan here
-  // (displayWindow has no partial-area path on this panel), so it is opt-in.
+  // Default: the clock follows page redraws. The per-minute option costs a panel
+  // scan every minute on this board, so it is opt-in (Setting -> status bar).
   if (SETTINGS.statusBarClockUpdate != CrossPointSettings::STATUS_BAR_CLOCK_UPDATE_MINUTE) return;
+  if (!SETTINGS.statusBarSpec().showsClock()) return;
   if (renderer.isInverted()) return;
   // A reading background paints under the bar; clearing the strip would erase it.
   if (SETTINGS.readingBackgroundEnabled) return;
@@ -5908,8 +5942,15 @@ void EpubReaderActivity::refreshStatusBarClockIfDue() {
   // the system-UI GC16 sweep. Without this an idle read flashed black/white
   // every Nth minute (N = the refresh interval) with no user action -- the most
   // jarring possible moment. The reader's page-turn cadence still sweeps.
-  renderer.displayWindow(region.x, region.y, region.width, region.height,
-                         DisplayRefreshContext::ContinuousReading);
+  // Exact windowed push: only the clock strip is driven, the body stays off. The
+  // rect is the difference bbox over the reserved header band, so no glyph can
+  // sit inside it, and the page on glass is the differential baseline. Verified
+  // by the bounded area harness (50 pushes) before being wired here; the watchdog
+  // arms around it so a stuck scan restarts instead of hanging the device.
+  armScanWatchdog(3000);
+  renderer.displayPanelWindow(region.x, region.y, region.width, region.height,
+                              DisplayRefreshContext::ContinuousReading);
+  disarmScanWatchdog();
   LOG_DBG("ERS", "Clock tick: minute=%lld window=%d,%d %dx%d", static_cast<long long>(minute), region.x, region.y,
           region.width, region.height);
 }
@@ -6154,11 +6195,15 @@ void EpubReaderActivity::discardOverlayPage() {
 // the chrome answers taps and buttons the moment it is visible instead of only
 // after a blocking displayBuffer() returns. Caller must hold the RenderLock.
 void EpubReaderActivity::pushOverlayRefresh() {
+  // Toolbar/panel moves are transient: they must not feed the periodic UI GC16
+  // sweep, or six taps in the reader land a full black/white flash mid-page.
+  // Closing the overlay goes through displayBuffer() with the default Normal
+  // context below, which is the deliberate cleanup point.
   if (renderer.supportsAsyncRefresh()) {
-    renderer.displayBufferAsync(HalDisplay::FAST_REFRESH);
+    renderer.displayBufferAsync(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
     overlayRefreshPending = true;
   } else {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
   }
 }
 
@@ -6173,10 +6218,95 @@ void EpubReaderActivity::settleOverlayRefresh() {
   renderer.cleanupGrayscaleWithFrameBuffer();  // waits, then reseeds the baseline
 }
 
+// ★ TEMP diagnostic (CMD:AREATEST): exercise the exact area push in a bounded
+// way. The caller (main.cpp) arms a watchdog before each call and disarms after;
+// if the call never returns the watchdog restarts the device, so an area-path
+// hang costs a reboot instead of a manual power cycle.
+void EpubReaderActivity::debugAreaTest(const int iterations) {
+  if (!section || !renderer.hasFrameBuffer()) return;
+  // Physical panel coords: the framebuffer is 1216 px wide, 684 rows. A rect here
+  // is written straight into the framebuffer, because GfxRenderer::fillRect takes
+  // LOGICAL (rotated) coordinates and would clip outside the 684-wide portrait.
+  // The rect MOVES between iterations on purpose: the quarantined windowed scan
+  // crashed under varying rects, and a fixed rect never reproduced it.
+  const int baseX = 1144;  // multiple of 8: keep the harness inside the band invariant
+  const int baseY = 150;
+  const int baseW = 66;
+  const int baseH = 90;
+  const int rowBytes = renderer.getDisplayWidthBytes();
+  uint8_t* fb = renderer.getFrameBuffer();
+  const int total = iterations > 0 ? iterations : 1;
+  RenderLock lock;
+  renderer.setRenderMode(GfxRenderer::BW);
+  GfxRenderer::setAreaPushAllowed(true);
+  // Save a band tall enough for every position the rect takes.
+  const int maxH = baseH + 0;
+  auto saved = std::make_unique<uint8_t[]>(static_cast<size_t>(rowBytes) * maxH);
+  if (!saved) {
+    GfxRenderer::setAreaPushAllowed(false);
+    return;
+  }
+  for (int i = 0; i < total; ++i) {
+    // Walk the rect up/down inside the header band so each push has a new y.
+    const int y = baseY + ((i * 10) % 120);
+    for (int row = 0; row < baseH; ++row) {
+      memcpy(saved.get() + static_cast<size_t>(row) * rowBytes, fb + static_cast<size_t>(y + row) * rowBytes, rowBytes);
+    }
+    const bool black = (i & 1) == 0;
+    for (int row = 0; row < baseH; ++row) {
+      uint8_t* rp = fb + static_cast<size_t>(y + row) * rowBytes;
+      for (int col = baseX; col < baseX + baseW; ++col) {
+        const uint8_t mask = static_cast<uint8_t>(0x80u >> (col & 7));
+        if (black) rp[col >> 3] &= static_cast<uint8_t>(~mask);
+        else rp[col >> 3] |= mask;
+      }
+    }
+    armScanWatchdog(3000);
+    LOG_ERR("AREA", "areatest %d/%d start %d,%d %dx%d", i + 1, total, baseX, y, baseW, baseH);
+    const long t0 = static_cast<long>(millis());
+    renderer.displayPanelWindow(baseX, y, baseW, baseH, DisplayRefreshContext::ContinuousReading);
+    disarmScanWatchdog();
+    LOG_ERR("AREA", "areatest %d/%d done in %ldms", i + 1, total, static_cast<long>(millis()) - t0);
+    for (int row = 0; row < baseH; ++row) {
+      memcpy(fb + static_cast<size_t>(y + row) * rowBytes, saved.get() + static_cast<size_t>(row) * rowBytes, rowBytes);
+    }
+  }
+  GfxRenderer::setAreaPushAllowed(false);
+  // Resync the page and the panel baseline after the experiment.
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH, DisplayRefreshContext::ContinuousReading);
+}
+
+void EpubReaderActivity::debugCloseOverlay() {
+  // Serial soak hook: the same path Back takes out of a sheet, so closing can be
+  // counted (it must repaint the page exactly once and never sweep the cadence).
+  if (overlay == Overlay::None) return;
+  closeOverlayToPage();
+}
+
+void EpubReaderActivity::debugMoveRing(const int delta) {
+  if (overlay == Overlay::None || !toolbarUi) return;
+  const int count = overlay == Overlay::Contents
+                        ? (contentsFilter_ != 0 && contentsRows_.empty() ? 1
+                                                                        : static_cast<int>(contentsRows_.size()))
+                    : overlay == Overlay::Text      ? kTextRowCount
+                    : overlay == Overlay::Bookmarks ? static_cast<int>(cachedBookmarks.size())
+                                                    : static_cast<int>(moreItems.size());
+  if (count <= 0) return;
+  panelIndex = std::clamp(panelIndex + delta, 0, count - 1);
+  panelCursorShown = true;
+  RenderLock lock;
+  settleOverlayRefresh();
+  renderOverlay();
+  pushOverlayRefresh();
+}
+
 void EpubReaderActivity::debugOpenPanel(const int tool) {
   focusedTool = tool == 1 ? 0 : tool == 2 ? 1 : 3;
+  // openOverlay() already paints and pushes the chrome over the live page.
+  // requestUpdate() here would re-render the whole page first (and on an AA
+  // page re-commit the gray frame), which is both slow and not what the real
+  // touch/key path does.
   openOverlay(tool == 1 ? Overlay::Contents : tool == 2 ? Overlay::Text : Overlay::More);
-  requestUpdate();
 }
 
 void EpubReaderActivity::debugOpenStressComment() {
@@ -6402,6 +6532,10 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       overlayPageStored = renderer.storeBwBuffer();
     }
     renderOverlay();
+    // The snapshot/restore and chrome repaint leave 100+ KB of framebuffer
+    // dirty in the PSRAM cache. The scan's feeder reads PSRAM too; flushing now
+    // keeps those write-backs out of the scan (core-1 feeder starvation seen as
+    // a line-queue underrun at prefill+queue depth).
     pushOverlayRefresh();
   } else {
     requestUpdate();  // no page yet: renderBook() draws the overlay once it is

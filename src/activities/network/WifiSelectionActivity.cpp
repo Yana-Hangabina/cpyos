@@ -148,7 +148,7 @@ WifiSelectionActivity::WifiSelectionActivity(GfxRenderer& renderer, MappedInputM
     : Activity("WifiSelection", renderer, mappedInput),
       UiAppHost(renderer),
       allowAutoConnect(autoConnect),
-      keepRadioOnExit(keepRadioOnExit) {}
+      keepRadioOnExit_(keepRadioOnExit) {}
 
 void WifiSelectionActivity::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<WifiSelectionActivity*>(user);
@@ -356,11 +356,12 @@ void WifiSelectionActivity::onExit() {
   WiFi.scanDelete();
   LOG_DBG("WIFI", "Free heap after scanDelete: %d bytes", ESP.getFreeHeap());
 
-  // A connected session belongs to the parent only when it asked for it
-  // (web server / app job). Everything else - a cancelled pick, the Home status
-  // chip, the debug entry - must not leave STA mode behind: that both powers
-  // the modem and prevents HalPowerManager from downclocking the CPU.
-  if (!keepRadioOnExit || !connected_) NetworkStartup::releaseRadio();
+  // Parents that own the session (web server, JJWXC, WeRead, OTA, downloads)
+  // manage the connection themselves and pass keepRadioOnExit=true. The
+  // "connect and leave" entry points pass false: nothing after this activity
+  // uses the link, and an idle associated STA both draws power and blocks the
+  // power manager's downclock.
+  if (!keepRadioOnExit_) NetworkStartup::releaseRadio();
 
   NetworkStartup::logMemory("WiFi selection exit end");
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
@@ -2078,7 +2079,6 @@ void WifiSelectionActivity::renderConnectionFailed(const Rect* screen, const The
 void WifiSelectionActivity::onComplete(const bool connected) {
   if (completed_) return;
   completed_ = true;
-  connected_ = connected;
   ActivityResult result;
   result.isCancelled = !connected;
   if (connected) {

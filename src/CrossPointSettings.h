@@ -98,15 +98,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     STATUS_BAR_CLOCK_MODE_COUNT
   };
 
-  // How the reader keeps the status-bar clock current. A per-minute update is a
-  // full-page scan on Read Pico (partial-area scans are banned there), so the
-  // power-conscious default only refreshes it when the page is redrawn anyway.
-  enum STATUS_BAR_CLOCK_UPDATE_MODE {
-    STATUS_BAR_CLOCK_UPDATE_PAGE_TURN = 0,
-    STATUS_BAR_CLOCK_UPDATE_MINUTE = 1,
-    STATUS_BAR_CLOCK_UPDATE_MODE_COUNT
-  };
-
   // Auto follows the timezone's baked DST rule; On/Off override it — the
   // escape hatch for a zone whose law changed before the firmware caught up.
   enum CLOCK_DST_MODE { CLOCK_DST_AUTO = 0, CLOCK_DST_ON = 1, CLOCK_DST_OFF = 2, CLOCK_DST_MODE_COUNT };
@@ -366,8 +357,6 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t xtcStatusBarMode = XTC_STATUS_BAR_HIDE;
   // Clock display in the reader status bar.
   uint8_t statusBarClock = STATUS_BAR_CLOCK_HIDE;
-  // Minute updates cost a full-page scan on Read Pico; default to page turns.
-  uint8_t statusBarClockUpdate = STATUS_BAR_CLOCK_UPDATE_PAGE_TURN;
   // LEGACY, kept for migration only: quarter-hour UTC offset biased by 48
   // (48 = UTC+0). Superseded by clockTimezone; read once by
   // timezones::activeIndex() when clockTimezone is unset.
@@ -451,7 +440,24 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
-  // E-ink refresh frequency (default 15 pages)
+  // How the reader keeps the status-bar clock current. A per-minute update is a
+  // full-page scan on Read Pico, so the power-conscious default only refreshes it
+  // when the page is redrawn anyway.
+  enum STATUS_BAR_CLOCK_UPDATE_MODE {
+    STATUS_BAR_CLOCK_UPDATE_PAGE_TURN = 0,
+    STATUS_BAR_CLOCK_UPDATE_MINUTE = 1,
+    STATUS_BAR_CLOCK_UPDATE_MODE_COUNT
+  };
+  uint8_t statusBarClockUpdate = STATUS_BAR_CLOCK_UPDATE_PAGE_TURN;
+
+  // E-ink refresh cadence, split into two settings (2026-10-29): whether the
+  // reader ever pays a whole-screen GC16 on a page count, and how many pages the
+  // interval is when it does. Off by default: 60 differential pages on hardware
+  // left only the faint "thin paper" residue, so the flash is now opt-in.
+  uint8_t periodicFullRefresh = 0;
+  uint8_t readerRefreshPages = 15;
+  // Legacy tier; migration-only (see fromJson). Kept so old settings files and
+  // the web UI keep parsing.
   uint8_t refreshFrequency = REFRESH_STANDARD;
   // 翻页效果（仅 Read Pico 提供入口）：0 = 直接刷新，1 = 水波纹错相揭页。
   // / Page turn effect (Read Pico only): 0 = instant refresh, 1 = water-ripple reveal.
@@ -697,6 +703,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  public:
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
+  // Pages between reader full refreshes; INT_MAX when the cadence is off.
   int getRefreshFrequency() const;
   // Number of system-UI pushes between periodic FULL GC16 sweeps, derived from
   // the same refreshFrequency setting (bounded mapping; never disabled).

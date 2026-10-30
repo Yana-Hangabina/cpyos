@@ -3,11 +3,24 @@
 
 #if FREEINK_DEVICE_READPICO
 #include <BoardReadPico.h>
+#include <EpdiyLcd.h>
+#include <HalPowerManager.h>
 #include <Logging.h>
 #endif
 
 // Global HalDisplay instance
 HalDisplay display;
+
+namespace {
+uint32_t s_grayScans = 0;
+}  // namespace
+
+uint32_t HalDisplay::takeGrayScanCount() {
+  const uint32_t out = s_grayScans;
+  s_grayScans = 0;
+  return out;
+}
+
 
 #define SD_SPI_MISO 7
 
@@ -113,9 +126,31 @@ EInkDisplay::RefreshContext convertRefreshContext(DisplayRefreshContext context)
   }
   return EInkDisplay::RefreshContext::Normal;
 }
+
+#if FREEINK_DEVICE_READPICO
+// A full-frame scan consumes one line every 16 us. At LOW_POWER_FREQ the two
+// line feeders cannot keep that pace on this board (measured ~32 us/line
+// combined), so the frame underruns, is reported failed and is retried as a
+// clean GC16 -- a visible flash on every push. Interactive turns already run at
+// 240 MHz because the input event raises the clock, but background scans do
+// not: the standby clock face and the reader's minute clock tick both draw
+// while the device is idle at 80 MHz. Holding a power lock for the duration of
+// the scan guarantees the feeders run at full speed regardless of who asked
+// for the push. The lock is quiet because a concurrent real lock (network
+// request) already implies full speed.
+struct ScanPowerGuard {
+  HalPowerManager::Lock lock{true};
+};
+#else
+struct ScanPowerGuard {
+  // User-provided ctor keeps the guard non-trivial, so -Wunused-variable stays quiet.
+  ScanPowerGuard() {}
+};
+#endif
 }  // namespace
 
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen, DisplayRefreshContext context) {
+  const ScanPowerGuard power;
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -124,6 +159,7 @@ void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen,
 }
 
 void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode, DisplayRefreshContext context) {
+  const ScanPowerGuard power;
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -142,6 +178,7 @@ HalDisplay::GrayscaleCapabilities HalDisplay::grayscaleCapabilities(GrayscaleMod
 bool HalDisplay::supportsAsyncGrayscaleBase() const { return grayscaleCapabilities().asyncBase; }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
+  const ScanPowerGuard power;
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -166,6 +203,8 @@ uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisp
 void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
 
 bool HalDisplay::displayGrayscaleBase(GrayscaleMode mode, RefreshMode fallback, bool turnOffScreen) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
   if (gpio.deviceIsX3() && fallback == HALF_REFRESH) einkDisplay.requestResync();
   return einkDisplay.displayGrayscaleBase(mode, static_cast<EInkDisplay::RefreshMode>(fallback), turnOffScreen);
 }
@@ -175,6 +214,8 @@ void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* m
 }
 
 void HalDisplay::displayGrayscaleBase(RefreshMode fallback, bool turnOffScreen, DisplayRefreshContext context) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
   // X3: a HALF fallback means the caller wants a clean base (e.g. the sleep
   // cover, a full-screen swap from arbitrary prior content). Without this, the
   // X3 grayscale base takes its gentle differential happy path and the prior
@@ -201,13 +242,68 @@ void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay
 
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
-void HalDisplay::displayGrayBuffer(bool turnOffScreen) { einkDisplay.displayGrayBuffer(turnOffScreen); }
-
-void HalDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
-  einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
+void HalDisplay::displayGrayBuffer(bool turnOffScreen) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
+  einkDisplay.displayGrayBuffer(turnOffScreen);
 }
 
-void HalDisplay::idlePowerTick(const uint32_t nowMs) { einkDisplay.idlePowerTick(nowMs); }
+bool HalDisplay::waitForScanIdle(uint32_t timeoutMs) {
+#if FREEINK_DEVICE_READPICO
+  const uint32_t start = millis();
+  while (freeink::epdiyLcdScanInProgress()) {
+    if (millis() - start >= timeoutMs) {
+      LOG_ERR("HAL", "present barrier timed out after %ums", static_cast<unsigned>(timeoutMs));
+      return false;
+    }
+    delay(1);
+  }
+  return true;
+#else
+  (void)timeoutMs;
+  return true;
+#endif
+}
+
+void HalDisplay::takePanelPushStats(uint32_t* frames, uint64_t* us) {
+#if FREEINK_DEVICE_READPICO
+  freeink::epdiyLcdTakePushStats(frames, us);
+#else
+  if (frames != nullptr) *frames = 0;
+  if (us != nullptr) *us = 0;
+#endif
+}
+
+bool HalDisplay::idlePowerTick(const uint32_t nowMs) {
+#if FREEINK_DEVICE_READPICO
+  if (freeink::epdiyLcdScanInProgress()) return false;
+  // No ScanPowerGuard here: this runs on EVERY main-loop pass, and the guard
+  // forces 240 MHz. Paired with the loop's idle downclock it produced a 240/80
+  // flip every ~60 ms while the device was doing nothing (measured 2026-10-30).
+  // The only real work below is dropping the rails 8 s after the last push,
+  // which is a few I2C writes and is fine at 80 MHz; the next push has its own
+  // guard.
+  return einkDisplay.idlePowerTick(nowMs);
+#else
+  (void)nowMs;
+  return false;
+#endif
+}
+
+bool HalDisplay::cleanWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  const ScanPowerGuard power;
+#if FREEINK_DEVICE_READPICO
+  if (freeink::epdiyLcdCleanArea(getFrameBuffer(), x, y, w, h)) return true;
+  ESP_LOGE("HAL", "area clean refused; falling back to a full clean");
+#endif
+  einkDisplay.displayBuffer(convertRefreshMode(FULL_REFRESH), false, EInkDisplay::RefreshContext::Normal);
+  return false;
+}
+
+void HalDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
+  const ScanPowerGuard power;
+  einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
+}
 
 void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   einkDisplay.writeGrayscalePlaneStrip(lsbPlane ? EInkDisplay::GRAY_PLANE_LSB : EInkDisplay::GRAY_PLANE_MSB, rows,
@@ -240,13 +336,21 @@ uint8_t* HalDisplay::beginGrayscale16() { return einkDisplay.beginGrayscale16();
 uint8_t* HalDisplay::beginGrayscale16From1bpp(const uint8_t* fb) {
   return einkDisplay.beginGrayscale16From1bpp(fb);
 }
-bool HalDisplay::commitGrayscale16(bool clean) { return einkDisplay.commitGrayscale16(clean); }
+bool HalDisplay::commitGrayscale16(bool clean) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
+  return einkDisplay.commitGrayscale16(clean);
+}
 bool HalDisplay::commitGrayscale16Area(const uint8_t* bwProxy, uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                                        bool clean) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
   (void)bwProxy;
   return einkDisplay.commitGrayscale16Area(x, y, w, h, clean);
 }
 bool HalDisplay::commitGrayscale16Areas(const freeink::GrayArea* areas, int count, bool clean) {
+  ++s_grayScans;
+  const ScanPowerGuard power;
   return einkDisplay.commitGrayscale16Areas(areas, count, clean);
 }
 void HalDisplay::cancelGrayscale16() { einkDisplay.cancelGrayscale16(); }

@@ -294,6 +294,7 @@ class SettingsActivity final : public UiTabListActivity {
                             bool subpage = false);
   void onEnter() override;
   void onExit() override;
+  bool wantsBandUpdates() const override { return true; }
   void render(RenderLock&&) override;
   // A category page opened from My (or settings search) is a child screen: it
   // keeps the four-category strip but wears a back header and pops to its

@@ -882,9 +882,13 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
 
 // "_g2": Gray2 (4-tone) thumbnails. The suffix keeps a 1-bit BMP cached by an
 // older firmware from being served as if it were grayscale.
-std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT]_g2.bmp"; }
+// _g8 since 2026-10-29: thumbnails carry 8-bit gray so the dashboard and the
+// library grid can show a real 16-level cover inside a gray canvas. The suffix
+// bump also invalidates the older 1-bit (_g2) files, which would otherwise be
+// found and drawn as dither.
+std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT]_g8.bmp"; }
 std::string Epub::getThumbBmpPath(int height) const {
-  return cachePath + "/thumb_" + std::to_string(height) + "_g2.bmp";
+  return cachePath + "/thumb_" + std::to_string(height) + "_g8.bmp";
 }
 
 bool Epub::generateThumbBmp(int height) const {
@@ -935,7 +939,8 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   if (convertOverrideCover(
           *this, outputPath, "thumbnail",
           [targetWidth, height](HalFile& source, HalFile& output) {
-            return JpegToBmpConverter::jpegFileToBmpStreamWithSize(source, output, targetWidth, height);
+            return JpegToBmpConverter::jpegFileToBmpStreamWithSize(source, output, targetWidth, height, true,
+                                                                   JpegToBmpConverter::Output::Gray8);
           },
           [targetWidth, height](HalFile& source, HalFile& output) {
             return PngToBmpConverter::pngFileToBmpStreamWithSize(source, output, targetWidth, height);
@@ -944,6 +949,13 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   }
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
+    // Leave the "no cover" marker behind. Without it every Home/Library entry
+    // re-opened this book's metadata and re-attempted the thumbnail (~150 ms).
+    // The cache directory may not exist yet on this path, so create it first or
+    // the empty write fails silently and the marker never appears.
+    setupCacheDir();
+    HalFile thumbBmp;
+    Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
     return false;
   }
 
@@ -955,10 +967,13 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
     if (convertExtractedCover(
             *this, coverImageHref, outputPath, "thumbnail",
             [targetWidth, height](HalFile& source, HalFile& output) {
-              return JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(source, output, targetWidth, height);
+              // 8-bit gray: the dashboard/library canvas is 16 levels, so the
+              // cover keeps its tones instead of dithering to pure black/white.
+              return JpegToBmpConverter::jpegFileToBmpStreamWithSize(source, output, targetWidth, height, true,
+                                                                     JpegToBmpConverter::Output::Gray8);
             },
             [targetWidth, height](HalFile& source, HalFile& output) {
-              return PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(source, output, targetWidth, height);
+              return PngToBmpConverter::pngFileToBmpStreamWithSize(source, output, targetWidth, height);
             })) {
       return true;
     }

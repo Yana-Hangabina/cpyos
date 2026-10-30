@@ -441,6 +441,13 @@ void SokobanGameActivity::handleInput() {
   }
 }
 
+void SokobanGameActivity::debugGameMove(const int direction) {
+  // 0=up 1=right 2=down 3=left, matching the serial CMD:GAMEMOVE convention.
+  static constexpr int kDr[4] = {-1, 0, 1, 0};
+  static constexpr int kDc[4] = {0, 1, 0, -1};
+  move(kDr[direction & 3], kDc[direction & 3]);
+}
+
 void SokobanGameActivity::move(int dr, int dc) {
   if (state != State::Playing) return;
   if (board.movePlayer(dr, dc)) {

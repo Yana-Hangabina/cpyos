@@ -64,7 +64,7 @@ std::string relativeDayLabel(const uint32_t timestamp) {
   return buf;
 }
 
-// UI wave progress: a thin sine baseline, a solid 10 px band over the read
+// refreshed UI progress: a thin sine baseline, a solid 10 px band over the read
 // portion, and a short marker at the boundary. Drawing it per pixel keeps the
 // wave crisp on the 1-bit panel; the line is only ~600 px wide.
 void drawWaveProgress(const GfxRenderer& renderer, const Rect rect, const int percent) {
@@ -294,6 +294,7 @@ bool InxRecentActivity::tryDrawBookCover(const std::string& path, const Rect& bo
 
 bool InxRecentActivity::drawBookCover(const int bookIndex, const Rect& bounds) {
   renderer.fillRect(bounds.x, bounds.y, bounds.width, bounds.height, false);
+
   if (books && bookIndex >= 0 && bookIndex < static_cast<int>(books->size()) &&
       bookIndex < static_cast<int>(RecentBooksStore::MAX_RECENT_BOOKS) && thumbnailHeight > 0) {
     const RecentBook& book = (*books)[bookIndex];
@@ -865,6 +866,13 @@ void InxRecentActivity::render(RenderLock&&) {
   }
   if (prepareNextMissingCover()) {
     // Do not push a half-built cover page; the next pass re-begins the canvas.
+    if (gray16) renderer.cancelGrayscale16();
+    return;
+  }
+  // A tap that already queued another screen makes this frame dead on arrival:
+  // paying its ~0.4 s panel scan would be pure latency on the way to the one the
+  // user asked for (rapid Home <-> Library switching).
+  if (activityManager.isSwitchPending()) {
     if (gray16) renderer.cancelGrayscale16();
     return;
   }
