@@ -66,11 +66,14 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
 
     ota = load(release_dir / 'ota' / 'readpico.json')
     firmware_url = ota.get('assets', [{}])[0].get('browser_download_url', '')
-    expected_suffix = f'/downloads/{version}/{latest["firmware"].get("filename", "readpico-firmware.bin")}'
-    if firmware_url and not firmware_url.endswith(expected_suffix):
-        # The release script writes this URL from --pages-base; a mismatch means
-        # the site would advertise a firmware that is not in this artifact.
-        fail(f'OTA firmware URL {firmware_url!r} does not end with {expected_suffix!r}')
+    firmware_name = latest['firmware'].get('filename', 'readpico-firmware.bin')
+    # 0.1.1 and older advertise the Pages copy; 0.1.2+ deliberately point the
+    # device at the GitHub release asset (mirror-prefixed), because Pages is slow
+    # from mainland China. Accept either, but it must name THIS version's file.
+    pages_suffix = f'/downloads/{version}/{firmware_name}'
+    github_suffix = f'/releases/download/cpyos-{version}/{firmware_name}'
+    if firmware_url and not (firmware_url.endswith(pages_suffix) or firmware_url.endswith(github_suffix)):
+        fail(f'OTA firmware URL {firmware_url!r} ends with neither {pages_suffix!r} nor {github_suffix!r}')
     if latest['firmware'].get('sha256') != ota.get('assets', [{}])[0].get('sha256'):
         fail('latest.json and the OTA manifest disagree on the firmware sha256')
 
