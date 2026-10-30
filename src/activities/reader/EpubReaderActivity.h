@@ -154,11 +154,9 @@ class EpubReaderActivity final : public ReaderActivity {
   // A tap that opened the book can still be mid-release when the first frame
   // lands; ignore input for a moment so the page is not dismissed unseen.
   uint32_t gestureHintShownAt = 0;
-  // Set by renderContents() the moment the hint is first shown, consumed once by
-  // loop(). The "seen" flag is persisted from the UI task, never from the render
-  // task: that stack lives in PSRAM, where an internal-flash write panics.
-  // Showing counts as seen so a power-off/flash before any input cannot bring
-  // the one-shot page back.
+  // renderContents() runs on the PSRAM-stack render task and must not write
+  // internal flash; it marks the hint seen and leaves the NVS write to loop()/
+  // onExit() on the UI task.
   std::atomic<bool> hintPersistPending_{false};
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
@@ -184,6 +182,10 @@ class EpubReaderActivity final : public ReaderActivity {
     int footerHeight = 0;
   };
   ReaderChromeMetrics readerChromeMetrics() const;
+  // The content top used by renderContents()/drawSelection(): viewable top plus
+  // screenMargin, pushed below the reader chrome header. Word hit-testing must
+  // use this same value or a long-press selects the line below the finger.
+  int selectionMarginTop() const;
   void drawReaderHeader() const;
   void drawReaderFooter() const;
   // Footnote preview card (B10): tapping a single footnote marker shows the note
@@ -673,6 +675,14 @@ class EpubReaderActivity final : public ReaderActivity {
 
   // Debug-only (serial CMD:PANEL): opens a reader sheet without a tap.
   void debugOpenPanel(int tool) override;
+  void debugCloseOverlay() override;
+  void debugAreaTest(int iterations) override;
+  // Serial soak hook: moves the open sheet's row cursor like Up/Down would.
+  void debugMoveRing(int delta) override;
+  // A sheet is a 1-bit overlay on an already-pushed page: row moves change only
+  // the cursor rows, so band updates apply while one is open. Page turns (no
+  // sheet) keep full-page pushes, and so do the AA base/gray pairs.
+  bool wantsBandUpdates() const override { return overlay != Overlay::None; }
   void debugSetContentsFilter(int filter) override;
   void debugActivateContentsRow(int row) override;
   void debugDismissHint() override;

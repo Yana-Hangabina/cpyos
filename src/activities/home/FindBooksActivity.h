@@ -19,6 +19,10 @@ class FindBooksActivity final : public Activity {
       : Activity("FindBooks", renderer, mappedInput) {}
 
   MainTab mainTab() const override { return MainTab::Apps; }
+  // Pure 1-bit cards that repaint in full; moving the ring changes only the two
+  // outline rings, so the diff stays a small band.
+  bool wantsBandUpdates() const override { return true; }
+  void debugMoveRing(int delta) override;
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;

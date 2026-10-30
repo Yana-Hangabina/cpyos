@@ -67,6 +67,7 @@ class UiTabListActivity : public UiListActivity {
   // Move to a ring position: tab bar rewinds the viewport, a row pulls the
   // viewport to itself.
   void moveRingTo(int ringIndex);
+  void debugMoveRing(int delta) override;
 
   // --- screen helpers --------------------------------------------------------
   // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs

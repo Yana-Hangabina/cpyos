@@ -959,7 +959,7 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResultWith<OpdsServerListActivity>(resultHandler);
         break;
       case SettingAction::Network: {
-        auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false);
+        auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false, false);
         if (!activity) {
           LOG_ERR("SETTINGS", "OOM: WifiSelectionActivity");
           return;

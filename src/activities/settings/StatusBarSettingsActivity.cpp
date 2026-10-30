@@ -23,7 +23,6 @@ enum MenuItem {
   ITEM_BATTERY,
   ITEM_XTC_STATUS_BAR,
   ITEM_CLOCK,
-  ITEM_CLOCK_UPDATE,
   ITEM_COUNT
 };
 
@@ -40,7 +39,6 @@ const StrId menuNames[FULL_MENU_ITEMS] = {
     StrId::STR_BATTERY,
     StrId::STR_XTC_STATUS_BAR,
     StrId::STR_CLOCK,
-    StrId::STR_CLOCK_UPDATE,
 };
 
 constexpr int PROGRESS_BAR_ITEMS = 3;
@@ -58,10 +56,6 @@ const StrId xtcStatusBarNames[XTC_STATUS_BAR_ITEMS] = {StrId::STR_HIDE, StrId::S
 
 constexpr int STATUS_BAR_CLOCK_ITEMS = CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT;
 const StrId statusBarClockNames[STATUS_BAR_CLOCK_ITEMS] = {StrId::STR_HIDE, StrId::STR_DIR_RIGHT, StrId::STR_DIR_LEFT};
-
-constexpr int STATUS_BAR_CLOCK_UPDATE_ITEMS = CrossPointSettings::STATUS_BAR_CLOCK_UPDATE_MODE_COUNT;
-const StrId statusBarClockUpdateNames[STATUS_BAR_CLOCK_UPDATE_ITEMS] = {StrId::STR_CLOCK_UPDATE_PAGE_TURN,
-                                                                        StrId::STR_CLOCK_UPDATE_MINUTE};
 
 const int verticalPreviewTextPadding = 40;
 }  // namespace
@@ -93,10 +87,6 @@ void StatusBarSettingsActivity::onEnter() {
 
   if (SETTINGS.statusBarClock >= STATUS_BAR_CLOCK_ITEMS) {
     SETTINGS.statusBarClock = CrossPointSettings::STATUS_BAR_CLOCK_MODE::STATUS_BAR_CLOCK_HIDE;
-  }
-
-  if (SETTINGS.statusBarClockUpdate >= STATUS_BAR_CLOCK_UPDATE_ITEMS) {
-    SETTINGS.statusBarClockUpdate = CrossPointSettings::STATUS_BAR_CLOCK_UPDATE_MODE::STATUS_BAR_CLOCK_UPDATE_PAGE_TURN;
   }
 
   // Labels never change (unlike the values, which track live SETTINGS
@@ -162,9 +152,6 @@ void StatusBarSettingsActivity::handleSelection() {
     case ITEM_CLOCK:
       SETTINGS.statusBarClock = (SETTINGS.statusBarClock + 1) % STATUS_BAR_CLOCK_ITEMS;
       break;
-    case ITEM_CLOCK_UPDATE:
-      SETTINGS.statusBarClockUpdate = (SETTINGS.statusBarClockUpdate + 1) % STATUS_BAR_CLOCK_UPDATE_ITEMS;
-      break;
     default:
       return;
   }
@@ -183,8 +170,6 @@ std::string StatusBarSettingsActivity::rowValueText(const int index) {
       return I18N.get(xtcStatusBarNames[SETTINGS.xtcStatusBarMode]);
     case ITEM_CLOCK:
       return I18N.get(statusBarClockNames[SETTINGS.statusBarClock]);
-    case ITEM_CLOCK_UPDATE:
-      return I18N.get(statusBarClockUpdateNames[SETTINGS.statusBarClockUpdate]);
     default:
       return "";
   }

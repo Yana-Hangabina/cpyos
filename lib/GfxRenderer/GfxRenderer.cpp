@@ -14,10 +14,24 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstring>
 #include <string_view>
+
+#if FREEINK_DEVICE_READPICO
+// Scan watchdog owned by main.cpp: the windowed push has no bounded wait inside
+// epdiy, so every area push arms a deadline first.
+extern void armScanWatchdog(uint32_t timeoutMs);
+extern void disarmScanWatchdog();
+#endif
+
+#if FREEINK_DEVICE_READPICO
+#include <rom/cache.h>
+#endif
 
 #include "../Memory/Memory.h"
 #include "FontCacheManager.h"
+#include "BandPolicy.h"
+#include "ChangedBand.h"
 #include "GlyphBitmap.h"
 #include "Memory.h"
 
@@ -2178,11 +2192,19 @@ bool GfxRenderer::commitGrayscale16Areas(const GrayAreaRect* areas, const int co
 void GfxRenderer::requestFullRefreshNext() const {
   nextRefreshOverridePending = true;
   nextRefreshOverride = HalDisplay::FULL_REFRESH;
+  nextRefreshOverrideFromGray = false;
   uiFastRefreshCount = 0;
 }
 
 bool GfxRenderer::commitGrayscale16(bool clean) const {
   if (!grayscale16Buffer) return false;
+  // This frame is about to rewrite every line with a gray-capable waveform, so a
+  // promotion left by the previous gray frame is already satisfied (Home ->
+  // Library, Home -> detail page). Explicit promotions (screen repair, control
+  // center) are not touched: their flag is false.
+  if (nextRefreshOverridePending && nextRefreshOverrideFromGray) {
+    nextRefreshOverridePending = false;
+  }
   const bool committed = commitNativeGray(display, clean);
   if (!committed) cancelNativeGray(display);
   grayscale16Buffer = nullptr;
@@ -2194,6 +2216,7 @@ bool GfxRenderer::commitGrayscale16(bool clean) const {
     // consumed by displayBuffer()/displayBufferAsync().
     nextRefreshOverridePending = true;
     nextRefreshOverride = HalDisplay::FULL_REFRESH;
+    nextRefreshOverrideFromGray = true;
   }
   return committed;
 }
@@ -2242,13 +2265,73 @@ bool GfxRenderer::drawBitmapGrayscale16(const Bitmap& bitmap, const int x, const
   const int targetHeight = std::floor((sourceHeight - 1) * scale) + 1;
   uint8_t* row = bitmap.drawScratch.get();
   uint8_t* source = row + width;
+  // Area-average downscale for shrinking draws (a 132x184 cover from a larger
+  // thumbnail). Upscaling keeps the nearest/replication path: accumulating a box
+  // while stretching leaves destination rows with no source row at all, which
+  // reads as smeared/striped covers.
+  const bool downscale = scale < 1.0f;
+  if (downscale) {
+    static memory::ByteBuffer boxScratch;
+    const size_t boxBytes = static_cast<size_t>(panelWidth) * (2 + 2 + 4 + 4);
+    if (!boxScratch) boxScratch = memory::makePsramByteBufferNoThrow(boxBytes);
+    if (boxScratch) {
+      uint16_t* boxX0 = reinterpret_cast<uint16_t*>(boxScratch.get());
+      uint16_t* boxX1 = boxX0 + panelWidth;
+      uint32_t* boxSum = reinterpret_cast<uint32_t*>(boxX1 + panelWidth);
+      uint32_t* boxCnt = boxSum + panelWidth;
+      const int accumWidth = std::min(targetWidth, static_cast<int>(panelWidth));
+      for (int dx = 0; dx < accumWidth; ++dx) {
+        boxX0[dx] = static_cast<uint16_t>(cropPixX + dx * sourceWidth / targetWidth);
+        int x1 = cropPixX + (dx + 1) * sourceWidth / targetWidth;
+        if (x1 <= boxX0[dx]) x1 = boxX0[dx] + 1;
+        if (x1 > width) x1 = width;
+        boxX1[dx] = static_cast<uint16_t>(x1);
+      }
+      int pendingDestY = -1;
+      const auto flushBoxRow = [&](const int destY) {
+        if (destY < 0) return;
+        for (int destX = 0; destX < accumWidth; ++destX) {
+          // Per-column count: at a fractional scale neighbouring columns map to
+          // one or two source pixels; dividing both by the same number produced
+          // alternating light/dark columns (vertical stripes on the cover).
+          if (boxCnt[destX] == 0) continue;
+          const int level = static_cast<int>((boxSum[destX] + boxCnt[destX] / 2) / boxCnt[destX]);
+          drawGrayscale16Pixel(x + destX, y + destY, static_cast<uint8_t>(level));
+        }
+      };
+      for (int fileY = 0; fileY < height; ++fileY) {
+        if (bitmap.readNextRow(row, source, nullptr, Bitmap::RowOutput::Gray8) != BmpReaderError::Ok) return false;
+        const int sourceY = bitmap.isTopDown() ? fileY : height - 1 - fileY;
+        if (sourceY < cropPixY || sourceY >= height - cropPixY) continue;
+        const int relativeY = sourceY - cropPixY;
+        const int destY = (relativeY * targetHeight + sourceHeight - 1) / sourceHeight;
+        if (destY >= targetHeight) continue;
+        if (destY != pendingDestY) {
+          flushBoxRow(pendingDestY);
+          std::memset(boxSum, 0, sizeof(uint32_t) * static_cast<size_t>(accumWidth));
+          std::memset(boxCnt, 0, sizeof(uint32_t) * static_cast<size_t>(accumWidth));
+          pendingDestY = destY;
+        }
+        for (int destX = 0; destX < accumWidth; ++destX) {
+          const int sx0 = boxX0[destX];
+          const int sx1 = boxX1[destX];
+          unsigned sum = 0;
+          for (int sx = sx0; sx < sx1; ++sx) sum += row[sx];
+          boxSum[destX] += sum;
+          boxCnt[destX] += static_cast<uint32_t>(sx1 - sx0);
+        }
+      }
+      flushBoxRow(pendingDestY);
+      return true;
+    }
+  }
+  // Nearest/replication path: one source row per destination row.
   for (int fileY = 0; fileY < height; ++fileY) {
     if (bitmap.readNextRow(row, source, nullptr, Bitmap::RowOutput::Gray8) != BmpReaderError::Ok) return false;
     const int sourceY = bitmap.isTopDown() ? fileY : height - 1 - fileY;
     if (sourceY < cropPixY || sourceY >= height - cropPixY) continue;
     const int relativeY = sourceY - cropPixY;
     const int destY = (relativeY * targetHeight + sourceHeight - 1) / sourceHeight;
-    // Select one source row per destination row, independent of BMP row order.
     if (destY >= targetHeight || destY * sourceHeight / targetHeight != relativeY) continue;
     for (int destX = 0; destX < targetWidth; ++destX) {
       const int sourceX = cropPixX + destX * sourceWidth / targetWidth;
@@ -2585,21 +2668,115 @@ void GfxRenderer::invertScreen() const {
   }
 }
 
+namespace {
+// Band updates are on. The 2026-10-28 crash that had them quarantined was
+// Cache_WriteBack_All() running on a PSRAM-stack task (see
+// docs/engineering/read-pico-refresh-stability.md); the call is gone. The kill
+// switches below stay for future bisecting.
+bool s_bandSuspended = false;
+bool s_bandPushFullPage = false;
+}  // namespace
+
+void GfxRenderer::setBandPushFullPage(const bool fullPage) { s_bandPushFullPage = fullPage; }
+
+bool GfxRenderer::s_areaPushAllowed_ = true;
+bool GfxRenderer::bandUpdatesSuspended() { return s_bandSuspended; }
+
+// On by default: the 2026-10-29 photo gate compared PHOTODEMO 0 (two whole-screen
+// GC16) against PHOTODEMO 1 (two dilated rect cleans) and the residue was
+// indistinguishable, so a sweep can clean what changed instead of flashing the
+// whole panel. CMD:CLEAN 0 and `localCleanFits` (union > 60%) keep the old path.
+bool GfxRenderer::s_localClean_ = true;
+int GfxRenderer::s_localCleanMaxPercent = static_cast<int>(band_policy::kMaxLocalCleanPercent);
+
+void GfxRenderer::setLocalCleanMaxPercent(const int percent) {
+  s_localCleanMaxPercent = percent < 5 ? 5 : (percent > 100 ? 100 : percent);
+}
+int GfxRenderer::localCleanMaxPercent() { return s_localCleanMaxPercent; }
+
+void GfxRenderer::setLocalCleanEnabled(const bool enabled) { s_localClean_ = enabled; }
+bool GfxRenderer::localCleanEnabled() { return s_localClean_; }
+
+namespace {
+GfxRenderer::RenderStats s_renderStats;
+}  // namespace
+
+GfxRenderer::RenderStats GfxRenderer::takeRenderStats() {
+  const RenderStats out = s_renderStats;
+  s_renderStats = RenderStats{};
+  return out;
+}
+void GfxRenderer::setAreaPushAllowed(const bool allowed) { s_areaPushAllowed_ = allowed; }
+bool GfxRenderer::areaPushAllowed() { return s_areaPushAllowed_; }
+
+void GfxRenderer::setBandUpdatesSuspended(const bool suspended) { s_bandSuspended = suspended; }
+
+void GfxRenderer::setBandUpdates(const bool on) {
+#if FREEINK_DEVICE_READPICO
+  if (on == bandUpdates_) return;
+  if (!on) {
+    // The snapshot is deliberately NOT freed here. Mode changes are decided by
+    // the loop task while the render task may still be inside a push that holds
+    // this pointer; freeing it there is a use-after-free (suspected source of the
+    // 2026-10-28 ActivityManager crashes). 104 KB of PSRAM stays allocated for
+    // the life of the renderer instead -- the destructor releases it.
+    bandUpdates_ = false;
+    return;
+  }
+  if (bandSnapshot_ == nullptr) {
+    auto buffer = memory::makePsramByteBufferNoThrow(getBufferSize());
+    bandSnapshot_ = buffer.release();
+  }
+  // No snapshot means no way to prove what the panel already shows: stay off
+  // rather than guess, and let the caller fall back to full-page pushes.
+  bandUpdates_ = bandSnapshot_ != nullptr;
+  if (!bandUpdates_) LOG_ERR("GFX", "band updates refused: no PSRAM snapshot");
+#else
+  (void)on;
+#endif
+}
+
+bool GfxRenderer::frameChangedSinceSnapshot() const {
+  if (bandSnapshot_ == nullptr) return true;
+  int x = 0;
+  int y = 0;
+  int w = 0;
+  int h = 0;
+  return computeChangedBand(&x, &y, &w, &h);
+}
+
+bool GfxRenderer::computeChangedBand(int* x, int* y, int* w, int* h) const {
+  return changedBandBoundingBox(frameBuffer, bandSnapshot_, panelWidthBytes, panelHeight, x, y, w, h);
+}
+
 void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefreshContext context) const {
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
   HalDisplay::RefreshMode effectiveRefreshMode = refreshMode;
+  // Source of a GC16, for CMD:PUSHSTATS (see RenderStats).
+  enum : uint8_t { kFullCaller, kFullOverride, kFullCadence, kFullLocalFallback } fullSource = kFullCaller;
+  if (refreshMode != HalDisplay::FULL_REFRESH) fullSource = kFullCadence;
   if (nextRefreshOverridePending) {
     effectiveRefreshMode = nextRefreshOverride;
     nextRefreshOverridePending = false;
+    fullSource = kFullOverride;
   }
 #if FREEINK_DEVICE_READPICO
   // This panel latches its source/gate driver state on the DU profile. FAST is
-  // therefore never a safe presentation mode here, for UI or reader pages.
-  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+  // therefore never a safe presentation mode here, for UI or reader pages -- with
+  // one experiment (CMD:DU): reader page turns may keep DU, which is ~40x less
+  // panel time (1-2 phases vs 37). UI contexts are never exempted.
+  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH &&
+      !(s_readerDuExperiment_ && context == DisplayRefreshContext::ContinuousReading)) {
     effectiveRefreshMode = HalDisplay::HALF_REFRESH;
   }
 #endif
+  // The periodic GC16 sweep is charged per DRIVEN PIXELS, not per call: a narrow
+  // band push barely adds ghosting, so only a full-page HALF push (or a band
+  // covering >= BAND_DEBT_PERCENT of the panel) advances the counter. Deciding
+  // "due" before the band attempt keeps the one pass that must clean from being
+  // downgraded to a band.
+  bool sweepDue = false;
   if (context == DisplayRefreshContext::Normal) {
     // System UI pages must not use DU. The fast profile leaves a low-contrast
     // horizontal smear that no later GC16 reliably removes, which is exactly
@@ -2610,23 +2787,175 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
       effectiveRefreshMode = HalDisplay::HALF_REFRESH;
     }
     if (effectiveRefreshMode == HalDisplay::HALF_REFRESH) {
-      if (uiFastRefreshCount < uiFullRefreshInterval) ++uiFastRefreshCount;
-      if (uiFastRefreshCount >= uiFullRefreshInterval) {
+      sweepDue = band_policy::sweepDue(uiFastRefreshCount, uiFullRefreshInterval);
+      if (sweepDue && !s_localClean_) {
+        fullSource = kFullCadence;
+        // Classic sweep: this pass itself becomes the whole-screen GC16. With
+        // local clean the decision moves into the band path, which knows what
+        // actually changed since the last clean.
         effectiveRefreshMode = HalDisplay::FULL_REFRESH;
         uiFastRefreshCount = 0;
       }
     } else if (effectiveRefreshMode == HalDisplay::FULL_REFRESH) {
       uiFastRefreshCount = 0;
+      // A full GC16 rewrote the whole panel; the union has nothing left to clean.
+      dirtyX_ = 0;
+      dirtyY_ = 0;
+      dirtyW_ = 0;
+      dirtyH_ = 0;
     }
     LOG_DBG("GFX", "UI push mode=%u fastCount=%u", static_cast<unsigned>(effectiveRefreshMode),
             static_cast<unsigned>(uiFastRefreshCount));
   }
+#if FREEINK_DEVICE_READPICO
+  // Band path: the caller opt-in'd (keyboard, list focus), the framebuffer is
+  // complete, and only a strip changed -- push the strip instead of re-driving
+  // the page. A FULL push keeps the full path so the sweep still resets the panel.
+  if (bandUpdates_ && bandSnapshot_ != nullptr && !s_bandSuspended &&
+      effectiveRefreshMode != HalDisplay::FULL_REFRESH && !fadingFix) {
+    int bx = 0;
+    int by = 0;
+    int bw = 0;
+    int bh = 0;
+    const long screenArea = static_cast<long>(panelWidth) * static_cast<long>(panelHeight);
+    const auto clearDirtyUnion = [this]() {
+      dirtyX_ = 0;
+      dirtyY_ = 0;
+      dirtyW_ = 0;
+      dirtyH_ = 0;
+    };
+    const auto unionDirty = [this](const int x, const int y, const int w, const int h) {
+      if (w <= 0 || h <= 0) return;
+      if (dirtyW_ <= 0) {
+        dirtyX_ = x;
+        dirtyY_ = y;
+        dirtyW_ = w;
+        dirtyH_ = h;
+        return;
+      }
+      const int x1 = std::max(dirtyX_ + dirtyW_, x + w);
+      const int y1 = std::max(dirtyY_ + dirtyH_, y + h);
+      dirtyX_ = std::min(dirtyX_, x);
+      dirtyY_ = std::min(dirtyY_, y);
+      dirtyW_ = x1 - dirtyX_;
+      dirtyH_ = y1 - dirtyY_;
+    };
+    // One GC16 over exactly what changed since the last clean, taken from the
+    // current framebuffer. False = the union is too large to be worth a rect and
+    // the caller should schedule a whole-screen GC16 instead.
+    const auto localClean = [&]() {
+      if (dirtyW_ <= 0) return true;
+      const long area = static_cast<long>(dirtyW_) * static_cast<long>(dirtyH_);
+      if (!band_policy::localCleanFits(area, screenArea, s_localCleanMaxPercent)) return false;
+      // Dilate: a rect edge can sit on the last driven pixel, where charge sharing
+      // with an untouched neighbour may leave a faint line. Growing the clean into
+      // already-clean pixels costs a few columns and removes that risk.
+      const band_policy::Rect grown = band_policy::dilateRect(
+          band_policy::Rect{dirtyX_, dirtyY_, dirtyW_, dirtyH_}, panelWidth, panelHeight);
+      if (grown.w <= 0) return true;
+      LOG_DBG("GFX", "local clean %d,%d %dx%d (union %d,%d %dx%d)", grown.x, grown.y, grown.w, grown.h, dirtyX_,
+              dirtyY_, dirtyW_, dirtyH_);
+      armScanWatchdog(3000);
+      display.cleanWindow(static_cast<uint16_t>(grown.x), static_cast<uint16_t>(grown.y),
+                          static_cast<uint16_t>(grown.w), static_cast<uint16_t>(grown.h));
+      disarmScanWatchdog();
+      ++s_renderStats.cleanPushes;
+      s_renderStats.bandAreaPixels += static_cast<uint64_t>(area);
+      clearDirtyUnion();
+      uiFastRefreshCount = 0;
+      std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+      return true;
+    };
+    const bool haveChange = computeChangedBand(&bx, &by, &bw, &bh);
+    if (!haveChange) {
+      ++s_renderStats.skippedPushes;
+      if (sweepDue && s_localClean_ && dirtyW_ > 0) {
+        // The frame matches the glass, but a clean is due: this is the quiet
+        // moment to run it.
+        if (localClean()) return;
+        effectiveRefreshMode = HalDisplay::FULL_REFRESH;
+        uiFastRefreshCount = 0;
+        clearDirtyUnion();
+      } else {
+        LOG_DBG("GFX", "band: no change, push skipped");
+        return;
+      }
+    } else {
+      const long bandArea = static_cast<long>(bw) * static_cast<long>(bh);
+      if (!band_policy::bandFitsWindow(bandArea, screenArea)) {
+        // This frame changes a lot; the full push below rewrites everything, so
+        // the dirty union resets with it.
+        clearDirtyUnion();
+      } else {
+        unionDirty(bx, by, bw, bh);
+        if (sweepDue && s_localClean_) {
+          if (localClean()) return;
+          effectiveRefreshMode = HalDisplay::FULL_REFRESH;
+          fullSource = kFullLocalFallback;
+          uiFastRefreshCount = 0;
+          clearDirtyUnion();
+        } else {
+          LOG_DBG("GFX", "band: %d,%d %dx%d of %dx%d", bx, by, bw, bh, panelWidth, panelHeight);
+          ++s_renderStats.bandPushes;
+          s_renderStats.bandAreaPixels += static_cast<uint64_t>(bandArea);
+          // Debt follows driven pixels (see the sweep block above).
+          if (context == DisplayRefreshContext::Normal && band_policy::bandChargesDebt(bandArea, screenArea) &&
+              uiFastRefreshCount < uiFullRefreshInterval) {
+            ++uiFastRefreshCount;
+          }
+          // The column mask groups four pixels per byte, so a rect whose x/w are not
+      // multiples of 4 would rely on the mask's sub-group bit order matching the
+      // LUT's packing -- an order the host tests cannot see. Every rect this
+      // renderer produces comes from a byte-aligned diff (multiples of 8), so the
+      // invariant holds; log loudly if a future caller breaks it.
+      if ((bx & 3) != 0 || (bw & 3) != 0) {
+        ESP_LOGE("GFX", "unaligned band %d,%d %dx%d (needs multiples of 4)", bx, by, bw, bh);
+      }
+      if (s_bandPushFullPage || !s_areaPushAllowed_) {
+            display.displayBuffer(effectiveRefreshMode, fadingFix, context);
+          } else {
+            armScanWatchdog(3000);
+            display.displayWindow(static_cast<uint16_t>(bx), static_cast<uint16_t>(by), static_cast<uint16_t>(bw),
+                                  static_cast<uint16_t>(bh));
+            disarmScanWatchdog();
+          }
+          std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+          return;
+        }
+      }
+    }
+  }
+#endif
 #ifdef SIMULATOR
   (void)context;
   display.displayBuffer(effectiveRefreshMode, fadingFix);
 #else
   display.displayBuffer(effectiveRefreshMode, fadingFix, context);
 #endif
+  // A full-page HALF push is the unit of ghost debt; FULL just reset the counter.
+  if (context == DisplayRefreshContext::Normal && effectiveRefreshMode == HalDisplay::HALF_REFRESH && !sweepDue) {
+    if (uiFastRefreshCount < uiFullRefreshInterval) ++uiFastRefreshCount;
+  }
+#if FREEINK_DEVICE_READPICO
+  // Keep the snapshot warm even while band updates are off for this screen: an
+  // overlay opens during a tick whose mode was decided before it existed, and a
+  // stale baseline would make its first row move a full-page diff.
+  if (bandSnapshot_ != nullptr && !s_bandSuspended) {
+    std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+  }
+#endif
+  ++s_renderStats.pagePushes;
+  s_renderStats.pageAreaPixels += static_cast<uint64_t>(panelWidth) * panelHeight;
+  if (effectiveRefreshMode == HalDisplay::FULL_REFRESH) {
+    ++s_renderStats.sweepPushes;
+    switch (fullSource) {
+      case kFullOverride: ++s_renderStats.fullFromOverride; break;
+      case kFullCadence: ++s_renderStats.fullFromCadence; break;
+      case kFullLocalFallback: ++s_renderStats.fullFromLocalFallback; break;
+      case kFullCaller:
+      default: ++s_renderStats.fullFromCaller; break;
+    }
+  }
 }
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, DisplayRefreshContext context) const {
@@ -2636,9 +2965,8 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, 
     nextRefreshOverridePending = false;
   }
 #if FREEINK_DEVICE_READPICO
-  // This panel latches its source/gate driver state on the DU profile. FAST is
-  // therefore never a safe presentation mode here, for UI or reader pages.
-  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH) {
+  if (effectiveRefreshMode == HalDisplay::FAST_REFRESH &&
+      !(s_readerDuExperiment_ && context == DisplayRefreshContext::ContinuousReading)) {
     effectiveRefreshMode = HalDisplay::HALF_REFRESH;
   }
 #endif
@@ -3291,17 +3619,32 @@ void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(
 void GfxRenderer::displayWindow(int x, int y, int w, int h, DisplayRefreshContext context) const {
   if (w <= 0 || h <= 0) return;
 #if FREEINK_DEVICE_READPICO
-  // Partial-area scans latch this panel's source/gate driver state. Push the
-  // whole page through the normal differential GL16 path instead; the clock
-  // tick and popups still update, but no windowed scan ever reaches the glass.
-  // The caller's context is preserved so an excluded cadence (the reader's
-  // ContinuousReading clock) does not feed the periodic UI GC16 sweep.
+  // Partial-area scans are not safe on this panel yet: a 2026-10-28 soak of the
+  // reader clock through the exact area path (epdiyLcdUpdateArea) left the unit
+  // unresponsive after about a dozen forced ticks. Every caller stays on the
+  // full-page differential push until that path has a bounded-timeout design and
+  // a host test. The caller's context is preserved so an excluded cadence (the
+  // reader's ContinuousReading clock) does not feed the periodic UI GC16 sweep.
   (void)x;
   (void)y;
   (void)w;
   (void)h;
   displayBuffer(HalDisplay::HALF_REFRESH, context);
   return;
+#else
+  displayPanelWindow(x, y, w, h, context);
+#endif
+}
+
+void GfxRenderer::displayPanelWindow(int x, int y, int w, int h, DisplayRefreshContext context) const {
+  if (w <= 0 || h <= 0) return;
+#if FREEINK_DEVICE_READPICO
+  // Quarantined windowed scan (see setAreaPushAllowed): keep the caller's
+  // contract by pushing the whole page, which is always correct.
+  if (!s_areaPushAllowed_) {
+    displayBuffer(HalDisplay::HALF_REFRESH, context);
+    return;
+  }
 #endif
   // x/y/w/h are PHYSICAL panel-memory coordinates (framebuffer row bytes), not
   // logical screen coordinates: callers that scan the raw framebuffer (the

@@ -74,6 +74,14 @@ gray, so each needs on-panel comparison, not just a host test.
    and the bounce path was worth ~2% of the SD side. Worth doing because it removes a hidden
    allocation from a hot path and un-lying a comment, not because copies get faster.
 
+   The same file now carries the **run-time clock fallback** (docs/07 D6): Read Pico tries
+   40 MHz, then 20 MHz (plain default-speed, because `sdmmc_card_init()` skips HS mode at or
+   below `SDMMC_FREQ_DEFAULT`), then 10 MHz before failing the mount. A tired card or dirty
+   contacts previously turned one marginal high-speed negotiation into the whole "SD card
+   error" screen with no recovery; the ladder keeps the device usable at a lower clock.
+   Other SDMMC targets keep their single clock (the ladder has one step). A successful mount
+   prints `[SD] SDMMC mounted at <kHz> kHz (<n>-bit)` so a degraded card is visible in the log.
+
 4. **Windowed (area) refresh — `epdiyLcdUpdateArea`.** A fourth entry point on the EpdiyLcd
    C API that expands a 1bpp framebuffer into epdiy's front buffer and runs ONE differential
    push scoped to a rect, diffing and copying back nothing outside it. epdiy already had the
@@ -206,9 +214,45 @@ gray, so each needs on-panel comparison, not just a host test.
    non-key PMU event) is cleared and the loop keeps sleeping: returning either
    made the reader's clock standby pop back to the reader by itself.
 
+10. **2026-10-28: gate-phase latch root cause — one frame must start once.**
+    The smear in `docs/engineering/read-pico-refresh-stability.md` is traced to a
+    concrete code path, not to the area geometry:
+    - A feeder underrun sets `render_context.error = EPD_DRAW_EMPTY_LINE_QUEUE`.
+    - `lcd_calculate_frame()`'s error branch runs in **both** feeder tasks and each one
+      called `epd_lcd_start_frame()`. The two starts were ~50 µs apart; the second reset
+      the 693-cycle RMT CKV loop at the start of the first (`overlap ≈ 11 038 µs`). The
+      gate ring lost a frame's worth of clocks and stayed offset: framebuffer crisp, every
+      later refresh wrong, only a reboot restored it.
+    - Fix: `RenderContext_t.frame_started` (`atomic_bool`, reset in
+      `prepare_context_for_next_frame`) plus `claim_frame_start()` in both the error and
+      the normal trigger. Only one feeder starts a physical frame; the error path still
+      starts one blank frame so the panel completes its lap.
+    - Belt-and-suspenders: `ckv_wait_previous_loop()` at the top of
+      `epd_lcd_start_frame()` waits out the previous finite CKV loop (task context,
+      before the critical section). It logs and blocks only when an invariant is already
+      violated, so no other caller can truncate a lap.
+    - Underrun: the 32-line prefill (512 µs) was too small for the long 36/37-phase
+      16-level scans; the first underrun was exactly at line 32. The Read Pico prefill is
+      now **96 lines (1.5 ms)**. The cold Library entry had a second source: the popup
+      push (a multi-phase scan) ran with the index rebuild / Library render and stalled
+      the feeder at line 233; `LibraryListActivity::onEnter` now rebuilds **before** the
+      popup push (that ordering fix is in the application tree, not this SDK patch).
+    - Verification: deterministic `EPD_DRAW_EMPTY_LINE_QUEUE` injection gave
+      `starts=256 early=0` (before: `early=64`, overlap 11 038 µs); a mixed
+      Library/Home/Settings/reader soak with natural underruns gave
+      `starts=1280 early=0`; after the Library reorder and prefill 96 a cold Library entry
+      produced zero underruns. Host `test_transactions.py` passes.
+    - The temporary CKV counters/tags, `CMD:INJECTERR`, `CMD:RM` and the
+      `epd_test_error` hook were stripped before regenerating this patch. The atomic
+      claim, the CKV wait, and prefill 96 are the permanent parts.
+    - Consequence for item 7's wording: the area API was a **trigger** (long multi-phase
+      scans + underruns), not the root cause. Keep the conservative full-page routing on
+      Read Pico until the fixed build has a long area/partial soak; do not treat
+      "partial-area scan" as intrinsically forbidden any more.
+
 ## Upgrading an older tree
 
-This patch grew from 20 to 27 files when items 6–9 landed; the idempotence marker
+This patch grew from 20 to 29 files when items 6–10 landed; the idempotence marker
 moved from `e0470_textturn_soft_settle` to `epd_draw_base_start` when item 6 landed. A working tree that still
 carries the earlier version cannot be patched in place: `apply.sh` detects that state and
 refuses. Restore the tree to `96de1be` first (re-checkout in a scratch clone, then
@@ -228,11 +272,16 @@ git fetch --depth 1 https://github.com/0x1abin/freeink-sdk.git 96de1be6ce08eb732
 # check the fetch out as sdk_pristine, copy the working tree as sdk_work, then:
 diff -ruN --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
           --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-          --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=lucide \
+          --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=MetalioEink4Board.h \
+          --exclude=lucide \
           sdk_pristine sdk_work > raw.patch
+# ★ On a case-insensitive filesystem (macOS APFS) the SDK tracks BOTH
+#   MetalioEInk4Board.h and MetalioEink4Board.h as distinct paths resolving to one
+#   file. Exclude both spellings or the unrelated in-flight Metalio change leaks in
+#   as a 30th patch file. diff's --exclude is case-sensitive even there.
 # strip the mtime that diff appends after a TAB on every --- / +++ line, and normalise
 # the header back to the plain --exclude=.git form, so regenerating produces a
-# content-only diff instead of touching all 27 headers:
+# content-only diff instead of touching all 29 headers:
 sed -E 's/^(---|\+\+\+) (sdk_pristine|sdk_work)\/([^[:space:]]+)[[:space:]].*$/\1 \2\/\3/' raw.patch \
   | sed -E 's|^diff -ruN --exclude=[^ ]+( --exclude=[^ ]+)* sdk_pristine/|diff -ruN --exclude=.git sdk_pristine/|' \
   > 96de1be-local.patch
@@ -241,7 +290,8 @@ mkdir sdk_verify && tar -c -C sdk_pristine . | tar -x -C sdk_verify
 patch -p1 -d sdk_verify < 96de1be-local.patch
 diff -rq --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
          --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-         --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=lucide \
+         --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=MetalioEink4Board.h \
+         --exclude=lucide \
          sdk_verify sdk_work
 ```
 

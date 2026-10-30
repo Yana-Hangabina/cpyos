@@ -208,6 +208,16 @@ Rect UITheme::getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButton
 }
 
 std::string UITheme::getCoverThumbPath(std::string coverBmpPath, int coverHeight) {
+  // Thumbnails moved from 1-bit (_g2, a misleading name) to 8-bit gray (_g8) on
+  // 2026-10-29. Templates persisted in recent.json (and any older cache record)
+  // still say _g2, which made every draw probe a file that no longer exists --
+  // and the Home thumbnail backfill then re-requested a render forever. Normalise
+  // here so old records resolve to the current files.
+  const std::string oldSuffix = "_g2.bmp";
+  const size_t oldPos = coverBmpPath.rfind(oldSuffix);
+  if (oldPos != std::string::npos) {
+    coverBmpPath.replace(oldPos, oldSuffix.size(), "_g8.bmp");
+  }
   size_t pos = coverBmpPath.find("[HEIGHT]", 0);
   if (pos != std::string::npos) {
     coverBmpPath.replace(pos, 8, std::to_string(coverHeight));

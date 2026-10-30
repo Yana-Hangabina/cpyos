@@ -17,6 +17,9 @@ class SudokuGameActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // A move changes board cells only; the title/status/footer bands stay
+  // undriven. Same pattern as 2048 and Sokoban (both soaked on hardware).
+  bool wantsBandUpdates() const override { return true; }
 
   // Localized difficulty name; public so SudokuMenuActivity can reuse it.
   static const char* difficultyName(SudokuBoard::Difficulty d);

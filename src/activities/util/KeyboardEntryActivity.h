@@ -42,6 +42,10 @@ class KeyboardEntryActivity : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Serial-only soak hook: inserts one character through the same path a touch
+  // key press takes, so band-update behaviour can be exercised without a finger.
+  void debugTypeChar() override;
+  bool wantsBandUpdates() const override { return true; }
   bool preventAutoSleep() override { return true; }
 
   // Optional live preview above the keyboard (library search). The callback

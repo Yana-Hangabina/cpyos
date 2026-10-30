@@ -19,6 +19,14 @@ class UiListActivity : public Activity, protected UiAppHost {
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Every list screen is 1-bit and repaints the whole surface while changing
+  // only the viewport/focus rows, so the band path applies to all of them. No
+  // list subclass draws a grayscale base (checked across src/activities); a
+  // future one must override this to false.
+  bool wantsBandUpdates() const override { return true; }
+  // Serial soak hook: move the selection like NavNext/NavPrevious would (the tab
+  // variant overrides it to walk tabs + rows).
+  void debugMoveRing(int delta) override;
 
  protected:
   // Base-owned row action; subclass-registered actions start at ACTION_USER.
