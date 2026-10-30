@@ -68,8 +68,8 @@ constexpr int16_t kGridTitleGapTop = 8;
 constexpr int16_t kGridRowGapBottom = 22;
 
 // CJK-aware greedy wrap for the coverless placeholder. GfxRenderer's
-// wrappedText only breaks on spaces, and a title like "脆皮鸭用户手册" is a
-// single word to it — it truncated to "CrossM…" in the grid (sim review,
+// wrappedText only breaks on spaces, and a Chinese title without spaces is a
+// single word to it — it truncated to a bare ellipsis in the grid (sim review,
 // 2026-10-16). Breaks per grapheme, trimming trailing spaces; when the line
 // budget runs out the remainder gets the usual ellipsis.
 std::vector<std::string> wrapCoverTitle(const GfxRenderer& renderer, const int fontId, const char* text,
@@ -269,8 +269,12 @@ void LibraryListActivity::onEnter() {
   const bool rebuildNeeded = library::isLibraryIndexDirty() || !index.open(library::libraryIndexPath()) ||
                              index.header().metadataEnabled != readMetadata;
   if (rebuildNeeded) {
+    // Rebuild first, then paint the list. There used to be a
+    // GUI.drawPopup(STR_LIBRARY_REBUILDING) between the walk and index.open(),
+    // but the walk is synchronous, so the popup only appeared once the work was
+    // already done -- and the list render replaced it immediately, paying one
+    // extra full-panel scan (~400 ms measured) for nothing.
     index.close();
-    GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
     rebuildIndex();
     if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot open library index");
   }
@@ -295,6 +299,9 @@ void LibraryListActivity::onExit() {
 }
 
 bool LibraryListActivity::rebuildIndex() {
+  // Present barrier: a cold index walks the whole card; letting it start while a
+  // panel scan is still feeding is exactly the long feeder stall that underruns.
+  display.waitForScanIdle();
   library::BuildStats stats;
   const bool ok = library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0);
   if (!ok) {
@@ -1922,11 +1929,21 @@ void LibraryListActivity::buildCoverGrid(UiScreen& screen) {
 
       bool drewCover = false;
       if (slot < kGridCoverSlots && gridCovers[slot] == GridCover::Ready && !gridCoverPaths[slot].empty()) {
-        HalFile file;
-        if (Storage.openFileForRead("LIB", gridCoverPaths[slot], file)) {
-          Bitmap bitmap(file);
+        // Shared PSRAM cache: a grid repaint used to re-read every 8-bit cover
+        // from the card (5 covers = ~500 KB per frame, the bulk of the entry time).
+        if (const auto* cached = BookCoverLoader::cacheThumbFile(gridCoverPaths[slot])) {
+          Bitmap bitmap(cached->bytes.get(), cached->size);
           if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
             drewCover = renderer.drawBitmapCropToFill(bitmap, cover.x, cover.y, cover.width, cover.height);
+          }
+        }
+        if (!drewCover) {
+          HalFile file;
+          if (Storage.openFileForRead("LIB", gridCoverPaths[slot], file)) {
+            Bitmap bitmap(file);
+            if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
+              drewCover = renderer.drawBitmapCropToFill(bitmap, cover.x, cover.y, cover.width, cover.height);
+            }
           }
         }
         if (!drewCover) {

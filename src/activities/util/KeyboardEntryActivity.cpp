@@ -1546,6 +1546,12 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
+void KeyboardEntryActivity::debugTypeChar() {
+  if (cursorMode) return;
+  insertUtf8("a");
+  requestUpdate();
+}
+
 void KeyboardEntryActivity::onComplete(std::string text) {
   setResult(KeyboardResult{std::move(text)});
   finish();

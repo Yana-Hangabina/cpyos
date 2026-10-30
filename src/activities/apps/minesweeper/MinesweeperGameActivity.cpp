@@ -123,6 +123,18 @@ void MinesweeperGameActivity::moveCursor(int dr, int dc) {
   cursorC = static_cast<uint8_t>(nc);
 }
 
+void MinesweeperGameActivity::debugGameMove(const int direction) {
+  static constexpr int kDr[4] = {-1, 0, 1, 0};
+  static constexpr int kDc[4] = {0, 1, 0, -1};
+  if (direction == 4) {
+    doConfirmAction();
+    requestUpdate();
+    return;
+  }
+  moveCursor(kDr[direction & 3], kDc[direction & 3]);
+  requestUpdate();
+}
+
 void MinesweeperGameActivity::doConfirmAction() {
   if (flagMode) {
     doFlag();

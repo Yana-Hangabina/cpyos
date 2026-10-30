@@ -1,8 +1,17 @@
 #pragma once
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
+#include <Logging.h>
 
 namespace ReaderUtils {
+// Experiment only (CMD:NOFULL): demote every reader GC16 to the differential
+// profile, including chapter boundaries, so a long run can answer whether the
+// residue saturates. Never enable this in a shipped build path.
+inline bool& fullRefreshSuppressed() {
+  static bool suppressed = false;
+  return suppressed;
+}
+
 inline HalDisplay::RefreshMode consumeRefreshMode(int& pagesUntilFullRefresh, bool deferClean = false) {
   if (deferClean && pagesUntilFullRefresh <= 1) {
     // Keep the debt: the next ordinary page must still clean.
@@ -22,8 +31,18 @@ inline HalDisplay::RefreshMode consumeRefreshMode(int& pagesUntilFullRefresh, bo
 #else
   const auto cleanMode = HalDisplay::HALF_REFRESH;
 #endif
-  const auto mode = (pagesUntilFullRefresh <= 1) ? cleanMode : HalDisplay::FAST_REFRESH;
+  auto mode = (pagesUntilFullRefresh <= 1) ? cleanMode : HalDisplay::FAST_REFRESH;
+  // Settings -> Display -> Periodic full refresh is off by default since
+  // 2026-10-29 (60 differential pages left only the faint "thin paper" residue on
+  // hardware). While it is off, every cadence clean -- including the one a
+  // chapter start asks for through this counter -- is demoted to the
+  // differential profile. The gray/image promotion (nextRefreshOverride) is a
+  // different path and still cleans: midtones cannot be erased differentially.
+  const bool demote = mode != HalDisplay::FAST_REFRESH &&
+                      (fullRefreshSuppressed() || SETTINGS.periodicFullRefresh == 0);
+  if (demote) mode = HalDisplay::FAST_REFRESH;
   if (pagesUntilFullRefresh <= 1) {
+    if (!demote) LOG_INF("ERS", "page refresh: FULL cadence (period=%d pages)", SETTINGS.getRefreshFrequency());
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
     pagesUntilFullRefresh--;

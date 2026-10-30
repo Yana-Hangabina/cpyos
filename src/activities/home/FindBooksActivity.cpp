@@ -230,6 +230,12 @@ void FindBooksActivity::openAction(const Action action) {
   }
 }
 
+void FindBooksActivity::debugMoveRing(const int delta) {
+  if (delta == 0) return;
+  selected_ = std::min(rowCount() - 1, std::max(0, selected_ + delta));
+  requestUpdate();
+}
+
 void FindBooksActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.goHome();
@@ -278,7 +284,9 @@ void FindBooksActivity::loop() {
 }
 
 void FindBooksActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  // 16-level canvas, same rule as Home and the shelf (see MyActivity::render).
+  const bool gray = renderer.beginGrayscale16();
+  if (!gray) renderer.clearScreen();
   const auto& metrics = UITheme::getInstance().getMetrics();
   drawPageHeader(Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, tr(STR_FIND_BOOKS));
 
@@ -459,5 +467,9 @@ void FindBooksActivity::render(RenderLock&&) {
     renderer.drawText(SMALL_FONT_ID, left, noteY, note.c_str());
   }
 
-  renderer.displayBuffer();
+  if (gray) {
+    renderer.commitGrayscale16(false);
+  } else {
+    renderer.displayBuffer();
+  }
 }

@@ -181,8 +181,9 @@ class MappedInputManager {
   void suppressNextRelease(Button button) const;
 
  public:
-  // A light-sleep wake press must not become an in-app long-press/deep-sleep.
-  // Set on the PowerButton wake, cleared by main once the key is released.
+  // A press that woke the device (light sleep) must never also count as an
+  // in-app long press. Standby sets this on wake; main swallows the whole press
+  // and clears it on release.
   void notePowerWakeFromSleep() { powerWakeReleasePending_ = true; }
   bool powerWakeReleasePending() const { return powerWakeReleasePending_; }
   void clearPowerWakeRelease() { powerWakeReleasePending_ = false; }

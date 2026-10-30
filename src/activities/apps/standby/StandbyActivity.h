@@ -20,6 +20,10 @@ class StandbyActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   void onExit() override;
+  // The face repaints once a minute just to move the clock digits. The scan time
+  // is fixed, but a band push drives only the changed strip: less panel current
+  // and no re-driving of the whole face every minute.
+  bool wantsBandUpdates() const override { return true; }
 
   // Standby manages its own timer/GPIO light-sleep cycles, so the framework's
   // generic deep-sleep timer stays paused for the activity's lifetime.

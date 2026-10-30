@@ -63,7 +63,6 @@ static_assert(migrateLegacySoundFeedback(true) == CrossPointSettings::SOUND_FEED
 // a stored 1 out of range and rewrote it to def=0 on every load, which is how
 // readerGestureHintSeen ended up 0 in memory while settings.json still said 1.
 constexpr uint8_t storedBoolFlag(const uint8_t value) { return value != 0 ? 1 : 0; }
-// Compile-time regression guard: a stored 1 must stay 1, and junk folds to 1.
 static_assert(storedBoolFlag(0) == 0);
 static_assert(storedBoolFlag(1) == 1);
 static_assert(storedBoolFlag(2) == 1);
@@ -383,6 +382,19 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
     needsResave = true;
   }
+
+  // 2026-10-29: the cadence became a toggle plus a page count. Files written
+  // before that only carry the tier (or the legacy counter); map the tier so an
+  // existing "Never" stays off and 15/30 keep their page count.
+  if (doc["periodicFullRefresh"].isNull()) {
+    const uint8_t tier = doc["refreshProfile"] | static_cast<uint8_t>(REFRESH_STANDARD);
+    periodicFullRefresh = tier == REFRESH_NEVER ? 0 : 1;
+    readerRefreshPages = tier == REFRESH_CLEAR ? 5 : (tier == REFRESH_RELAXED ? 30 : 15);
+    needsResave = true;
+  }
+  if (readerRefreshPages < 5) readerRefreshPages = 5;
+  if (readerRefreshPages > 120) readerRefreshPages = 120;
+  readerRefreshPages = static_cast<uint8_t>(((readerRefreshPages + 2) / 5) * 5);
 
   // Legacy migration: the aggregate statusBar field predates the split fields.
   if (doc["statusBarChapterPageCount"].isNull()) {
@@ -879,40 +891,28 @@ uint64_t CrossPointSettings::getDailyGoalMs() const {
 }
 
 int CrossPointSettings::getRefreshFrequency() const {
-  switch (refreshFrequency) {
-    case REFRESH_CLEAR:
-      return 1;
-    case REFRESH_STANDARD:
-    default:
-      return 15;
-    case REFRESH_RELAXED:
-      return 30;
-    case REFRESH_NEVER:
-      // Effectively disables the periodic full refresh; the page counter
-      // counts down from here and never reaches the threshold in practice.
-      return std::numeric_limits<int>::max();
+  if (!periodicFullRefresh) {
+    // The counter counts down from here and never reaches the threshold, so no
+    // page is ever promoted by the cadence. Chapter starts still ask for a clean
+    // through the same counter; ReaderRefresh demotes those too while this is off.
+    return std::numeric_limits<int>::max();
   }
+  return readerRefreshPages > 0 ? readerRefreshPages : 15;
 }
 
 uint8_t CrossPointSettings::getUiRefreshInterval() const {
-  // Reader tiers count pages; the UI counter counts pushes (a settings page
-  // flip and a standby face tick each count once), so each tier maps to its
-  // own interval. Standard keeps the historic constant, and the UI side never
-  // fully disables the periodic GC16 sweep: an unbounded GL16 chain
-  // accumulates residue that no later GC16 reliably removes (see
-  // GfxRenderer::displayBuffer and
-  // docs/engineering/read-pico-refresh-stability.md).
-  switch (refreshFrequency) {
-    case REFRESH_CLEAR:
-      return 2;
-    case REFRESH_RELAXED:
-      return 10;
-    case REFRESH_NEVER:
-      return 16;
-    case REFRESH_STANDARD:
-    default:
-      return 6;
-  }
+  // The UI counter counts pushes (a settings flip and a standby face tick each
+  // count once). The UI sweep is never disabled: a local clean over the dirty
+  // union is what a sweep now costs, and skipping it entirely would let the
+  // chrome drift. Scale it from the reader interval, clamped to the historic
+  // range (Standard = 15 pages -> 6 pushes).
+  // Independent of the reader toggle: the UI sweep with local clean on is a rect
+  // clean, not a flash, and the chrome still needs a periodic reset. Standard
+  // (15 pages) keeps the historic 6 pushes.
+  const int pushes = (static_cast<int>(readerRefreshPages) * 2 + 4) / 5;
+  if (pushes < 2) return 2;
+  if (pushes > 16) return 16;
+  return static_cast<uint8_t>(pushes);
 }
 
 void CrossPointSettings::clearSdFontFamily() {

@@ -19,6 +19,14 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
       UiAppHost(renderer, upstreamStyle),
       wantsTouchLongPress(wantsTouchLongPress) {}
 
+void UiListActivity::debugMoveRing(const int delta) {
+  const int count = listCount();
+  if (count <= 0) return;
+  const int next = ((activeNav().selected.load() + delta) % count + count) % count;
+  activeNav().requestSelection(next);
+  requestUpdate();
+}
+
 void UiListActivity::onEnter() {
   Activity::onEnter();
   activeNav().reset();
@@ -165,7 +173,10 @@ void UiListActivity::drawFooter() {
 }
 
 void UiListActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  // A 16-level canvas clears itself inside beginGrayscale16(); clearing again
+  // would wipe the gray buffer's midtones with the B/W proxy.
+  const bool gray = presentsGrayscale() && renderer.beginGrayscale16();
+  if (!gray) renderer.clearScreen();
   drawChrome();
   renderUi();
   // Wrapped labels grow rows, so fewer rows can fit than the fixed-height
@@ -174,11 +185,35 @@ void UiListActivity::render(RenderLock&&) {
   // the nav advanced the viewport and asked for another build. Bounded: top
   // strictly advances toward the selection each pass.
   for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
-    renderer.clearScreen();
+    if (!gray) renderer.clearScreen();
     drawChrome();
     renderUi();
   }
   drawFooter();
   beforeDisplayHook();
+  // Skip a frame whose screen is already on its way out (see InxRecentActivity:
+  // the scan, not the draw, is what makes a rapid switch feel stuck).
+  if (activityManager.isSwitchPending()) {
+    if (gray) renderer.cancelGrayscale16();
+    return;
+  }
+  if (gray) {
+    // A gray commit always costs a panel scan, so an identical frame is skipped --
+    // but only within the same screen session: the first frame after a switch must
+    // always present, or a preempted paint leaves the previous screen up while the
+    // tab state already points here ("tapping Library does nothing", 2026-10-29).
+    if (renderer.frameUnchangedThisSession()) {
+      renderer.cancelGrayscale16();
+      return;
+    }
+    // GL16 commit: covers keep their tones, and because the whole frame goes out
+    // with a gray-capable waveform the previous gray page needs no promotion.
+    if (!renderer.commitGrayscale16(false)) {
+      renderer.displayBuffer();
+      return;
+    }
+    renderer.noteFramePresented();
+    return;
+  }
   renderer.displayBuffer();
 }

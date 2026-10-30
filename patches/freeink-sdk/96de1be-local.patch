@@ -38,7 +38,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h s
  void epdiyLcdCancelGrayscale16();
  
  /// 推一帧。`fb` 是 1bpp、MSB 在前、每行 width/8 字节、height 行；位约定由
-@@ -98,6 +119,45 @@
+@@ -98,6 +119,55 @@
  /// the bit convention is the one handed to epdiyLcdBegin.
  bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
  
@@ -65,6 +65,13 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h s
 +/// 等待在飞的异步扫描收尾（没有在飞时立即返回）。
 +/// / Join the deferred scan; returns immediately when none is in flight.
 +void epdiyLcdWaitScan();
++
++/// True while a deferred scan is in flight. / 是否有扫描在飞。
++bool epdiyLcdScanInProgress();
++
++/// Read-and-clear panel work counters: frames pushed and wall time inside the
++/// push. Used by CMD:SCANSTATS to attribute panel cost to one action.
++void epdiyLcdTakePushStats(uint32_t* frames, uint64_t* us);
 +bool epdiyLcdScanPending();
 +
 +/// 只更新矩形区域 [x, x+w) x [y, y+h)：把 `fb` 展开成 epdiy 的帧缓冲后，只对这个
@@ -79,12 +86,15 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h s
 +/// baseline is unknown, since an area diff has no full rewrite to lean on; the next full
 +/// push rebuilds it. The HV rails are left up (area updates usually arrive back to back,
 +/// so dropping and re-raising costs more than holding).
++/// 强制整屏波形重建一个矩形（局部清理）：矩形内每个像素都被驱动，矩形外不动。
++/// / Forced full-waveform rebuild of one rect (local clean); outside untouched.
++bool epdiyLcdCleanArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 +bool epdiyLcdUpdateArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h, EpdiyLcdRefresh mode);
 +
  /// 只把这一页留作底图，不推屏。给「底图与灰阶合并成一次波形」的宿主用：宿主随后调用
  /// epdiyLcdDrawGray()，由它用这张底图合成整页并只推一次。
  /// / Stash this page as the base WITHOUT presenting it. For hosts that combine the
-@@ -119,6 +179,27 @@
+@@ -119,6 +189,27 @@
  /// complement of the page), so pushing it yields a negative. LgfxEpdDriver.cpp:187-201
  /// documents the same trap; this keeps a base image for the same reason.
  bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff);
@@ -108,24 +118,29 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/include/EpdiyLcd.h s
 +/// rails_idle_check: keep them up during a burst of work and drop them only when
 +/// nothing is happening. The image is bistable, so the next push repowers the
 +/// rails and pays tens of milliseconds.
-+void epdiyLcdIdleTick(uint32_t nowMs);
++bool epdiyLcdIdleTick(uint32_t nowMs);
  
  /// 进入低功耗：掉轨并释放 LCD_CAM/GDMA/RMT。
  /// / Enter low power: drop the rails and release LCD_CAM/GDMA/RMT.
 diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk_work/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
 --- sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
 +++ sdk_work/libs/display/EpdiyLcd/src/EpdiyLcd.cpp
-@@ -9,8 +9,8 @@
+@@ -9,8 +9,13 @@
  
  #include <EpdiyLcd.h>
  #include <esp_heap_caps.h>
 -#if FREEINK_READPICO_DIAGNOSTICS
  #include <esp_timer.h>
++
++namespace {
++uint32_t g_pushFrames = 0;
++uint64_t g_pushUs = 0;
++}  // namespace
 +#if FREEINK_READPICO_DIAGNOSTICS
  // rom console rather than ESP_LOGI: on this build ESP_LOG does not reach the serial
  // port. The header is ESP-IDF-only, and the host transaction test builds this file
  // twice -- once with diagnostics on -- so it cannot be included unconditionally.
-@@ -23,6 +23,7 @@
+@@ -23,6 +28,7 @@
  #endif
  #include <esp_log.h>
  
@@ -133,7 +148,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  #include <cstring>
  
  extern "C" {
-@@ -31,6 +32,7 @@
+@@ -31,6 +37,7 @@
  // / epdiy headers without extern "C" guards are wrapped here; re-wrapping the
  // guarded ones is harmless.
  #include "e0470/include/e0470_epaper_waveform.h"
@@ -141,7 +156,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  #include "epdiy/include/epd_lcd.h"
  #include "epdiy/include/epd_waveform.h"
  #include "epdiy/src/epd_board.h"
-@@ -57,7 +59,148 @@
+@@ -57,7 +64,148 @@
  // 调用方的 1bpp 位约定，由 epdiyLcdBegin 给定一次。
  // / The caller's 1 bpp bit convention, fixed once by epdiyLcdBegin.
  bool g_blackIsOne = false;
@@ -290,7 +305,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  // 1bpp 行 → 4bpp 行的展开表：一个输入字节出 4 个输出字节。
  // epdiy 是每字节两个像素，偶数列在低半字节、奇数列在高半字节，15 = 白。
  // / Expansion table: one 1 bpp input byte becomes four 4 bpp bytes. epdiy packs
-@@ -122,6 +265,9 @@
+@@ -122,6 +270,9 @@
  
    if (epd_lcd_init(&c, static_cast<int>(epd_width()), static_cast<int>(epd_height())) != ESP_OK) return false;
    epd_lcd_set_prefill_lines(g_cfg->prefillLines);
@@ -300,7 +315,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    return true;
  }
  
-@@ -145,8 +291,23 @@
+@@ -145,8 +296,23 @@
    (void)state;
    if (g_cfg != nullptr && g_cfg->power.powerOff != nullptr) g_cfg->power.powerOff();
    g_powerReady = false;
@@ -324,7 +339,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  void boardMeasureVcom(epd_ctrl_state_t* state) { (void)state; }
  
  // 硬规则：面板 VCOM 是出厂写进 PMU 的，与这块玻璃配对，写错会永久损坏面板。
-@@ -182,6 +343,10 @@
+@@ -182,6 +348,10 @@
    // 波形必须在 epd_hl_init 之前建好：E0470_WAVEFORM 的相位数据由它填。
    // / The waveform must be built before epd_hl_init(): it fills E0470_WAVEFORM.
    e0470_waveform_init();
@@ -335,7 +350,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  
    epd_set_board(&kBoard);
    if (!epd_init(&kBoard, &E0470_DISPLAY, EPD_OPTIONS_DEFAULT)) {
-@@ -247,9 +412,16 @@
+@@ -247,9 +417,16 @@
  }
  
  void epdiyLcdEnd() {
@@ -352,7 +367,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    heap_caps_free(g_base);
    g_base = nullptr;
    g_fb4 = nullptr;
-@@ -257,6 +429,7 @@
+@@ -257,6 +434,7 @@
    g_nativeGrayActive = false;
    g_initialized = false;
    g_baselineKnown = false;
@@ -360,7 +375,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  }
  
  namespace {
-@@ -281,7 +454,12 @@
+@@ -281,7 +459,12 @@
  // and push it back to black, and that erase is the flash a turn shows. Every other
  // profile keeps the table epd_hl_init attached.
  const EpdWaveform* waveformFor(EpdiyLcdRefresh mode) {
@@ -374,7 +389,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  }
  
  // 1bpp 页 -> epdiy 4bpp。展开表把调用方的位约定翻成 epdiy 的灰度级；本玻璃实测
-@@ -313,7 +491,59 @@
+@@ -313,7 +496,65 @@
  }
  #endif
  
@@ -431,11 +446,17 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
 +
 +bool pushFrame(EpdiyLcdRefresh mode, bool turnOff, bool allowAsync, bool clearGrayAreas = false,
 +               bool forceAllLines = false) {
++  const int64_t pushStartedUs = esp_timer_get_time();
++  ++g_pushFrames;
++  struct PushAccounting {
++    int64_t started;
++    ~PushAccounting() { g_pushUs += static_cast<uint64_t>(esp_timer_get_time() - started); }
++  } pushAccounting{pushStartedUs};
 +  waitScan();
    epd_poweron();
    if (!g_powerReady) {
      g_baselineKnown = false;
-@@ -326,10 +556,105 @@
+@@ -326,10 +567,105 @@
      memset(g_hl.back_fb, 0xFF, static_cast<size_t>(epd_width()) / 2 * epd_height());
      mode = EpdiyLcdRefresh::Full;
    }
@@ -542,7 +563,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    const EpdWaveform* waveform = waveformFor(mode);
    const bool swapWaveform = waveform != g_hl.waveform;
    if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
-@@ -338,8 +663,45 @@
+@@ -338,8 +674,45 @@
    // / Full takes the all-lines-and-columns-dirty path; every other profile is pushed
    // differentially, and it is only a differential push that lets the held diagonal
    // actually skip a pixel.
@@ -590,7 +611,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
  #if FREEINK_READPICO_DIAGNOSTICS
    int diffMs, drawMs, copyMs;
-@@ -357,36 +719,204 @@
+@@ -357,36 +730,204 @@
  #endif
    g_baselineKnown = err == EPD_DRAW_SUCCESS;
    if (!g_baselineKnown) ESP_LOGE("EpdiyLcd", "Frame failed (%u); clean retry required", static_cast<unsigned>(err));
@@ -799,7 +820,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
  
  #if FREEINK_READPICO_DIAGNOSTICS
-@@ -402,10 +932,36 @@
+@@ -402,10 +943,36 @@
  #if FREEINK_READPICO_DIAGNOSTICS
    recordConversion(conversionStartedUs);
  #endif
@@ -837,11 +858,50 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    if (!g_started || fb == nullptr || g_base == nullptr || g_cfg == nullptr) return;
    // 只留底图：不展开、不推帧。灰阶提交会用它合成整页，所以整帧只被一种波形驱动一次。
    // / Stash only: no expansion, no frame push. The grey commit composes the whole page
-@@ -414,7 +970,60 @@
+@@ -414,7 +981,99 @@
    memcpy(g_base, fb, bytes);
  }
  
 -bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
++bool epdiyLcdCleanArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
++  waitScan();
++  if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
++  if (w == 0 || h == 0) return false;
++  if (x >= epd_width() || y >= epd_height()) return false;
++  if (static_cast<int>(x) + w > epd_width()) w = static_cast<uint16_t>(epd_width() - x);
++  if (static_cast<int>(y) + h > epd_height()) h = static_cast<uint16_t>(epd_height() - y);
++  epd_poweron();
++  if (!g_powerReady) {
++    g_baselineKnown = false;
++    ESP_LOGE("EpdiyLcd", "Panel power-on failed; area clean skipped");
++    epd_poweroff();
++    return false;
++  }
++  // A forced-full rect rebuilds that rect from the framebuffer, but says nothing
++  // about the rest of the panel: refuse when the outside baseline is unknown.
++  if (!g_baselineKnown) {
++    epd_poweroff();
++    return false;
++  }
++  fillFrom1bpp(fb);
++  const int temperature = static_cast<int>(panelTemperature());
++  const EpdWaveform* waveform = waveformFor(EpdiyLcdRefresh::Full);
++  const bool swapWaveform = waveform != g_hl.waveform;
++  if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
++  const EpdRect area = {.x = static_cast<int>(x),
++                        .y = static_cast<int>(y),
++                        .width = static_cast<int>(w),
++                        .height = static_cast<int>(h)};
++  const auto err = epd_hl_update_area_full(&g_hl, drawModeFor(EpdiyLcdRefresh::Full), temperature, area);
++  if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
++  g_baselineKnown = err == EPD_DRAW_SUCCESS;
++  if (!g_baselineKnown) {
++    ESP_LOGE("EpdiyLcd", "Area clean failed (%u); clean retry required", static_cast<unsigned>(err));
++  }
++  if (g_baselineKnown) (void)boardReleaseDrive();
++  return g_baselineKnown;
++}
++
 +bool epdiyLcdUpdateArea(const uint8_t* fb, uint16_t x, uint16_t y, uint16_t w, uint16_t h, EpdiyLcdRefresh mode) {
 +  // 区段刷新保持同步：它要等 415ms 扫描才返回，但调用方是主循环里的分钟级时钟，
 +  // 不存在可重叠的排版工作；与整帧异步扫描也绝不能并发（同一个 render_context）。
@@ -899,7 +959,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
    if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return false;
    if (g_base == nullptr || lsb == nullptr || msb == nullptr) return false;
  
-@@ -459,15 +1068,54 @@
+@@ -459,15 +1118,65 @@
  #if FREEINK_READPICO_DIAGNOSTICS
    recordConversion(conversionStartedUs);
  #endif
@@ -923,24 +983,25 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
 +  return drawGrayPage(lsb, msb, mode, turnOff, true);
 +}
 +
-+void epdiyLcdIdleTick(const uint32_t nowMs) {
++bool epdiyLcdIdleTick(const uint32_t nowMs) {
 +  if (!g_started || !g_powerReady || g_cfg == nullptr || g_cfg->power.powerOff == nullptr) {
 +    railsDisarmed();
-+    return;
++    return false;
 +  }
-+  if (g_railsDeadlineMs == 0) return;
-+  if (static_cast<int32_t>(nowMs - static_cast<uint32_t>(g_railsDeadlineMs)) < 0) return;
++  if (g_railsDeadlineMs == 0) return false;
++  if (static_cast<int32_t>(nowMs - static_cast<uint32_t>(g_railsDeadlineMs)) < 0) return false;
 +  // The caller holds the render lock; join a deferred scan before the rails go.
 +  waitScan();
 +  if (!g_powerReady) {
 +    railsDisarmed();
-+    return;
++    return false;
 +  }
 +  g_railsDeadlineMs = 0;
 +  // Visible at the build's ERROR log level (ESP_LOG INFO/DEBUG never reach the
 +  // serial port here). This is a state transition, not a fault.
 +  ESP_LOGE("EpdiyLcd", "Rails idle off after %u ms", static_cast<unsigned>(kRailsIdleTimeoutMs));
 +  epd_poweroff();
++  return true;
 +}
 +
  void epdiyLcdDeepSleep() {
@@ -953,6 +1014,16 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/EpdiyLcd.cpp sdk
  bool epdiyLcdReady() { return g_started && g_fb4 != nullptr; }
 +
 +void epdiyLcdSetWaterTurn(int direction) { g_waterTurnDirection = direction; }
++
++
++bool epdiyLcdScanInProgress() { return epd_draw_scan_pending(); }
++
++void epdiyLcdTakePushStats(uint32_t* frames, uint64_t* us) {
++  if (frames != nullptr) *frames = g_pushFrames;
++  if (us != nullptr) *us = g_pushUs;
++  g_pushFrames = 0;
++  g_pushUs = 0;
++}
  
  }  // namespace freeink
 diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c sdk_work/libs/display/EpdiyLcd/src/e0470/e0470_epaper_waveform.c
@@ -1996,13 +2067,45 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/highle
  }
  
  enum EpdDrawError epd_hl_update_area(
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.c
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.c
+@@ -85,6 +85,7 @@
+     ctx->lut_build_func(ctx->conversion_lut, phases, ctx->current_frame);
+ 
+     ctx->lines_prepared = 0;
++    atomic_store_explicit(&ctx->frame_started, false, memory_order_release);
+     ctx->lines_consumed = 0;
+     if (ctx->line_threads != NULL) {
+         for (int i = 0; i < ctx->lines_total; i++) {
 diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
 --- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
 +++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_common/render_context.h
-@@ -64,6 +64,14 @@
+@@ -25,6 +25,8 @@
+ 
+     /// index of the next line of data to process
+     atomic_int lines_prepared;
++    /// Exactly one feeder may start the physical frame (normal and error path).
++    atomic_bool frame_started;
+     volatile int lines_consumed;
+     int lines_total;
+ 
+@@ -53,6 +55,10 @@
+     const EpdWaveform* waveform;
+     enum EpdDrawMode mode;
+     enum EpdDrawError error;
++    /// First underrun line/count for the current scan (telemetry + recovery).
++    int underrun_first_line;
++    uint32_t underrun_lines;
++    int64_t underrun_us;
+ 
+     // Lookup table size.
+     size_t conversion_lut_size;
+@@ -63,6 +69,14 @@
+     lut_func_t lut_lookup_func;
      /// LUT building function. Must not be NULL
      lut_build_func_t lut_build_func;
- 
++
 +    // 同一物理扫描中的逐行或逐列错相 LUT。/ Per-line or per-column staggered LUTs in one physical scan.
 +    const uint8_t* const* phase_luts;
 +    const int8_t* line_phase;
@@ -2010,14 +2113,133 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output
 +    const int* col_band_x1;
 +    const int8_t* col_band_phase;
 +    int col_band_n;
-+
+ 
      /// Queue of lines prepared for output to the display,
      /// one for each thread.
-     LineQueue_t line_queues[NUM_RENDER_THREADS];
+diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c
+--- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c
++++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/lcd_driver.c
+@@ -164,6 +164,50 @@
+ 
+ static s3_lcd_t lcd = { 0 };
+ 
++// Frame-boundary guard (2026-10-28).
++//
++// The panel's gate driver is a ring: one frame must clock exactly 693 CKV pulses
++// before the next one begins. Resetting the RMT while the previous finite loop
++// is still running truncates that lap; the ring then stays shifted and every
++// later refresh paints at the wrong row (the smear in
++// docs/engineering/read-pico-refresh-stability.md). One cause was the error
++// path starting a frame from both feeders; that is fixed at the source in
++// render_lcd.c. This wait is the belt-and-suspenders invariant for every other
++// caller: never reconfigure the RMT early, wait the previous lap out.
++//
++// Called from epd_lcd_start_frame() in task context, BEFORE the critical
++// section. A wait only happens on a violated invariant (normally zero).
++static int64_t s_ckv_start_us;
++static int s_ckv_cycles;
++static bool s_ckv_running;
++static uint32_t s_ckv_waits;
++
++static void IRAM_ATTR ckv_note_start(int cycles) {
++    s_ckv_running = true;
++    s_ckv_start_us = esp_timer_get_time();
++    s_ckv_cycles = cycles;
++}
++
++static void ckv_wait_previous_loop(void) {
++    if (!s_ckv_running) return;
++    const int64_t end = s_ckv_start_us + (int64_t)s_ckv_cycles * lcd.line_time_01us / 10;
++    int64_t now = esp_timer_get_time();
++    if (now >= end) return;
++    const int64_t overlap = end - now;
++    ++s_ckv_waits;
++    while (now < end) {
++        const int64_t remain = end - now;
++        if (remain > 2000) {
++            vTaskDelay(pdMS_TO_TICKS(1));
++        } else {
++            esp_rom_delay_us((uint32_t)remain);
++        }
++        now = esp_timer_get_time();
++    }
++    ESP_LOGE("epd_lcd", "CKV lap not finished; waited %lldus (count=%u)", (long long)overlap,
++             (unsigned)s_ckv_waits);
++}
++
+ void IRAM_ATTR epd_lcd_line_source_cb(line_cb_func_t line_source, void* payload) {
+     lcd.line_source_cb = line_source;
+     lcd.line_cb_payload = payload;
+@@ -191,6 +235,7 @@
+ }
+ 
+ static void IRAM_ATTR start_ckv_cycles(int cycles) {
++    ckv_note_start(cycles);
+     rmt_compat_tx_configure_finite_loop(RMT_CKV_CHAN, cycles);
+     rmt_compat_tx_reset_mem(RMT_CKV_CHAN);
+     rmt_compat_tx_start(RMT_CKV_CHAN);
+@@ -804,6 +849,9 @@
+ }
+ 
+ void IRAM_ATTR epd_lcd_start_frame() {
++    // Task context only; let the previous finite CKV loop finish before the RMT
++    // is reconfigured. See ckv_wait_previous_loop().
++    ckv_wait_previous_loop();
+     int initial_lines = min(LINE_BATCH, lcd.display_lines);
+ 
+     // hsync: pulse width, back porch, active width, front porch
+@@ -856,6 +904,7 @@
+     lcd_ll_start(lcd.hal.dev);
+ 
+     taskEXIT_CRITICAL(&frame_start_spinlock);
++
+ }
+ 
+ #else
 diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
 --- sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
 +++ sdk_work/libs/display/EpdiyLcd/src/epdiy/src/output_lcd/render_lcd.c
-@@ -77,6 +77,19 @@
+@@ -8,6 +8,7 @@
+ 
+ #include <esp_idf_version.h>
+ #include <esp_log.h>
++#include <esp_timer.h>
+ #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+ #if __has_include(<rom/cache.h>)
+ #include <rom/cache.h>
+@@ -30,6 +31,15 @@
+ // declare vector optimized line mask application.
+ void epd_apply_line_mask_VE(uint8_t* line, const uint8_t* mask, int mask_len);
+ 
++// Remember where the first line of the scan went missing (telemetry + recovery).
++static inline void IRAM_ATTR note_underrun(RenderContext_t* ctx) {
++    if (ctx->underrun_lines == 0) {
++        ctx->underrun_first_line = ctx->lines_consumed;
++        ctx->underrun_us = esp_timer_get_time();
++    }
++    ++ctx->underrun_lines;
++}
++
+ __attribute__((optimize("O3"))) static bool IRAM_ATTR
+ retrieve_line_isr(RenderContext_t* ctx, uint8_t* buf) {
+     if (ctx->lines_consumed >= ctx->lines_total) {
+@@ -38,6 +48,7 @@
+     int thread = ctx->line_threads[ctx->lines_consumed];
+     if (thread >= NUM_RENDER_THREADS) {
+         ctx->error |= EPD_DRAW_EMPTY_LINE_QUEUE;
++        note_underrun(ctx);
+         memset(buf, 0x00, ctx->display_width / 4);
+         ctx->lines_consumed += 1;
+         return pdFALSE;
+@@ -49,6 +60,7 @@
+ 
+     if (lq_read(lq, buf) != 0) {
+         ctx->error |= EPD_DRAW_EMPTY_LINE_QUEUE;
++        note_underrun(ctx);
+         memset(buf, 0x00, ctx->display_width / 4);
+     }
+ 
+@@ -77,6 +89,19 @@
          epd_lcd_frame_done_cb((frame_done_func_t)handle_lcd_frame_done, ctx);
          prepare_context_for_next_frame(ctx);
  
@@ -2037,7 +2259,39 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output
          // start both feeder tasks
          xTaskNotifyGive(ctx->feed_tasks[!xPortGetCoreID()]);
          xTaskNotifyGive(ctx->feed_tasks[xPortGetCoreID()]);
-@@ -207,6 +220,16 @@
+@@ -165,6 +190,19 @@
+ 
+ #define int_min(a, b) (((a) < (b)) ? (a) : (b))
+ 
++// Exactly one feeder may start the physical frame. Both feeders run
++// lcd_calculate_frame() and the error path starts a frame before the line loop,
++// so without this claim an underrun makes both of them call
++// epd_lcd_start_frame() ~50us apart. The second call resets the RMT CKV loop at
++// the start of the first one, truncating ~11ms of gate clocks and moving the
++// panel's gate ring; that is the smear this tree has been chasing.
++static bool IRAM_ATTR claim_frame_start(RenderContext_t* ctx) {
++    bool expected = false;
++    return atomic_compare_exchange_strong_explicit(
++        &ctx->frame_started, &expected, true, memory_order_acq_rel, memory_order_acquire
++    );
++}
++
+ // 每帧开扫之前先算好多少行。这段预填是帧与帧之间的空档：行队列只要跑在 DMA 前面
+ // 就行，一行 16us 才消费一条，喂线程几微秒就算完一条，所以预填不需要很多；太少了
+ // 会在 ISR 延迟抖动时欠载（EPD_DRAW_EMPTY_LINE_QUEUE）。
+@@ -190,8 +228,9 @@
+     if (ctx->error) {
+         memset(ctx->line_threads, 0, ctx->lines_total);
+         epd_lcd_line_source_cb((line_cb_func_t)&retrieve_line_isr, ctx);
+-        epd_lcd_start_frame();
+-        ESP_LOGW("epd_lcd", "draw frame draw initiated, but an error flag is set: %X", ctx->error);
++        if (claim_frame_start(ctx)) {
++            epd_lcd_start_frame();
++        }
+         return;
+     }
+ 
+@@ -207,13 +246,23 @@
  
      // index of the line that triggers the frame output when processed
      int trigger_line = int_min(s_prefill_lines, max_y - min_y);
@@ -2054,7 +2308,15 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/output
  
      while (l = atomic_fetch_add(&ctx->lines_prepared, 1), l < ctx->lines_total) {
          ctx->line_threads[l] = thread_id;
-@@ -253,7 +276,29 @@
+ 
+         // queue is sufficiently filled to fill both bounce buffers, frame
+         // can begin
+-        if (l - min_y == trigger_line) {
++        if (l - min_y == trigger_line && claim_frame_start(ctx)) {
+             epd_lcd_line_source_cb((line_cb_func_t)&retrieve_line_isr, ctx);
+             epd_lcd_start_frame();
+         }
+@@ -253,7 +302,29 @@
              buf = lq_current(lq);
          }
  
@@ -2172,7 +2434,15 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
      EpdRect area,
      const uint8_t* data,
      EpdRect crop_to,
-@@ -250,6 +315,13 @@
+@@ -246,10 +311,21 @@
+     render_context.mode = mode;
+     render_context.waveform = waveform;
+     render_context.error = EPD_DRAW_SUCCESS;
++    // Keep the first underrun of the whole scan, not the last phase.
++    render_context.underrun_first_line = -1;
++    render_context.underrun_lines = 0;
++    render_context.underrun_us = 0;
+     render_context.drawn_lines = drawn_lines;
      render_context.data_ptr = data;
      render_context.lut_build_func = lut_functions.build_func;
      render_context.lut_lookup_func = lut_functions.lookup_func;
@@ -2186,7 +2456,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
  
      render_context.lines_prepared = 0;
      render_context.lines_consumed = 0;
-@@ -282,16 +354,83 @@
+@@ -282,18 +358,89 @@
          render_context.line_mask, drawn_columns, render_context.display_width / 4
      );
  
@@ -2195,6 +2465,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
 +}
  
 -    if (render_context.error & EPD_DRAW_EMPTY_LINE_QUEUE) {
+-        ESP_LOGE("epdiy", "line buffer underrun occurred!");
 +enum EpdDrawError epd_draw_base_start(
 +    EpdRect area,
 +    const uint8_t* data,
@@ -2207,12 +2478,15 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
 +) {
 +    if (s_scan_task == NULL || s_scan_done == NULL) {
 +        return EPD_DRAW_SCAN_BUSY;
-+    }
+     }
+-
+-    if (render_context.error != EPD_DRAW_SUCCESS) {
+-        return render_context.error;
 +    if (s_scan_pending) {
 +        // The caller broke the contract. Refuse instead of corrupting the
 +        // context of the scan that is still running.
 +        return EPD_DRAW_SCAN_BUSY;
-+    }
+     }
 +    enum EpdDrawError err = epd_draw_base_prepare(
 +        area, data, crop_to, mode, temperature, drawn_lines, drawn_columns, waveform
 +    );
@@ -2222,9 +2496,9 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
 +    s_scan_error = EPD_DRAW_SUCCESS;
 +    s_scan_pending = true;
 +    xTaskNotifyGive(s_scan_task);
-+    return EPD_DRAW_SUCCESS;
-+}
-+
+     return EPD_DRAW_SUCCESS;
+ }
+ 
 +enum EpdDrawError epd_draw_wait(void) {
 +    if (!s_scan_pending) {
 +        return s_scan_error;
@@ -2240,13 +2514,15 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
 +    render_context.col_band_n = 0;
 +
 +    if (s_scan_error & EPD_DRAW_EMPTY_LINE_QUEUE) {
-         ESP_LOGE("epdiy", "line buffer underrun occurred!");
-     }
++        ESP_LOGE(
++            "epdiy", "line buffer underrun occurred! first_line=%d count=%u at=%lldus",
++            render_context.underrun_first_line, (unsigned)render_context.underrun_lines,
++            (long long)render_context.underrun_us
++        );
++    }
 +    return s_scan_error;
 +}
- 
--    if (render_context.error != EPD_DRAW_SUCCESS) {
--        return render_context.error;
++
 +bool epd_draw_scan_pending(void) {
 +    return s_scan_pending;
 +}
@@ -2269,13 +2545,14 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
 +    );
 +    if (err != EPD_DRAW_SUCCESS) {
 +        return err;
-     }
--    return EPD_DRAW_SUCCESS;
++    }
 +    return epd_draw_wait();
- }
- 
++}
++
  static void IRAM_ATTR render_thread(void* arg) {
-@@ -381,6 +520,16 @@
+     int thread_id = (int)arg;
+ 
+@@ -381,6 +528,16 @@
          if (xTaskCreatePinnedToCore(render_thread, "epd_prep", 1 << 12, (void*)i,
                                    configMAX_PRIORITIES - 1, &render_context.feed_tasks[i], i) != pdPASS) goto fail;
      }
@@ -2292,7 +2569,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/EpdiyLcd/src/epdiy/src/render
      renderer_ready = true;
      return true;
  fail:
-@@ -392,6 +541,15 @@
+@@ -392,6 +549,15 @@
  void epd_renderer_deinit() {
      const EpdBoardDefinition* board = epd_current_board();
      if (board_init_attempted && board != NULL) board->poweroff(epd_ctrl_state());
@@ -2627,7 +2904,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/include/FreeIn
 +  // Idle display power check, called from the host under the render lock. The
 +  // epdiy LCD driver drops the HV rails after 8 s without a successful frame;
 +  // other drivers ignore it.
-+  void idlePowerTick(uint32_t nowMs);
++  bool idlePowerTick(uint32_t nowMs);
    void displayGrayBuffer(bool turnOffScreen = false, const unsigned char* lut = nullptr, bool factoryMode = false);
    void displayGrayCalibration(uint16_t customX, uint16_t customY, uint16_t customW, uint16_t customH);
  
@@ -2682,8 +2959,8 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/FreeInkDis
    displayAsyncImpl(mode, /*turnOffScreen=*/false, /*noShadow=*/true, context);
  }
  
-+void FreeInkDisplay::idlePowerTick(const uint32_t nowMs) {
-+  if (_driver) _driver->idlePowerTick(nowMs);
++bool FreeInkDisplay::idlePowerTick(const uint32_t nowMs) {
++  return _driver && _driver->idlePowerTick(nowMs);
 +}
 +
  void FreeInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
@@ -2885,7 +3162,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/Epd
  void EpdiyLcdDriver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
                                                       RefreshContext context) {
    (void)bus;
-@@ -180,6 +226,32 @@
+@@ -180,6 +226,30 @@
    // / Defer: the host writes the LSB/MSB planes next and calls displayGray(), which
    // composes the whole page and presents it once.
    epdiyLcdStashBase(fb);
@@ -2896,9 +3173,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/Epd
 +  epdiyLcdSetWaterTurn(direction);
 +}
 +
-+void EpdiyLcdDriver::idlePowerTick(const uint32_t nowMs) {
-+  if (_ready) epdiyLcdIdleTick(nowMs);
-+}
++bool EpdiyLcdDriver::idlePowerTick(const uint32_t nowMs) { return _ready && epdiyLcdIdleTick(nowMs); }
 +
 +void EpdiyLcdDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y,
 +                                   uint16_t w, uint16_t h, bool turnOff) {
@@ -2974,7 +3249,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/Epd
 +                     uint16_t h, bool turnOff) override;
 +
 +  // Drop the HV rails after the panel has been idle (rpr's rails_idle_check).
-+  void idlePowerTick(uint32_t nowMs) override;
++  bool idlePowerTick(uint32_t nowMs) override;
 +
 +  // 异步推屏：displayStart() 完成展开/差分/起扫后立即返回，扫描在 epdiy 的内部
 +  // 任务上跑；displayFinish() 等它收尾。宿主（FreeInkDisplay 的 noShadow 路径）
@@ -3039,7 +3314,7 @@ diff -ruN --exclude=.git sdk_pristine/libs/display/FreeInkDisplay/src/driver/Pan
 +  // Called from the host's idle loop (under the render lock). Drivers that keep
 +  // an expensive rail powered between frames drop it here after their own idle
 +  // window; everyone else is a no-op.
-+  virtual void idlePowerTick(uint32_t nowMs) { (void)nowMs; }
++  virtual bool idlePowerTick(uint32_t nowMs) { (void)nowMs; return false; }
 +
    // True when displayStart() defers (returns true) rather than completing
    // inline. Lets the facade skip async scaffolding (shadow setup) on blocking
@@ -3205,7 +3480,28 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/BoardReadP
 diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
 --- sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
 +++ sdk_work/libs/hardware/BoardReadPico/src/ReadPicoEpdiyConfig.cpp
-@@ -137,7 +137,8 @@
+@@ -106,10 +106,16 @@
+ constexpr int kPclkMhz = READPICO_PCLK_HZ / 1000000;
+ constexpr Scan kScan = solveScan(kPclkMhz, kPanelWidth, kPanelHeight);
+ 
+-// FULL 档的预填行数：一行 16µs，喂线程余量大，32 行实测无欠载，帧间隙归零。
+-// / FULL-profile prefill: 16 µs/line leaves slack, 32 lines measured underrun-free
+-// and closes the frame gap.
+-constexpr uint8_t kPrefillLines = 32;
++// 预填行数：一行 16µs。32 行（512µs）在普通翻页上够用，但 16 灰阶整页扫描
++// （36/37 相）与快速切页同时发生时，feeder 会在触发帧启动后短暂停顿，32 行垫子
++// 被吃光，欠载恰好从第 32 行开始（2026-10-28 真机）。96 行 = 1.5ms，仍在
++// 每线程 64 槽队列（合计 128 行）与 2*64-16=112 的硬上限内。
++// / Prefill: 32 lines (512 us) is enough for ordinary page turns, but during a
++// 36/37-phase 16-gray page scan with rapid page switching the feeder can stall
++// right after the frame starts and the queue underruns exactly at line 32
++// (2026-10-28, hardware). 96 lines = 1.5 ms, still inside the 64-slot per-thread
++// queues (128 total) and the 2*64-16=112 hard ceiling.
++constexpr uint8_t kPrefillLines = 96;
+ 
+ }  // namespace
+ 
+@@ -137,7 +143,8 @@
        // / Reuse the board power hooks (ReadPicoPower.cpp): they already
        // implement the verified board_poweron() order with the VCOM gate before any
        // rail comes up.
@@ -3257,7 +3553,32 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/BoardReadPico/src/ReadPicoPo
 diff -ruN --exclude=.git sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
 --- sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
 +++ sdk_work/libs/hardware/SDCardManager/src/SdmmcBlockDevice.cpp
-@@ -116,8 +116,18 @@
+@@ -33,10 +33,24 @@
+ #if FREEINK_DEVICE_READPICO
+ constexpr uint32_t kSdmmcMaxFreqKhz = SDMMC_FREQ_HIGHSPEED;  // 40 MHz
+ constexpr uint32_t kSdmmcRetrySettleMs = 200;
++// Run-time clock fallback (docs/07 D6). The reference firmware pins the slot at
++// high speed because 20 MHz was "too slow for random small reads"; that stays the
++// first choice. But a card that negotiates 40 MHz and then cannot hold it (a tired
++// card, a fingerprint on the contacts, a long ribbon) currently fails the whole
++// mount and the device boots to "SD card error" with no way back. Drop the clock
++// before giving up: sdmmc_card_init() derives the card clock from
++// host.max_freq_khz and skips HS mode entirely at or below SDMMC_FREQ_DEFAULT
++// (framework-espidf components/sdmmc/sdmmc_sd.c:489-492), so 20 MHz is a plain
++// default-speed card and 10 MHz is the last resort.
++constexpr uint32_t kSdmmcFreqLadderKhz[] = {SDMMC_FREQ_HIGHSPEED, SDMMC_FREQ_DEFAULT, 10000};
+ #else
+ constexpr uint32_t kSdmmcMaxFreqKhz = SDMMC_FREQ_DEFAULT;  // 20 MHz
+ constexpr uint32_t kSdmmcRetrySettleMs = 0;
++// Other SDMMC targets keep their single clock: no hardware evidence for a ladder
++// there, and the retry pacing above already differs per board.
++constexpr uint32_t kSdmmcFreqLadderKhz[] = {SDMMC_FREQ_DEFAULT};
+ #endif
++constexpr size_t kSdmmcFreqLadderSteps = sizeof(kSdmmcFreqLadderKhz) / sizeof(kSdmmcFreqLadderKhz[0]);
+ }  // namespace
+ 
+ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
+@@ -116,8 +130,18 @@
    // live in PSRAM / at an unaligned address, while native SDMMC requires an
    // internal-RAM DMA buffer. Limiting each transfer to eight sectors keeps the
    // buffer bounded at 4 KiB and avoids heap churn in the USB-MSC callbacks.
@@ -3278,7 +3599,78 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlock
    if (!_dmaBuffer) {
      free(card);
      sdmmc_host_deinit();
-@@ -178,10 +188,13 @@
+@@ -131,27 +155,41 @@
+   // 0x107; validating a real read here means _card is only published once genuine
+   // block I/O works, and the gate is left in the exact LOW state that read succeeded under.
+   esp_err_t mountErr = ESP_FAIL;
+-  for (int attempt = 0; attempt < 4; attempt++) {
+-    if (sdPwr >= 0) {
+-      digitalWrite(sdPwr, HIGH);
+-      delay(80);
+-      digitalWrite(sdPwr, LOW);  // run with the enable held LOW
+-      delay(120);
+-    } else if (attempt > 0 && kSdmmcRetrySettleMs != 0) {
+-      // No gate to power-cycle (Read Pico): let the card finish its power-on
+-      // negotiation before the next attempt, which is what the reference
+-      // firmware's 200 ms re-mount does (read_pico_sd.c mount_card()).
+-      delay(kSdmmcRetrySettleMs);
++  uint32_t mountedKhz = 0;
++  for (size_t step = 0; step < kSdmmcFreqLadderSteps; step++) {
++    host.max_freq_khz = kSdmmcFreqLadderKhz[step];
++    for (int attempt = 0; attempt < 4; attempt++) {
++      if (sdPwr >= 0) {
++        digitalWrite(sdPwr, HIGH);
++        delay(80);
++        digitalWrite(sdPwr, LOW);  // run with the enable held LOW
++        delay(120);
++      } else if (attempt > 0 && kSdmmcRetrySettleMs != 0) {
++        // No gate to power-cycle (Read Pico): let the card finish its power-on
++        // negotiation before the next attempt, which is what the reference
++        // firmware's 200 ms re-mount does (read_pico_sd.c mount_card()).
++        delay(kSdmmcRetrySettleMs);
++      }
++      esp_err_t e = sdmmc_card_init(&host, card);
++      if (e != ESP_OK && card->csd.capacity == 0) {
++        mountErr = e;  // failed before CSD — nothing to read; power-cycle and retry
++        continue;
++      }
++      // CSD is valid (capacity known); prove real block I/O before committing.
++      e = sdmmc_read_sectors(card, _dmaBuffer, 0, 1);
++      mountErr = e;
++      if (e == ESP_OK) break;
+     }
+-    esp_err_t e = sdmmc_card_init(&host, card);
+-    if (e != ESP_OK && card->csd.capacity == 0) {
+-      mountErr = e;  // failed before CSD — nothing to read; power-cycle and retry
+-      continue;
++    if (mountErr == ESP_OK) {
++      mountedKhz = host.max_freq_khz;
++      break;
+     }
+-    // CSD is valid (capacity known); prove real block I/O before committing.
+-    e = sdmmc_read_sectors(card, _dmaBuffer, 0, 1);
+-    mountErr = e;
+-    if (e == ESP_OK) break;
++    // sdmmc_card_init() memsets the card struct and sends CMD0 before every
++    // attempt, so the next ladder step starts from a clean card state.
++    if (step + 1 < kSdmmcFreqLadderSteps && Serial)
++      Serial.printf("[%lu] [SD] SDMMC mount at %lu kHz failed (%s); retrying at %lu kHz\n", millis(),
++                    static_cast<unsigned long>(host.max_freq_khz), esp_err_to_name(mountErr),
++                    static_cast<unsigned long>(kSdmmcFreqLadderKhz[step + 1]));
+   }
+   if (mountErr != ESP_OK) {
+     if (Serial)
+@@ -162,6 +200,9 @@
+     sdmmc_host_deinit();
+     return false;
+   }
++  if (Serial)
++    Serial.printf("[%lu] [SD] SDMMC mounted at %lu kHz (%u-bit)\n", millis(), static_cast<unsigned long>(mountedKhz),
++                  static_cast<unsigned>(pins.busWidth));
+   _card = card;
+   return true;
+ }
+@@ -178,10 +219,13 @@
    }
  }
  

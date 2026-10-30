@@ -144,6 +144,12 @@ void ActivityManager::renderTaskTrampoline(void* param) {
   self->renderTaskLoop();
 }
 
+void ActivityManager::noteActivitySwitch() {
+  activitySwitchMs_ = millis();
+  awaitingFirstFrame_ = true;
+  renderer.noteContentSwitch();
+}
+
 void ActivityManager::renderTaskLoop() {
   auto waitTicks = portMAX_DELAY;
   uint32_t idleGeneration = 0;
@@ -161,7 +167,15 @@ void ActivityManager::renderTaskLoop() {
         const auto delayMs = currentActivity->idleRenderDelayMs();
         idleGeneration = idleRenderGeneration.load(std::memory_order_relaxed);
         display.setInverted(SETTINGS.screenInverted != 0);
+        const uint32_t renderStart = millis();
         currentActivity->render(std::move(lock));
+        if (awaitingFirstFrame_) {
+          awaitingFirstFrame_ = false;
+          LOG_INF("PERF", "%s first frame: render=%ums since switch=%ums",
+                  currentActivity ? currentActivity->debugName() : "(none)",
+                  static_cast<unsigned>(millis() - renderStart),
+                  static_cast<unsigned>(millis() - activitySwitchMs_));
+        }
         // Freezes the boot-stage record the first time a frame lands on the panel
         // (docs/07 D2). Every later frame costs one flag test.
         boottimings::markFirstPaint();
@@ -185,6 +199,11 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+  // One source of truth for the band-update mode: whatever activity is on top
+  // decides. pushActivity/popActivity only queue the switch, so this runs before
+  // any pending transition too -- the new activity's first render then already
+  // has the right mode (the reader, for example, must not inherit the library's).
+  renderer.setBandUpdates(currentActivity && currentActivity->wantsBandUpdates());
   if (mappedInput.consumeSuppressedRelease()) {
     resetHomeStandbyInput();
     return;
@@ -272,6 +291,7 @@ void ActivityManager::loop() {
       } else {
         currentActivity = std::move(stackActivities.back());
         stackActivities.pop_back();
+        noteActivitySwitch();
         resetHomeStandbyInput();
         LOG_DBG("ACT", "Popped from activity stack, new size = %zu", stackActivities.size());
         // Handle result if necessary
@@ -296,7 +316,17 @@ void ActivityManager::loop() {
 
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
-      if (RenderLock::peek()) break;
+      if (RenderLock::peek()) {
+        // Deferred until the render task releases the lock; log the wait so a
+        // "the tab did nothing" report can be tied to it (rate-limited).
+        static uint32_t lastDeferLog = 0;
+        const uint32_t now = millis();
+        if (now - lastDeferLog > 800) {
+          LOG_INF("ACT", "switch deferred: render busy");
+          lastDeferLog = now;
+        }
+        break;
+      }
       RenderLock lock;
 
       if (pendingAction.load() == PendingAction::Replace) {
@@ -317,6 +347,7 @@ void ActivityManager::loop() {
       }
       pendingAction.store(PendingAction::None);
       currentActivity = std::move(pendingActivity);
+      noteActivitySwitch();
       resetHomeStandbyInput();
 
       // Drop any one-shot tap/release edge events the outgoing activity already
@@ -408,10 +439,21 @@ bool ActivityManager::handleMainTabInput() {
       const MainTab target = MainTabs::fromX(x - tabBar.x, tabBar.width);
       if (target != MainTab::None) {
         mainTabFocus = MainTabFocus::Content;
-        if (target != currentTab)
+        LOG_INF("ACT", "tab tap x=%d target=%d current=%d", x, static_cast<int>(target),
+                static_cast<int>(currentTab));
+        if (target != currentTab) {
           goToMainTab(target);
-        else
-          requestUpdate();
+        } else {
+          // Self-healing for a stale glass, but rate-limited: an unthrottled
+          // repaint makes repeated taps on the current tab queue a full render
+          // each (this panel pays ~0.5 s per push).
+          static uint32_t lastSameTabRepaint = 0;
+          const uint32_t nowMs = millis();
+          if (nowMs - lastSameTabRepaint > 2000) {
+            lastSameTabRepaint = nowMs;
+            requestUpdate();
+          }
+        }
       }
       return true;
     }
@@ -516,6 +558,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   } else {
     // No current activity, safe to launch immediately
     currentActivity = std::move(newActivity);
+    noteActivitySwitch();
     resetHomeStandbyInput();
     currentActivity->onEnter();
   }
@@ -599,6 +642,22 @@ void ActivityManager::goToBrowser() {
     replaceActivityWith<OpdsServerListActivity>(true);
   }
 }
+
+bool ActivityManager::isReaderForeground() const {
+  return currentActivity && currentActivity->isReaderActivity();
+}
+
+void ActivityManager::goToReaderStandby() {
+  if (!isReaderForeground()) return;
+  auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput, /*returnOnWake=*/true);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: reader standby");
+    return;
+  }
+  pushActivity(std::move(activity));
+}
+
+void ActivityManager::debugWakeStandby() { StandbyActivity::debugWakeNow(); }
 
 void ActivityManager::goToPlugins(bool showOpds) {
   replaceActivityWith<PluginCatalogActivity>(showOpds, /*rootMode=*/true);
@@ -740,22 +799,6 @@ bool ActivityManager::isReaderActivity() const {
                      [](const auto& activity) { return activity->isReaderActivity(); }) ||
          (currentActivity && currentActivity->isReaderActivity());
 }
-
-bool ActivityManager::isReaderForeground() const {
-  return currentActivity && currentActivity->isReaderActivity();
-}
-
-void ActivityManager::goToReaderStandby() {
-  if (!isReaderForeground()) return;
-  auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput, /*returnOnWake=*/true);
-  if (!activity) {
-    LOG_ERR("ACT", "OOM: reader standby");
-    return;
-  }
-  pushActivity(std::move(activity));
-}
-
-void ActivityManager::debugWakeStandby() { StandbyActivity::debugWakeNow(); }
 
 bool ActivityManager::keepsBluetoothAlive() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),

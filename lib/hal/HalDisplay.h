@@ -139,10 +139,26 @@ class HalDisplay {
   // windowed push fall back to a full-frame Fast refresh. Used by the reader's
   // per-minute status-bar clock tick so the body text is never re-driven.
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
-
-  // Idle power hook for the active panel driver (Read Pico drops its HV rails
-  // when nothing has been pushed for 8 s). Must be called under the render lock.
-  void idlePowerTick(uint32_t nowMs);
+  // Ghost clean scoped to a rect: one forced-full GC16 over it (every pixel in the
+  // rect is driven), leaving the rest of the panel's optical state alone. Returns
+  // false when the panel cannot do it (baseline unknown); callers then do a full
+  // clean so a scheduled clean is never silently lost.
+  bool cleanWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+  // Present barrier: block (bounded) until no panel scan is in flight. Call it
+  // before work that can stall the feeder for longer than the cushion -- a cold
+  // index rebuild, a settings flush, an OTA read -- so the scan that is already
+  // running is not starved by it. Returns false on timeout (work then proceeds).
+  bool waitForScanIdle(uint32_t timeoutMs = 3000);
+  // Idle rail release; called from the main loop. True when the rails were just
+  // dropped (the panel keeps its image; the next push powers them up).
+  bool idlePowerTick(uint32_t nowMs);
+  // Read-and-clear panel work counters (frames pushed, wall time inside the
+  // push). Used by CMD:SCANSTATS to attribute panel cost to one action.
+  void takePanelPushStats(uint32_t* frames, uint64_t* us);
+  // Number of grayscale/16-level scan entry points that ran since the last take.
+  // displayBuffer() is counted by GfxRenderer (it owns the band decision); these
+  // are the base/commit calls that bypass it, which is how the 16-gray pages move.
+  static uint32_t takeGrayScanCount();
 
   // Tiled grayscale: stream one band of a plane (lsbPlane selects LSB/MSB RAM)
   // straight to the controller; supportsStripGrayscale() gates the path. See

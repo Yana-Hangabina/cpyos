@@ -46,6 +46,12 @@ class ActivityManager {
   std::unique_ptr<Activity> currentActivity;
   MainTabFocus mainTabFocus = MainTabFocus::Tabs;
   bool mainTabEntryReleasePending = false;
+  // Per-switch latency trace: when the activity became current and whether its
+  // first frame has landed. Consumed by the render task, so the answer includes
+  // the queue delay the owner actually waits through, not just render time.
+  uint32_t activitySwitchMs_ = 0;
+  bool awaitingFirstFrame_ = false;
+  void noteActivitySwitch();
 
  private:
   enum class StandbyBackState : uint8_t { Idle, Pressed, WaitingForRelease };
@@ -186,14 +192,6 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
-  // True only when the reader itself is the visible activity (not a menu or a
-  // sub-page that sits above it). Used for the power-key standby gesture.
-  bool isReaderForeground() const;
-  // Push the standard clock standby over the reader; its power-key wake pops
-  // straight back to the preserved reader instead of going Home.
-  void goToReaderStandby();
-  // Debug hook for the serial test harness: simulate the standby power press.
-  void debugWakeStandby();
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
   bool handleForcedRefresh();
@@ -205,6 +203,14 @@ class ActivityManager {
   // The render task can call this to abort a long render early and let the
   // main task proceed with the activity switch.
   bool isSwitchPending() const { return pendingAction.load() != PendingAction::None; }
+  // True only when the reader itself is the visible activity (not a menu or a
+  // sub-page that sits above it). Used for the power-key standby gesture.
+  bool isReaderForeground() const;
+  // Push the standard clock standby over the reader; its power-key wake pops
+  // straight back to the preserved reader instead of going Home.
+  void goToReaderStandby();
+  // Debug hook for the serial test harness: simulate the standby power press.
+  void debugWakeStandby();
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

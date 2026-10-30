@@ -36,6 +36,11 @@ class LibraryListActivity final : public UiTabListActivity {
 
   void onEnter() override;
   void onExit() override;
+  // The grid presents through the 16-level canvas (real cover tones, and no
+  // GC16 promotion when the previous screen was Home). Band updates are 1-bit
+  // only; the list layout keeps them.
+  bool presentsGrayscale() const override { return usesCoverGrid(); }
+  bool wantsBandUpdates() const override { return !usesCoverGrid(); }
   void debugOpenSearch() override { openSearch(); }
   void debugOpenSearchSample() override { query = "\xE6\x88\x91"; openSearch(); }
 

@@ -56,6 +56,13 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   requestUpdate();
 }
 
+void UiTabListActivity::debugMoveRing(const int delta) {
+  const int ringSize = listCount() + 1;
+  if (ringSize <= 1) return;
+  const int next = ((ringPos() + delta) % ringSize + ringSize) % ringSize;
+  moveRingTo(next);
+}
+
 void UiTabListActivity::navigateButtons() {
   if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
       mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {

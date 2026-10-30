@@ -45,7 +45,10 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_BATTERY:
       return &icon_battery_48;
     case StrId::STR_REFRESH_FREQ:
+    case StrId::STR_PERIODIC_REFRESH:
       return &icon_refresh_cw_48;
+    case StrId::STR_REFRESH_INTERVAL:
+      return &icon_timer_48;
     case StrId::STR_UI_THEME:
       return &icon_palette_48;
     case StrId::STR_INX_RECENT_LAYOUT:

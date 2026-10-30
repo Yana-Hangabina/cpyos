@@ -139,6 +139,10 @@ void Game2048Activity::loop() {
   }
 }
 
+void Game2048Activity::debugGameMove(const int direction) {
+  handleSlide(static_cast<Game2048Board::Direction>(direction & 3));
+}
+
 void Game2048Activity::newGame() {
   board_.reset();
   score_ = 0;

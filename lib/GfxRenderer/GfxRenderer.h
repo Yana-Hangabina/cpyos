@@ -89,6 +89,19 @@ class GfxRenderer {
   bool fadingFix;
   mutable uint8_t syntheticBoldPixels = 0;
   uint8_t* frameBuffer = nullptr;
+  // Band-update snapshot: the framebuffer as last pushed to the panel.
+  bool bandUpdates_ = false;
+  uint8_t* bandSnapshot_ = nullptr;
+  // Quarantined windowed scan (see setAreaPushAllowed).
+  static bool s_areaPushAllowed_;
+  static bool s_localClean_;
+  static int s_localCleanMaxPercent;
+  // Union (physical coords) of the rects driven since the last clean.
+  mutable int dirtyX_ = 0;
+  mutable int dirtyY_ = 0;
+  mutable int dirtyW_ = 0;
+  mutable int dirtyH_ = 0;
+
   uint16_t panelWidth = HalDisplay::DISPLAY_WIDTH;
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
   uint16_t panelWidthBytes = HalDisplay::DISPLAY_WIDTH_BYTES;
@@ -97,6 +110,13 @@ class GfxRenderer {
   // Lets an activity force e.g. a HALF_REFRESH for a single frame (used by the
   // reading-stats screens) without threading the mode through every render path.
   mutable bool nextRefreshOverridePending = false;
+  // True when the pending override came from a 16-level commit. A following gray
+  // commit rewrites every line with a gray-capable waveform, so it may drop this
+  // override instead of promoting an unrelated later 1-bit page to GC16.
+  mutable bool nextRefreshOverrideFromGray = false;
+  static inline bool s_readerDuExperiment_ = false;
+  mutable uint32_t contentEpoch_ = 0;
+  mutable uint32_t presentedEpoch_ = 0xFFFFFFFFu;
   mutable HalDisplay::RefreshMode nextRefreshOverride = HalDisplay::FAST_REFRESH;
   // UI pages run differential GL16, never DU. Even GL16 leaves a little
   // residue over a long chain, so promote every Nth UI push to a FULL GC16
@@ -180,6 +200,12 @@ class GfxRenderer {
   ~GfxRenderer() {
     cancelGrayscale16();
     freeBwBufferChunks();
+    // Release the band snapshot here, never at a mode change: the render task can
+    // be inside a push that still holds it (see setBandUpdates).
+    if (bandSnapshot_ != nullptr) {
+      std::free(bandSnapshot_);
+      bandSnapshot_ = nullptr;
+    }
   }
   GfxRenderer(const GfxRenderer&) = delete;
   GfxRenderer& operator=(const GfxRenderer&) = delete;
@@ -283,15 +309,16 @@ class GfxRenderer {
   void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
                      DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
-  // Idle power hook (Read Pico: drop the panel HV rails after 8 s without a
-  // frame). Call only while holding the render lock and with no frame queued.
-  void idlePowerTick(uint32_t nowMs) const { display.idlePowerTick(nowMs); }
   // Force the next displayBuffer() to use `mode`, overriding its argument once.
   void requestNextRefresh(const HalDisplay::RefreshMode mode) const {
     nextRefreshOverride = mode;
     nextRefreshOverridePending = true;
+    nextRefreshOverrideFromGray = false;
   }
-  void clearNextRefreshOverride() const { nextRefreshOverridePending = false; }
+  void clearNextRefreshOverride() const {
+    nextRefreshOverridePending = false;
+    nextRefreshOverrideFromGray = false;
+  }
   void requestNextFullRefresh() const { requestNextRefresh(HalDisplay::FULL_REFRESH); }
   // One-shot: the next displayBuffer()/displayBufferAsync() call uses `mode`
   // instead of what its caller asked for, then the override clears itself.
@@ -307,6 +334,37 @@ class GfxRenderer {
   void displayBufferAsync(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
                           DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   void waitRefreshComplete() const;
+  // Bounding box of the differences against the band snapshot, in physical
+  // panel coords. Returns false when the framebuffer matches the snapshot.
+  bool computeChangedBand(int* x, int* y, int* w, int* h) const;
+  // True when the framebuffer differs from the last presented frame (or no
+  // snapshot exists yet). The 16-level path uses it to skip a commit when a
+  // render produced an identical frame -- a gray commit always costs a full
+  // panel scan, unlike the 1-bit band path.
+  bool frameChangedSinceSnapshot() const;
+  // Experiment (CMD:DU): let ContinuousReading FAST pushes reach the panel as DU
+  // instead of being promoted to GL16. Off by default; UI pages are never DU.
+  static void setExperimentalReaderDu(bool on) { s_readerDuExperiment_ = on; }
+  static bool experimentalReaderDu() { return s_readerDuExperiment_; }
+
+  // Idle rail release; the main loop calls it once per pass under a try-lock.
+  // True when the panel's HV rails were dropped (image stays; next push re-raises).
+  bool idlePowerTick(uint32_t nowMs) const { return display.idlePowerTick(nowMs); }
+  void takePanelPushStats(uint32_t* frames, uint64_t* us) const { display.takePanelPushStats(frames, us); }
+  // Presentation epoch: bumped when the activity (screen) changes. A gray commit
+  // may only be skipped when the frame did not change AND we already presented a
+  // frame for this screen -- otherwise a preempted paint leaves a stale snapshot
+  // and the screen never comes up ("tapping Library does nothing").
+  void noteContentSwitch() const { ++contentEpoch_; }
+  bool frameUnchangedThisSession() const {
+    return presentedEpoch_ == contentEpoch_ && bandSnapshot_ != nullptr && !frameChangedSinceSnapshot();
+  }
+  // Record the current framebuffer as presented, for the gray-commit path that
+  // bypasses displayBuffer().
+  void noteFramePresented() const {
+    if (bandSnapshot_ != nullptr) std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+    presentedEpoch_ = contentEpoch_;
+  }
   // True when displayBufferAsync() genuinely overlaps: panel defers and
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
@@ -517,6 +575,77 @@ class GfxRenderer {
   // so an idle read never flashes mid-page).
   void displayWindow(int x, int y, int w, int h,
                      DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
+  // Opt-in band updates for 1-bit screens that repaint the whole surface but
+  // change only a strip (keyboard text line / candidates, list focus). While on,
+  // displayBuffer() diffs the framebuffer against the last pushed frame and, when
+  // the change fits in a small rect, pushes only that rect through the windowed
+  // path instead of re-driving the page. The snapshot lives in PSRAM; turning it
+  // off frees it. Never used for FULL pushes or grayscale bases.
+  void setBandUpdates(bool on);
+  bool bandUpdatesEnabled() const { return bandUpdates_; }
+  // Global kill switch for the band path (serial CMD:BANDS 0), so a suspected
+  // windowed-push problem can be A/B'd on one build. Off = every push is a full
+  // page, exactly the pre-band behaviour.
+  static void setBandUpdatesSuspended(bool suspended);
+  // Bisect switch: still compute the band (and keep the snapshot), but send the
+  // pass as a full-page push. Separates "diff/snapshot" problems from "windowed
+  // scan" problems.
+  static void setBandPushFullPage(bool fullPage);
+  // Replace the periodic full-screen GC16 with a GC16 over the rect that has
+  // actually changed since the last clean (CMD:CLEAN 1). Off by default: the
+  // thresholds and the optics need on-glass comparison first.
+  static void setLocalCleanEnabled(bool enabled);
+  static bool localCleanEnabled();
+  // Largest dirty union (percent of the panel) still cleaned with a rect GC16.
+  // Runtime knob for the photo A/B; clamped to 5..100, default 60.
+  static void setLocalCleanMaxPercent(int percent);
+  static int localCleanMaxPercent();
+  // State dump for CMD:REFRESHMAP: why a pass would be banded, cleaned or full.
+  static bool bandUpdatesSuspended();
+  uint8_t refreshCounter() const { return uiFastRefreshCount; }
+  uint8_t refreshInterval() const { return uiFullRefreshInterval; }
+  bool bandModeActive() const { return bandUpdates_; }
+  void dirtyUnionRect(int* x, int* y, int* w, int* h) const {
+    *x = dirtyX_;
+    *y = dirtyY_;
+    *w = dirtyW_;
+    *h = dirtyH_;
+  }
+  // The windowed scan (epdiyLcdUpdateArea) is QUARANTINED: repeated area pushes
+  // with varying rects crashed the unit (Guru Meditation / double exception,
+  // reproduced 2/3 runs; the same workload with full-page pushes is clean). Off
+  // by default, so displayPanelWindow() degrades to a full-page push. Only the
+  // serial AREATEST harness and an explicit CMD:AREAPUSH 1 re-enable it.
+  static void setAreaPushAllowed(bool allowed);
+  static bool areaPushAllowed();
+
+  // Refresh accounting for the partial-refresh work (CMD:PUSHSTATS). Counts what
+  // actually reached the glass: a full page, a band rect, or nothing because the
+  // frame matched the last push. take() returns and clears the counters.
+  struct RenderStats {
+    uint32_t pagePushes = 0;   // every full-page push (HALF or FULL)
+    uint32_t sweepPushes = 0;  // the subset that was a GC16 clean
+    uint32_t bandPushes = 0;
+    uint32_t cleanPushes = 0;  // local GC16 cleans that replaced a full sweep
+    uint32_t skippedPushes = 0;
+    uint64_t bandAreaPixels = 0;
+    uint64_t pageAreaPixels = 0;
+    // Why a pass became GC16: the caller asked for it, nextRefreshOverride
+    // promoted it, the periodic UI cadence fired, or a local clean was declined
+    // because the dirty union was too large.
+    uint32_t fullFromCaller = 0;
+    uint32_t fullFromOverride = 0;
+    uint32_t fullFromCadence = 0;
+    uint32_t fullFromLocalFallback = 0;
+  };
+  static RenderStats takeRenderStats();
+  // Exact windowed push in PHYSICAL coords; never degrades to a full page.
+  // Callers must arm the scan watchdog (armScanWatchdog) around it: the area path
+  // has no bounded wait inside epdiy, and a scan that never returns would hang
+  // the caller on a board with no reset button. Today the reader's minute clock
+  // is the only caller; the body must sit outside the rect.
+  void displayPanelWindow(int x, int y, int w, int h,
+                          DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   // Display the framebuffer as the base frame for a grayscale overlay that
   // follows (X3: OEM differential base waveform; others: plain display with
   // `fallback`).

@@ -18,6 +18,9 @@ class GomokuGameActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // A move changes board cells only; the title/status/footer bands stay
+  // undriven. Same pattern as 2048 and Sokoban (both soaked on hardware).
+  bool wantsBandUpdates() const override { return true; }
 
  private:
   enum class State : uint8_t { Playing, GameMenu, GameOver };

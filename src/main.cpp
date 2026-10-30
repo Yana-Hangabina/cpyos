@@ -55,8 +55,12 @@
 #include "network/OtaUpdater.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/apps/AppsMenuActivity.h"
 #include "activities/home/FindBooksActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
+#include "activities/util/PhotoDemoActivity.h"
 #include "activities/reader/EpubReaderActivity.h"
+#include "activities/reader/ReaderRefresh.h"
 #include "activities/home/MyActivity.h"
 #include "activities/library/LibraryListActivity.h"
 #ifdef BOARD_HAS_PSRAM
@@ -110,6 +114,45 @@ FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts
 static unsigned long allowSleepAt = 0;
 constexpr unsigned long READING_STATS_CHECKPOINT_IDLE_MS = 15UL * 1000UL;
 static unsigned long lastX4ProPowerClickAt = 0;
+// CMD:NOSLEEP keeps the unit awake for serial soaks; auto-sleep would otherwise
+// dead-stop a long device regression in the middle.
+static bool g_debugNoSleep = false;
+
+// Scan watchdog for the windowed (area) push. That path has no bounded wait
+// inside epdiy -- a scan that never completes blocks its caller forever, and this
+// board has no reset button. Callers that use the area push arm a deadline; if it
+// passes, the device restarts instead of hanging. The task is created on the
+// first arm, so boards and users that never take the area path pay nothing.
+static unsigned long s_scanWatchdogDeadlineMs = 0;
+static bool s_scanWatchdogStarted = false;
+
+namespace {
+void scanWatchdogTask(void*) {
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(200));
+    const unsigned long deadline = s_scanWatchdogDeadlineMs;
+    if (deadline != 0 && static_cast<long>(millis() - deadline) > 0) {
+      ESP_LOGE("SCANWD", "windowed push did not return in time; restarting");
+      vTaskDelay(pdMS_TO_TICKS(100));
+      esp_restart();
+    }
+  }
+}
+
+}  // namespace
+
+void armScanWatchdog(const uint32_t timeoutMs) {
+  if (!s_scanWatchdogStarted) {
+    if (xTaskCreate(scanWatchdogTask, "scanwd", 3072, nullptr, 1, nullptr) == pdPASS) {
+      s_scanWatchdogStarted = true;
+    } else {
+      ESP_LOGE("SCANWD", "watchdog task creation failed (internal RAM); area push unguarded");
+    }
+  }
+  s_scanWatchdogDeadlineMs = millis() + timeoutMs;
+}
+
+void disarmScanWatchdog() { s_scanWatchdogDeadlineMs = 0; }
 
 namespace {
 constexpr unsigned long X4PRO_POWER_DOUBLE_CLICK_MS = 500;
@@ -1474,6 +1517,105 @@ void loop() {
           const int space = cmd.indexOf(' ');
           activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
         }
+      } else if (cmd == "APPS") {
+        activityManager.pushActivity(makeUniqueNoThrow<AppsMenuActivity>(renderer, mappedInputManager));
+      } else if (cmd == "KEYBOARD") {
+        activityManager.pushActivity(
+            makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test", "", 64, InputType::Text));
+      } else if (cmd == "TYPE") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugTypeChar();
+      } else if (cmd == "ROWUP" || cmd == "ROWDOWN") {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          activity->debugMoveRing(cmd == "ROWDOWN" ? 1 : -1);
+        }
+      } else if (cmd == "CLOSEPANEL") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugCloseOverlay();
+      } else if (cmd == "PUSHSTATS") {
+        const auto st = GfxRenderer::takeRenderStats();
+        logSerial.printf("PUSHSTATS sweep_caller=%u override=%u cadence=%u local_fb=%u\n",
+                         static_cast<unsigned>(st.fullFromCaller), static_cast<unsigned>(st.fullFromOverride),
+                         static_cast<unsigned>(st.fullFromCadence),
+                         static_cast<unsigned>(st.fullFromLocalFallback));
+        logSerial.printf("PUSHSTATS page=%u sweep=%u band=%u clean=%u skipped=%u band_px=%llu page_px=%llu\n",
+                         static_cast<unsigned>(st.pagePushes), static_cast<unsigned>(st.sweepPushes),
+                         static_cast<unsigned>(st.bandPushes), static_cast<unsigned>(st.cleanPushes),
+                         static_cast<unsigned>(st.skippedPushes),
+                         static_cast<unsigned long long>(st.bandAreaPixels),
+                         static_cast<unsigned long long>(st.pageAreaPixels));
+      } else if (cmd == "GRAYSTATS") {
+        logSerial.printf("GRAYSTATS gray=%u\n", static_cast<unsigned>(HalDisplay::takeGrayScanCount()));
+      } else if (cmd == "REFRESHMAP") {
+        auto* activity = activityManager.currentActivityPtr();
+        int ux = 0;
+        int uy = 0;
+        int uw = 0;
+        int uh = 0;
+        renderer.dirtyUnionRect(&ux, &uy, &uw, &uh);
+        logSerial.printf(
+            "REFRESHMAP activity=%s wantsBand=%d mode=%d bands=%s area=%s clean=%s max=%d%% counter=%u/%u "
+            "union=%d,%d %dx%d\n",
+            activity ? activity->debugName() : "(none)", activity && activity->wantsBandUpdates() ? 1 : 0,
+            renderer.bandModeActive() ? 1 : 0, GfxRenderer::bandUpdatesSuspended() ? "suspended" : "on",
+            GfxRenderer::areaPushAllowed() ? "on" : "blocked", GfxRenderer::localCleanEnabled() ? "on" : "off",
+            GfxRenderer::localCleanMaxPercent(), static_cast<unsigned>(renderer.refreshCounter()),
+            static_cast<unsigned>(renderer.refreshInterval()), ux, uy, uw, uh);
+      } else if (cmd.startsWith("CLEANMAX")) {
+        const int space = cmd.indexOf(' ');
+        GfxRenderer::setLocalCleanMaxPercent(space > 0 ? cmd.substring(space + 1).toInt() : 60);
+        LOG_INF("GFX", "local clean max union = %d%%", GfxRenderer::localCleanMaxPercent());
+      } else if (cmd.startsWith("CLEAN")) {
+        // 1 = a scheduled sweep cleans only the rect that changed since the last
+        // clean (windowed GC16); 0 = the classic whole-screen GC16.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setLocalCleanEnabled(on);
+        LOG_INF("GFX", "local clean %s", on ? "ON (rect GC16)" : "off (full sweeps)");
+      } else if (cmd.startsWith("BANDS")) {
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setBandUpdatesSuspended(!on);
+        LOG_INF("GFX", "band updates %s", on ? "allowed" : "suspended (full-page only)");
+      } else if (cmd.startsWith("NOSLEEP")) {
+        const int space = cmd.indexOf(' ');
+        g_debugNoSleep = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        LOG_INF("SLP", "debug no-sleep %s", g_debugNoSleep ? "ON (serial soak)" : "off");
+      } else if (cmd.startsWith("AREAPUSH")) {
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setAreaPushAllowed(on);
+        LOG_INF("GFX", "area push %s", on ? "ALLOWED" : "blocked (full-page fallback)");
+      } else if (cmd.startsWith("BANDPUSH")) {
+        const int space = cmd.indexOf(' ');
+        const bool full = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setBandPushFullPage(full);
+        LOG_INF("GFX", "band push = %s", full ? "full page (bisect)" : "windowed");
+      } else if (cmd.startsWith("PHOTODEMO")) {
+        const int space = cmd.indexOf(' ');
+        const int mode = space > 0 ? cmd.substring(space + 1).toInt() : 0;
+        activityManager.pushActivity(makeUniqueNoThrow<PhotoDemoActivity>(renderer, mappedInputManager, mode));
+      } else if (cmd.startsWith("CADENCE")) {
+        // "CADENCE on|off [pages]" — the two Settings -> Display rows, persisted.
+        const int space = cmd.indexOf(' ');
+        if (space > 0) {
+          const String arg = cmd.substring(space + 1);
+          const int second = arg.indexOf(' ');
+          const String first = second > 0 ? arg.substring(0, second) : arg;
+          if (first == "on" || first == "1") SETTINGS.periodicFullRefresh = 1;
+          if (first == "off" || first == "0") SETTINGS.periodicFullRefresh = 0;
+          if (second > 0) {
+            const int pages = arg.substring(second + 1).toInt();
+            if (pages >= 5 && pages <= 120) SETTINGS.readerRefreshPages = static_cast<uint8_t>(pages);
+          }
+          SETTINGS.saveToFile();
+        }
+        LOG_INF("PERF", "cadence=%d pages=%d (reader %d pages, ui %d pushes)",
+                SETTINGS.periodicFullRefresh ? 1 : 0, SETTINGS.readerRefreshPages,
+                SETTINGS.getRefreshFrequency(), SETTINGS.getUiRefreshInterval());
+      } else if (cmd.startsWith("NOFULL")) {
+        // Session-only: demote every reader GC16 for ghost experiments.
+        const int space = cmd.indexOf(' ');
+        ReaderUtils::fullRefreshSuppressed() = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        LOG_INF("PERF", "reader full refresh suppressed=%d", ReaderUtils::fullRefreshSuppressed() ? 1 : 0);
       } else if (cmd.startsWith("READ")) {
         String path = "/BOOKS/test.epub";
         const int space = cmd.indexOf(' ');
@@ -1722,7 +1864,8 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (sleepTimeoutMs > 0 && !activityManager.preventAutoSleep() && millis() - lastActivityTime >= sleepTimeoutMs) {
+  if (sleepTimeoutMs > 0 && !g_debugNoSleep && !activityManager.preventAutoSleep() &&
+      millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
@@ -1848,7 +1991,7 @@ void loop() {
       return;
     }
     skipLoopDelay = activityManager.skipLoopDelay();
-    // rpr's rails_idle_check: after 8 s without a frame the panel driver drops
+    // kiikoread's rails_idle_check: after 8 s without a frame the panel driver drops
     // the HV rails. Runs under the render lock, so it can never race a scan.
     if (!skipLoopDelay) renderer.idlePowerTick(millis());
   }

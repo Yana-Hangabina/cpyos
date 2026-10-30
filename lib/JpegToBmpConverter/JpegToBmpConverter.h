@@ -19,7 +19,7 @@ class JpegToBmpConverter {
   static bool jpegFileToBmpStream(HalFile& jpegFile, Print& bmpOut, bool crop, bool originalThresholds);
   // Convert with custom target size (for thumbnails and image previews).
   static bool jpegFileToBmpStreamWithSize(HalFile& jpegFile, Print& bmpOut, int targetMaxWidth, int targetMaxHeight,
-                                          bool crop = true);
+                                          bool crop = true, Output output = Output::Gray2);
   // Convert to 1-bit BMP (black and white only, no grays) for fast home screen rendering.
   // crop=true fills the target box and trims overflow; false fits the whole
   // image inside it (used by the CBZ page reader).

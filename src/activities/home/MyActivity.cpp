@@ -790,8 +790,9 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
       // Bluetooth opens its settings, and the sleep chip opens the display
       // category that owns the timeout.
       if (i == 0) {
-        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(
-            renderer, mappedInput, /*autoConnect=*/false, /*keepRadioOnExit=*/false));
+        activityManager.pushActivity(
+            std::make_unique<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false,
+                                                    /*keepRadioOnExit=*/false));
       } else if (i == 1) {
         activityManager.pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput));
       } else {
@@ -817,6 +818,16 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
     return true;
   }
   return false;
+}
+
+void MyActivity::debugMoveRing(const int delta) {
+  if (delta == 0) return;
+  if (tab_ != Tab::Tools) {
+    tab_ = Tab::Tools;
+  } else {
+    toolSelected_ = ((toolSelected_ + delta) % kToolCount + kToolCount) % kToolCount;
+  }
+  requestUpdate();
 }
 
 void MyActivity::loop() {
@@ -864,7 +875,11 @@ void MyActivity::loop() {
 }
 
 void MyActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  // 16-level canvas: the same rule as Home and the shelf. A gray page left behind
+  // by Home would otherwise force a whole-screen GC16 on the way here (a visible
+  // flash), and the tabs must be able to trade places without one.
+  const bool gray = renderer.beginGrayscale16();
+  if (!gray) renderer.clearScreen();
   const auto& metrics = UITheme::getInstance().getMetrics();
   drawPageHeader(Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, tr(STR_MINE));
   drawTabs();
@@ -873,5 +888,9 @@ void MyActivity::render(RenderLock&&) {
     case Tab::Tools: drawTools(); break;
     case Tab::Settings: drawSettings(); break;
   }
-  renderer.displayBuffer();
+  if (gray) {
+    renderer.commitGrayscale16(false);
+  } else {
+    renderer.displayBuffer();
+  }
 }

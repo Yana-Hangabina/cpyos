@@ -223,7 +223,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
-    constexpr size_t entryCount = 86
+    constexpr size_t entryCount = 85
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -262,10 +262,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
-                          {StrId::STR_REFRESH_CLEAR, StrId::STR_REFRESH_STANDARD, StrId::STR_REFRESH_RELAXED,
-                           StrId::STR_NEVER},
-                          "refreshProfile", StrId::STR_CAT_DISPLAY),
+        // Two controls instead of one tier list: whether the reader pays a
+        // whole-screen GC16 on a page count at all, and the count when it does.
+        // Off by default; the differential path alone kept the residue at the
+        // "thin paper" level for 60 pages on hardware (2026-10-29).
+        SettingInfo::Toggle(StrId::STR_PERIODIC_REFRESH, &CrossPointSettings::periodicFullRefresh,
+                            "periodicFullRefresh", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Value(StrId::STR_REFRESH_INTERVAL, &CrossPointSettings::readerRefreshPages, {5, 120, 5},
+                           "readerRefreshPages", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_INX_RECENT_LAYOUT, &CrossPointSettings::inxRecentLayout,
@@ -625,6 +629,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
         SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
                             "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR),
+        SettingInfo::Enum(StrId::STR_CLOCK_UPDATE, &CrossPointSettings::statusBarClockUpdate,
+                          {StrId::STR_CLOCK_UPDATE_PAGE_TURN, StrId::STR_CLOCK_UPDATE_MINUTE}, "statusBarClockUpdate",
+                          StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
                             "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
@@ -647,9 +654,6 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // Range 0..104 = quarter-hour steps from UTC-12:00 to UTC+14:00, biased by 48.
         SettingInfo::Enum(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, std::move(statusBarClockValues),
                           "statusBarClock", StrId::STR_CUSTOMISE_STATUS_BAR),
-        SettingInfo::Enum(StrId::STR_CLOCK_UPDATE, &CrossPointSettings::statusBarClockUpdate,
-                          {StrId::STR_CLOCK_UPDATE_PAGE_TURN, StrId::STR_CLOCK_UPDATE_MINUTE}, "statusBarClockUpdate",
-                          StrId::STR_CUSTOMISE_STATUS_BAR),
     });
     v.insert(v.end(), {
         SettingInfo::Value(StrId::STR_CLOCK_UTC_OFFSET, &CrossPointSettings::clockUtcOffsetQ, {0, 104, 1},

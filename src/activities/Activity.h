@@ -27,6 +27,8 @@ class Activity {
   ActivityResult result;
 
  public:
+  // Debug/diagnostic name (CMD:REFRESHMAP); the activity's registered label.
+  const char* debugName() const { return name.c_str(); }
   explicit Activity(std::string name, GfxRenderer& renderer, MappedInputManager& mappedInput)
       : name(std::move(name)), renderer(renderer), mappedInput(mappedInput) {}
   virtual ~Activity() = default;
@@ -70,6 +72,20 @@ class Activity {
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
   // Debug-only serial hook; activities that own sheets override it.
   virtual void debugOpenPanel(int) {}
+  virtual void debugCloseOverlay() {}
+  virtual void debugTypeChar() {}
+  // Opt-in band updates (GfxRenderer::setBandUpdates): only for 1-bit screens
+  // whose repaint changes a small strip. Asked on every manager loop tick, so a
+  // pushed or popped activity sets the mode for whatever is on top.
+  virtual bool wantsBandUpdates() const { return false; }
+  // Present through the 16-level canvas instead of a 1-bit push. Only for
+  // screens whose content needs midtones (cover art); a following gray screen
+  // then needs no GC16 promotion, so Home <-> Library no longer flashes.
+  virtual bool presentsGrayscale() const { return false; }
+  // Serial-only soak hook: moves the list ring like a NavNext/NavPrevious press.
+  virtual void debugMoveRing(int) {}
+  // Serial-only soak hook: performs one game move (0..3 = up/right/down/left).
+  virtual void debugGameMove(int) {}
   virtual void debugSetTab(int) {}
   virtual void debugDismissHint() {}
   virtual void debugOpenJjwxcComment() {}
@@ -83,6 +99,7 @@ class Activity {
   virtual void debugForceEmpty() {}
   virtual void debugSetContentsFilter(int) {}
   virtual void debugActivateContentsRow(int) {}
+  virtual void debugAreaTest(int) {}
 
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes

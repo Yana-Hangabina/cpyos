@@ -21,11 +21,15 @@ class MyActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   MainTab mainTab() const override { return MainTab::Settings; }
+  // The tool drawer is the only tab with a movable cursor; the other two
+  // repaint a large area, so the renderer falls back to a full page push there.
+  bool wantsBandUpdates() const override { return true; }
   void debugSetTab(int tab) override {
     if (tab < 0 || tab >= kTabCount) return;
     tab_ = static_cast<Tab>(tab);
     requestUpdate();
   }
+  void debugMoveRing(int delta) override;
 
  private:
   enum class Tab : uint8_t { Records = 0, Tools = 1, Settings = 2 };

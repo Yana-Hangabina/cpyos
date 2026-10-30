@@ -17,6 +17,9 @@ class SokobanGameActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  void debugGameMove(int direction) override;
+  // A step moves the player/crate cells only; the level frame and hints stay.
+  bool wantsBandUpdates() const override { return true; }
 
  private:
   enum class State : uint8_t { Playing, Won, LevelSelect };

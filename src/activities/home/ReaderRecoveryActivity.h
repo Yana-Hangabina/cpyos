@@ -3,6 +3,11 @@
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
 
+// NOT ROUTED since 2026-10-28: main.cpp clears a stale resume state and goes
+// Home instead. The page interrupted the reader and added no copy protection.
+// Kept only because its strings are still in the i18n pack; remove the class
+// and its three translated keys together in a data-partition release.
+//
 // Shown at boot when the previous attempt to open a book died (docs/07 D8).
 //
 // Today that case silently lands on Home: main.cpp's router treats a non-zero
