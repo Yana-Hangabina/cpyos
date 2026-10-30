@@ -1,16 +1,22 @@
 {
   "en": [
-    "OTA mirrors: ghfast.top and gh-proxy.com",
-    "Automatic speed test picks the fastest route",
-    "Much faster updates from mainland China",
-    "CMD:OTAPROBE prints the measurements",
-    "Clock updates: page turn or every minute"
+    "Partial refresh drives only changed strips",
+    "Local clean makes ghosting more predictable",
+    "Periodic full refresh is now optional",
+    "Fast page turns take about 150 ms",
+    "8-bit gray covers, no flash on tab switches",
+    "SD card falls back to a lower clock",
+    "OTA picks the fastest GitHub mirror",
+    "Language pack changed; full install needed"
   ],
   "zh": [
-    "OTA 支持国内 GitHub 镜像加速",
-    "自动测速并选择最快线路",
-    "国内更新速度大幅提升",
-    "串口命令查看测速结果",
-    "语言包已更新，需完整安装一次"
+    "局部刷新：只驱动变化的条带",
+    "局部清理让残影更可控",
+    "定期全刷改为可选项",
+    "快速翻页面板约 150 毫秒",
+    "封面改 8 位灰阶，切页不闪",
+    "SD 卡失败自动降频重试",
+    "OTA 自动测速选最快镜像",
+    "语言包更新，需完整安装一次"
   ]
 }
