@@ -1907,6 +1907,24 @@ void loop() {
           logSerial.printf("OTAPROBE check=%d\n", static_cast<int>(result));
           if (result == OtaUpdater::OK) updater->debugProbeDownloadMirrors();
         }
+      } else if (cmd == "OTAINSTALL") {
+        // Serial smoke test for the real device-OTA path: fetch the CPYOS
+        // manifest, download into the inactive slot and reboot. It needs an
+        // active Wi-Fi link; the updater probes the mirrors and verifies the
+        // image before switching slots.
+        auto updater = makeUniqueNoThrow<OtaUpdater>();
+        if (!updater) {
+          logSerial.printf("OTAINSTALL_ERR oom\n");
+        } else {
+          const auto check = updater->checkForUpdate(OtaUpdater::Channel::Stable);
+          logSerial.printf("OTAINSTALL check=%d latest=%s\n", static_cast<int>(check),
+                           updater->getLatestVersion().c_str());
+          if (check == OtaUpdater::OK) {
+            const auto result = updater->installUpdate(
+                [](void*) { logSerial.printf("OTAINSTALL progress\n"); }, nullptr);
+            logSerial.printf("OTAINSTALL result=%d\n", static_cast<int>(result));
+          }
+        }
       } else if (cmd.startsWith("CAT ")) {
         String path = cmd.substring(4);
         path.trim();
