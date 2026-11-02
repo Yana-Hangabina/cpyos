@@ -161,9 +161,15 @@ class OptionPopup {
     if (ignoreInitialConfirmRelease) {
       if (confirmReleased) {
         ignoreInitialConfirmRelease = false;
-        return true;
+        // Only a release without a press edge in the same pass is the inherited
+        // contact finishing. MappedInputManager reports a logical Confirm, one
+        // mapped from a home-button action or a short power press, as pressed
+        // and released at once, so a fresh click of that kind has to reach the
+        // selection below instead of being swallowed here.
+        if (!input.wasPressed(confirm)) return true;
+      } else if (!input.isPressed(confirm)) {
+        ignoreInitialConfirmRelease = false;
       }
-      if (!input.isPressed(confirm)) ignoreInitialConfirmRelease = false;
     }
 
     if (confirmReleased) {
@@ -184,7 +190,10 @@ class OptionPopup {
     const auto popupLabels = input.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, popupLabels.btn1, popupLabels.btn2, popupLabels.btn3, popupLabels.btn4);
     render(renderer);
-    renderer.displayBuffer();
+    // A popup is a transient overlay over a stable page: keep it out of the
+    // periodic UI GC16 sweep. The underlying screen's next Normal push resumes
+    // the sweep and clears any faint GL16 residue.
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
     return true;
   }
 

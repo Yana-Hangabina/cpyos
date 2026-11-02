@@ -47,8 +47,12 @@ constexpr int kSheetHeaderH = 54;
 constexpr int kSheetLegendH = 24;
 constexpr int kSheetRowH = 88;
 constexpr int kSheetFooterH = 90;
-constexpr unsigned long kConnectedAutoContinueMs = 2000;
-constexpr unsigned long kConnectedTickMs = 900;
+// The join acknowledgement is a state change on the existing connecting sheet,
+// not a second success layout. It lasts just long enough to be seen after the
+// band refresh (~440 ms on Read Pico); the old 2 s hold plus a full-sheet
+// repaint was pure latency. The next screen (comment panel, app busy page)
+// already tells the user what is happening.
+constexpr unsigned long kConnectedAckMs = 800;
 
 int signalBarsForRssi(const int32_t rssi) {
   if (rssi >= -55) return 4;
@@ -288,7 +292,6 @@ void WifiSelectionActivity::onEnter() {
   manualNetworkListRequested = false;
   autoAttemptedSsids.clear();
   connectedAtMs_ = 0;
-  connectedHalfTicked_ = false;
   completed_ = false;
   lastWifiStatus_ = 0;
   const size_t savedCredentialCount = WIFI_STORE.getCredentialCount();
@@ -708,6 +711,9 @@ void WifiSelectionActivity::checkConnectionStatus() {
     char ipStr[16];
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     connectedIP = ipStr;
+    // Keep the connecting frame's footer for the acknowledgement frame so the
+    // band diff stays confined to the badge and the two status lines.
+    ackAutoConnecting_ = autoConnecting;
     autoConnecting = false;
 
 #if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
@@ -793,23 +799,12 @@ void WifiSelectionActivity::checkConnectionStatus() {
 }
 
 void WifiSelectionActivity::loop() {
-  // CONNECTED holds for 2 s so the sheet can say "connected, continuing";
-  // Confirm continues immediately, Back never undoes a completed join.
+  // The join acknowledgement is in-place and short: the connecting sheet keeps
+  // its geometry, only the badge and status lines change. No input is accepted
+  // during the acknowledgement, so a stray tap cannot cancel a completed join.
   if (state == WifiSelectionState::CONNECTED) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (millis() - connectedAtMs_ >= kConnectedAckMs) {
       leaveConnectedState(true);
-      return;
-    }
-    if (millis() - connectedAtMs_ >= kConnectedAutoContinueMs) {
-      leaveConnectedState(true);
-      return;
-    }
-    if (!connectedHalfTicked_ && millis() - connectedAtMs_ >= kConnectedTickMs) {
-      connectedHalfTicked_ = true;
-      requestUpdate();
-    }
-    if (sheetMode_) {
-      handleSheetInput();
     }
     return;
   }
@@ -1163,7 +1158,9 @@ void WifiSelectionActivity::render(RenderLock&&) {
       renderConnecting(&screen, &metrics);
       break;
     case WifiSelectionState::CONNECTED:
-      renderConnected(&screen, &metrics);
+      // Same layout as "connecting", with the badge and the status lines
+      // changed in place. This is what keeps the success frame a band update.
+      renderConnecting(&screen, &metrics);
       break;
     case WifiSelectionState::SAVE_PROMPT:
     case WifiSelectionState::FORGET_PROMPT: {
@@ -1415,9 +1412,6 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
       // grabber + header + legend + five 88 px rows + footer (design: 622-644)
       sheetHeight = kSheetGrabberBand + kSheetHeaderH + kSheetLegendH + 5 * kSheetRowH + kSheetFooterH;
       break;
-    case WifiSelectionState::CONNECTED:
-      sheetHeight = 308;
-      break;
     case WifiSelectionState::CONNECTION_FAILED:
     case WifiSelectionState::NETWORK_ERROR:
       sheetHeight = 340;
@@ -1480,16 +1474,15 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
                     static_cast<int16_t>(half), btnH};
       break;
     }
-    case WifiSelectionState::CONNECTED: {
-      const int top = (g.sheet.y + g.sheet.height) - 14 - 96;
-      g.btn1 = Rect{kSheetSidePad, static_cast<int16_t>(top), static_cast<int16_t>(innerWidth), 96};
-      break;
-    }
     case WifiSelectionState::SCANNING:
     case WifiSelectionState::AUTO_CONNECTING:
-    case WifiSelectionState::CONNECTING: {
+    case WifiSelectionState::CONNECTING:
+    case WifiSelectionState::CONNECTED: {
+      // The acknowledgement keeps the connecting frame's footer, so the band
+      // diff does not include the bottom of the sheet.
+      const bool autoLike = state == WifiSelectionState::CONNECTED ? ackAutoConnecting_ : autoConnecting;
       const int top = (g.sheet.y + g.sheet.height) - 16 - 88;
-      if (autoConnecting) {
+      if (autoLike) {
         const int half = (innerWidth - kBtnGap) / 2;
         g.btn1 = Rect{kSheetSidePad, static_cast<int16_t>(top), static_cast<int16_t>(half), btnH};
         g.btn2 = Rect{static_cast<int16_t>(kSheetSidePad + half + kBtnGap), static_cast<int16_t>(top),
@@ -1508,7 +1501,6 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
 void WifiSelectionActivity::enterConnectedState() {
   state = WifiSelectionState::CONNECTED;
   connectedAtMs_ = millis();
-  connectedHalfTicked_ = false;
   requestUpdate();
 }
 
@@ -1523,6 +1515,63 @@ void WifiSelectionActivity::cancelSheet() {
     WiFi.disconnect();
   }
   onComplete(false);
+}
+
+void WifiSelectionActivity::renderSheetProgressLike(const SheetGeom& g, const bool acknowledged) const {
+  const int radarSize = 84;
+  if (acknowledged) {
+    drawSheetCheckBadge(renderer, g.sheet.x + kSheetSidePad + radarSize / 2,
+                        g.sheet.y + kSheetGrabberBand + 8 + radarSize / 2, radarSize / 2 - 10);
+  } else {
+    drawSheetRadar(renderer, g.sheet.x + kSheetSidePad, g.sheet.y + kSheetGrabberBand + 8, radarSize);
+  }
+
+  const char* title = tr(STR_CONNECTED);
+  if (!acknowledged) {
+    if (state == WifiSelectionState::SCANNING) {
+      title = autoConnecting ? tr(STR_FINDING_SAVED_WIFI) : tr(STR_SCANNING);
+    } else {
+      title = autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING);
+    }
+  }
+  const int textX = g.sheet.x + kSheetSidePad + radarSize + 20;
+  const int textW = (g.sheet.x + g.sheet.width) - kSheetSidePad - textX;
+  const std::string shownTitle = renderer.truncatedText(UI_12_FONT_ID, title, textW);
+  renderer.drawText(UI_12_FONT_ID, textX, g.sheet.y + kSheetGrabberBand + 18, shownTitle.c_str(), true,
+                    EpdFontFamily::BOLD);
+
+  if (acknowledged || state != WifiSelectionState::SCANNING) {
+    std::string detail;
+    if (acknowledged) {
+      detail = selectedSSID;
+      if (!connectedIP.empty()) detail += std::string("  ") + connectedIP;
+    } else {
+      detail = std::string(tr(STR_TO_PREFIX)) + selectedSSID;
+    }
+    const std::string shownDetail = renderer.truncatedText(SMALL_FONT_ID, detail.c_str(), textW);
+    renderer.drawText(SMALL_FONT_ID, textX,
+                      g.sheet.y + kSheetGrabberBand + 18 + renderer.getLineHeight(UI_12_FONT_ID) + 6,
+                      shownDetail.c_str());
+  }
+
+  // Same decorative duck-wave bar in both frames: a wait has no true percentage,
+  // and the acknowledgement must not change this region (that would widen the
+  // band and re-drive more pixels for no information).
+  constexpr int kWaitBarH = 40;
+  const int barW = std::min(static_cast<int>(g.sheet.width) - 2 * kSheetSidePad, 480);
+  const int laneY = g.sheet.y + kSheetGrabberBand + 8 + radarSize + 10;
+  GUI.drawProgressBar(renderer,
+                      Rect{static_cast<int16_t>(g.sheet.x + (g.sheet.width - barW) / 2),
+                           static_cast<int16_t>(laneY), static_cast<int16_t>(barW), kWaitBarH},
+                      55, 100, false);
+
+  const bool autoLike = acknowledged ? ackAutoConnecting_ : autoConnecting;
+  if (autoLike) {
+    drawSheetButton(renderer, g.btn1, tr(STR_SHOW_NETWORKS), false);
+    drawSheetButton(renderer, g.btn2, tr(STR_CANCEL), false);
+  } else {
+    drawSheetButton(renderer, g.btn1, tr(STR_CANCEL), false);
+  }
 }
 
 void WifiSelectionActivity::renderSheet() {
@@ -1637,72 +1686,12 @@ void WifiSelectionActivity::renderSheet() {
     }
     case WifiSelectionState::SCANNING:
     case WifiSelectionState::AUTO_CONNECTING:
-    case WifiSelectionState::CONNECTING: {
-      const int radarSize = 84;
-      drawSheetRadar(renderer, g.sheet.x + kSheetSidePad, g.sheet.y + kSheetGrabberBand + 8, radarSize);
-      const char* title = tr(STR_SCANNING);
-      if (state == WifiSelectionState::SCANNING) {
-        title = autoConnecting ? tr(STR_FINDING_SAVED_WIFI) : tr(STR_SCANNING);
-      } else {
-        title = autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING);
-      }
-      const int textX = g.sheet.x + kSheetSidePad + radarSize + 20;
-      const int textW = (g.sheet.x + g.sheet.width) - kSheetSidePad - textX;
-      const std::string shownTitle = renderer.truncatedText(UI_12_FONT_ID, title, textW);
-      renderer.drawText(UI_12_FONT_ID, textX, g.sheet.y + kSheetGrabberBand + 18, shownTitle.c_str(), true,
-                        EpdFontFamily::BOLD);
-      if (state != WifiSelectionState::SCANNING) {
-        const std::string detail =
-            renderer.truncatedText(SMALL_FONT_ID, (std::string(tr(STR_TO_PREFIX)) + selectedSSID).c_str(), textW);
-        renderer.drawText(SMALL_FONT_ID, textX, g.sheet.y + kSheetGrabberBand + 18 + renderer.getLineHeight(UI_12_FONT_ID) + 6,
-                          detail.c_str());
-      }
-
-      // Decorative duck-wave progress (design frame 17): an unknown-duration
-      // wait has no true percentage, so the duck parks at 55% and no number is
-      // printed. This replaces the 12-cell lane, which read as a plain line.
-      constexpr int kWaitBarH = 40;
-      const int barW = std::min(static_cast<int>(g.sheet.width) - 2 * kSheetSidePad, 480);
-      const int laneY = g.sheet.y + kSheetGrabberBand + 8 + radarSize + 10;
-      GUI.drawProgressBar(renderer,
-                          Rect{static_cast<int16_t>(g.sheet.x + (g.sheet.width - barW) / 2),
-                               static_cast<int16_t>(laneY), static_cast<int16_t>(barW), kWaitBarH},
-                          55, 100, false);
-
-      if (autoConnecting) {
-        drawSheetButton(renderer, g.btn1, tr(STR_SHOW_NETWORKS), false);
-        drawSheetButton(renderer, g.btn2, tr(STR_CANCEL), false);
-      } else {
-        drawSheetButton(renderer, g.btn1, tr(STR_CANCEL), false);
-      }
+    case WifiSelectionState::CONNECTING:
+      renderSheetProgressLike(g, /*acknowledged=*/false);
       break;
-    }
-    case WifiSelectionState::CONNECTED: {
-      constexpr int kBadge = 56;
-      drawSheetCheckBadge(renderer, g.sheet.x + kSheetSidePad + kBadge / 2,
-                          g.sheet.y + kSheetGrabberBand + 10 + kBadge / 2, kBadge / 2);
-      const int textX = g.sheet.x + kSheetSidePad + kBadge + 16;
-      const int textW = (g.sheet.x + g.sheet.width) - kSheetSidePad - textX;
-      renderer.drawText(SMALL_FONT_ID, textX, g.sheet.y + kSheetGrabberBand + 12, tr(STR_CONNECTED));
-      const std::string ssid = renderer.truncatedText(UI_12_FONT_ID, selectedSSID.c_str(), textW);
-      renderer.drawText(UI_12_FONT_ID, textX, g.sheet.y + kSheetGrabberBand + 12 + renderer.getLineHeight(SMALL_FONT_ID) + 2,
-                        ssid.c_str(), true, EpdFontFamily::BOLD);
-
-      const std::string ipInfo = std::string(tr(STR_IP_ADDRESS_PREFIX)) + connectedIP;
-      renderer.drawText(SMALL_FONT_ID, g.sheet.x + kSheetSidePad,
-                        g.sheet.y + kSheetGrabberBand + 88, ipInfo.c_str());
-      // Auto-continue bar: fills over the real 2 s hold, no invented deadline.
-      constexpr int kBarH = 6;
-      const int elapsed = static_cast<int>(std::min<unsigned long>(millis() - connectedAtMs_, kConnectedAutoContinueMs));
-      const int barY = g.sheet.y + kSheetGrabberBand + 88 + renderer.getLineHeight(SMALL_FONT_ID) + 12;
-      const int barW = g.sheet.width - 2 * kSheetSidePad;
-      renderer.drawRect(g.sheet.x + kSheetSidePad, barY, barW, kBarH, true);
-      const int fill = std::clamp(barW * elapsed / static_cast<int>(kConnectedAutoContinueMs), 0, barW - 2);
-      if (fill > 0) renderer.fillRect(g.sheet.x + kSheetSidePad + 1, barY + 1, fill, kBarH - 2, true);
-
-      drawSheetButton(renderer, g.btn1, tr(STR_DONE), true);
+    case WifiSelectionState::CONNECTED:
+      renderSheetProgressLike(g, /*acknowledged=*/true);
       break;
-    }
     case WifiSelectionState::CONNECTION_FAILED:
     case WifiSelectionState::NETWORK_ERROR: {
       constexpr int kErr = 44;
@@ -1895,9 +1884,9 @@ void WifiSelectionActivity::handleSheetInput() {
         leaveConnectedState(true);
         return;
       }
-      // The sheet path returns before the legacy auto-continue timer below;
-      // without this the connected sheet stayed up until the user tapped it.
-      if (millis() - connectedAtMs_ >= kConnectedAutoContinueMs) {
+      // Unreachable while the acknowledgement block at the top of loop() owns
+      // CONNECTED; kept consistent with the same short deadline.
+      if (millis() - connectedAtMs_ >= kConnectedAckMs) {
         leaveConnectedState(true);
       }
       return;
@@ -1977,8 +1966,11 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     // detail line, as one centred column. The bar is decorative here (an
     // unknown-duration wait has no true progress), so the duck parks at the
     // mockup's own 55% mark and no percentage is printed.
+    const bool acknowledged = state == WifiSelectionState::CONNECTED;
     const char* title = nullptr;
-    if (state == WifiSelectionState::SCANNING) {
+    if (acknowledged) {
+      title = tr(STR_CONNECTED);
+    } else if (state == WifiSelectionState::SCANNING) {
       title = autoConnecting ? tr(STR_FINDING_SAVED_WIFI) : tr(STR_SCANNING);
     } else {
       title = autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING);
@@ -1989,13 +1981,20 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     const int columnX = screen->x + (screen->width - columnWidth) / 2;
     const int titleLine = renderer.getLineHeight(UI_12_FONT_ID);
     const int titleLines = static_cast<int>(renderer.wrappedText(UI_12_FONT_ID, title, columnWidth, 2).size());
+    const bool showSsid = acknowledged || state != WifiSelectionState::SCANNING;
+    // Keep the original 26-byte "to SSID" line (the host test pins its UTF-8
+    // ellipsis); the acknowledgement gets its own wider line for SSID + IP.
     char ssidInfo[26] = {};
-    const bool showSsid = state != WifiSelectionState::SCANNING;
-    if (showSsid) {
+    char ackInfo[64] = {};
+    if (showSsid && !acknowledged) {
       if (snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str()) > 25) {
         const int length = utf8SafeTruncateBuffer(ssidInfo, 22);
         snprintf(ssidInfo + length, sizeof(ssidInfo) - length, "...");
       }
+    } else if (acknowledged) {
+      snprintf(ackInfo, sizeof(ackInfo), "%s  %s", selectedSSID.c_str(), connectedIP.c_str());
+      const int length = utf8SafeTruncateBuffer(ackInfo, sizeof(ackInfo) - 1);
+      ackInfo[length] = '\0';
     }
     const int detailLine = showSsid ? renderer.getLineHeight(UI_10_FONT_ID) : 0;
     const int blockHeight = kBarHeight + 20 + titleLines * titleLine + (showSsid ? 10 + detailLine : 0);
@@ -2007,9 +2006,10 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     y += titleLines * titleLine;
     if (showSsid) {
       y += 10;
-      UITheme::drawCenteredText(renderer, Rect{screen->x, y, screen->width, detailLine}, UI_10_FONT_ID, y, ssidInfo);
+      UITheme::drawCenteredText(renderer, Rect{screen->x, y, screen->width, detailLine}, UI_10_FONT_ID, y,
+                                acknowledged ? ackInfo : ssidInfo);
     }
-    if (autoConnecting && !mappedInput.hasTouch()) {
+    if (!acknowledged && autoConnecting && !mappedInput.hasTouch()) {
       const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SHOW_NETWORKS), "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     }
@@ -2021,46 +2021,34 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     const Rect statusBounds{statusX, screen->y, statusWidth, screen->height};
     UITheme::drawCenteredWrappedText(renderer, statusBounds, UI_10_FONT_ID, statusText, MAX_STATUS_LINES);
   } else {
-    const char* statusText = autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING);
+    const bool acknowledged = state == WifiSelectionState::CONNECTED;
+    const char* statusText =
+        acknowledged ? tr(STR_CONNECTED)
+                     : (autoConnecting ? tr(STR_CONNECTING_SAVED_WIFI) : tr(STR_CONNECTING));
     const Rect statusBounds{statusX, screen->y, statusWidth, top - metrics->verticalSpacing - screen->y};
     UITheme::drawCenteredWrappedText(renderer, statusBounds, UI_12_FONT_ID, statusText, MAX_STATUS_LINES, true,
                                      EpdFontFamily::BOLD, UITheme::TextVerticalAlignment::BOTTOM);
 
-    char ssidInfo[26];
-    if (snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str()) > 25) {
+    char ssidInfo[26] = {};
+    char ackInfo[64] = {};
+    if (acknowledged) {
+      snprintf(ackInfo, sizeof(ackInfo), "%s  %s", selectedSSID.c_str(), connectedIP.c_str());
+      const int length = utf8SafeTruncateBuffer(ackInfo, sizeof(ackInfo) - 1);
+      ackInfo[length] = '\0';
+    } else if (snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str()) > 25) {
       const int length = utf8SafeTruncateBuffer(ssidInfo, 22);
       snprintf(ssidInfo + length, sizeof(ssidInfo) - length, "...");
     }
     const Rect ssidBounds{statusX, top, statusWidth, height};
     {
       const GfxRenderer::ClipScope clip(renderer, ssidBounds.x, ssidBounds.y, ssidBounds.width, ssidBounds.height);
-      UITheme::drawCenteredText(renderer, ssidBounds, UI_10_FONT_ID, top, ssidInfo);
+      UITheme::drawCenteredText(renderer, ssidBounds, UI_10_FONT_ID, top, acknowledged ? ackInfo : ssidInfo);
     }
   }
-  if (autoConnecting && !mappedInput.hasTouch()) {
+  if (state != WifiSelectionState::CONNECTED && autoConnecting && !mappedInput.hasTouch()) {
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SHOW_NETWORKS), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
-}
-
-void WifiSelectionActivity::renderConnected(const Rect* screen, const ThemeMetrics* metrics) const {
-  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto top = screen->y + (screen->height - height * 4) / 2;
-
-  UITheme::drawCenteredText(renderer, *screen, UI_12_FONT_ID, top - 30, tr(STR_CONNECTED), true, EpdFontFamily::BOLD);
-
-  std::string ssidInfo = std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID;
-  if (ssidInfo.length() > 28) {
-    ssidInfo.replace(25, ssidInfo.length() - 25, "...");
-  }
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top + 10, ssidInfo.c_str());
-
-  const std::string ipInfo = std::string(tr(STR_IP_ADDRESS_PREFIX)) + connectedIP;
-  UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top + 40, ipInfo.c_str());
-
-  // Use centralized button hints
-  const auto labels = mappedInput.mapLabels("", tr(STR_DONE), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void WifiSelectionActivity::renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const {

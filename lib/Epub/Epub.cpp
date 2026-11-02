@@ -1,6 +1,9 @@
 #include "Epub.h"
 
 #include <FsHelpers.h>
+#include <GifImageLayout.h>
+#include <GifLimitedWriter.h>
+#include <GifToBmpConverter.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -12,6 +15,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 #include "Epub/FontManifest.h"
@@ -77,6 +81,81 @@ bool convertOverrideCover(const Epub& epub, const std::string& outputPath, const
                           JpegConvert jpegConvert, PngConvert pngConvert) {
   const std::string sourcePath = epub.getCoverOverridePath();
   return convertCoverFile(sourcePath, coverImageType(sourcePath), outputPath, outputKind, jpegConvert, pngConvert);
+}
+
+// GifToBmpConverter drives AnimatedGIF through one process-wide file handle, so
+// two concurrent cover generations (dashboard scan + reader) must not overlap.
+// std::mutex is the codebase's portable choice (PersistableStore, DeviceSecret)
+// and works on both the device and the simulator.
+std::mutex& gifGenerationMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+void removeGifTemporaryFile(const std::string& path) {
+  if (!Storage.remove(path.c_str()) && Storage.exists(path.c_str())) {
+    LOG_ERR("EBP", "Failed to remove GIF temporary file: %s", path.c_str());
+  }
+}
+
+// Extracts the cover GIF under a byte cap, converts the first frame to BMP and
+// publishes it atomically. An animated GIF yields its first frame; a decoder
+// failure leaves no partial file behind and falls through to "no cover".
+template <typename Convert>
+bool generateGifBmp(const Epub& epub, const std::string& href, const std::string& bmpPath, const char* outputKind,
+                    Convert convert) {
+  const std::lock_guard<std::mutex> gifLock(gifGenerationMutex());
+  // Another caller may have completed this cache while we waited.
+  if (Storage.exists(bmpPath.c_str())) return true;
+
+  const std::string gifTempPath = epub.getCachePath() + "/.cover.gif";
+  const std::string bmpTempPath = bmpPath + ".tmp";
+
+  // Bounded extraction: the ZIP directory may overstate the entry size.
+  {
+    HalFile gifOut;
+    if (!Storage.openFileForWrite("EBP", gifTempPath, gifOut)) {
+      LOG_ERR("EBP", "Failed to create GIF extraction file: %s", gifTempPath.c_str());
+      return false;
+    }
+    GifLimitedWriter limited(gifOut, GifCommon::MAX_FILE_BYTES);
+    bool extracted = epub.readItemContentsToStream(href, limited, 1024);
+    extracted = gifOut.close() && extracted;
+    if (!extracted) {
+      LOG_ERR("EBP", "GIF %s extraction failed, exceeded the byte limit, or could not close: %s", outputKind,
+              gifTempPath.c_str());
+      removeGifTemporaryFile(gifTempPath);
+      return false;
+    }
+  }
+
+  HalFile gifFile;
+  HalFile bmpFile;
+  if (!Storage.openFileForRead("EBP", gifTempPath, gifFile)) {
+    LOG_ERR("EBP", "Failed to open extracted GIF: %s", gifTempPath.c_str());
+    removeGifTemporaryFile(gifTempPath);
+    return false;
+  }
+  if (!Storage.openFileForWrite("EBP", bmpTempPath, bmpFile)) {
+    LOG_ERR("EBP", "Failed to create GIF %s BMP: %s", outputKind, bmpTempPath.c_str());
+    gifFile.close();
+    removeGifTemporaryFile(gifTempPath);
+    removeGifTemporaryFile(bmpTempPath);
+    return false;
+  }
+
+  bool success = convert(gifFile, bmpFile);
+  const bool sourceClosed = gifFile.close();
+  const bool outputClosed = bmpFile.close();
+  success = success && sourceClosed && outputClosed;
+  removeGifTemporaryFile(gifTempPath);
+  if (success && !Storage.rename(bmpTempPath.c_str(), bmpPath.c_str())) {
+    LOG_ERR("EBP", "Failed to publish GIF %s BMP: %s", outputKind, bmpPath.c_str());
+    success = false;
+  }
+  if (!success) removeGifTemporaryFile(bmpTempPath);
+  LOG_DBG("EBP", "Generated %s BMP from GIF cover image, success: %s", outputKind, success ? "yes" : "no");
+  return success;
 }
 }  // namespace
 
@@ -208,9 +287,10 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
           const auto endPos = coverPageHtml.find('"', pos);
           if (endPos != std::string::npos) {
             const auto ref = std::string_view{coverPageHtml}.substr(pos, endPos - pos);
-            // Cover BMP generation supports JPG/PNG only; skip GIF so an unsupported wrapper image
-            // does not block a later supported cover reference.
-            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref)) {
+            // Cover BMP generation supports JPG/PNG/GIF. Skip unsupported wrappers so a later
+            // supported raster image can still be selected.
+            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref) ||
+                FsHelpers::hasGifExtension(ref)) {
               imageRef = ref;
               break;
             }
@@ -864,6 +944,16 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     }
   }
 
+  if (FsHelpers::hasGifExtension(coverImageHref)) {
+    return generateGifBmp(*this, coverImageHref, getCoverBmpPath(cropped, originalThresholds),
+                          cropped ? "cropped cover" : "cover",
+                          [cropped, originalThresholds](HalFile& gif, Print& bmp) {
+                            return GifToBmpConverter::gifFileToBmpStream(gif, bmp, cropped,
+                                                                         GifToBmpConverter::Output::Gray2,
+                                                                         originalThresholds);
+                          });
+  }
+
   if (Txt::isTxtOrMd(filepath)) {
     return Txt::convertCoverImageToBmp(coverImageHref, getCoverBmpPath(cropped, originalThresholds), 0, cropped,
                                        originalThresholds);
@@ -975,6 +1065,18 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
             [targetWidth, height](HalFile& source, HalFile& output) {
               return PngToBmpConverter::pngFileToBmpStreamWithSize(source, output, targetWidth, height);
             })) {
+      return true;
+    }
+  }
+
+  if (FsHelpers::hasGifExtension(coverImageHref)) {
+    // 8-bit like the JPEG/PNG thumbnail paths: the thumb file suffix is _g8 and
+    // the dashboard/libray canvas reads all 16 gray levels from it.
+    if (generateGifBmp(*this, coverImageHref, outputPath, "thumbnail",
+                       [targetWidth, height](HalFile& gif, Print& bmp) {
+                         return GifToBmpConverter::gifFileToBmpStreamWithSize(
+                             gif, bmp, targetWidth, height, true, GifToBmpConverter::Output::Gray8);
+                       })) {
       return true;
     }
   }

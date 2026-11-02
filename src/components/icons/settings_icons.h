@@ -22,8 +22,16 @@ namespace settings_icons {
 inline const freeink::Icon* forSetting(const StrId id) {
   switch (id) {
     // Displays
-    case StrId::STR_SLEEP_SCREEN:
+    case StrId::STR_STANDBY_STYLE:
       return &icon_clock_48;
+    case StrId::STR_LIGHT_SLEEP_STYLE:
+    case StrId::STR_DEEP_SLEEP_STYLE:
+      return &icon_moon_48;
+    case StrId::STR_SLEEP_STATE_BADGE:
+      return &icon_info_48;
+    case StrId::STR_STANDBY_IMAGE:
+    case StrId::STR_LIGHT_SLEEP_IMAGE:
+    case StrId::STR_DEEP_SLEEP_IMAGE:
     case StrId::STR_SLEEP_COVER_MODE:
     case StrId::STR_SLEEP_COVER_FILTER:
     case StrId::STR_READING_BACKGROUND:
@@ -59,6 +67,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_READER_MENU_STYLE:
       return &icon_panel_bottom_48;
     case StrId::STR_UI_DENSITY:
+    case StrId::STR_UI_FONT_SCALE:
       return &icon_sliders_horizontal_48;
     case StrId::STR_SUNLIGHT_FADING_FIX:
     case StrId::STR_DBL_CLICK_PWR_LIGHT:
@@ -152,6 +161,8 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_TOUCH_READER_CONTROLS:
     case StrId::STR_LONG_PRESS_BEHAVIOR:
       return &icon_hand_48;
+    case StrId::STR_TAP_ZONES:
+      return &icon_layout_grid_48;
     case StrId::STR_NEXT_PAGE_GESTURE:
       return &icon_chevron_right_48;
     case StrId::STR_PREV_PAGE_GESTURE:

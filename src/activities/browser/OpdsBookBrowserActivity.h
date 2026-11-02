@@ -1,5 +1,5 @@
 #pragma once
-#include <OpdsParser.h>
+#include <OpdsFeed.h>
 
 #include <string>
 #include <utility>

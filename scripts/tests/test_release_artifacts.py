@@ -62,9 +62,10 @@ class ImageCheckTest(unittest.TestCase):
 
     def test_renamed_checkout_project_passes(self):
         # PlatformIO writes the checkout directory name into esp_app_desc; a
-        # CPYOS clone is normally named cpyos, not crossmux.
-        _blob, desc, _notes = self.check(make_image(project='cpyos'))
-        self.assertEqual(desc['project_name'], 'cpyos')
+        # CPYOS clone is normally named cpyos or cpyos-public, not crossmux.
+        for project in ('cpyos', 'cpyos-public'):
+            _blob, desc, _notes = self.check(make_image(project=project))
+            self.assertEqual(desc['project_name'], project)
 
     def test_wrong_chip_is_rejected(self):
         with self.assertRaises(SystemExit):

@@ -85,14 +85,58 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 }
 
 struct TouchPageTurn {
-  bool prev;
-  bool next;
-  unsigned long heldMs;
+  bool prev = false;
+  bool next = false;
+  // Custom tap-zone short action (tapzones::Action) for the reader to dispatch.
+  // PREV/NEXT/MENU are resolved here (they need the gesture/mirroring state);
+  // every other action is handed to the activity.
+  uint8_t action = tapzones::NONE;
+  // Long-press action (tapzones::LongAction) of a main cell, valid when
+  // longPress is set. Fires on release (or while holding, see below).
+  bool longPress = false;
+  uint8_t longAction = tapzones::LONG_NONE;
+  unsigned long heldMs = 0;
 };
+
+// Shared tap-zone grid for the current display/orientation. The reader
+// hit-tests with the same rectangles the zone editor paints (same safe margin,
+// visible gaps and integer cell sizes): what the editor shows is what the
+// reader hits.
+inline tapzones::Grid tapZoneGrid(const GfxRenderer& renderer) {
+  return tapzones::Grid(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight());
+}
+
+// Zone index (0..8 main, 9..14 small, -1 gap/outside) at a screen point.
+inline int tapZoneAt(const GfxRenderer& renderer, const int x, const int y) {
+  return tapZoneGrid(renderer).zoneAt(x, y);
+}
+
+// Configured short action of a zone, small-zone fallback included.
+inline uint8_t zoneShortAction(const int zone) {
+  return tapzones::shortActionForZone(zone, SETTINGS.tapZones, SETTINGS.miniZones);
+}
+
+// Configured long-press action of a zone (small zones are tap-only).
+inline uint8_t zoneLongAction(const int zone) {
+  return tapzones::longActionForZone(zone, SETTINGS.tapZonesLong);
+}
+
+// A page-turn direction that still accepts tap input. INVERTED_TAP is the
+// legacy gesture whose sides are swapped; it still accepts taps.
+inline bool allowsTap(const uint8_t gesture) { return gestureAllowsTap(gesture); }
+
+// Legacy outer-thirds resolution, shared by the reader and the host oracle.
+// `flip` is the mirrored state (rtlBook XOR page-turn direction) folded with
+// the legacy Inverted Tap gesture.
+inline uint8_t legacyZoneAction(const GfxRenderer& renderer, const int x, const int y, const bool flip,
+                                const bool prevTaps, const bool nextTaps, const bool menuTap) {
+  return tapzones::legacyActionAt(x, y, renderer.getScreenWidth(), renderer.getScreenHeight(), flip, prevTaps,
+                                  nextTaps, menuTap);
+}
 
 inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
                                          const bool rtlBook = false) {
-  TouchPageTurn result{false, false, 0};
+  TouchPageTurn result;
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
   }
@@ -114,10 +158,76 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
     return result;
   }
 
-  const bool nextTaps = gestureAllowsTap(SETTINGS.pageTurnGesture);
-  const bool prevTaps = gestureAllowsTap(SETTINGS.previousPageGesture);
-  if (!nextTaps && !prevTaps) {
+  const bool nextTaps = allowsTap(SETTINGS.pageTurnGesture);
+  const bool prevTaps = allowsTap(SETTINGS.previousPageGesture);
+  const bool menuTap = SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_TAP;
+  const bool invertedTap = SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
+                           SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP;
+  // Zone PREV/NEXT are reading-order actions; the mirrored page-turn direction
+  // (and the legacy Inverted Tap gesture) swap which side of the screen turns
+  // forward, exactly like the legacy thirds did.
+  const bool flip = mirrored != invertedTap;
+
+  if (SETTINGS.tapZoneMode != CrossPointSettings::TAP_ZONE_MODE_CUSTOM) {
+    // --- Legacy outer-thirds layout: unchanged from the pre-zone reader. ---
+    if (!nextTaps && !prevTaps) {
+      return result;
+    }
+
+    int x = 0;
+    int y = 0;
+    if (!input.wasScreenTapped(x, y)) {
+      return result;
+    }
+
+    // The centred reader-menu tap target (isTouchMenuTap below) keeps priority
+    // over the page-turn zones.
+    const int width = renderer.getScreenWidth();
+    const int height = renderer.getScreenHeight();
+    if (menuTap && x >= width / 3 && x < width - width / 3 && y >= height / 3 && y < height - height / 3) {
+      return result;
+    }
+
+    const uint8_t action = legacyZoneAction(renderer, x, y, invertedTap != mirrored, prevTaps, nextTaps, false);
+    result.next = action == tapzones::NEXT;
+    result.prev = action == tapzones::PREV;
+    result.heldMs = gpio.lastTouchHeldMs();
     return result;
+  }
+
+  // --- Custom 3x3 grid + six mini zones. ---
+
+  // Long-press actions fire WHILE the finger is still down, once a stationary
+  // contact has been held BOOKMARK_HOLD_MS: the action runs on the timer, not
+  // the eventual release. Only a main cell can carry one, and only an
+  // explicitly configured one (the default is NONE), so a reader who never
+  // assigned a long action keeps the old hold behaviour (selection, page skip)
+  // untouched. Suppressing the contact keeps the lift from also tapping.
+  {
+    float nx = 0.0f;
+    float ny = 0.0f;
+    unsigned long heldMs = 0;
+    if (gpio.isTouchTapCandidate(nx, ny, heldMs)) {
+      result.heldMs = heldMs;
+      if (heldMs >= BOOKMARK_HOLD_MS) {
+        int lx = 0;
+        int ly = 0;
+        renderer.tapToLogical(nx, ny, lx, ly);
+        const int zone = tapZoneAt(renderer, lx, ly);
+        if (zone >= 0 && zone < 9) {
+          const uint8_t longAction = zoneLongAction(zone);
+          if (longAction != tapzones::LONG_NONE) {
+            gpio.suppressTouchContact();
+            result.longPress = true;
+            result.longAction = longAction;
+            return result;
+          }
+        }
+      }
+      // Still holding with no long action: tap actions keep their release
+      // semantics, so wait for the lift.
+      return result;
+    }
   }
 
   int x = 0;
@@ -125,27 +235,46 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
   if (!input.wasScreenTapped(x, y)) {
     return result;
   }
+  result.heldMs = gpio.lastTouchHeldMs();
 
-  const int width = renderer.getScreenWidth();
-  const int height = renderer.getScreenHeight();
-  // The centered reader-menu tap target (isTouchMenuTap below) keeps priority
-  // over the page-turn zones.
-  if (SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_TAP && x >= width / 3 && x < width - width / 3 &&
-      y >= height / 3 && y < height - height / 3) {
-    return result;
+  // Taps in a safe-margin / gap band do nothing rather than snapping to a
+  // neighbouring cell.
+  const int zone = tapZoneAt(renderer, x, y);
+  if (zone < 0) return result;
+
+  // A held tap with a configured long action runs it; otherwise the short
+  // action below still fires (a held page-turn cell keeps turning pages).
+  if (zone < 9 && result.heldMs >= BOOKMARK_HOLD_MS) {
+    const uint8_t longAction = zoneLongAction(zone);
+    if (longAction != tapzones::LONG_NONE) {
+      result.longPress = true;
+      result.longAction = longAction;
+      return result;
+    }
   }
 
-  // Give the whole page to the sole tap-enabled direction. When both accept
-  // taps, split at the left third. RTL books and Inverted Tap each reverse
-  // the shared zones, and so does the page-turn direction.
-  const bool inverted = (SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
-                         SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP) != mirrored;
-  const bool nextZone = inverted ? x < (width * 2) / 3 : x >= width / 3;
-  result.next = nextTaps && (!prevTaps || nextZone);
-  result.prev = prevTaps && (!nextTaps || !nextZone);
-  result.heldMs = gpio.lastTouchHeldMs();
+  uint8_t action = zoneShortAction(zone);
+  // Mirroring chooses which side turns forward only when both directions are
+  // reachable by tap. With a single tap direction the whole page is that
+  // direction, exactly like the legacy split (mirroring then has nothing to
+  // swap, so it must not invert the sole action).
+  const bool applyFlip = flip && prevTaps && nextTaps;
+  if (action == tapzones::PREV && applyFlip) action = tapzones::NEXT;
+  else if (action == tapzones::NEXT && applyFlip) action = tapzones::PREV;
+  if (action == tapzones::PREV && !prevTaps) action = tapzones::NONE;
+  if (action == tapzones::NEXT && !nextTaps) action = tapzones::NONE;
+  if (action == tapzones::MENU && !menuTap) action = tapzones::NONE;
+
+  if (action == tapzones::PREV) {
+    result.prev = true;
+  } else if (action == tapzones::NEXT) {
+    result.next = true;
+  } else if (action != tapzones::NONE) {
+    result.action = action;
+  }
   return result;
 }
+
 
 // Tap in the center third of the screen: the tap path into the reader menu on
 // every touch board. detectTouchPageTurn() excludes this centered rectangle,
@@ -158,6 +287,15 @@ inline bool isTouchMenuTap(const GfxRenderer& renderer, const MappedInputManager
   int x = 0;
   int y = 0;
   if (!input.wasScreenTapped(x, y)) return false;
+  // Custom grid: a zone with its own action owns this tap. Page-turn zones
+  // must page, and a MENU zone opens the menu through the zone action path in
+  // the reader. The centre-third fallback below therefore only covers zones
+  // with no action, keeping the original centre-tap behaviour on untouched
+  // cells while freeing centre cells for real assignments.
+  if (SETTINGS.tapZoneMode == CrossPointSettings::TAP_ZONE_MODE_CUSTOM) {
+    const int zone = tapZoneAt(renderer, x, y);
+    if (zone >= 0 && zoneShortAction(zone) != tapzones::NONE) return false;
+  }
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
   const int zoneWidth = width / 3;

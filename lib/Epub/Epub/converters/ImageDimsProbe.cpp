@@ -25,6 +25,8 @@ bool ImageDimsProbe::feed(const uint8_t b) {
         state = State::JpegSoi;
       } else if (b == PNG_SIG[0]) {
         state = State::PngHeader;
+      } else if (b == 'G') {
+        state = State::GifHeader;
       } else {
         state = State::Failed;
         return false;
@@ -57,6 +59,26 @@ bool ImageDimsProbe::feed(const uint8_t b) {
         }
       }
       pos++;
+      return true;
+
+    case State::GifHeader:
+      // "GIF87a" / "GIF89a", then the little-endian logical screen width and
+      // height. pos is the absolute stream offset (0 = the 'G' that got us here).
+      if ((pos < 4 && b != "GIF8"[pos]) || (pos == 4 && b != '7' && b != '9') || (pos == 5 && b != 'a')) {
+        state = State::Failed;
+        return false;
+      }
+      if (pos == 6 || pos == 7) {
+        width |= static_cast<uint32_t>(b) << ((pos - 6) * 8);
+      } else if (pos == 8 || pos == 9) {
+        height |= static_cast<uint32_t>(b) << ((pos - 8) * 8);
+      }
+      if (pos++ == 9) {
+        // Stamp the format only now that the whole signature has matched.
+        format = Format::Gif;
+        state = State::Done;
+        return false;
+      }
       return true;
 
     case State::JpegSoi:

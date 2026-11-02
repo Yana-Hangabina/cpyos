@@ -5,6 +5,7 @@
 
 #include "ImageToFramebufferDecoder.h"
 
+class GifToFramebufferConverter;
 class JpegToFramebufferConverter;
 class PngToFramebufferConverter;
 
@@ -15,6 +16,7 @@ class ImageDecoderFactory {
   static bool isFormatSupported(const std::string& imagePath);
 
  private:
+  static std::unique_ptr<GifToFramebufferConverter> gifDecoder;
   static std::unique_ptr<JpegToFramebufferConverter> jpegDecoder;
   static std::unique_ptr<PngToFramebufferConverter> pngDecoder;
 };

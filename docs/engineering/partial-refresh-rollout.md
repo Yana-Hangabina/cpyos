@@ -29,56 +29,13 @@ matrix, and the photo-gated decisions).
 claim, the CKV lap wait, prefill 112, the AA A/B switch, the windowed-scan clean API,
 the scan-in-progress probe, and the extracted `line_mask.h`.
 
-## 1.1 Dev -> public port status (2026-10-30)
-
-Ported in this pass (tree builds; `pio run -e readpico` SUCCESS):
-
-| Area | Files |
-|---|---|
-| Renderer core | `lib/GfxRenderer/GfxRenderer.{h,cpp}` (band path, local clean, epochs, box filter, DU flag, stats), `ChangedBand.h`, `BandPolicy.h` |
-| HAL | `lib/hal/HalDisplay.{h,cpp}` (ScanPowerGuard, cleanWindow, waitForScanIdle, idle tick, push stats, gray counts) |
-| SDK (patch) | `epdiyLcdCleanArea`, `epdiyLcdScanInProgress`, push counters; `patches/freeink-sdk/96de1be-local.patch` regenerated (29 files, round-trip 0) |
-| Activities | `Activity.h`, `ActivityManager.{h,cpp}` (+ public's reader-standby helpers re-applied), `UiListActivity`, `LibraryListActivity`, `InxRecentActivity`, `MyActivity`, `FindBooksActivity`, `KeyboardEntryActivity`, `PhotoDemoActivity` |
-| Assets/covers | `BookCoverLoader` (byte cache + path memo), `UITheme` (`_g2` -> `_g8` normalisation), `JpegToBmpConverter` (Gray8), `Epub` (`_g8` thumbnails) |
-| Settings | `periodicFullRefresh` + `readerRefreshPages` split (public's `statusBarClockUpdate` kept), i18n keys `STR_PERIODIC_REFRESH` / `STR_REFRESH_INTERVAL` |
-| Power | `armScanWatchdog` in `main.cpp`; Wi-Fi release and idle rails were already in public |
-
-Second pass (2026-10-30, later): the **dev application layer now covers public** for everything
-except `main.cpp` and the app directories kept local (`jjwxc/`, `weread/`, `reading-stats/`,
-`pdf*`). That includes the reader (DU fast turns, overlay bands, cadence demotion), standby
-band, `statusBarClockUpdate` (now also in dev), the display stack, covers, settings and i18n.
-`main.cpp` keeps the debug-command difference by design; its non-debug power paths still need
-a line-by-line comparison (last item below).
-
-Third pass (2026-10-30, later): `main.cpp` non-debug content is aligned too -- the battery log
-feature (`BATT`/`BATTLOG`/`NET` plus its once-a-minute sampler) was back-ported into dev, so the
-only remaining differences between the trees are the debug command sets. Both trees build.
-
-Fourth pass (2026-10-30): the serial diagnostics `refresh_soak.py` needs were ported into the
-public `main.cpp` (`GRAYSTATS`, `REFRESHMAP`, `PUSHSTATS`, `CLEAN`/`CLEANMAX`, `BANDS`,
-`AREAPUSH`, `BANDPUSH`, `NOSLEEP`, `PHOTODEMO`, `KEYBOARD`, `TYPE`, `ROWUP`/`ROWDOWN`,
-`CLOSEPANEL`, `APPS`, `CADENCE`, `NOFULL`). The remaining dev-only commands are PDF/game/DU
-experiments, not acceptance inputs.
-
-Acceptance done (2026-10-30, public image flashed to both slots):
-
-1. `exp/refresh_soak.py`: **36/36** (bands, local clean, keyboard, reader entry/sheet/close,
-   gray Home round-trip, My/Find, no unaligned rects, no crash, no underrun).
-2. Boot: `0.1.2-cpyos`, 33 languages / 1578 keys, SD at 40 MHz, **0 `[ERR]`**.
-3. Idle CPU: one downclock to 80 MHz, no 240/80 flip (the every-pass `ScanPowerGuard` in
-   `HalDisplay::idlePowerTick` was removed; that was the flip).
-4. Branding scan after each merge (done for this batch).
-
-★ Keep this gate for future merges: flash to both slots, run the §4 matrix plus
-`exp/refresh_soak.py`, and confirm no `[ERR]` before publishing.
-
 ## 2. Build and verify
 
 ```bash
 source ~/.zshrc >/dev/null 2>&1
-cd repos/cpyos-public
-gg ~/.platformio/penv/bin/pio run -e readpico > build/readpico-build.log 2>&1
-grep -E '\[(SUCCESS|FAILED)\]' build/readpico-build.log | tail -1
+cd repos/crossmux
+gg ~/.platformio/penv/bin/pio run -e readpico > /tmp/b.log 2>&1
+grep -E '\[(SUCCESS|FAILED)\]' /tmp/b.log | tail -1
 python3 - <<'EOF'
 import struct
 d = open('.pio/build/readpico/firmware.bin','rb').read()

@@ -428,3 +428,48 @@ print('Chinese font coverage OK')
 
 Any assertion failure means a list or header is stale; re-run the regeneration
 steps before committing.
+
+## External scalable family (`CROSSPOINT_SYSTEM_FONT_PACK`)
+
+Read Pico and the C3 targets no longer pick between a wide 12pt bitmap and
+narrow 14/16pt subsets. One scalable family covers every UI and reader size, so
+a book title, a JJWXC string and the reader body cannot change point size just
+because one character is outside a subset. The family is the 2013
+《通用规范汉字表》 (8,105 characters) unioned with GB2312 and common
+punctuation; `assets/fonts/chars_8105.txt` is the coverage contract.
+
+| Target | Source | Install |
+|---|---|---|
+| Read Pico (PSRAM) | `assets/fonts/cpyos_han_sans.def` embedded in app0 | first boot inflates it to `/.crosspoint/system_font_<crc>.dat`; later boots stream glyphs from that SD file, so only FreeType's face tables live in PSRAM |
+| C3 / X3 / X4 | `build/system_font.dat` in spiffs | written by the full install (`package_nightly_target.py`) and the browser flasher, preserved by app-only OTA |
+| Anything without the pack | built-in 8pt CJK subset | emergency fallback only; UI is readable but coverage is narrow |
+
+* The built-in 12pt GB2312, 10pt and 14/16pt bitmap slices are not linked in
+  these builds. Do not add a `notosans_cjk_12` reference: it will pull the
+  bitmap back in and defeat the swap.
+* Read Pico rebinds `SMALL/UI_10/UI_12/CONTROL_18`, the status/estimate rows and
+  `NOTOSANS_18` (display role) at the selected `uiFontScale`; `getReaderFontId()`
+  keeps honouring 12/14/16/18pt instead of the old high-DPI fixed 12pt. The
+  reader's 18pt uses `CJK_UI_18`, not the UI-rebound `NOTOSANS_18`.
+* C3 keeps the built-in 8pt subset for system chrome and loads **one** reader
+  face at a time. A FreeType face keeps per-face copies of cmap/loca/hmtx, so
+  registering the UI scale's four sizes plus a reader face does not fit the
+  no-PSRAM heap. `typography::apply()` configures only `fontPointSize` there;
+  the UI font-scale setting is hidden.
+* Read Pico loads at most four faces at once (three UI roles that differ plus
+  the current reader size); changing the scale or reader size releases the
+  faces that are no longer in the set before loading new ones.
+* The pack is validated by header, size and (C3 spiffs) CRC-32; the embedded
+  Read Pico carrier is covered by the bootloader-verified app image. A failure
+  leaves the 8pt fallback and logs `system font pack unavailable`; it never
+  draws wrong glyphs.
+* On Read Pico `SdCardFontSystem::setupUiFallbacks()` returns early while the
+  pack is ready: otherwise it would clear the Typography bindings and load the
+  SD family's extra UI sizes over the vector faces. The reader still loads the
+  selected SD family at its reading size.
+* Read Pico's `readpico_pdf*` envs deliberately unflag the pack and keep the
+  old external bitmap arrangement: MuPDF needs the space the embedded carrier
+  would take.
+* Font licensing and the source/subset recipe live in `assets/fonts/README.md`.
+  `scripts/tests/test_system_font_pack.py` verifies the carrier inflates to the
+  committed TTF, the coverage contract, and the C3 spiffs budget.

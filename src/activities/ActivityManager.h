@@ -65,6 +65,10 @@ class ActivityManager {
 
   // Pending activity to be launched on next loop iteration
   std::unique_ptr<Activity> pendingActivity;
+  // Push requested while another transition was still queued (pushActivity):
+  // applied right after that transition, so a push can never discard a pending
+  // navigation. Only one push waits; a newer one replaces the older.
+  std::unique_ptr<Activity> deferredPush;
   enum class PendingAction { None, Push, Pop, Replace };
   // Shared between the main task (core 0) and the render task (core 1), so it
   // must be atomic rather than a plain/volatile enum (FreeRTOS SMP data race).
@@ -161,7 +165,6 @@ class ActivityManager {
   void goToWoodfish();
   void goToAirPage();
   void goToBuddy();
-  void goToStandby();
   void goToGame2048();
 #ifdef ENABLE_CHINESE_VERSION
   void goToChineseChess();
@@ -190,8 +193,12 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  // True when an activity below the current one (usually the reader/comment
+  // panel under the standby overlay) asked to stay awake.
+  bool stackPreventAutoSleep() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
+  bool isStandbyActivity() const;
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
   bool handleForcedRefresh();
@@ -206,8 +213,11 @@ class ActivityManager {
   // True only when the reader itself is the visible activity (not a menu or a
   // sub-page that sits above it). Used for the power-key standby gesture.
   bool isReaderForeground() const;
-  // Push the standard clock standby over the reader; its power-key wake pops
-  // straight back to the preserved reader instead of going Home.
+  // Push the standby overlay over the current activity; power/Back pops back
+  // to the preserved caller. Reader power-key standby uses the same path.
+  void goToStandby();
+  // Kept as an alias for the reader power-key call sites; identical to
+  // goToStandby() now that every standby entry is an overlay.
   void goToReaderStandby();
   // Debug hook for the serial test harness: simulate the standby power press.
   void debugWakeStandby();

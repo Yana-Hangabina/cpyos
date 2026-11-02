@@ -52,17 +52,7 @@ constexpr int kToolGap = 16;
 constexpr int kGroupHeader = 48;
 
 void drawMaskIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y, const int size) {
-  const int rowBytes = (icon.w + 7) / 8;
-  for (int row = 0; row < size; ++row) {
-    const int sourceY = row * icon.h / size;
-    const uint8_t* sourceRow = icon.bits + sourceY * rowBytes;
-    for (int column = 0; column < size; ++column) {
-      const int sourceX = column * icon.w / size;
-      if (((sourceRow[sourceX / 8] >> (7 - (sourceX & 7))) & 1U) == 0) {
-        renderer.drawPixel(x + column, y + row, true);
-      }
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
 }
 
 void drawChevron(const GfxRenderer& renderer, const int x, const int y) {

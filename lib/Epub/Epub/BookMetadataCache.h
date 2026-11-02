@@ -4,7 +4,6 @@
 #include <HalStorage.h>
 
 #include <algorithm>
-#include <deque>
 #include <memory>
 #include <string>
 
@@ -68,14 +67,20 @@ class BookMetadataCache {
   std::unique_ptr<uint32_t[]> cumulativeSizes;
   uint16_t cumulativeSizeCount = 0;
 
-  // Index for fast href→spineIndex lookup (used only for large EPUBs)
+  // Index for fast href→spineIndex lookup. Exists only during a large EPUB's
+  // TOC pass; a member container would hold its storage for every open book,
+  // and clear()/shrink_to_fit() cannot give the deque's node map back.
+  //
+  // A nothrow array rather than std::deque: resize() on a deque allocates its
+  // map and nodes with throwing `new`, which aborts under -fno-exceptions when
+  // the heap is tight. One makeUniqueNoThrow<Elem[]>() either yields the whole
+  // index or nullptr, so createTocEntry can fall back to the linear scan.
   struct SpineHrefIndexEntry {
     uint64_t hrefHash;  // FNV-1a 64-bit hash
     uint16_t hrefLen;   // length for collision reduction
     int16_t spineIndex;
   };
-  std::deque<SpineHrefIndexEntry> spineHrefIndex;
-  bool useSpineHrefIndex = false;
+  std::unique_ptr<SpineHrefIndexEntry[]> spineHrefIndex;
 
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
   // ponytail: cap the optimization; larger books fall back to SD reads.

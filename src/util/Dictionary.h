@@ -80,9 +80,18 @@ class Dictionary {
   // the definition text (capped at MAX_DEFINITION_BYTES) and the headword as
   // stored in the index. Returns true on a hit. *outResult (if provided)
   // reports the precise outcome so the UI can distinguish a genuine miss from a
-  // decompression / low-memory / read failure.
+  // decompression / low-memory / read failure. *locationOut (if provided) is
+  // filled on a hit so a recursive viewer can re-read this exact entry (a
+  // .syn target can share its headword with another entry, so the word alone
+  // would resolve to the wrong one).
   bool lookup(const char* word, std::string& definitionOut, std::string& matchedHeadwordOut,
-              LookupResult* outResult = nullptr);
+              LookupResult* outResult = nullptr, DictLocation* locationOut = nullptr);
+
+  // Read the definition at location. Used by the recursive viewer to reload a
+  // previous entry after its payload was released. On failure returns false
+  // and, if outResult is given, sets it to the specific reason (Decompress /
+  // LowMemory / ReadError).
+  bool readDefinition(const DictLocation& location, std::string& out, LookupResult* outResult = nullptr);
 
   static std::string cleanWord(const char* word);
 
@@ -175,7 +184,6 @@ class Dictionary {
 
   // Read the definition at location. On failure returns false and, if outResult
   // is given, sets it to the specific reason (Decompress / LowMemory / ReadError).
-  bool readDefinition(const DictLocation& location, std::string& out, LookupResult* outResult = nullptr);
   static void stemVariants(const std::string& word, std::vector<std::string>& out);
 
   // Read a null-terminated word from an open file into buf (max bufSize-1

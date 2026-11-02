@@ -5,27 +5,7 @@
 #include <string>
 #include <vector>
 
-/**
- * Type of OPDS entry.
- */
-enum class OpdsEntryType {
-  NAVIGATION,  // Link to another catalog
-  BOOK         // Downloadable book
-};
-
-/**
- * Represents an entry from an OPDS feed (either a navigation link or a book).
- */
-struct OpdsEntry {
-  OpdsEntryType type = OpdsEntryType::NAVIGATION;
-  std::string title;
-  std::string author;  // Only for books
-  std::string href;    // Navigation URL or epub download URL
-  std::string id;
-};
-
-// Legacy alias for backward compatibility
-using OpdsBook = OpdsEntry;
+#include "OpdsEntry.h"
 
 /**
  * Parser for OPDS (Open Publication Distribution System) Atom feeds.
@@ -71,6 +51,8 @@ class OpdsParser final : public Print {
    */
   const std::vector<OpdsEntry>& getEntries() const& { return entries; }
   std::vector<OpdsEntry> getEntries() && { return std::move(entries); }
+  // Moves the entries out (used by OpdsFeed, which owns both parsers).
+  std::vector<OpdsEntry> takeEntries() { return std::move(entries); }
 
   /**
    * Get only book entries (legacy compatibility).

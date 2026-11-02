@@ -2,6 +2,14 @@
 
 #if defined(CROSSPOINT_MUPDF)
 
+// Regression guard: MuPDF needs the PSRAM heap and the 7.19 MiB readpico app
+// slot. Defining CROSSPOINT_MUPDF on C3/other non-PSRAM targets used to compile
+// empty wrappers silently and pushed those targets over their flash budget once
+// other features grew. Fail the build instead of discovering it at link time.
+#if !defined(BOARD_HAS_PSRAM) && !defined(CROSSPOINT_EMULATED)
+#error "CROSSPOINT_MUPDF is a PSRAM/readpico-only feature; do not enable it on C3"
+#endif
+
 #include <string>
 #include <vector>
 

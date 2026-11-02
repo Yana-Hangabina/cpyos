@@ -132,6 +132,9 @@ jobs:
       - name: Package and verify unified target
         run: |
           set -euo pipefail
+          # No-PSRAM targets (C3) stream the CJK face from spiffs. Generate the
+          # pack in the same job so the full install writes it automatically.
+          python3 scripts/build_system_font_pack.py
           python3 scripts/package_nightly_target.py "${{ matrix.targetId }}" \
             --channel "${{ needs.prepare.outputs.channel }}" \
             --output "dist/${{ matrix.targetId }}"

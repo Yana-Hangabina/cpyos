@@ -19,16 +19,16 @@ So the local work travels as `96de1be-local.patch`, applied with `./apply.sh`
 
 ## What is in the patch
 
-Two ports from the **rpr** project (read-pico-reader / kiikoread, Apache-2.0; local copy
-under `.scratch/rpr/`), both display-side and both default-off or behaviour-preserving
+Two ports from the **kiikoread** project (read-pico-reader / kiikoread, Apache-2.0; local copy
+under `.scratch/kiikoread/`), both display-side and both default-off or behaviour-preserving
 unless asked for — plus one unrelated storage fix (3):
 
 1. **TEXTTURN white-to-mid-gray early settle.** `e0470_textturn_soft_settle()`, called
-   once at the end of `e0470_waveform_init()`, applies rpr's algorithm to the `from=15`
+   once at the end of `e0470_waveform_init()`, applies kiikoread's algorithm to the `from=15`
    column of the TEXTTURN table (swap phases only, never drop one; at most two phases).
    Revert on a panel that looks worse: delete that one call.
 2. **Water-ripple page turn.** New `libs/display/EpdiyLcd/src/e0470_page_turn/` (engine
-   ported from rpr, **not** verbatim: two local changes, both about memory),
+   ported from kiikoread, **not** verbatim: two local changes, both about memory),
    `E0470_APPLY_WAVEFORM` in the e0470 waveform module,
    four purely additive hooks in epdiy (`epdiy.h`, `render.c`, `render_context.h`,
    `render_lcd.c` — with no phase pointer attached they are exactly the old behaviour),
@@ -36,8 +36,8 @@ unless asked for — plus one unrelated storage fix (3):
    `PanelDriver.h`. The reader-facing half (settings entry, `EpubReaderActivity`, i18n
    keys) lives in this repository proper and is committed normally.
 
-   The two local deviations from rpr, both because internal RAM is the scarce resource on
-   this board and rpr's tree does not share that constraint:
+   The two local deviations from kiikoread, both because internal RAM is the scarce resource on
+   this board and kiikoread's tree does not share that constraint:
 
    - **Internal hot window.** The 40 KiB phase table stays in PSRAM, and each tick copies
      only the band rows it will actually read into an 8 KiB internal window
@@ -51,7 +51,7 @@ unless asked for — plus one unrelated storage fix (3):
      because the only other release point, `epdiyLcdEnd`, runs on the deep-sleep path and
      leaving the reader never reaches it.
 
-rpr's own frozen note applies to both: equal drive counts do not guarantee equal optical
+kiikoread's own frozen note applies to both: equal drive counts do not guarantee equal optical
 gray, so each needs on-panel comparison, not just a host test.
 
 3. **SDMMC bounce buffer aligned to the data cache line.** `SdmmcBlockDevice` kept its one
@@ -100,16 +100,16 @@ gray, so each needs on-panel comparison, not just a host test.
    therefore takes PHYSICAL coords too; the reader computes them by scanning the raw framebuffer
    for the changed-pixel bounding box after repainting only the status strip.
 
-5. **End-of-push pixel-drive release (rpr rc95), rails kept.** `EpdiyLcdPowerHooks` gains an
+5. **End-of-push pixel-drive release (kiikoread rc95), rails kept.** `EpdiyLcdPowerHooks` gains an
    optional `releaseDrive` hook; `ReadPicoPower.cpp` implements it as clearing XOE on the
    FCI9555 (keeping the SY7636A HV rails and VCOM up), and `epdPowerOn()` now re-asserts XOE
    from its "rails already up" branch so the next push re-enables the drive. `EpdiyLcd`
    calls it at the end of every successful push (full frame, water-ripple, and the area
    update), so a still/unchanged frame is not left driven. The panel image is bistable, so
    dropping the drive is not visible; a null hook keeps the old behaviour (drive held from
-   power-on). This is the faithful port of rpr's "release pixel drive even after
+   power-on). This is the faithful port of kiikoread's "release pixel drive even after
    unchanged/failed output".
-   ★ **Needs an on-panel page-turn check** (rpr's frozen note applies): this is a board
+   ★ **Needs an on-panel page-turn check** (kiikoread's frozen note applies): this is a board
    power-sequence change and only a live scan can confirm the panel still drives. Revert =
    drop the `releaseDrive` hook from the config (or set it to nullptr).
 
@@ -186,11 +186,11 @@ gray, so each needs on-panel comparison, not just a host test.
    Verification: `test/host/transactions.cpp` carries the waveform stubs and the
    async-prefill expectation now matches the shipped 96-line cushion.
 
-8. **Idle HV-rail drop — rpr's `rails_idle_check`.** `EpdiyLcd` now arms an 8 s
+8. **Idle HV-rail drop — kiikoread's `rails_idle_check`.** `EpdiyLcd` now arms an 8 s
    deadline on every successful push/area/gray commit (`boardReleaseDrive` is the
    common tail) and `epdiyLcdIdleTick(nowMs)` drops the SY7636A/VCOM rails when it
    expires. The host calls it from `main.cpp` under the render lock; the next push
-   repowers the rails (20 ms settle + PGOOD) and raises XOE. This mirrors rpr's
+   repowers the rails (20 ms settle + PGOOD) and raises XOE. This mirrors kiikoread's
    `display.c` `RAILS_IDLE_TIMEOUT_MS = 8000` / `rails_keepalive()` /
    `rails_idle_check()` exactly; it is what makes the panel stop drawing its
    charge-pump current during long pauses and in clock standby. The image is
@@ -205,7 +205,7 @@ gray, so each needs on-panel comparison, not just a host test.
    press releases the FCA9555 INT# before the S3 is awake, so a level-only light
    sleep can miss it and need a long hold. `pmuTakeKeyWakeup()` drains the FIFO,
    acknowledges every event and reports key types (or a currently held key).
-   `HalPowerManager::lightSleepReadPico` now sleeps in 2 s slices (matching rpr's
+   `HalPowerManager::lightSleepReadPico` now sleeps in 2 s slices (matching kiikoread's
    `APP_LOCK_KEY_POLL_US`) and polls that function after each wake; a key event
    returns `PowerButton` before the 60 s clock tick. The caller passes the last
    event id seen before sleeping, so the press that opened standby cannot be
@@ -250,9 +250,18 @@ gray, so each needs on-panel comparison, not just a host test.
       Read Pico until the fixed build has a long area/partial soak; do not treat
       "partial-area scan" as intrinsically forbidden any more.
 
+11. **Band line-mask extraction (`output_common/line_mask.h`).** The per-pixel mapping in
+    `epd_populate_line_mask()` moved into a standalone header so the host can test it
+    without the LCD driver. Behaviour is unchanged; the only caller is still
+    `epd_populate_line_mask`. `src/line_mask/run_line_mask_test.sh` covers empty masks,
+    odd endpoints, all 15 non-zero nibbles, an independent random oracle and a deliberate
+    nibble-swap mutation. Two previously undocumented conventions are now pinned: a
+    `dirty_columns` byte covers two pixels with the low nibble first, and a mask byte
+    covers four pixels with the first pixel in the low two bits.
+
 ## Upgrading an older tree
 
-This patch grew from 20 to 29 files when items 6–10 landed; the idempotence marker
+This patch grew from 20 to 30 files when items 6–11 landed; the idempotence marker
 moved from `e0470_textturn_soft_settle` to `epd_draw_base_start` when item 6 landed. A working tree that still
 carries the earlier version cannot be patched in place: `apply.sh` detects that state and
 refuses. Restore the tree to `96de1be` first (re-checkout in a scratch clone, then
@@ -281,7 +290,7 @@ diff -ruN --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
 #   as a 30th patch file. diff's --exclude is case-sensitive even there.
 # strip the mtime that diff appends after a TAB on every --- / +++ line, and normalise
 # the header back to the plain --exclude=.git form, so regenerating produces a
-# content-only diff instead of touching all 29 headers:
+# content-only diff instead of touching all 30 headers:
 sed -E 's/^(---|\+\+\+) (sdk_pristine|sdk_work)\/([^[:space:]]+)[[:space:]].*$/\1 \2\/\3/' raw.patch \
   | sed -E 's|^diff -ruN --exclude=[^ ]+( --exclude=[^ ]+)* sdk_pristine/|diff -ruN --exclude=.git sdk_pristine/|' \
   > 96de1be-local.patch

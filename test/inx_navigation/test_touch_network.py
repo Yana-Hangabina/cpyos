@@ -91,6 +91,16 @@ int main(){
   OptionPopup q;q.ignoreInitialConfirmRelease=true;q.onSelectCallback=[&](int){++calls;};
   input={};input.released=int(MappedInputManager::Button::Confirm);q.handleInput(input,update);
   assert(q.active&&calls==1);q.handleInput(input,update);assert(!q.active&&calls==2);
+  // A fresh logical Confirm arrives pressed and released in the same pass (a
+  // home-button action or a short power press); it carries its own press edge,
+  // so the entry barrier must not swallow it and it has to select.
+  OptionPopup logical;int logicalCalls=0,logicalPicked=-1;
+  logical.ignoreInitialConfirmRelease=true;logical.selectedIndex=3;
+  logical.onSelectCallback=[&](int index){++logicalCalls;logicalPicked=index;};
+  input={};input.pressed=int(MappedInputManager::Button::Confirm);input.released=input.pressed;
+  logical.handleInput(input,update);
+  assert(!logical.ignoreInitialConfirmRelease);
+  assert(!logical.active&&logicalCalls==1&&logicalPicked==3);
   ++scenes;
  }
 }
@@ -228,17 +238,17 @@ struct MappedInput {
  Labels mapLabels(const char* a,const char* b,const char* c,const char* d)const{return {a,b,c,d};}
 };
 constexpr fui::ActionId ACTION_CANCEL=4,ACTION_RETURN=5,ACTION_SCAN=2,ACTION_ROW=1;
-enum class WifiSelectionState {SCANNING,AUTO_CONNECTING,CONNECTING,NETWORK_ERROR,CONNECTION_FAILED,SAVE_PROMPT,FORGET_PROMPT,NETWORK_LIST};
+enum class WifiSelectionState {SCANNING,AUTO_CONNECTING,CONNECTING,NETWORK_ERROR,CONNECTION_FAILED,SAVE_PROMPT,FORGET_PROMPT,NETWORK_LIST,CONNECTED};
 constexpr int STR_CANCEL=0,STR_BACK=1,STR_SHOW_NETWORKS=2,STR_RETRY=3,STR_ERROR_GENERAL_FAILURE=4,
  STR_NO_NETWORKS=5,STR_CONNECTION_FAILED=6,STR_FINDING_SAVED_WIFI=7,STR_SCANNING=8,
- STR_CONNECTING_SAVED_WIFI=9,STR_CONNECTING=10,STR_TO_PREFIX=11;
+ STR_CONNECTING_SAVED_WIFI=9,STR_CONNECTING=10,STR_TO_PREFIX=11,STR_CONNECTED=12;
 bool chinese=false;
 const char* tr(int id) {
  switch(id) {
  case STR_CANCEL:return "Cancel";case STR_BACK:return "Back";case STR_SHOW_NETWORKS:return "Show networks";
  case STR_TO_PREFIX:return chinese?"至 ":"to ";case STR_FINDING_SAVED_WIFI:return "Finding saved WiFi";
  case STR_SCANNING:return "Scanning";case STR_CONNECTING_SAVED_WIFI:return chinese?"Connecting to a saved wireless network with a translated status message":"Connecting saved WiFi";
- case STR_CONNECTING:return "Connecting";default:return "Error";
+ case STR_CONNECTING:return "Connecting";case STR_CONNECTED:return "Connected";default:return "Error";
  }
 }
 struct Target: fui::DrawTarget {
@@ -253,7 +263,7 @@ struct Target: fui::DrawTarget {
 };
 struct WifiSelectionActivity {
  WifiSelectionState state=WifiSelectionState::CONNECTING;bool autoConnecting=false;
- GfxRenderer renderer;MappedInput mappedInput;std::string selectedSSID,connectionError;
+ GfxRenderer renderer;MappedInput mappedInput;std::string selectedSSID,connectionError,connectedIP;
  std::vector<int> networks;std::vector<fui::ListItem> networkRowItems;
  size_t selectedNetworkIndex=0;fui::ListNav listNav;
  int subtitleHeight()const{return UITheme::getInstance().metrics.tabBarHeight;}

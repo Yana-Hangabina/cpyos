@@ -19,6 +19,7 @@
 #include "../../../../src/fontIds.h"
 #include "Epub.h"
 #include "Epub/Page.h"
+#include "Epub/PageBottomAlign.h"
 #include "Epub/VisibleTextUtils.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageDimsProbe.h"
@@ -297,7 +298,9 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   // block is flushed so the chapter starts on a fresh page.
   if (txtChapterBoundaries || std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+      // A page closed at a chapter boundary stays top-aligned: the next chapter
+      // starts a fresh page, so distributing this one would be a visible jump.
+      completeCurrentPage(false);
       if (hasFailed()) return;
       completedPageCount++;
       if (!allocatePage()) return;
@@ -320,6 +323,9 @@ bool ChapterHtmlSlimParser::allocatePage() {
   }
   currentPage = std::move(page);
   currentPageNextY = 0;
+  currentPageContentBottom = 0;
+  currentLineHeight = 0;
+  currentPageHasGridTable = false;
   currentPageVisibleOffsetSet = false;
   return true;
 }
@@ -483,7 +489,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
   if (!currentPage->elements.empty() && currentPageNextY + totalHeight > viewportHeight) {
     setCurrentPageVisibleOffset(visibleTextOffset);
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completeCurrentPage(true);
     if (hasFailed()) return;
     completedPageCount++;
     if (!allocatePage()) return;
@@ -685,7 +691,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
     if (!currentPage || pageFull) {
       if (pageFull) {
         setCurrentPageVisibleOffset(lineVisibleOffset);
-        completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+        completeCurrentPage(true);
         if (hasFailed()) return;
         completedPageCount++;
       }
@@ -699,6 +705,9 @@ void ChapterHtmlSlimParser::finishTableRow() {
     }
 
     const int16_t rowY = currentPageNextY;
+    // Mark before any cell line is pushed: rows reset the cursor per column, so
+    // this page's cursor no longer describes a single text column.
+    currentPageHasGridTable = true;
     const size_t requiredCapacity = currentPage->elements.size() + columnCount;
     if (currentPage->elements.capacity() < requiredCapacity) {
       const size_t linesThatFit =
@@ -838,6 +847,29 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (!cssStyle.hasDirection() && self->effectiveDirectionDefined) {
     cssStyle.direction = self->effectiveDirection;
     cssStyle.defined.direction = 1;
+  }
+
+  // Resolve explicit `font-weight: inherit` / `font-style: inherit` after the cascade and
+  // before this element (or its table-cell path below) changes the active style. The parent's
+  // emphasis is whatever is already in effect here: the block style, the inline stack, or a
+  // still-open <b>/<i>/<strong>/<em> tracked by the depth watermarks.
+  switch (cssStyle.fontWeight) {
+    case CssFontWeight::Normal:
+    case CssFontWeight::Bold:
+      break;
+    case CssFontWeight::Inherit:
+      cssStyle.fontWeight =
+          (self->effectiveBold || self->boldUntilDepth < self->depth) ? CssFontWeight::Bold : CssFontWeight::Normal;
+      break;
+  }
+  switch (cssStyle.fontStyle) {
+    case CssFontStyle::Normal:
+    case CssFontStyle::Italic:
+      break;
+    case CssFontStyle::Inherit:
+      cssStyle.fontStyle =
+          (self->effectiveItalic || self->italicUntilDepth < self->depth) ? CssFontStyle::Italic : CssFontStyle::Normal;
+      break;
   }
 
   // Skip elements with display:none before all fast paths (tables, links, etc.).
@@ -1042,7 +1074,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           const bool recognised = sniffedExtension != nullptr || ImageDecoderFactory::isFormatSupported(resolvedPath);
 
           if (!recognised) {
-            LOG_ERR("EHP", "Unsupported image entry (neither JPEG/PNG content nor a known extension): %s",
+            LOG_ERR("EHP", "Unsupported image entry (neither JPEG/PNG/GIF content nor a known extension): %s",
                     resolvedPath.c_str());
           } else {
             // Create a unique filename for the cached image. Prefer the sniffed
@@ -1210,8 +1242,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (self->currentPage && !self->currentPage->elements.empty() &&
                     (self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
                      self->viewportHeight)) {
-                  self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
-                                       self->xpathListItemIndex, self->currentPageVisibleOffset);
+                  self->completeCurrentPage(true);
                   if (self->hasFailed()) return;
                   self->completedPageCount++;
                   if (!self->allocatePage()) return;
@@ -1423,6 +1454,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   if (matches(name, HEADER_TAGS, std::size(HEADER_TAGS))) {
+    // Text running straight into a block ("text<h3>...") is still in the part-word
+    // buffer; flush it into the block it belongs to before that block is replaced.
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+      if (self->hasFailed()) return;
+    }
     self->currentCssStyle = cssStyle;
     auto headerBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Center, self->viewportWidth);
     headerBlockStyle.textAlignDefined = true;
@@ -1463,6 +1500,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
       if (self->hasFailed()) return;
     } else {
+      // Flush pending text before the new block, as the header and <br/> branches do;
+      // otherwise inline text immediately before <p>/<div> is attached to the new block.
+      if (self->partWordBufferIndex > 0) {
+        self->flushPartWordBuffer();
+        if (self->hasFailed()) return;
+      }
       self->currentCssStyle = cssStyle;
       const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
                                                                                   BlockStyle::CombineAxis::Horizontal);
@@ -2320,7 +2363,7 @@ bool ChapterHtmlSlimParser::finishParse() {
       pendingAnchorId.clear();
     }
     setCurrentPageVisibleOffset(visibleTextOffset);
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completeCurrentPage(false);  // the chapter's final page stays top-aligned
     if (hasFailed()) return false;
     completedPageCount++;
     currentPage.reset();
@@ -2358,7 +2401,7 @@ bool ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   if (currentPageNextY + lineHeight > viewportHeight) {
     setCurrentPageVisibleOffset(visibleOffset);
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completeCurrentPage(true);  // a filled page is never the chapter's final page
     if (hasFailed()) return false;
     completedPageCount++;
     if (!allocatePage()) return false;
@@ -2379,10 +2422,15 @@ bool ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   const int rubyShift = line->getRubyShift(renderer.getFontAscenderSize(fontId));
   const int baseLineHeight = renderer.getLineHeight(fontId, lineCompression);
   for (const auto& link : line->takeLinkSpans()) {
+    const size_t linkIndex = currentPage->links.size();
     if (!currentPage->addLink(link.href, static_cast<int16_t>(xOffset + link.x),
                               static_cast<int16_t>(currentPageNextY + rubyShift - link.topLift), link.width,
                               static_cast<int16_t>(baseLineHeight + link.topLift))) {
       LOG_DBG("EHP", "Dropped page link: %.48s", link.href);
+    } else if (verticalBottomAlign && linkIndex < currentPageLinkLines.size()) {
+      // Remember which element (this line) the link belongs to so bottom-align
+      // can move it by the same delta. Only tracked when the feature is on.
+      currentPageLinkLines[linkIndex] = static_cast<uint16_t>(currentPage->elements.size());
     }
   }
   auto pageLine = makeUniqueNoThrow<PageLine>(std::move(line), xOffset, currentPageNextY);
@@ -2392,8 +2440,45 @@ bool ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
     return false;
   }
   currentPage->elements.push_back(std::move(pageLine));
+  currentLineHeight = static_cast<int16_t>(lineHeight);
   currentPageNextY += lineHeight;
+  currentPageContentBottom = currentPageNextY;
   return true;
+}
+
+void ChapterHtmlSlimParser::completeCurrentPage(const bool doBottomAlign) {
+  if (doBottomAlign) applyVerticalBottomAlign(currentPage.get());
+  completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+}
+
+void ChapterHtmlSlimParser::applyVerticalBottomAlign(Page* page) {
+  if (!verticalBottomAlign || !page || currentPageHasGridTable || page->elements.empty()) return;
+  // Only pages made entirely of text lines are redistributed; a page carrying
+  // an image or a horizontal rule keeps its fixed layout.
+  int lineCount = 0;
+  for (const auto& el : page->elements) {
+    if (el->getTag() != TAG_PageLine) return;
+    ++lineCount;
+  }
+  // currentPageContentBottom is the exact cursor after the last line push, so a
+  // trailing paragraph gap is not mistaken for space already consumed.
+  const auto plan = pageBottomAlign::plan(viewportHeight, currentPageContentBottom, lineCount, currentLineHeight);
+  if (!plan.distribute) return;
+
+  // Line i shifts down by i*gap (+1 px for the first `remainder` lines), and its
+  // links move with it. Link indices follow line insertion order, including
+  // raised and ruby links.
+  int lineIndex = 0;
+  size_t linkIndex = 0;
+  for (auto& el : page->elements) {
+    const int shift = pageBottomAlign::shiftFor(plan, lineIndex);
+    if (shift != 0) el->yPos = static_cast<int16_t>(el->yPos + shift);
+    while (linkIndex < page->links.size() && currentPageLinkLines[linkIndex] == lineIndex) {
+      if (shift != 0) page->links[linkIndex].y = static_cast<int16_t>(page->links[linkIndex].y + shift);
+      ++linkIndex;
+    }
+    ++lineIndex;
+  }
 }
 
 void ChapterHtmlSlimParser::makePages() {

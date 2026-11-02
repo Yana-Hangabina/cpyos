@@ -246,7 +246,45 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
 
   client.setInsecure();
   client.setTimeout(static_cast<unsigned long>(options.timeoutMs));
-  if (!reused && !client.connect(host, HTTPS_PORT)) {
+  // Diagnostic split without touching the vendored SDK: SecureClient polls its
+  // abort callback immediately before the TCP connect, immediately after it,
+  // then once per TLS handshake round trip (documented on
+  // SecureClient::setAbortCallback). The first two calls therefore bracket
+  // DNS+TCP, and connect() returning marks the end of TLS. A TLS-1.2 fallback
+  // attempt reuses the callback, so a retry (which SecureClient logs itself)
+  // makes the split approximate; normal handshakes take the first path.
+  struct ConnectTiming {
+    uint32_t startMs = 0;
+    uint32_t afterTcpMs = 0;
+    uint32_t calls = 0;
+  } connectTiming;
+  if (!reused) {
+    client.setAbortCallback([&connectTiming]() {
+      const uint32_t now = millis();
+      if (connectTiming.calls == 0) {
+        connectTiming.startMs = now;
+      } else if (connectTiming.calls == 1) {
+        connectTiming.afterTcpMs = now;
+      }
+      ++connectTiming.calls;
+      return false;
+    });
+  }
+  const bool connected = reused || client.connect(host, HTTPS_PORT);
+  if (!reused) {
+    client.setAbortCallback(nullptr);
+    const uint32_t now = millis();
+    if (connectTiming.calls >= 2) {
+      LOG_INF("WR", "TLS connect split: dns+tcp=%lu ms tls=%lu ms total=%lu ms host=%s",
+              static_cast<unsigned long>(connectTiming.afterTcpMs - connectTiming.startMs),
+              static_cast<unsigned long>(now - connectTiming.afterTcpMs),
+              static_cast<unsigned long>(now - connectTiming.startMs), host);
+    } else {
+      LOG_INF("WR", "TLS connect split: no TCP checkpoint after %lu ms host=%s",
+              static_cast<unsigned long>(now - connectTiming.startMs), host);
+    }
+  }
+  if (!connected) {
     LOG_ERR("HTTP", "wolfSSL request connect failed");
     cleanupClient(client);
     return WeReadHttpClient::Result::NetworkError;

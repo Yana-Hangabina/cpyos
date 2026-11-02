@@ -72,6 +72,23 @@ static_assert(storedBoolFlag(255) == 1);
 // allocation per obfuscated setting on every save and load.
 constexpr size_t OBF_KEY_BUF = 64;
 
+// Load one fixed-size tap-zone array. Unknown / out-of-range entries fall back
+// to the struct default for that slot, and a short array pads from it. Returns
+// false when the key is absent (the caller then keeps every default).
+template <size_t N>
+bool loadTapZoneArray(JsonVariantConst doc, const char* key, uint8_t (&out)[N], const uint8_t (&fallback)[N],
+                      const uint8_t count) {
+  const JsonArrayConst arr = doc[key];
+  if (arr.isNull()) return false;
+  for (size_t i = 0; i < N; ++i) out[i] = fallback[i];
+  const size_t stored = arr.size();
+  for (size_t i = 0; i < N && i < stored; ++i) {
+    const uint8_t value = arr[i] | fallback[i];
+    out[i] = value < count ? value : fallback[i];
+  }
+  return true;
+}
+
 // Null-terminated copy into a fixed-size settings field.
 void copyToField(char* dest, const char* src, const size_t maxLen) {
   strncpy(dest, src, maxLen - 1);
@@ -198,6 +215,27 @@ void CrossPointSettings::validateFrontButtonMapping(CrossPointSettings& settings
   }
 }
 
+static uint8_t deepStyleFromLegacySleepScreen(const uint8_t legacy) {
+  using CS = CrossPointSettings;
+  switch (legacy) {
+    case CS::CUSTOM:
+      return CS::DEEP_SLEEP_CUSTOM_IMAGE;
+    case CS::COVER:
+    case CS::COVER_CUSTOM:
+      return CS::DEEP_SLEEP_COVER;
+    case CS::BLANK:
+      return CS::DEEP_SLEEP_BLANK;
+    case CS::QUICK_RESUME:
+      return CS::DEEP_SLEEP_QUICK_RESUME;
+    case CS::TRANSPARENT:
+      return CS::DEEP_SLEEP_TRANSPARENT;
+    case CS::DARK:
+    case CS::LIGHT:
+    default:
+      return CS::DEEP_SLEEP_NIGHT;
+  }
+}
+
 uint8_t CrossPointSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue) {
   switch (legacyValue) {
     case SLEEP_1_MIN:
@@ -247,6 +285,11 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   if (verticalText != 0) {
     doc["verticalText"] = verticalText;
   }
+  // Reader text panel toggle (TextSettingsActivity Layout tab), not a
+  // SettingsList entry, so it is persisted here like verticalText.
+  if (verticalBottomAlign != 0) {
+    doc["verticalBottomAlign"] = verticalBottomAlign;
+  }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["readerGestureHintSeen"] = readerGestureHintSeen;
   doc["frontButtonBack"] = frontButtonBack;
@@ -266,6 +309,18 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["hiddenAppsMask"] = hiddenAppsMask;
   doc["appsCatalogVersion"] = appsCatalogVersion;
   doc["buddyClaimed"] = buddyClaimed;
+  // Reader tap zones. The arrays are not SettingsList entries (they are edited
+  // by TapZoneSettingsActivity), so persist them here. tapZoneVersion marks the
+  // layout schema; a stored LEGACY mode keeps the grid dormant.
+  doc["tapZoneVersion"] = TAP_ZONE_SETTINGS_VERSION;
+  doc["tapZoneMode"] = tapZoneMode;
+  doc["tapZonesCustomized"] = tapZonesCustomized;
+  JsonArray tapZonesArray = doc["tapZones"].to<JsonArray>();
+  for (const uint8_t zone : tapZones) tapZonesArray.add(zone);
+  JsonArray tapZonesLongArray = doc["tapZonesLong"].to<JsonArray>();
+  for (const uint8_t action : tapZonesLong) tapZonesLongArray.add(action);
+  JsonArray miniZonesArray = doc["miniZones"].to<JsonArray>();
+  for (const uint8_t action : miniZones) miniZonesArray.add(action);
   // Font family and size — both use dynamic getter/setters in SettingsList (the
   // option lists depend on the SD font registry), so the generic loop skips them.
   doc["fontFamily"] = fontFamily;
@@ -311,6 +366,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Fine first-line-indent adjustment (paired with firstLineIndent above).
   firstLineIndentPx = static_cast<int8_t>(std::clamp(doc["firstLineIndentPx"] | 0, -12, 12));
   verticalText = static_cast<uint8_t>(std::clamp(doc["verticalText"] | 0, 0, 1));
+  verticalBottomAlign = static_cast<uint8_t>(std::clamp(doc["verticalBottomAlign"] | 0, 0, 1));
 
   auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
 
@@ -473,6 +529,24 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  // Sleep model migration (2026-11): the old sleepScreen enum mixed content
+  // and polarity. DARK/LIGHT both become the night scene; polarity now comes
+  // from screenInverted (dark mode). COVER_CUSTOM falls back to COVER. The old
+  // key is never written again, but it stays readable for one upgrade.
+  if (doc["deepSleepStyle"].isNull() && !doc["sleepScreen"].isNull()) {
+    const uint8_t legacy = doc["sleepScreen"] | static_cast<uint8_t>(LIGHT);
+    deepSleepStyle = deepStyleFromLegacySleepScreen(legacy);
+    needsResave = true;
+  }
+  // Existing Read Pico saves predate the standby overlay. Treat the old
+  // "Ignore" default as the new standby default; an explicit user choice of
+  // Ignore can be restored in Settings afterwards.
+  if (doc["standbyStyle"].isNull() && FREEINK_DEVICE_READPICO &&
+      shortPwrBtn == static_cast<uint8_t>(SHORT_PWRBTN::IGNORE)) {
+    shortPwrBtn = static_cast<uint8_t>(SHORT_PWRBTN::STANDBY);
+    needsResave = true;
+  }
+
   if ((doc["fakeBoldVersion"] | static_cast<uint8_t>(0)) < FAKE_BOLD_VERSION) {
     if (doc["fakeBold"].is<uint8_t>()) {
       const uint8_t legacyFakeBold = doc["fakeBold"].as<uint8_t>();
@@ -501,6 +575,34 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
       previousPageGesture = pageTurnGesture;
       needsResave = true;
     }
+  }
+
+  // Reader tap zones. Saves written before this feature carry none of the keys:
+  // keep LEGACY mode with the stock grid, so their reading surface is
+  // byte-for-byte the old outer-thirds behaviour. A stored grid is validated
+  // slot by slot (unknown values fall back to that slot's default). A save that
+  // explicitly asks for CUSTOM without a grid is seeded from its gestures.
+  const bool hasStoredTapZoneMode = !doc["tapZoneMode"].isNull();
+  tapZoneMode = clamp(doc["tapZoneMode"] | static_cast<uint8_t>(TAP_ZONE_MODE_LEGACY), TAP_ZONE_MODE_COUNT,
+                      static_cast<uint8_t>(TAP_ZONE_MODE_LEGACY));
+  tapZonesCustomized = storedBoolFlag(doc["tapZonesCustomized"] | static_cast<uint8_t>(0));
+  const bool hasTapZones = loadTapZoneArray(doc, "tapZones", tapZones, tapzones::kDefaultZones, tapzones::ACTION_COUNT);
+  loadTapZoneArray(doc, "tapZonesLong", tapZonesLong, tapzones::kDefaultLongZones, tapzones::LONG_ACTION_COUNT);
+  loadTapZoneArray(doc, "miniZones", miniZones, tapzones::kDefaultMiniZones, tapzones::ACTION_COUNT);
+  // Saves written before tapZoneMode existed never recorded the selected mode.
+  // A customized grid is the only evidence that the user chose CUSTOM, so
+  // restore it instead of silently reverting to the legacy thirds at boot.
+  if (!hasStoredTapZoneMode && tapZonesCustomized && hasTapZones && tapZoneMode == TAP_ZONE_MODE_LEGACY) {
+    tapZoneMode = TAP_ZONE_MODE_CUSTOM;
+    needsResave = true;
+  }
+  if (!hasTapZones && tapZoneMode == TAP_ZONE_MODE_CUSTOM) {
+    const auto allowsTap = [](const uint8_t gesture) {
+      return gesture == TAP_AND_SWIPE || gesture == TAP_ONLY || gesture == INVERTED_TAP;
+    };
+    tapzones::seedZones(tapZones, allowsTap(previousPageGesture), allowsTap(pageTurnGesture),
+                        showReaderMenu == READER_MENU_TAP);
+    needsResave = true;
   }
 
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
@@ -729,6 +831,7 @@ bool CrossPointSettings::loadFromBinaryFile() {
   };
 
   sleepScreen = validated(0, sleepScreen, SLEEP_SCREEN_MODE_COUNT);
+  deepSleepStyle = deepStyleFromLegacySleepScreen(sleepScreen);
   extraParagraphSpacing = value(1, extraParagraphSpacing);
   shortPwrBtn = validated(2, shortPwrBtn, SHORT_PWRBTN_COUNT);
   statusBar = validated(3, statusBar, STATUS_BAR_MODE_COUNT);
@@ -811,6 +914,12 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.characterSpacing = getCharacterSpacing();
   spec.wordSpacingPercent = wordSpacing;
   spec.paragraphAlignment = paragraphAlignment;
+  // Vertical layout has no "bottom" to align to: the parser lays columns out in
+  // a rotated frame and PageLine::yPos is the position along the writing
+  // direction, so shifting it would slide whole columns. Ignore the toggle there
+  // (the Layout tab hides the row in vertical mode) rather than touching the
+  // vertical render path.
+  spec.verticalBottomAlign = verticalBottomAlign != 0 && verticalText == 0;
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
   spec.hyphenationEnabled = hyphenationEnabled != 0;
@@ -944,7 +1053,17 @@ int CrossPointSettings::getReaderFontId() const {
   // in the page render loop) so rendering is correct even before it has run.
   const uint8_t pt =
       snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+#if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // The bitmap profile has one built-in reader size; the pack registers every
+  // size, so the size setting must keep working there.
   if (UiHighDpiProfile::enabled) return UiHighDpiProfile::reader12FontId;
+#endif
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // The pack registers one face per point size under this id, including the
+  // sizes above 18pt that the old bitmap profile never exposed. The family
+  // setting only chooses an SD face; the pack's single family is used here.
+  return CJK_READER_SIZE_FONT_ID(pt);
+#else
   const bool sans = (fontFamily == NOTOSANS);
   switch (pt) {
     case 12:
@@ -957,4 +1076,5 @@ int CrossPointSettings::getReaderFontId() const {
     default:
       return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
   }
+#endif
 }
