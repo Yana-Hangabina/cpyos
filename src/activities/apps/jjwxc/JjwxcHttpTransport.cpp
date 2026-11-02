@@ -10,7 +10,6 @@
 namespace {
 
 constexpr const char* kTag = "JJWXC";
-constexpr int kTimeoutMs = 45000;
 // Eight: the three fixed API headers, or the WAP set (User-Agent, Accept,
 // Accept-Language, Cookie, Referer, Content-Type). Sized above what either path
 // sends today, because the loop below drops what does not fit -- and a silently
@@ -129,7 +128,7 @@ int JjwxcHttpTransport::request(const char* method, const char* url, const jjwxc
   options.bodySize = body ? bodyLen : 0;
   options.headers = mapped;
   options.headerCount = mappedCount;
-  options.timeoutMs = kTimeoutMs;
+  options.timeoutMs = requestTimeoutMs_;
   options.readBuffer = ioBuffer_;
   options.readBufferSize = sizeof(ioBuffer_);
 
@@ -197,7 +196,7 @@ int JjwxcHttpTransport::request(const char* method, const char* url, const jjwxc
   int status = 0;
   auto result = WeReadHttpClient::request(session, url, options, onData, onHdr, status);
 
-  if (retryable && result == WeReadHttpClient::Result::NetworkError && delivered == 0 &&
+  if (retryable && allowReconnect_ && result == WeReadHttpClient::Result::NetworkError && delivered == 0 &&
       session.reusedRequests() != reusedBefore) {
     LOG_INF(kTag, "stale keep-alive session; reconnecting once for %.70s", url);
     session.reset();

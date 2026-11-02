@@ -106,6 +106,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   SheetGeom sheetGeom() const;
   bool isSheetState() const;
   void renderSheet();
+  void renderSheetProgressLike(const SheetGeom& g, bool acknowledged) const;
   void handleSheetInput();
   void cancelSheet();
   void enterConnectedState();
@@ -123,7 +124,6 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   unsigned long connectedAtMs_ = 0;
   // onComplete() must be idempotent: the CONNECTED hold and a Confirm can race.
   bool completed_ = false;
-  bool connectedHalfTicked_ = false;
   int lastWifiStatus_ = 0;
 
   // Whether network was connected using a saved password (skip save prompt)
@@ -132,6 +132,9 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   // Whether to attempt auto-connect on entry
   const bool allowAutoConnect;
   const bool keepRadioOnExit_;
+  // Which footer the connecting frame showed; the acknowledgement frame reuses
+  // it so the only changed pixels are the badge and the two status lines.
+  bool ackAutoConnecting_ = false;
 
   // Whether we are attempting to auto-connect or auto-scan saved networks.
   bool autoConnecting = false;
@@ -173,7 +176,6 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void renderNetworkList(const Rect* screen, const ThemeMetrics* metrics);
   void renderPasswordEntry(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderConnecting(const Rect* screen, const ThemeMetrics* metrics) const;
-  void renderConnected(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const;
 
   void showNetworkError();
@@ -207,4 +209,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
+  // The connected acknowledgement only changes the badge and two status lines,
+  // so push a band instead of repainting (and re-driving) the whole sheet.
+  bool wantsBandUpdates() const override { return true; }
 };

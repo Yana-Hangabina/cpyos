@@ -19,10 +19,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <netdb.h>
 #include <new>
 #include <strings.h>
 #include <type_traits>
 
+#include "BackgroundWork.h"
 #include "CrossPointState.h"
 #include "NetworkStartup.h"
 #include "SilentRestart.h"
@@ -36,6 +38,7 @@
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 
+#include "JjwxcCommentFetcher.h"
 #include "JjwxcEpub.h"
 #include "JjwxcUpdates.h"
 #include "JjwxcPayKey.h"
@@ -81,17 +84,7 @@ constexpr int kDetailBandGap = 10;
 
 void drawDetailIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
                     const int size) {
-  const int rowBytes = (icon.w + 7) / 8;
-  for (int row = 0; row < size; ++row) {
-    const int sourceY = row * icon.h / size;
-    const uint8_t* sourceRow = icon.bits + sourceY * rowBytes;
-    for (int column = 0; column < size; ++column) {
-      const int sourceX = column * icon.w / size;
-      if (((sourceRow[sourceX / 8] >> (7 - (sourceX & 7))) & 1U) == 0) {
-        renderer.drawPixel(x + column, y + row, true);
-      }
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
 }
 // CPY frame 12: the double rule between the pill band and the blurb, with its
 // gaps (5px rule block + air on both sides).
@@ -294,6 +287,10 @@ struct ChapterListCtx {
 struct ChapterSinkCtx {
   JjwxcEpub::ChapterWriter* writer;
   bool failed = false;
+  // Localised "作者有话说" heading, resolved once at the call site (tr() strings live
+  // for the life of the translation table, so the pointer can be held).
+  const char* noteHeading = nullptr;
+  bool sayStarted = false;
 };
 
 struct CoverSinkCtx {
@@ -503,7 +500,14 @@ bool collectBuffer(void* ctx, const uint8_t* data, size_t len) {
 // unreachable anyway.
 void jobTrampoline(void* param) {
   auto* self = static_cast<JjwxcActivity*>(param);
-  self->runJobBody();
+  // Whole-book downloads and the comment queue both run here. The standby
+  // overlay must not suspend or power off while this guard is alive. Scope it
+  // to the body: the final vTaskSuspend(nullptr) never returns until the job is
+  // reaped, and an armed guard left around it would block light sleep forever.
+  {
+    background_work::Guard backgroundGuard;
+    self->runJobBody();
+  }
   self->signalJobDone();
   vTaskSuspend(nullptr);
 }
@@ -528,7 +532,8 @@ void JjwxcActivity::requestDeepLink(const char* novelId, const DeepLinkAction ac
   pendingDeepLinkChapterId_ = 0;
   pendingDeepLinkOpenChapter_ = false;
   pendingDeepLinkQuery_[0] = '\0';
-  const bool needsBook = action != DeepLinkAction::RefreshUpdates && action != DeepLinkAction::Search;
+  const bool needsBook = action != DeepLinkAction::RefreshUpdates && action != DeepLinkAction::Search &&
+                         action != DeepLinkAction::OpenCacheQueue;
   if (action == DeepLinkAction::None) return;
   if (needsBook && (novelId == nullptr || novelId[0] == '\0')) return;
   pendingDeepLinkAction_ = action;
@@ -656,6 +661,9 @@ bool JjwxcActivity::haveSession() const {
 
 void JjwxcActivity::onEnter() {
   Activity::onEnter();
+  // A long-press sleep may have set the foreground-job stop flag; a fresh entry
+  // means no foreground job owns the radio.
+  jjwxc_cache_service::setForegroundJob(false);
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   // Reclaims the SD font and the renderer font cache when PSRAM/internal
   // headroom is low, before the Wi-Fi driver starts allocating. This board needs
@@ -727,6 +735,7 @@ void JjwxcActivity::onEnter() {
   deviceCodeSent_ = false;
 
   vipChainProven_ = false;
+  vipNoteProven_ = false;
   busyScreen_ = false;
   sleepHoldoffUntil_ = 0;
   lastProgressBucket_ = 0;
@@ -805,6 +814,35 @@ void JjwxcActivity::onEnter() {
     runUpdateCheck();
     return;
   }
+  if (requested == DeepLinkAction::OpenCacheQueue) {
+    if (!JjwxcStore::isDisclaimerAccepted()) {
+      enter(State::Menu);
+      return;
+    }
+    enterCacheQueue();
+    return;
+  }
+  if (requested == DeepLinkAction::EnqueueComments) {
+    if (!JjwxcStore::isDisclaimerAccepted() || requestedNovel[0] == '\0') {
+      enter(State::Menu);
+      return;
+    }
+    JjwxcStore::TocSummary summary;
+    uint32_t highest = 0;
+    if (!JjwxcStore::readTocSummary(requestedNovel, summary, highest) || summary.count == 0) {
+      showMessage(tr(STR_JJWXC_NO_CATALOGUE), State::Menu);
+      return;
+    }
+    JjwxcStore::NovelRecord rec;
+    const char* bookTitle = requestedNovel;
+    if (JjwxcStore::loadNovel(requestedNovel, rec)) {
+      if (rec.title[0]) bookTitle = rec.title;
+    }
+    novelId_ = requestedNovel;
+    enqueueCommentQueue(requestedNovel, bookTitle, 0, summary.count - 1);
+    enterCacheQueue();
+    return;
+  }
   if (requested != DeepLinkAction::None && requestedNovel[0] != '\0' && JjwxcStore::isDisclaimerAccepted()) {
     deepLinkAction_ = requested;
     // The detail page is a destination, not a maintenance job: it stays open
@@ -849,6 +887,7 @@ void JjwxcActivity::onExit() {
   // the popup must not outlive the screen that owns it.
   optionPopup_.dismiss();
   stopJob();
+  jjwxc_cache_service::setForegroundJob(false);
   // Rule #5, and the bitmap points at this file: both go before the activity does.
   releaseCover();
   transport_.resetSession();
@@ -881,6 +920,14 @@ void JjwxcActivity::onExit() {
 bool JjwxcActivity::preventAutoSleep() {
   if (jobRunning_) return true;
   return sleepHoldoffUntil_ != 0 && static_cast<int32_t>(millis() - sleepHoldoffUntil_) < 0;
+}
+
+void JjwxcActivity::prepareForSleep() {
+  // Explicit deep sleep (long press): let the background cache persist at its
+  // next checkpoint instead of being cut off mid-write. The flag is in RAM only,
+  // so a reboot starts with a clean slate.
+  jjwxc_cache_service::setForegroundJob(true);
+  if (jobRunning_) jobCancel_.store(true);
 }
 
 void JjwxcActivity::enter(State next) {
@@ -1068,6 +1115,7 @@ const char* JjwxcActivity::stateLabel(const uint8_t rawState) {
 // ---------------------------------------------------------------------------
 
 void JjwxcActivity::rebuildRows() {
+  loadCacheQueue();
   rows_.clear();
   rowIds_.clear();
   // The detail block reserves room for the action rows, so a change in how many
@@ -1096,6 +1144,13 @@ void JjwxcActivity::rebuildRows() {
       }
       rows_.push_back({tr(STR_JJWXC_LIBRARY), tr(STR_JJWXC_LIBRARY_HINT)});
       rowIds_.push_back("library");
+      {
+        char countLine[48];
+        snprintf(countLine, sizeof(countLine), tr(STR_JJWXC_CACHE_COUNT_FMT),
+                 static_cast<unsigned>(cacheQueueCount_));
+        rows_.push_back({tr(STR_JJWXC_CACHE_QUEUE), countLine});
+        rowIds_.push_back("cachequeue");
+      }
       // WAP hands back no nickName in a JSON field; there is a `nickname` cookie, but
       // it is percent-encoded UTF-8 and decoding it is not worth a branch here. The
       // generic label is honest about what we know.
@@ -1104,6 +1159,81 @@ void JjwxcActivity::rebuildRows() {
                                      : tr(STR_JJWXC_NOT_LOGGED_IN)});
       rowIds_.push_back("account");
       break;
+    case State::CacheQueue: {
+      if (cacheQueueCount_ == 0) {
+        // Nothing to start, pause or clear: an "already done" toggle row would
+        // only offer a tap that does nothing.
+        rows_.push_back({tr(STR_JJWXC_CACHE_EMPTY), ""});
+        rowIds_.push_back("");
+        break;
+      }
+      bool anyWork = false;
+      bool anyDone = false;
+      for (size_t i = 0; i < cacheQueueCount_; ++i) {
+        if (static_cast<JjwxcCacheQueue::State>(cacheQueue_[i].state) == JjwxcCacheQueue::State::Done) {
+          anyDone = true;
+        } else {
+          anyWork = true;
+        }
+      }
+      const char* top = queueStatus_.workerActive ? tr(STR_JJWXC_CACHE_PAUSE)
+                        : anyWork                  ? tr(STR_JJWXC_CACHE_RESUME)
+                                                   : tr(STR_JJWXC_CACHE_DONE);
+      char countLine[48];
+      snprintf(countLine, sizeof(countLine), tr(STR_JJWXC_CACHE_COUNT_FMT),
+               static_cast<unsigned>(cacheQueueCount_));
+      rows_.push_back({top, countLine});
+      rowIds_.push_back("__toggle");
+      const auto stateText = [](const uint8_t raw) -> const char* {
+        switch (static_cast<JjwxcCacheQueue::State>(raw)) {
+          case JjwxcCacheQueue::State::Running: return tr(STR_JJWXC_CACHE_RUNNING);
+          case JjwxcCacheQueue::State::Paused: return tr(STR_JJWXC_CACHE_PAUSED);
+          case JjwxcCacheQueue::State::NeedsWifi: return tr(STR_JJWXC_CACHE_NEEDS_WIFI);
+          case JjwxcCacheQueue::State::NeedsLogin: return tr(STR_JJWXC_CACHE_NEEDS_LOGIN);
+          case JjwxcCacheQueue::State::Done: return tr(STR_JJWXC_CACHE_DONE);
+          case JjwxcCacheQueue::State::Error: return tr(STR_JJWXC_ERR_SERVER);
+          default: return tr(STR_JJWXC_CACHE_WAITING);
+        }
+      };
+      for (size_t i = 0; i < cacheQueueCount_; ++i) {
+        const JjwxcCacheQueue::Item& item = cacheQueue_[i];
+        uint32_t dc = item.doneChapters;
+        uint32_t tc = item.totalChapters;
+        uint32_t dp = item.doneParagraphs;
+        uint32_t tp = item.totalParagraphs;
+        uint8_t state = item.state;
+        if (queueStatus_.workerActive && i == queueStatus_.itemIndex) {
+          dc = queueStatus_.doneChapters;
+          tc = queueStatus_.totalChapters;
+          dp = queueStatus_.doneParagraphs;
+          tp = queueStatus_.totalParagraphs;
+          state = static_cast<uint8_t>(JjwxcCacheQueue::State::Running);
+        } else if (queueStatus_.userPaused && state != static_cast<uint8_t>(JjwxcCacheQueue::State::Done)) {
+          state = static_cast<uint8_t>(JjwxcCacheQueue::State::Paused);
+        }
+        char progress[96];
+        if (tp > 0) {
+          snprintf(progress, sizeof(progress), tr(STR_JJWXC_CACHE_PROGRESS_FMT), static_cast<unsigned long>(dp),
+                   static_cast<unsigned long>(tp), static_cast<unsigned long>(dc),
+                   static_cast<unsigned long>(tc));
+        } else {
+          snprintf(progress, sizeof(progress), tr(STR_JJWXC_CACHE_PROGRESS_UNKNOWN_FMT),
+                   static_cast<unsigned long>(dc), static_cast<unsigned long>(tc),
+                   static_cast<unsigned long>(dp));
+        }
+        char sub2[192];
+        snprintf(sub2, sizeof(sub2), "%s · %s", progress, stateText(state));
+        rows_.push_back({item.title[0] ? item.title : item.novelId, sub2});
+        char rowId[16];
+        snprintf(rowId, sizeof(rowId), "item:%u", static_cast<unsigned>(i));
+        rowIds_.push_back(rowId);
+      }
+      if (anyDone) {
+        rows_.push_back({tr(STR_JJWXC_CACHE_CLEAR_DONE), ""});
+        rowIds_.push_back("__clear");
+      }
+      break;
+    }
     case State::Account: {
       // Two distinct entry points rather than one "Login" that silently reuses the
       // saved name: the user has to be able to tell whether confirming will log in
@@ -1574,6 +1704,9 @@ void JjwxcActivity::withNetwork(std::function<void()> job, const State onCancel,
 
 bool JjwxcActivity::startJob(std::function<void()> body, const char* busyText, const bool openAfter) {
   if (jobRunning_) return false;
+  // A foreground JJWXC job gets the radio/heap first; the queued background
+  // comment cache yields at its next checkpoint and resumes when the job ends.
+  jjwxc_cache_service::setForegroundJob(true);
   jobBody_ = std::move(body);
   jobDone_.store(false);
   jobStatus_ = jjwxc::Status::Ok;
@@ -1750,6 +1883,7 @@ void JjwxcActivity::stopJob() {
 void JjwxcActivity::pollJob() {
   if (!jobRunning_ || !jobDone_.load()) return;
   reapJob();
+  jjwxc_cache_service::setForegroundJob(false);
   if (updateCheckOnly_) {
     updateCheckOnly_ = false;
     const bool wasCancelled = jobCancel_.exchange(false);
@@ -2269,7 +2403,8 @@ size_t puaLookupFromMap(void* ctx, uint32_t codePoint, char out[4]) {
 }  // namespace
 
 jjwxc::Status JjwxcActivity::fetchWapVipChapter(const char* novelId, const uint32_t chapterId,
-                                                jjwxc::ChapterMeta& meta, jjwxc::TextSink onText, void* textCtx) {
+                                                jjwxc::ChapterMeta& meta, jjwxc::TextSink onText, void* textCtx,
+                                                jjwxc::TextSink onSay, void* sayCtx) {
   meta = jjwxc::ChapterMeta{};
   wapAppOnly_ = false;
   if (novelId == nullptr || novelId[0] == '\0' || chapterId == 0 || onText == nullptr) return jjwxc::Status::Protocol;
@@ -2493,6 +2628,22 @@ jjwxc::Status JjwxcActivity::fetchWapVipChapter(const char* novelId, const uint3
   // path gives, where `content` can arrive before the reply's own `code` does.
   if (!onText(textCtx, reinterpret_cast<const char*>(textSlice), wr.textLen)) {
     return jjwxc::Status::Cancelled;
+  }
+  // The note is plaintext on the same page and outside contentvars, so it is
+  // available exactly when the body was -- an unpurchased chapter never reaches here
+  // (the 302 above) and no second request is made. `bodySlice` is free again now that
+  // the prose has been copied to `textSlice`.
+  if (onSay != nullptr) {
+    size_t noteLen = 0;
+    if (jjwxc::wapAuthorNoteToText(reinterpret_cast<const char*>(pageSlice), pageLen, &puaLookupFromMap, mapSlice,
+                                   reinterpret_cast<char*>(bodySlice), kWapBodySlice, noteLen) &&
+        noteLen != 0) {
+      if (!vipNoteProven_) {
+        vipNoteProven_ = true;
+        LOG_INF(kTag, "VIP chain note: ch %lu note=%uB", (unsigned long)chapterId, (unsigned)noteLen);
+      }
+      if (!onSay(sayCtx, reinterpret_cast<const char*>(bodySlice), noteLen)) return jjwxc::Status::Cancelled;
+    }
   }
   meta.textBytes = wr.textLen;
   meta.isVip = true;
@@ -3480,207 +3631,197 @@ void JjwxcActivity::launchFavoriteMutation(const char* path, const std::string& 
 // ---- paragraph comment totals (reader sidecar) ------------------------------
 
 namespace {
-struct CommentCountCtx {
-  JjwxcCommentSidecar::Count* out = nullptr;
-  size_t cap = 0;
-  size_t count = 0;
-};
+// Small local copy of the business-code probe used by the comment queue; the
+// app-side JSON helpers live in JjwxcCommentActivity.cpp's anonymous namespace.
+int responseBusinessCode(const char* body) {
+  if (body == nullptr) return -1;
+  const char* p = strstr(body, "\"code\"");
+  if (p == nullptr) return -1;
+  p = strchr(p, ':');
+  if (p == nullptr) return -1;
+  ++p;
+  while (*p == ' ' || *p == '\t' || *p == '"') ++p;
+  bool neg = false;
+  if (*p == '-') {
+    neg = true;
+    ++p;
+  }
+  int v = 0;
+  bool any = false;
+  while (*p >= '0' && *p <= '9') {
+    v = v * 10 + (*p - '0');
+    any = true;
+    ++p;
+  }
+  return any ? (neg ? -v : v) : -1;
+}
 
-struct CommentBodyCtx {
-  JjwxcCommentSidecar::Bodies::Item* out = nullptr;
-  size_t cap = 0;
-  size_t count = 0;
-};
 }  // namespace
 
-bool JjwxcActivity::onCommentCount(void* ctx, const jjwxc::ParagraphComment& item, size_t) {
-  auto* c = static_cast<CommentCountCtx*>(ctx);
-  if (c->out == nullptr || c->count >= c->cap) return false;
-  const unsigned long id = strtoul(item.paragraphId, nullptr, 10);
-  if (id == 0 || item.total == 0) return true;
-  c->out[c->count].paragraphId = static_cast<uint32_t>(id);
-  c->out[c->count].total = static_cast<uint16_t>(item.total > 65535 ? 65535 : item.total);
-  ++c->count;
-  return true;
+// Both helpers live behind JjwxcCommentFetcher so the activity's chapter job and
+// the background cache service run exactly the same token/encoding/refusal path.
+JjwxcActivity::CommentFetchResult JjwxcActivity::fetchAndStoreCommentCounts(
+    const uint32_t chapterId, const bool includeBodies, const uint32_t prefetchMs, const size_t prefetchRequests) {
+  if (!ensureWapSession() || scratch_ == nullptr || scratchCap_ < 64 * 1024) return CommentFetchResult::Error;
+  JjwxcCommentFetcher fetcher(*jar_, *wap_, scratch_, scratchCap_);
+  fetcher.setNovelId(novelId_.c_str());
+  fetcher.setNowUnix(cookieClock());
+  fetcher.setCancelFlags(&jobCancel_, nullptr);
+  return fetcher.fetchCounts(chapterId, includeBodies, prefetchMs, prefetchRequests);
 }
 
-void JjwxcActivity::fetchAndStoreCommentCounts(const uint32_t chapterId, const bool includeBodies,
-                                               const uint32_t prefetchMs, const size_t prefetchRequests) {
-  if (!ensureWapSession() || scratch_ == nullptr || scratchCap_ < 64 * 1024) return;
-  char sid[256];
-  char token[400];
-  token[0] = '\0';
-  if (jar_->get("sid", sid, sizeof(sid), cookieClock()) != 0) {
-    char b64[400];
-    if (jjwxc::Base64::encode(reinterpret_cast<const uint8_t*>(sid), strlen(sid), b64, sizeof(b64)) > 0 &&
-        jjwxc::wapUrlEncode(b64, strlen(b64), token, sizeof(token)) == 0) {
-      token[0] = '\0';
-    }
-  }
-  char url[768];
-  const int n = snprintf(url, sizeof(url),
-                         "https://www.jjwxc.net/app.jjwxc/Pc/comment/getNovelParagraphCommentNum"
-                         "?versionCode=489&novelid=%s&chapterid=%lu%s%s",
-                         novelId_.c_str(), static_cast<unsigned long>(chapterId), token[0] ? "&token=" : "", token);
-  if (n <= 0 || static_cast<size_t>(n) >= sizeof(url)) return;
-  auto* page = reinterpret_cast<char*>(scratch_);
-  BufferCollector col{page, 64 * 1024, 0, false};
-  jjwxc::WapOptions opt;
-  opt.referer = "https://m.jjwxc.net/book2/";
-  jjwxc::WapResponse res;
-  const int http = wap_->get(url, opt, &collectBuffer, &col, res);
-  if (http != 200 || res.sawRedirect || col.overflow || col.len == 0) {
-    LOG_INF(kTag, "comment counts unavailable for chapter %lu (http=%d)", (unsigned long)chapterId, http);
-    return;
-  }
-  page[col.len] = '\0';
-  // 128 entries is far past any real chapter's commented-paragraph count, and
-  // keeps the worker stack free for the TLS handshake that follows.
-  constexpr size_t kMaxChapterCounts = 128;
-  JjwxcCommentSidecar::Count counts[kMaxChapterCounts];
-  CommentCountCtx ctx{counts, kMaxChapterCounts, 0};
-  jjwxc::parseParagraphComments(page, col.len, &JjwxcActivity::onCommentCount, &ctx);
-  // Drop the old sidecar first: after a repackage the old paragraph ids may no
-  // longer match this body, and a stale bubble is worse than no bubble.
-  const std::string path = JjwxcStore::commentCountsPath(novelId_.c_str(), chapterId);
-  Storage.remove(path.c_str());
-  // An empty table is still written. Without it a chapter with no comments is
-  // indistinguishable from one never checked, and the whole-book comment pass
-  // would re-request its counts on every run.
-  if (JjwxcStore::saveCommentCounts(novelId_.c_str(), chapterId, counts, ctx.count)) {
-    LOG_INF(kTag, "comment counts: chapter %lu %u paragraphs", (unsigned long)chapterId, (unsigned)ctx.count);
-  } else {
-    LOG_ERR(kTag, "comment sidecar write failed for chapter %lu", (unsigned long)chapterId);
-  }
-  if (includeBodies && ctx.count > 0) {
-    prefetchCommentBodies(chapterId, counts, ctx.count, millis() + prefetchMs, prefetchRequests);
-  }
-}
-
-bool JjwxcActivity::onPrefetchComment(void* ctx, const jjwxc::CommentItem& item, size_t) {
-  auto* c = static_cast<CommentBodyCtx*>(ctx);
-  if (c->out == nullptr || c->count >= c->cap) return false;
-  JjwxcCommentSidecar::Bodies::Item& out = c->out[c->count];
-  snprintf(out.author, sizeof(out.author), "%s", item.author);
-  snprintf(out.date, sizeof(out.date), "%s", item.date);
-  snprintf(out.ip, sizeof(out.ip), "%s", item.ip);
-  snprintf(out.body, sizeof(out.body), "%s", item.body);
-  snprintf(out.commentId, sizeof(out.commentId), "%s", item.commentId);
-  out.agreeNum = item.agreeNum;
-  out.disagreeNum = item.disagreeNum;
-  out.replyTotal = item.replyTotal;
-  out.readerAgree = item.readerAgree;
-  out.isAuthor = item.isAuthor;
-  ++c->count;
-  return true;
-}
-
-// The first page of each commented paragraph is enough for offline reading;
-// "more comments" stays an explicit network action. A single-chapter run passes
-// a 75 s deadline; the whole-book pass passes its own longer deadline and
-// request budget, so this never runs past the caller's commitment.
 JjwxcActivity::CommentPrefetchResult JjwxcActivity::prefetchCommentBodies(
     const uint32_t chapterId, const JjwxcCommentSidecar::Count* counts, const size_t count, const uint32_t deadlineMs,
-    const size_t requestBudget) {
-  CommentPrefetchResult result;
-  if (counts == nullptr || count == 0) return result;
-  if (!ensureWapSession() || scratch_ == nullptr || scratchCap_ < 128 * 1024) return result;
-  constexpr size_t kPageSize = 20;
-  auto itemsBuf = memory::makePsramByteBufferNoThrow(kPageSize * sizeof(JjwxcCommentSidecar::Bodies::Item));
-  if (!itemsBuf) {
-    LOG_ERR(kTag, "no PSRAM for comment prefetch");
-    return result;
-  }
-  auto* items = reinterpret_cast<JjwxcCommentSidecar::Bodies::Item*>(itemsBuf.get());
+    const size_t requestBudget, const size_t beginIndex) {
+  CommentPrefetchResult empty;
+  if (!ensureWapSession() || scratch_ == nullptr || scratchCap_ < 128 * 1024) return empty;
+  JjwxcCommentFetcher fetcher(*jar_, *wap_, scratch_, scratchCap_);
+  fetcher.setNovelId(novelId_.c_str());
+  fetcher.setNowUnix(cookieClock());
+  fetcher.setCancelFlags(&jobCancel_, nullptr);
+  return fetcher.prefetchBodies(chapterId, counts, count, deadlineMs, requestBudget, beginIndex);
+}
 
-  char sid[256];
-  char token[400];
-  token[0] = '\0';
-  if (jar_->get("sid", sid, sizeof(sid), cookieClock()) != 0) {
-    char b64[400];
-    if (jjwxc::Base64::encode(reinterpret_cast<const uint8_t*>(sid), strlen(sid), b64, sizeof(b64)) > 0 &&
-        jjwxc::wapUrlEncode(b64, strlen(b64), token, sizeof(token)) == 0) {
-      token[0] = '\0';
-    }
-  }
+void JjwxcActivity::debugOpenJjwxcCacheQueue() { enterCacheQueue(); }
 
-  for (size_t i = 0; i < count; ++i) {
-    if (jobCancel_.load()) break;
-    const uint32_t paragraphId = counts[i].paragraphId;
-    if (paragraphId == 0 || counts[i].total == 0) continue;
-    const std::string bodyPath = JjwxcStore::commentBodiesPath(novelId_.c_str(), chapterId, paragraphId);
-    if (Storage.exists(bodyPath.c_str())) {
-      ++result.skipped;
-      continue;
-    }
-    if (static_cast<int32_t>(millis() - deadlineMs) >= 0 || result.requests >= requestBudget) {
-      LOG_INF(kTag, "comment prefetch budget reached (%u/%u)", (unsigned)i, (unsigned)count);
-      result.budgetReached = true;
+void JjwxcActivity::debugEnqueueJjwxcCacheQueue() {
+  if (novelId_.empty()) {
+    showToast(tr(STR_JJWXC_CACHE_EMPTY));
+    return;
+  }
+  JjwxcStore::TocSummary summary;
+  uint32_t highest = 0;
+  if (!JjwxcStore::readTocSummary(novelId_.c_str(), summary, highest) || summary.count == 0) {
+    showToast(tr(STR_JJWXC_NO_CATALOGUE));
+    return;
+  }
+  const char* bookTitle = novel_.title[0] ? novel_.title : novelId_.c_str();
+  enqueueCommentQueue(novelId_.c_str(), bookTitle, 0, summary.count - 1);
+  enterCacheQueue();
+}
+
+void JjwxcActivity::debugEnqueueJjwxcCacheQueueRange(const uint32_t from, const uint32_t to) {
+  if (novelId_.empty()) {
+    showToast(tr(STR_JJWXC_CACHE_EMPTY));
+    return;
+  }
+  JjwxcStore::TocSummary summary;
+  uint32_t highest = 0;
+  if (!JjwxcStore::readTocSummary(novelId_.c_str(), summary, highest) || summary.count == 0) {
+    showToast(tr(STR_JJWXC_NO_CATALOGUE));
+    return;
+  }
+  const char* bookTitle = novel_.title[0] ? novel_.title : novelId_.c_str();
+  enqueueCommentQueue(novelId_.c_str(), bookTitle, from, to);
+  enterCacheQueue();
+}
+
+void JjwxcActivity::debugClearJjwxcCacheQueue() {
+  jjwxc_cache_service::clearAll();
+  loadCacheQueue();
+  refreshQueueRows();
+  showToast(tr(STR_JJWXC_CACHE_EMPTY));
+}
+
+void JjwxcActivity::debugPauseJjwxcCacheQueue() {
+  jjwxc_cache_service::pauseByUser();
+  LOG_INF(kTag, "debug: cache queue pause requested");
+}
+
+void JjwxcActivity::debugResumeJjwxcCacheQueue() {
+  jjwxc_cache_service::resumeByUser();
+  loadCacheQueue();
+  LOG_INF(kTag, "debug: cache queue resume requested");
+}
+
+void JjwxcActivity::debugJjwxcCacheQueueStatus() {
+  loadCacheQueue();
+  LOG_INF(kTag, "cache queue status: items=%u active=%d paused=%d q=%u/%u p=%u/%u",
+          static_cast<unsigned>(cacheQueueCount_), queueStatus_.workerActive ? 1 : 0,
+          queueStatus_.userPaused ? 1 : 0, static_cast<unsigned>(queueStatus_.doneChapters),
+          static_cast<unsigned>(queueStatus_.totalChapters), static_cast<unsigned>(queueStatus_.doneParagraphs),
+          static_cast<unsigned>(queueStatus_.totalParagraphs));
+  for (size_t i = 0; i < cacheQueueCount_; ++i) {
+    LOG_INF(kTag, "  queue[%u] %s state=%u %lu/%lu ch %lu/%lu p", static_cast<unsigned>(i), cacheQueue_[i].novelId,
+            static_cast<unsigned>(cacheQueue_[i].state), static_cast<unsigned long>(cacheQueue_[i].doneChapters),
+            static_cast<unsigned long>(cacheQueue_[i].totalChapters),
+            static_cast<unsigned long>(cacheQueue_[i].doneParagraphs),
+            static_cast<unsigned long>(cacheQueue_[i].totalParagraphs));
+  }
+}
+
+// ---- background comment cache queue ----------------------------------------
+
+void JjwxcActivity::loadCacheQueue() {
+  // The background service owns the queue. This page only reads a snapshot; it
+  // must never write the array or run a second worker.
+  jjwxc_cache_service::snapshot(cacheQueue_, JjwxcCacheQueue::kMaxItems, cacheQueueCount_, queueStatus_);
+  queueSnapshotRevision_ = queueStatus_.revision;
+}
+
+void JjwxcActivity::enqueueCommentQueue(const char* novelId, const char* title, uint32_t fromOrdinal,
+                                        uint32_t toOrdinal) {
+  const auto r = jjwxc_cache_service::enqueue(novelId, title, fromOrdinal, toOrdinal);
+  switch (r) {
+    case jjwxc_cache_service::EnqueueResult::Ok:
+      showToast(tr(STR_JJWXC_CACHE_ENQUEUED));
       break;
-    }
-
-    char url[768];
-    const int n = snprintf(url, sizeof(url),
-                           "https://www.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
-                           "?versionCode=489&novelId=%s&chapterId=%lu&paragraph_id=%lu&offset=0&limit=%u%s%s",
-                           novelId_.c_str(), static_cast<unsigned long>(chapterId),
-                           static_cast<unsigned long>(paragraphId), static_cast<unsigned>(kPageSize),
-                           token[0] ? "&token=" : "", token);
-    if (n <= 0 || static_cast<size_t>(n) >= sizeof(url)) {
-      ++result.failed;
-      continue;
-    }
-    ++result.requests;
-    auto* page = reinterpret_cast<char*>(scratch_);
-    BufferCollector col{page, 64 * 1024, 0, false};
-    jjwxc::WapOptions opt;
-    opt.referer = "https://m.jjwxc.net/book2/";
-    jjwxc::WapResponse res;
-    const int http = wap_->get(url, opt, &collectBuffer, &col, res);
-    if (http != 200 || res.sawRedirect || col.overflow || col.len == 0) {
-      ++result.failed;
-      LOG_INF(kTag, "comment prefetch: para=%lu http=%d", (unsigned long)paragraphId, http);
-      delay(250);
-      continue;
-    }
-    page[col.len] = '\0';
-    size_t textLen = col.len;
-    const auto enc = txt_encoding::detect(reinterpret_cast<const uint8_t*>(page), col.len, true);
-    if (enc == txt_encoding::Encoding::Gbk) {
-      const auto conv = txt_encoding::transcodeGbkInPlace(reinterpret_cast<uint8_t*>(page), col.len, scratchCap_, true);
-      if (conv.rawLength == 0 || conv.utf8Length == 0) {
-        ++result.failed;
-        continue;
-      }
-      textLen = conv.utf8Length;
-      page[textLen] = '\0';
-    }
-
-    CommentBodyCtx ctx{items, kPageSize, 0};
-    jjwxc::parseCommentList(page, textLen, &JjwxcActivity::onPrefetchComment, &ctx);
-    uint32_t total = 0;
-    const char* totalKey = strstr(page, "\"commentTotal\"");
-    if (totalKey != nullptr) {
-      const char* p = strchr(totalKey, ':');
-      if (p != nullptr) {
-        ++p;
-        while (*p == ' ' || *p == '"') ++p;
-        while (*p >= '0' && *p <= '9') total = total * 10 + static_cast<uint32_t>(*p++ - '0');
-      }
-    }
-    if (ctx.count > 0 &&
-        JjwxcStore::saveCommentBodies(novelId_.c_str(), chapterId, paragraphId, items, ctx.count,
-                                      total > ctx.count ? total : static_cast<uint32_t>(ctx.count))) {
-      ++result.fetched;
-    } else {
-      ++result.failed;
-    }
-    delay(300);
+    case jjwxc_cache_service::EnqueueResult::NoCatalogue:
+      showToast(tr(STR_JJWXC_NO_CATALOGUE));
+      break;
+    case jjwxc_cache_service::EnqueueResult::Full:
+      showToast(tr(STR_JJWXC_CACHE_FULL));
+      break;
+    case jjwxc_cache_service::EnqueueResult::Invalid:
+    default:
+      showToast(tr(STR_JJWXC_CACHE_EMPTY));
+      break;
   }
-  LOG_INF(kTag, "comment prefetch: chapter %lu fetched=%u skipped=%u failed=%u requests=%u",
-          (unsigned long)chapterId, static_cast<unsigned>(result.fetched), static_cast<unsigned>(result.skipped),
-          static_cast<unsigned>(result.failed), static_cast<unsigned>(result.requests));
-  return result;
+  loadCacheQueue();
+  if (state_ == State::CacheQueue) rebuildRows();
+}
+
+bool JjwxcActivity::queueHasWork() const {
+  for (size_t i = 0; i < cacheQueueCount_; ++i) {
+    const auto st = static_cast<JjwxcCacheQueue::State>(cacheQueue_[i].state);
+    if (st == JjwxcCacheQueue::State::Queued || st == JjwxcCacheQueue::State::NeedsWifi) return true;
+  }
+  return false;
+}
+
+void JjwxcActivity::enterCacheQueue() {
+  loadCacheQueue();
+  enter(State::CacheQueue);
+  refreshQueueRows();
+}
+
+void JjwxcActivity::refreshQueueRows() {
+  if (state_ != State::CacheQueue) return;
+  rebuildRows();
+  requestUpdate();
+}
+
+void JjwxcActivity::onCacheQueueConfirm() {
+  if (selected_ < 0 || static_cast<size_t>(selected_) >= rowIds_.size()) return;
+  const std::string id(rowIds_[static_cast<size_t>(selected_)].c_str());
+  if (id == "__toggle") {
+    // The service owns the run. Pause/Resume are the only controls here; the
+    // Wi-Fi connect is silent and never opens a picker.
+    if (queueStatus_.workerActive) {
+      jjwxc_cache_service::pauseByUser();
+      showToast(tr(STR_JJWXC_CACHE_PAUSED));
+    } else {
+      jjwxc_cache_service::resumeByUser();
+      showToast(tr(STR_JJWXC_CACHE_RUNNING));
+    }
+    refreshQueueRows();
+    return;
+  }
+  if (id == "__clear") {
+    jjwxc_cache_service::clearDone();
+    refreshQueueRows();
+    return;
+  }
 }
 
 // Whole-book pass. This is deliberately an explicit action rather than part of
@@ -3813,7 +3954,7 @@ jjwxc::Status JjwxcActivity::fetchParagraphComments(const uint32_t ordinal) {
   }
   char url[768];
   const int n = snprintf(url, sizeof(url),
-                         "https://www.jjwxc.net/app.jjwxc/Pc/comment/getNovelParagraphCommentNum"
+                         "https://m.jjwxc.net/app.jjwxc/Pc/comment/getNovelParagraphCommentNum"
                          "?versionCode=489&novelid=%s&chapterid=%lu%s%s",
                          novelId_.c_str(), static_cast<unsigned long>(chapters_[ordinal].chapterId),
                          token[0] ? "&token=" : "", token);
@@ -3918,7 +4059,7 @@ jjwxc::Status JjwxcActivity::fetchCommentList(const uint32_t ordinal, const uint
   }
   char url[768];
   const int n = snprintf(url, sizeof(url),
-                         "https://www.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
+                         "https://m.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
                          "?versionCode=489&novelId=%s&chapterId=%lu&paragraph_id=%lu&offset=%lu&limit=20%s%s",
                          novelId_.c_str(), static_cast<unsigned long>(chapters_[ordinal].chapterId),
                          static_cast<unsigned long>(paragraphId), static_cast<unsigned long>(offset),
@@ -4338,15 +4479,14 @@ void JjwxcActivity::promptPrefetchCommentBodies() {
       requestUpdate();
       return;
     }
-    withNetwork(
-        [this] {
-          jobWhat_ = tr(STR_JJWXC_COMMENT_PREFETCH);
-          jobNextState_ = State::BookDetail;
-          returnState_ = State::BookDetail;
-          jobNotice_.clear();
-          launchJob([this] { prefetchAllCommentBodies(); }, tr(STR_JJWXC_COMMENT_PREFETCH));
-        },
-        State::BookDetail);
+    const uint32_t count = tocSummary_.count;
+    if (count == 0) {
+      showMessage(tr(STR_JJWXC_NO_CATALOGUE), State::BookDetail);
+      return;
+    }
+    const char* bookTitle = novel_.title[0] ? novel_.title : (info_.novelName[0] ? info_.novelName : novelId_.c_str());
+    enqueueCommentQueue(novelId_.c_str(), bookTitle, 0, count - 1);
+    enterCacheQueue();
   });
 }
 
@@ -4820,6 +4960,26 @@ bool JjwxcActivity::onChapterEntry(void* ctx, const jjwxc::ChapterEntry& e, size
 
 bool JjwxcActivity::onChapterText(void* ctx, const char* utf8, size_t len) {
   auto* c = static_cast<ChapterSinkCtx*>(ctx);
+  if (!c->writer->feed(utf8, len)) {
+    c->failed = true;
+    return false;
+  }
+  return true;
+}
+
+// The author's note follows the prose in the same chapter file, under its own
+// heading. The heading is only emitted for a note that has content: chapters with
+// no note are common, and an empty "作者有话说" section would read as a rendering bug.
+bool JjwxcActivity::onChapterSay(void* ctx, const char* utf8, size_t len) {
+  auto* c = static_cast<ChapterSinkCtx*>(ctx);
+  if (len == 0) return true;
+  if (!c->sayStarted) {
+    c->sayStarted = true;
+    if (!c->writer->beginAuthorNote(c->noteHeading ? c->noteHeading : "")) {
+      c->failed = true;
+      return false;
+    }
+  }
   if (!c->writer->feed(utf8, len)) {
     c->failed = true;
     return false;
@@ -5433,7 +5593,7 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
     // writer discards all of them and the stub below is composed from this
     // record alone. Nothing is ever rolled back into a shared file.
     JjwxcEpub::ChapterWriter writer;
-    ChapterSinkCtx sink{&writer, false};
+    ChapterSinkCtx sink{&writer, false, tr(STR_JJWXC_AUTHOR_NOTE)};
     jjwxc::ChapterMeta meta;
     // Two sources, chosen by the catalogue's own isVip flag. Free chapters stay on
     // app-cdn's chapterContent, which serves them anonymously as plaintext JSON with no
@@ -5470,12 +5630,16 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
         storageFail();
         return;
       }
-      sink = ChapterSinkCtx{&writer, false};
+      // The note heading is resolved here, once, so the writer stays free of i18n.
+      sink = ChapterSinkCtx{&writer, false, tr(STR_JJWXC_AUTHOR_NOTE)};
       meta = jjwxc::ChapterMeta{};
+      // Both paths carry the author's note: WAP as plaintext `note_str` on the page,
+      // app-cdn as the `sayBody`/`sayBodyV2` field (identical; the parser emits one).
       s = servedFromWap
-              ? fetchWapVipChapter(novelId_.c_str(), rec.chapterId, meta, &JjwxcActivity::onChapterText, &sink)
+              ? fetchWapVipChapter(novelId_.c_str(), rec.chapterId, meta, &JjwxcActivity::onChapterText, &sink,
+                                   &JjwxcActivity::onChapterSay, &sink)
               : jjwxc::fetchChapter(transport_, cred_, novelId_.c_str(), rec.chapterId, scratch, meta,
-                                    &JjwxcActivity::onChapterText, &sink, nullptr, nullptr);
+                                    &JjwxcActivity::onChapterText, &sink, &JjwxcActivity::onChapterSay, &sink);
       if (s != jjwxc::Status::Network || jobCancel_.load()) break;
     }
     if (s == jjwxc::Status::Ok && !sink.failed && meta.chapterId != 0 && meta.chapterId != rec.chapterId) {
@@ -5533,7 +5697,10 @@ void JjwxcActivity::cacheChapterRange(uint32_t fromOrdinal, uint32_t toOrdinal) 
       // 10-108 requests per chapter would otherwise dominate the run.
       if (haveSession() && !jobCancel_.load()) {
         const bool singleChapter = fromOrdinal == toOrdinal;
-        const bool wantBodies = singleChapter || cacheCommentBodies_;
+        // Range/whole runs enqueue a background comment item instead of turning
+        // an 18-minute cache into hours. Only an explicit single chapter still
+        // prefetches inline, for the "cache and read this chapter" gesture.
+        const bool wantBodies = singleChapter;
         const uint32_t bodyMs = singleChapter ? 75000 : 30000;
         const size_t bodyRequests = singleChapter ? static_cast<size_t>(-1) : 30;
         fetchAndStoreCommentCounts(rec.chapterId, wantBodies, bodyMs, bodyRequests);
@@ -5814,6 +5981,10 @@ void JjwxcActivity::startCaching(uint32_t fromOrdinal, uint32_t toOrdinal, const
   // unconfirmed full re-download, re-requesting every chapter the account had been
   // refused.
   refreshPending_ = false;
+  if (cacheCommentBodies_ && fromOrdinal != toOrdinal) {
+    const char* bookTitle = novel_.title[0] ? novel_.title : (info_.novelName[0] ? info_.novelName : novelId_.c_str());
+    enqueueCommentQueue(novelId_.c_str(), bookTitle, fromOrdinal, toOrdinal);
+  }
   // No token check here on purpose: scanning the range for a VIP chapter would
   // mean up to N SD reads inside an input handler. The job decides per chapter
   // instead -- an unpurchased VIP chapter becomes a placeholder and the run
@@ -6508,7 +6679,8 @@ void JjwxcActivity::renderRows() const {
   if (UITheme::getInstance().usesCpyLayout()) {
     // The remaining app lists -- menu, shelf, library, search, range presets
     // -- take the same row language; short action menus ride in the card.
-    renderCpyPlainRows(state_ == State::Menu || state_ == State::DownloadRange);
+    renderCpyPlainRows(state_ == State::Menu || state_ == State::DownloadRange ||
+                       state_ == State::CacheQueue);
     return;
   }
   const int vis = visibleRows();
@@ -6845,12 +7017,31 @@ void JjwxcActivity::renderCpyPlainRows(const bool withCard) const {
   const int last = std::min(scroll_ + visibleRows(), n);
   for (int i = scroll_; i < last; ++i) {
     const int y = top + (i - scroll_) * h;
-    const bool cursor = i == selected_;
+    // The empty-state label is information, not a row: no cursor fill and no
+    // chevron, otherwise it looks like a control that does nothing.
+    const bool infoOnly = rows_[i].subtitle.empty() && i < static_cast<int>(rowIds_.size()) && rowIds_[i].empty();
+    const bool cursor = i == selected_ && !infoOnly;
     if (cursor) {
       renderer.fillRect(withCard ? cardX + 2 : safe.x, y, withCard ? cardW - 4 : safe.width, h, true);
     }
     if (i > 0) renderer.drawLine(textX, y, rightX, y, true);
-    if (bookRows) {
+    // Queue items carry a long, several-part progress line ("comments x/y ·
+    // chapters a/b · state"). The single-line right-hand value clipped the last
+    // digit on a 187-chapter book, so these rows use the book layout: title on
+    // the first line, progress across the full width underneath.
+    const bool queueItemRow = state_ == State::CacheQueue && i > 0 && !rows_[i].subtitle.empty();
+    if (queueItemRow) {
+      const int blockH = titleLine + 4 + smallLine;
+      const int ty = y + (h - blockH) / 2;
+      char title[256];
+      copyMiddleEllipsis(renderer, kListFont, rows_[i].title.c_str(), title, sizeof(title), textMax,
+                         cursor ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+      renderer.drawText(kListFont, textX, ty, title, !cursor,
+                        cursor ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+      char val[256];
+      snprintf(val, sizeof(val), "%s", rows_[i].subtitle.c_str());
+      renderer.drawText(kSmallFont, textX, ty + titleLine + 4, val, !cursor);
+    } else if (bookRows) {
       const bool hasSub = !rows_[i].subtitle.empty();
       const int ty = hasSub ? y + (h - blockH) / 2 : y + (h - titleLine) / 2;
       char title[256];
@@ -6879,9 +7070,17 @@ void JjwxcActivity::renderCpyPlainRows(const bool withCard) const {
         renderer.drawText(kSmallFont, rightX - 24 - valW, y + (h - smallLine) / 2, val, !cursor);
       }
     }
-    const int cy = y + h / 2;
-    renderer.drawLine(rightX - 6, cy - 7, rightX, cy, 2, !cursor);
-    renderer.drawLine(rightX, cy, rightX - 6, cy + 7, 2, !cursor);
+    // Informational queue rows are not tappable; a disclosure chevron would
+    // promise an action that does not exist.
+    if (!queueItemRow && !infoOnly) {
+      const int cy = y + h / 2;
+      renderer.drawLine(rightX - 6, cy - 7, rightX, cy, 2, !cursor);
+      renderer.drawLine(rightX, cy, rightX - 6, cy + 7, 2, !cursor);
+    }
+  }
+  if (state_ == State::CacheQueue && cacheQueueCount_ > 0) {
+    const int hy = top + n * h + 16;
+    if (hy + smallLine <= bottom) renderer.drawText(kSmallFont, textX, hy, tr(STR_JJWXC_CACHE_HINT), true);
   }
 }
 
@@ -7697,6 +7896,7 @@ void JjwxcActivity::render(RenderLock&&) {
           title = refreshPending_ ? tr(STR_JJWXC_REFRESH_CACHE) : tr(STR_JJWXC_PICK_RANGE);
           break;
         case State::ChapterList: title = tr(STR_JJWXC_CHAPTERS); break;
+        case State::CacheQueue: title = tr(STR_JJWXC_CACHE_QUEUE); break;
         default: break;
       }
       char cpyTitle[96] = {};
@@ -7769,7 +7969,20 @@ void JjwxcActivity::render(RenderLock&&) {
 
 void JjwxcActivity::loop() {
   pollJob();
-
+  // The service may be running while this page is visible; refresh its snapshot
+  // once a second so the panel is not repainted per paragraph.
+  if (state_ == State::CacheQueue) {
+    static uint32_t lastQueueRefreshMs = 0;
+    if (millis() - lastQueueRefreshMs >= 1000) {
+      lastQueueRefreshMs = millis();
+      const uint32_t before = queueStatus_.revision;
+      loadCacheQueue();
+      if (queueStatus_.revision != before) {
+        rebuildRows();
+        requestUpdate();
+      }
+    }
+  }
   if (!toast_.empty() && static_cast<int32_t>(millis() - toastUntilMs_) >= 0) {
     toast_.clear();
     requestUpdate();
@@ -7926,6 +8139,15 @@ void JjwxcActivity::loop() {
       case State::DownloadRange:
       case State::ChapterList:
         enter(State::BookDetail);
+        return;
+      case State::CacheQueue:
+        if (jobRunning_) {
+          jobCancel_.store(true);
+          showToast(tr(STR_JJWXC_CACHE_PAUSED));
+          requestUpdate();
+          return;
+        }
+        enter(State::Menu);
         return;
       default:
         enter(State::Menu);
@@ -8123,6 +8345,7 @@ void JjwxcActivity::moveSelectionByPage(const int pages) {
 void JjwxcActivity::onListConfirm() {
   switch (state_) {
     case State::Menu: onMenuConfirm(); return;
+    case State::CacheQueue: onCacheQueueConfirm(); return;
     case State::Account: onAccountConfirm(); return;
     case State::Shelf:
     case State::SearchResults:
@@ -8278,6 +8501,7 @@ void JjwxcActivity::onMenuConfirm() {
   else if (id == "discover") enter(State::Discover);
   else if (id == "search") enter(State::AdvancedSearch);
   else if (id == "library") enter(State::Library);
+  else if (id == "cachequeue") enterCacheQueue();
   else if (id == "account") enter(State::Account);
 }
 

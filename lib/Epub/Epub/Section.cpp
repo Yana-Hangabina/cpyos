@@ -54,10 +54,22 @@ namespace {
 //   78 / 79 - latched paragraph index (the first version stored 0xFFFF on every line)
 //   79 / 80 - TextBlock stores the line's first visibleTextOffset (annotations)
 //   81 / 82 - TextBlock stores whether the line ends its source <p> (comment bubbles)
+//   82 / 83 - pending text flushed before a block or heading opens; layout changes
+//   83 / 84 - vertical page bottom-align toggle byte in the section header; a
+//             cached top-aligned page must never be served with the toggle on
+//             (upstream 8418166c + 9a7e6b35)
+//   84 / 85 - static GIF images are laid out as image blocks; a cached section
+//             that skipped them must be rebuilt to show them
+//   85 / 86 - justification and no-break-space layout changed (a carried space at a wrapped
+//             line start is dropped and only a space with a continuation stretches), and CSS
+//             font-weight/font-style: inherit now resolves against the parent
+//             (upstream 8b2ba5e9 + 1bd323dd)
+//   86 / 87 - the CJK text face moved from built-in bitmap slices to one scalable
+//             family, so every cached page's metrics are stale
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 82;
+constexpr uint8_t SECTION_FILE_VERSION = 87;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 81;
+constexpr uint8_t SECTION_FILE_VERSION = 86;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
@@ -80,7 +92,7 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint32_t) * 5 + sizeof(int8_t) + sizeof(uint8_t) + sizeof(uint8_t) +
-                                 sizeof(uint8_t);  // verticalText
+                                 sizeof(uint8_t) /* verticalText */ + sizeof(bool) /* verticalBottomAlign */;
 // Called only between layout/render operations; no borrowed glyph pointer is live.
 void reclaimLayoutCaches(GfxRenderer& renderer, const char* stage) {
 #ifndef BOARD_HAS_PSRAM
@@ -146,7 +158,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
                                    sizeof(spec.collectTouchLinks) + sizeof(spec.verticalText) + sizeof(uint32_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                   sizeof(spec.characterSpacing) + sizeof(spec.wordSpacingPercent),
+                                   sizeof(spec.characterSpacing) + sizeof(spec.wordSpacingPercent) +
+                                   sizeof(spec.verticalBottomAlign),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
@@ -167,6 +180,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
   serialization::writePod(file, spec.verticalText);
+  serialization::writePod(file, spec.verticalBottomAlign);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -213,6 +227,9 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     int8_t fileCharacterSpacing = 0;
     uint8_t fileWordSpacingPercent = 100;
     uint8_t fileVerticalText = 0;
+    // Read as a byte so a corrupt header cannot alias onto a valid bool, and
+    // anything but 0/1 fails the match below (upstream 9a7e6b35).
+    uint8_t fileVerticalBottomAlign = 0;
     const bool headerValid =
         serialization::readPod(file, fileFontId) && serialization::readPod(file, fileLineCompression) &&
         serialization::readPod(file, fileExtraParagraphSpacing) && serialization::readPod(file, fileFirstLineIndent) &&
@@ -222,11 +239,12 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         serialization::readPod(file, fileEmbeddedStyle) && serialization::readPod(file, fileImageRendering) &&
         serialization::readPod(file, fileFocusReadingEnabled) && serialization::readPod(file, fileCollectTouchLinks) &&
         serialization::readPod(file, fileCharacterSpacing) && serialization::readPod(file, fileWordSpacingPercent) &&
-        serialization::readPod(file, fileVerticalText);
+        serialization::readPod(file, fileVerticalText) && serialization::readPod(file, fileVerticalBottomAlign);
 
     if (!headerValid || spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.firstLineIndent != fileFirstLineIndent ||
         spec.paragraphIndentSpaces != fileParagraphIndentSpaces || spec.paragraphAlignment != fileParagraphAlignment ||
+        fileVerticalBottomAlign > 1 || spec.verticalBottomAlign != (fileVerticalBottomAlign != 0) ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
@@ -485,7 +503,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
-      spec.firstLineIndent, spec.firstLineIndentPx, spec.paragraphAlignment,
+      spec.firstLineIndent, spec.firstLineIndentPx, spec.paragraphAlignment, spec.verticalBottomAlign,
       static_cast<uint16_t>(spec.verticalText ? spec.viewportHeight : spec.viewportWidth),
       static_cast<uint16_t>(spec.verticalText ? spec.viewportWidth : spec.viewportHeight),
       spec.hyphenationEnabled, spec.focusReadingEnabled,

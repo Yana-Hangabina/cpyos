@@ -1,0 +1,22 @@
+{
+  "en": [
+    "One scalable CJK font covers 8,105 characters",
+    "PDF highlights, notes and a combined panel",
+    "CBZ and FB2 books, static GIF first frame",
+    "16-level text and antialiased UI graphics",
+    "JJWXC comment bodies cache in the background",
+    "Queue page can pause, resume and clear",
+    "Standby zombie fix and boot timings",
+    "Language pack changed; full install for 33 languages"
+  ],
+  "zh": [
+    "统一可缩放中文字体，覆盖 8105 字",
+    "PDF 高亮、笔记与合并面板",
+    "新增 CBZ / FB2 与静态 GIF",
+    "16 级文字与 UI 抗锯齿",
+    "晋江段评正文后台缓存",
+    "缓存队列可暂停、恢复与清空",
+    "修复待机假死并记录开机耗时",
+    "语言包更新，其他语言需完整安装"
+  ]
+}

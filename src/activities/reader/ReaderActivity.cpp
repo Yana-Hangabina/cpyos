@@ -1,9 +1,11 @@
 #include "ReaderActivity.h"
+#include "activities/apps/jjwxc/JjwxcCacheService.h"
 
 #include "EmojiFont.h"
 
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
+#include <HalDisplay.h>
 #include <HalStorage.h>
 #include <KOReaderDocumentId.h>
 #include <Memory.h>
@@ -23,6 +25,9 @@
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "Typography.h"
+#endif
 #include "XtcReaderActivity.h"
 #include "util/PluginEvents.h"
 
@@ -68,9 +73,22 @@ void ReaderActivity::notePageTurn(const bool forward, const bool succeeded) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+  // Reading has priority: the background paragraph-comment queue yields at its
+  // next request and releases the radio/heap. The reader's own comment panel
+  // prefetch is a separate, foreground path.
+  jjwxc_cache_service::setReaderForeground(true);
   // The reader is where emoji matter; follow the persisted reader point size.
   // Reloading is a no-op unless the size changed since the last book.
   emoji_font::setPointSize(renderer, SETTINGS.fontPointSize);
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // Load the reader-size vector face (and any UI faces this activity needs)
+  // before the first page is laid out; a no-op when the set is unchanged.
+  typography::apply(renderer, SETTINGS.uiFontScale);
+#endif
+  // Fast turn is a 1-bit DU path. Keep its old 25% weight; the UI and normal
+  // pages keep the 50% threshold that matches the reference firmware.
+  GfxRenderer::setBwGlyphThreshold(SETTINGS.fastPageTurn ? 1 : 2);
+  GfxRenderer::setBwGlyphThreshold4(SETTINGS.fastPageTurn ? 7 : 10);
 
   // Heap ledger for field crash reports: free vs largest block distinguishes a
   // leak (free falls) from fragmentation (free stable, largest collapses).
@@ -110,7 +128,13 @@ void ReaderActivity::rememberBookOnceRendered() {
 }
 
 void ReaderActivity::onExit() {
+  // Never leak the reader's fast-turn weight into menus or other activities.
+  GfxRenderer::setBwGlyphThreshold(2);
+  GfxRenderer::setBwGlyphThreshold4(10);
   Activity::onExit();
+  // Resume only after the reader has released its fonts/page cache: the service
+  // must not compete with the teardown for PSRAM or the radio.
+  jjwxc_cache_service::setReaderForeground(false);
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {
@@ -238,6 +262,23 @@ void ReaderActivity::loop() {
   if (handleBackNavigation()) return;
 
   const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  // Tap-zone actions dispatch before any page-turn handling. In the default
+  // LEGACY layout the detection never sets these, so this is inert there. The
+  // end-of-book screen owns its taps.
+  if (!isAtEndOfBook()) {
+    if (touch.longPress && touch.longAction != tapzones::LONG_NONE) {
+      handleZoneLongAction(touch.longAction);
+      requestUpdate();
+      return;
+    }
+    if (touch.action != tapzones::NONE) {
+      // An unsupported action is swallowed on purpose: a zone the user assigned
+      // must never fall through to a page turn.
+      handleZoneShortAction(touch.action);
+      requestUpdate();
+      return;
+    }
+  }
   auto [prevTriggered, nextTriggered, fromMotion] = ReaderUtils::detectPageTurn(mappedInput);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
@@ -267,6 +308,59 @@ void ReaderActivity::loop() {
     }
   }
   requestUpdate();
+}
+
+bool ReaderActivity::handleZoneShortAction(const uint8_t action) {
+  switch (action) {
+    case tapzones::MENU:
+      return openZoneMenu();
+    case tapzones::GO_HOME:
+      onGoHome();
+      return true;
+    case tapzones::REFRESH:
+      renderer.promoteNextRefresh(HalDisplay::FULL_REFRESH);
+      requestUpdate();
+      return true;
+    case tapzones::ROTATE_CW:
+      rotateZoneOrientation(1);
+      return true;
+    case tapzones::ROTATE_CCW:
+      rotateZoneOrientation(-1);
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool ReaderActivity::handleZoneLongAction(const uint8_t action) {
+  switch (action) {
+    case tapzones::LONG_MENU:
+      return openZoneMenu();
+    case tapzones::LONG_GO_HOME:
+      onGoHome();
+      return true;
+    case tapzones::LONG_REFRESH:
+      renderer.promoteNextRefresh(HalDisplay::FULL_REFRESH);
+      requestUpdate();
+      return true;
+    case tapzones::LONG_ROTATE_CW:
+      rotateZoneOrientation(1);
+      return true;
+    case tapzones::LONG_ROTATE_CCW:
+      rotateZoneOrientation(-1);
+      return true;
+    default:
+      return false;
+  }
+}
+
+void ReaderActivity::rotateZoneOrientation(const int delta) {
+  const uint8_t next = static_cast<uint8_t>((SETTINGS.orientation + delta + CrossPointSettings::ORIENTATION_COUNT) %
+                                            CrossPointSettings::ORIENTATION_COUNT);
+  if (next == SETTINGS.orientation) return;
+  SETTINGS.orientation = next;
+  SETTINGS.saveToFile();
+  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 }
 
 void ReaderActivity::render(RenderLock&&) {

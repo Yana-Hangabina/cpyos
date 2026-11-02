@@ -375,10 +375,16 @@ inline uint8_t modernLevelAt(const uint8_t* data, const int x, const int y, cons
   return count > 0 ? static_cast<uint8_t>((sum + count / 2) / count) : 0;
 }
 
+inline bool drawModernGray(const GfxRenderer& renderer, UIIcon icon, int x, int y, int size, bool inverted);
+
 inline bool drawModern(const GfxRenderer& renderer, const UIIcon icon, const int x, const int y, const int size,
                        const bool inverted) {
   const uint8_t* data = ModernAppIcons::dataFor(icon);
   if (!data || size <= 0) return false;
+  // The source artwork already carries four tones. The run-length 1-bit path
+  // below is for the 1bpp panels; a 16-level page should keep the levels (and
+  // the area averaging that modernLevelAt does when scaling).
+  if (renderer.isGrayscale16Active() && drawModernGray(renderer, icon, x, y, size, inverted)) return true;
   for (int oy = 0; oy < size; ++oy) {
     int runStart = -1;
     for (int ox = 0; ox <= size; ++ox) {
@@ -417,13 +423,6 @@ inline void draw(const GfxRenderer& renderer, const UIIcon icon, const int x, co
   if (scale > 0 && drawModern(renderer, icon, x, y, size * scale, inverted)) return;
   const uint8_t* bitmap = get(icon);
   if (!bitmap || scale <= 0) return;
-  constexpr int rowBytes = size / 8;
-  for (int row = 0; row < size; ++row) {
-    for (int column = 0; column < size; ++column) {
-      const uint8_t byte = bitmap[row * rowBytes + column / 8];
-      if (((byte >> (7 - column % 8)) & 1U) != 0) continue;
-      renderer.fillRect(x + column * scale, y + row * scale, scale, scale, !inverted);
-    }
-  }
+  renderer.drawMaskAA(bitmap, size, size, x, y, size * scale, size * scale, true, !inverted);
 }
 }  // namespace InxAppIcons

@@ -23,6 +23,7 @@ void DuckSleepFace::onEnter() {
 void DuckSleepFace::onExit() {}
 
 StandbyFace::TickResult DuckSleepFace::tick() {
+  if (!showClock_) return TickResult::None;
   const uint32_t nowMin = standby_time::getMinuteTick(startMs_);
   if (static_cast<int32_t>(nowMin) == lastMin_) return TickResult::None;
   lastMin_ = static_cast<int32_t>(nowMin);
@@ -38,13 +39,15 @@ void DuckSleepFace::render(GfxRenderer& renderer, const Rect& viewport) {
 
   // Songti extra-bold clock with the date line under it (frame 34's layout:
   // the block sits high on the page, ratio-based so C3 scales with it).
-  unsigned hh = 0;
-  unsigned mm = 0;
-  standby_time::getNowHHMM(startMs_, hh, mm);
-  const int centerX = viewport.x + viewport.width / 2;
-  const int clockTop = viewport.y + viewport.height * 21 / 100;
-  const int timeHeight = cpy_clock::drawTime(renderer, centerX, clockTop, hh, mm);
-  cpy_clock::drawDateLine(renderer, centerX, clockTop + timeHeight + 12);
+  if (showClock_) {
+    unsigned hh = 0;
+    unsigned mm = 0;
+    standby_time::getNowHHMM(startMs_, hh, mm);
+    const int centerX = viewport.x + viewport.width / 2;
+    const int clockTop = viewport.y + viewport.height * 21 / 100;
+    const int timeHeight = cpy_clock::drawTime(renderer, centerX, clockTop, hh, mm);
+    cpy_clock::drawDateLine(renderer, centerX, clockTop + timeHeight + 12);
+  }
 
   // Water band low on the page (frame 34: ~220px off the bottom), wave line
   // on top of a light dither.
@@ -69,6 +72,7 @@ void DuckSleepFace::render(GfxRenderer& renderer, const Rect& viewport) {
 StrId DuckSleepFace::titleId() const { return StrId::STR_FACE_DUCK_SLEEP; }
 
 uint32_t DuckSleepFace::secondsUntilNextWake() const {
+  if (!showClock_) return 60u;  // static light-sleep image; poll once a minute
   uint32_t sec;
   if (standby_time::isSynced()) {
     const time_t now = time(nullptr);

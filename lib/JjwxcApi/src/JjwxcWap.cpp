@@ -744,6 +744,102 @@ size_t wapHtmlToText(char* frag, size_t fragLen) {
   return end - start;
 }
 
+// ------------------------------------------------------------- author note ---
+
+// An <img title="X"> in a note is an inline emoji from the site's own sheet. The
+// reader cannot fetch that sheet, and dropping the tag would silently delete a
+// character the author typed, so the label becomes "[X]". `alt` is the fallback
+// because the template uses it on some emoji and `title` on others.
+size_t noteImgLabel(const char* tag, const size_t tagLen, char* out, const size_t outCap) {
+  const char* keys[] = {"title=\"", "alt=\""};
+  for (const char* key : keys) {
+    const size_t k = findCi(tag, tagLen, 0, key);
+    if (k == tagLen) continue;
+    const size_t start = k + strlen(key);
+    size_t end = start;
+    while (end < tagLen && tag[end] != '"') ++end;
+    if (end == start) continue;
+    const size_t n = (end - start) + 2;
+    if (n > outCap) return 0;
+    out[0] = '[';
+    memcpy(out + 1, tag + start, end - start);
+    out[n - 1] = ']';
+    return n;
+  }
+  return 0;
+}
+
+// Note markup is a subset of the body's: <br>, </p>, emoji <img>, and the odd
+// <a>. Paragraph splitting and newline collapsing are the same rules as
+// wapHtmlToText, so a note reads like prose rather than like HTML source.
+size_t noteHtmlToText(char* frag, const size_t fragLen) {
+  size_t w = 0;
+  for (size_t r = 0; r < fragLen;) {
+    if (frag[r] == '<') {
+      size_t e = r;
+      while (e < fragLen && frag[e] != '>') ++e;
+      if (e >= fragLen) {  // unterminated: treat the rest as text
+        frag[w++] = frag[r++];
+        continue;
+      }
+      const size_t tagLen = e - r;
+      const bool isBr = (tagLen >= 3 && iStartsWith(frag, fragLen, r + 1, "br"));
+      const bool isCloseP = (tagLen >= 3 && iStartsWith(frag, fragLen, r + 1, "/p"));
+      const bool isImg = (tagLen >= 4 && iStartsWith(frag, fragLen, r + 1, "img"));
+      if (isBr || isCloseP) {
+        frag[w++] = '\n';
+      } else if (isImg) {
+        // The insertion is never longer than the tag it replaces, so it cannot
+        // overwrite bytes this loop has not consumed yet.
+        w += noteImgLabel(frag + r, tagLen, frag + w, fragLen - w);
+      }
+      r = e + 1;
+      continue;
+    }
+    const char c = frag[r];
+    if (c == '\r') {
+      frag[w++] = '\n';
+      ++r;
+      if (r < fragLen && frag[r] == '\n') ++r;
+      continue;
+    }
+    frag[w++] = c;
+    ++r;
+  }
+
+  size_t v = 0;
+  size_t run = 0;
+  for (size_t i = 0; i < w;) {
+    if (frag[i] == '\n') {
+      while (v > 0 && (frag[v - 1] == ' ' || frag[v - 1] == '\t')) --v;
+      ++run;
+      if (run <= 2) frag[v++] = '\n';
+      ++i;
+      continue;
+    }
+    run = 0;
+    frag[v++] = frag[i++];
+  }
+  size_t start = 0;
+  while (start < v) {
+    size_t advance = 1;
+    if (!isUnicodeSpace(utf8Decode(frag + start, v - start, advance))) break;
+    start += advance;
+  }
+  size_t end = v;
+  while (end > start) {
+    size_t b = end;
+    while (b > start && (static_cast<uint8_t>(frag[b - 1]) & 0xC0) == 0x80) --b;
+    if (b == start) break;
+    --b;
+    size_t advance = 1;
+    if (!isUnicodeSpace(utf8Decode(frag + b, end - b, advance))) break;
+    end = b;
+  }
+  if (start > 0) memmove(frag, frag + start, end - start);
+  return end - start;
+}
+
 WapResult wapPageToText(const char* page, const size_t pageLen, const PuaLookup pua, void* puaCtx,
                         WapBuffers& bufs) {
   WapResult res;
@@ -788,6 +884,47 @@ WapResult wapPageToText(const char* page, const size_t pageLen, const PuaLookup 
   bufs.text[bodyLen] = '\0';
   res.textLen = bodyLen;
   return res;
+}
+
+bool wapAuthorNoteToText(const char* page, const size_t pageLen, const PuaLookup pua, void* puaCtx, char* out,
+                         const size_t outCap, size_t& outLen) {
+  outLen = 0;
+  if (page == nullptr || out == nullptr || outCap < 2) return false;
+
+  // Both quote styles, because the note wrapper is emitted by a different template
+  // than contentvars and the two have been seen to disagree.
+  size_t id = findCi(page, pageLen, 0, "id=\"note_str\"");
+  const size_t idSingle = findCi(page, pageLen, 0, "id='note_str'");
+  if (idSingle < id) id = idSingle;
+  if (id == pageLen) return false;
+
+  const size_t openEnd = findCi(page, pageLen, id, ">");
+  if (openEnd == pageLen) return false;
+  const size_t close = findCi(page, pageLen, openEnd, "</script>");
+  if (close == pageLen) return false;
+
+  const size_t start = openEnd + 1;
+  size_t len = close - start;
+  if (len > outCap - 1) {
+    // Truncate on a UTF-8 boundary: the only consumer is a text sink, and half a
+    // code point would render as a replacement box in the book.
+    len = outCap - 1;
+    while (len > 0 && (static_cast<uint8_t>(page[start + len]) & 0xC0) == 0x80) --len;
+  }
+  memcpy(out, page + start, len);
+  out[len] = '\0';
+
+  // Same order as the body: the CSS rules live in `page`, then entities, then the
+  // watermark, then markup. A note with none of these passes through unchanged.
+  len = wapUndoCssDisplacement(out, len, outCap - 1, page, pageLen);
+  len = wapDecodeEntities(out, len);
+  uint32_t total = 0;
+  uint32_t unresolved = 0;
+  len = wapApplyPuaMap(out, len, pua, puaCtx, total, unresolved);
+  len = noteHtmlToText(out, len);
+  out[len] = '\0';
+  outLen = len;
+  return true;
 }
 
 }  // namespace jjwxc

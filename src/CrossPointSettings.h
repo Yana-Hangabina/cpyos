@@ -10,6 +10,7 @@
 #include "AppVisibility.h"
 #include "BleKeyMapping.h"
 #include "InxItemLayout.h"
+#include "TapZones.h"
 #include "components/UiHighDpiProfile.h"
 #include "util/ReadingGuideLine.h"
 
@@ -41,6 +42,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Callers must not re-enter SETTINGS methods that lock storeMutex while holding it.
   std::mutex& getMutex() const { return storeMutex; }
 
+  // LEGACY, migration-only. DARK/LIGHT used to be sleep-screen values; the
+  // current model keeps polarity in the global screenInverted (dark mode) and
+  // content in deepSleepStyle. Never present this enum in the settings UI.
   enum SLEEP_SCREEN_MODE {
     DARK = 0,
     LIGHT = 1,
@@ -59,6 +63,36 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     INVERTED_BLACK_AND_WHITE = 2,
     SLEEP_SCREEN_COVER_FILTER_COUNT
   };
+  // Standby content style. Selected in Settings; the standby screen itself no
+  // longer cycles faces. DUCK_SLEEP is the default and is also what the reader's
+  // power-key standby shows.
+  enum STANDBY_STYLE {
+    STANDBY_DUCK_SLEEP = 0,
+    STANDBY_SLOPPY_CLOCK = 1,
+    STANDBY_CALENDAR = 2,
+    STANDBY_CUSTOM_IMAGE = 3,
+    STANDBY_STYLE_COUNT
+  };
+  // Light sleep is the 35-second stage of standby. FOLLOW_STANDBY keeps the
+  // clock updating; the default is a static duck/water image without a clock.
+  enum LIGHT_SLEEP_STYLE {
+    LIGHT_SLEEP_DUCK_STATIC = 0,
+    LIGHT_SLEEP_FOLLOW_STANDBY = 1,
+    LIGHT_SLEEP_CUSTOM_IMAGE = 2,
+    LIGHT_SLEEP_STYLE_COUNT
+  };
+  // Deep sleep content style. Polarity follows the global screenInverted; DARK
+  // and LIGHT are not styles. COVER_CUSTOM was a fallback rule and is gone.
+  enum DEEP_SLEEP_STYLE {
+    DEEP_SLEEP_NIGHT = 0,
+    DEEP_SLEEP_CUSTOM_IMAGE = 1,
+    DEEP_SLEEP_COVER = 2,
+    DEEP_SLEEP_QUICK_RESUME = 3,
+    DEEP_SLEEP_TRANSPARENT = 4,
+    DEEP_SLEEP_BLANK = 5,
+    DEEP_SLEEP_STYLE_COUNT
+  };
+  enum SLEEP_STATE_BADGE { SLEEP_BADGE_OFF = 0, SLEEP_BADGE_ON = 1, SLEEP_STATE_BADGE_COUNT };
 
   // Legacy aggregate status-bar modes, retained only for settings.bin migration.
   enum STATUS_BAR_MODE {
@@ -188,7 +222,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Legacy 1.4-and-earlier files stored a 0..3 SMALL/MEDIUM/LARGE/EXTRA_LARGE
   // slot; fromJson() folds that range up (see LEGACY_FONT_SIZE_MAX).
   static constexpr uint8_t LEGACY_FONT_SIZE_MAX = 3;
-  static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = UiHighDpiProfile::enabled ? 14 : 12;
+  // 12pt is 25px at the legacy 150-DPI mapping. Keep it as the out-of-box size
+  // even though the system pack can now render larger reader sizes.
+  static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = 12;
   enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, EXTRA_WIDE = 3, LINE_COMPRESSION_COUNT };
   enum SYNTHETIC_BOLD {
     SYNTHETIC_BOLD_OFF = 0,
@@ -242,6 +278,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     FORCE_REFRESH = 3,
     FOOTNOTES = 4,
     PWR_CONFIRM = 5,
+    // Short press enters the standby overlay (and wakes back to the caller).
+    // Appended so existing persisted indices keep their meaning.
+    STANDBY = 6,
     SHORT_PWRBTN_COUNT
   };
 
@@ -309,6 +348,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PAGE_TURN_GESTURE_COUNT
   };
 
+  // Reader tap-zone layout. LEGACY keeps the outer-thirds split exactly as it
+  // always worked (left/right thirds page, centre third opens the menu, the
+  // per-direction gestures and the mirrored page-turn direction decide the
+  // sides). CUSTOM hit-tests the 3x3 grid + six mini zones below through
+  // tapzones::Grid; it is opt-in, so a reader who never opens the Tap Zones
+  // page keeps the legacy behaviour bit for bit.
+  enum TAP_ZONE_MODE { TAP_ZONE_MODE_LEGACY = 0, TAP_ZONE_MODE_CUSTOM = 1, TAP_ZONE_MODE_COUNT };
+  // Schema version of the persisted tap-zone keys; bumped only when a stored
+  // layout needs migrating.
+  static constexpr uint8_t TAP_ZONE_SETTINGS_VERSION = 1;
+
   // How the reader menu opens on touch boards. Persisted under the legacy
   // "tapForReaderMenu" key: 0/1 keep their old Off/Tap meaning.
   enum SHOW_READER_MENU { READER_MENU_OFF = 0, READER_MENU_TAP = 1, READER_MENU_SWIPE_UP = 2, SHOW_READER_MENU_COUNT };
@@ -337,10 +387,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     DAILY_GOAL_TARGET_COUNT
   };
 
-  // Sleep screen settings
+  // LEGACY, migration-only: old sleep-screen index (and settings.bin slot).
+  // Never written to settings.json and never shown in the UI.
   uint8_t sleepScreen = LIGHT;
+  // Sleep/standby content styles. Polarity is global (screenInverted), so a
+  // DARK/LIGHT variant is not a style anymore.
+  uint8_t standbyStyle = STANDBY_DUCK_SLEEP;
+  uint8_t lightSleepStyle = LIGHT_SLEEP_DUCK_STATIC;
+  uint8_t deepSleepStyle = DEEP_SLEEP_NIGHT;
+  uint8_t sleepStateBadge = SLEEP_BADGE_ON;
   // Night mode: inverted output polarity, applied to every activity per
-  // render by ActivityManager. The sleep screen opts out itself.
+  // render by ActivityManager. Standby and deep-sleep screens follow it too.
   uint8_t screenInverted = 0;
   // Sleep screen cover mode settings
   uint8_t sleepScreenCoverMode = FIT;
@@ -406,8 +463,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t readingGuideLineEnabled = 0;
   uint8_t readingGuideLineStyle = static_cast<uint8_t>(readingGuideLine::Style::ShortDash);
   int8_t readingGuideLineOffset = READING_GUIDE_LINE_OFFSET_DEFAULT;
-  // Short power button click behaviour
+  // Short power button click behaviour. Read Pico defaults to the standby
+  // overlay; other boards keep the historical Ignore default until the user
+  // chooses an action.
+#if FREEINK_DEVICE_READPICO
+  uint8_t shortPwrBtn = STANDBY;
+#else
   uint8_t shortPwrBtn = IGNORE;
+#endif
   // X4 Pro: double-click power toggles the frontlight. Disabling frees the
   // power button for shortPwrBtn actions without the double-click wait.
   uint8_t doubleClickPwrLight = 1;
@@ -438,6 +501,14 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
   uint8_t paragraphAlignment = JUSTIFIED;
+  // Vertical page bottom alignment (upstream 8418166c). When on, every non-final
+  // text-only page redistributes its leftover space between the lines so the
+  // first line stays at the top and the last one reaches the content bottom
+  // (capped at half a line height per gap). The chapter's final page stays
+  // top-aligned. Part of the section cache key. Ignored while verticalText is
+  // on: in vertical layout "lines" are right-aligned columns, and this setting
+  // must not move them along the writing direction (see readerRenderSpec()).
+  uint8_t verticalBottomAlign = 0;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
   // How the reader keeps the status-bar clock current. A per-minute update is a
@@ -493,6 +564,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // CPY row rhythm: 0 = comfortable, 1 = compact (more rows per screen; the
   // chrome — title band, tab bar, keyboard — keeps its size). INX ignores it.
   uint8_t uiDensity = 0;
+  // One unified UI/content type scale. 0=compact, 1=standard, 2=large,
+  // 3=extra large. Only targets with the external system font pack expose the
+  // setting; other targets keep their built-in sizes. Defaults preserve each
+  // panel's current look: ReadPico's 12/14/16 UI (large) and C3's 8/10/12
+  // (compact).
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+  uint8_t uiFontScale = 2;
+#else
+  uint8_t uiFontScale = 0;
+#endif
   // Show front-button hints along the bottom edge on non-touch devices.
   uint8_t showButtonHints = 1;
   // Dead storage: the INX layout variants are retired, but the field stays
@@ -584,6 +665,32 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // and other apps are untouched. XORed with rtlBook (right-to-left books such as
   // vertical Japanese), so the two cancel rather than each flipping the result.
   uint8_t pageTurnDirection = 0;
+  // Reader tap-zone layout (TAP_ZONE_MODE). LEGACY is the default so an
+  // existing reader sees no change at all; CUSTOM uses the grid below.
+  uint8_t tapZoneMode = TAP_ZONE_MODE_LEGACY;
+  // Set once the custom grid has been edited (or explicitly reset). Switching
+  // to CUSTOM the first time seeds the grid from the legacy configuration;
+  // after that the user's grid survives a trip back to LEGACY.
+  uint8_t tapZonesCustomized = 0;
+  // Short action of the 3x3 grid (tapzones::Action, row-major). The default
+  // reproduces the legacy thirds: left column back, right column forward, the
+  // centre cell opens the menu and the rest of the centre column turns forward.
+  uint8_t tapZones[9] = {
+      tapzones::PREV, tapzones::NEXT, tapzones::NEXT,  // top row
+      tapzones::PREV, tapzones::MENU, tapzones::NEXT,  // middle row
+      tapzones::PREV, tapzones::NEXT, tapzones::NEXT,  // bottom row
+  };
+  // Long-press action of the 3x3 grid (tapzones::LongAction, same layout).
+  uint8_t tapZonesLong[9] = {
+      tapzones::LONG_NONE, tapzones::LONG_NONE, tapzones::LONG_NONE,  // top row
+      tapzones::LONG_NONE, tapzones::LONG_NONE, tapzones::LONG_NONE,  // middle row
+      tapzones::LONG_NONE, tapzones::LONG_NONE, tapzones::LONG_NONE,  // bottom row
+  };
+  // Six small edge zones (tap-only), in tapzones::Grid::miniCell order:
+  // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right, 4 top-middle,
+  // 5 bottom-middle.
+  uint8_t miniZones[6] = {tapzones::NONE, tapzones::NONE, tapzones::NONE,
+                          tapzones::NONE, tapzones::NONE, tapzones::NONE};
   // Reader menu open gesture (SHOW_READER_MENU: off / center tap / bottom-edge
   // up-swipe). Only surfaced on home-key boards, where Home is the capacitive
   // key and the bottom edge is free; elsewhere it stays at the Tap default.

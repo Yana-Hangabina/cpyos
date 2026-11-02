@@ -356,10 +356,10 @@ class SettingsIconsTest(unittest.TestCase):
         """Mutation test: remove one mapping and the audit must notice."""
         text = MAPPING_HEADER.read_text()
         mutated = text.replace(
-            '    case StrId::STR_SLEEP_SCREEN:\n      return &icon_clock_48;\n', '')
+            '    case StrId::STR_STANDBY_STYLE:\n      return &icon_clock_48;\n', '')
         self.assertNotEqual(mutated, text, 'mutation anchor moved; update this test')
         missing = missing_rows(mappings_from_text(mutated))
-        self.assertIn('STR_SLEEP_SCREEN', missing['display'])
+        self.assertIn('STR_STANDBY_STYLE', missing['display'])
 
 
 if __name__ == '__main__':

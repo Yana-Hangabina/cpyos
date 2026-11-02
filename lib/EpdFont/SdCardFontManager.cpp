@@ -104,7 +104,12 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
+#if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // On the system-font-pack targets these bindings belong to typography::apply()
+  // (the scalable UI family), not to the SD family; clearing them here dropped
+  // the whole UI back to the 8pt fallback until the next apply().
   renderer.clearPreferredFonts();
+#endif
   renderer.clearSdCardFonts();
   for (auto& lf : loaded_) {
     // removeFont drops only mappings that reference this SD font, preserving

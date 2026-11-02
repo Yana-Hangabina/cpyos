@@ -68,8 +68,8 @@ constexpr int16_t kGridTitleGapTop = 8;
 constexpr int16_t kGridRowGapBottom = 22;
 
 // CJK-aware greedy wrap for the coverless placeholder. GfxRenderer's
-// wrappedText only breaks on spaces, and a Chinese title without spaces is a
-// single word to it — it truncated to a bare ellipsis in the grid (sim review,
+// wrappedText only breaks on spaces, and a title like "脆皮鸭用户手册" is a
+// single word to it — it truncated to "CrossM…" in the grid (sim review,
 // 2026-10-16). Breaks per grapheme, trimming trailing spaces; when the line
 // budget runs out the remainder gets the usual ellipsis.
 std::vector<std::string> wrapCoverTitle(const GfxRenderer& renderer, const int fontId, const char* text,
@@ -134,13 +134,7 @@ constexpr int gridTitleFontId() {
 // renderer, and the theme's own copy is file-local, so the two quiet header
 // actions carry this eight-line blitter.
 void drawMaskIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y) {
-  const int stride = (icon.w + 7) / 8;
-  for (int row = 0; row < icon.h; ++row) {
-    const uint8_t* src = icon.bits + static_cast<size_t>(row) * stride;
-    for (int col = 0; col < icon.w; ++col) {
-      if (((src[col >> 3] >> (7 - (col & 7))) & 1U) == 0) renderer.drawPixel(x + col, y + row, true);
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, icon.w, icon.h, true, true);
 }
 
 // Design's .seal: a white disc with a 2px black ring and one glyph. White fill
@@ -490,6 +484,31 @@ void LibraryListActivity::showRecentBookOptions(const int entry) {
   requestUpdate();
 }
 
+bool LibraryListActivity::canSwipeDelete(const int index) const {
+  // Collapsed groups are headings, and the cover grid has no row to slide; the
+  // grid keeps tap-to-open. Everything else resolves a real book row below.
+  if (groupsCollapsed || usesCoverGrid()) return false;
+  return index >= 0 && index < listCount();
+}
+
+void LibraryListActivity::swipeDelete(const int entry) {
+  if (entry < 0 || entry >= listCount()) return;
+  // Land the ring on the row first so the confirmation's "after" state (and a
+  // cancelled dialog) leaves the shelf where the gesture happened. ring 0 is
+  // the tab band, so rows start at 1.
+  activeNav().selected = entry + 1;
+  if (isRecentSort(sortOrder) && entry < pinnedCount()) {
+    // Pinned Recent rows come from RecentBooksStore, not the index (mirrors
+    // showRecentBookOptions()).
+    const auto& books = RECENT_BOOKS.getBooks();
+    if (entry >= static_cast<int>(books.size())) return;
+    promptDeleteBookByPath(books[static_cast<size_t>(entry)].path, books[static_cast<size_t>(entry)].title);
+  } else {
+    promptDeleteBook(entry);
+  }
+  requestUpdate();
+}
+
 // Manual index refresh, same card discipline as the onEnter rebuild: the walk
 // wants the card to itself, and the render task must not read the index (or
 // the filter) around it.
@@ -728,6 +747,7 @@ void LibraryListActivity::onTabAction(const int index) {
 }
 
 void LibraryListActivity::selectTab(const int index, const bool toggleIfActive) {
+  closeSwipeDelete();
   if (index < 0 || index >= TAB_SLOTS) return;
   if (toggleIfActive && index == activeTab()) descendingTabs ^= static_cast<uint8_t>(1u << index);
   sortOrder = orderForTab(index, descendingTabs);
@@ -1377,6 +1397,7 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   props.items = winItems.data();
   props.itemsWindowFirst = static_cast<uint16_t>(windowStart);
   props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
+  configureSwipeDelete(screen, props);
   screen.list(props);
   const int next = nav.drawnRows;
   const auto body = screen.body();
@@ -1931,12 +1952,16 @@ void LibraryListActivity::buildCoverGrid(UiScreen& screen) {
       if (slot < kGridCoverSlots && gridCovers[slot] == GridCover::Ready && !gridCoverPaths[slot].empty()) {
         // Shared PSRAM cache: a grid repaint used to re-read every 8-bit cover
         // from the card (5 covers = ~500 KB per frame, the bulk of the entry time).
+        // The Bitmap memory-source constructor only exists with PSRAM/emulation;
+        // C3 falls through to the streaming file path below.
+#if defined(BOARD_HAS_PSRAM) || defined(CROSSPOINT_EMULATED)
         if (const auto* cached = BookCoverLoader::cacheThumbFile(gridCoverPaths[slot])) {
           Bitmap bitmap(cached->bytes.get(), cached->size);
           if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
             drewCover = renderer.drawBitmapCropToFill(bitmap, cover.x, cover.y, cover.width, cover.height);
           }
         }
+#endif
         if (!drewCover) {
           HalFile file;
           if (Storage.openFileForRead("LIB", gridCoverPaths[slot], file)) {

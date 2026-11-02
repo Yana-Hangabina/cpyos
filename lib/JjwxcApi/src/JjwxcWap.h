@@ -120,6 +120,26 @@ WapStatus wapDecryptContent(const WapVars& v, const WapCryptInfo& info, char* bo
 // entities, resolve the watermark, strip tags, normalise newlines.
 WapResult wapPageToText(const char* page, size_t pageLen, PuaLookup pua, void* puaCtx, WapBuffers& bufs);
 
+// The author's note ("作者有话说") a WAP chapter page carries as
+//   <script id="note_str" type="text/html">...</script>
+//
+// It is PLAINTEXT on the page, outside contentvars: the service never encrypts it
+// and never asks for a second request, which is also why an unpurchased chapter
+// (a 302 to /buy) can never expose one. The note may legitimately be empty --
+// many chapters have none -- so `found` and the length are reported separately.
+//
+// Cleaning reuses the body's repairs so a note cannot smuggle through a shape the
+// prose path already handles: numeric/named entities, CSS `content:` displacement,
+// and the PUA watermark. `<br>` and `</p>` become newlines; an `<img title="X">`
+// becomes `[X]` rather than vanishing with its tag (the emoji itself cannot be
+// drawn without the site's emoji sheet); every other tag is dropped.
+//
+// Returns false only when the page has no note element. When the cleaned note does
+// not fit in `out` it is truncated on a UTF-8 boundary and still reported, because
+// a long note is an enhancement, not a reason to fail the chapter.
+bool wapAuthorNoteToText(const char* page, size_t pageLen, PuaLookup pua, void* puaCtx, char* out, size_t outCap,
+                         size_t& outLen);
+
 // --- exposed for tests -------------------------------------------------------
 // The key derivation is the part that cannot be debugged from its output: a wrong
 // rotation or a swapped key/IV yields plausible-looking garbage, so the

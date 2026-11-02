@@ -32,8 +32,8 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 
 | 按钮 | 适用场景 | 行为 |
 |---|---|---|
-| **首次安装 / 恢复** | 出厂固件、CrossMux 1.6.5、分区表不是 CPYOS 布局 | 写 bootloader、分区表、boot_app0、app 和四个数据包；要求擦除芯片 |
-| **从 CPYOS 升级** | 已经在运行 CPYOS 0.1.0 或更新版本 | 只写 app 和四个数据包；保留 NVS 与分区表 |
+| **首次安装 / 恢复** | 出厂固件、CrossMux 1.6.5、分区表不是 CPYOS 布局 | 写 bootloader、分区表、boot_app0、app 和五个数据包；要求擦除芯片 |
+| **从 CPYOS 升级** | 已经在运行 CPYOS 0.1.0 或更新版本 | 只写 app 和五个数据包；保留 NVS 与分区表 |
 
 首次安装会重建分区表（7.19 MiB app 槽 + 1.5 MiB 数据分区）。网页刷机不会删除 SD 卡里的书和 `/.crosspoint` 设置，但会擦除芯片上的 NVS（Wi-Fi 凭据等）。
 
@@ -51,6 +51,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 | `web_pack.dat` | `0xEC6000` |
 | `hyphen.dat` | `0xF00000` |
 | `i18n_pack.dat` | `0xF70000` |
+| `emoji.dat` | `0xFD0000` |
 
 偏移量以包内 `FLASH.md` 和 `build/data_manifest.txt` 为准；分区表或数据包布局变化时本文档会过时。校验：
 
@@ -66,7 +67,8 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \
   0xE70000 pinyin.dat 0xEC6000 web_pack.dat \
-  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat
+  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \
+  0xFD0000 emoji.dat
 ```
 
 成功判据是日志里的 **`Hash of data verified.`**，不是退出码。
@@ -79,7 +81,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
 2. **设置 → 系统 → 检查更新**；
 3. 确认升级，等待下载、校验和重启；不要断电。
 
-OTA 只写 app0，不动数据分区、SD 卡、书库和设置。因此，如果某个版本同时改了语言包 / 网页包 / 拼音 / 断词数据，**不能只做 OTA**：设备会保留旧数据包，语言包键数不符时回退英文，网页显示恢复页。0.1.0 首次安装会写入四个数据包；之后的小版本 OTA 才安全。发布说明会标注需要完整安装的版本。固件读取：
+OTA 只写 app0，不动数据分区、SD 卡、书库和设置。因此，如果某个版本同时改了语言包 / 网页包 / 拼音 / 断词 / emoji 数据，**不能只做 OTA 得到全部语言**：设备会保留旧数据包；语言包键数不符时，未内嵌的 33 种语言会回退英文（中文与英文在固件内，不受影响），网页包不兼容时显示恢复页。0.2.0 的语言包有变化，中文 app-only OTA 仍完整，其他语言请用「从 CPYOS 升级」或完整安装包重写数据分区。发布说明会标注需要完整安装的版本。固件读取：
 
 ```
 https://yana-hangabina.github.io/cpyos/ota/readpico.json
@@ -89,12 +91,13 @@ https://yana-hangabina.github.io/cpyos/ota/readpico.json
 
 ## 4. 数据分区与 SD 卡
 
-数据分区 `spiffs` 当前 1.5 MiB，四个 blob 的偏移由 `scripts/generate_data_manifest.py` 从分区表和 C++ 加载器常量生成：
+数据分区 `spiffs` 当前 1.5 MiB，五个 blob 的偏移由 `scripts/generate_data_manifest.py` 从分区表和 C++ 加载器常量生成：
 
 - `pinyin.dat`：拼音输入与书名搜索；
 - `hyphen.dat`：11 种语言断词；
 - `i18n_pack.dat`：33 种 UI 语言；
-- `web_pack.dat`：文件传输 / 设置网页。
+- `web_pack.dat`：文件传输 / 设置网页；
+- `emoji.dat`：Noto Emoji 单色子集，正文与段评的 emoji 回退。
 
 SD 卡根目录的同名文件优先于数据分区（`/pinyin.dat`、`/hyphen.dat`），这是免刷写更新数据的通道。数据分区缺失时固件仍能启动，但对应功能会降级：非英文语言回退英文，网页显示恢复页。
 

@@ -98,13 +98,7 @@ constexpr int bluetoothStatusIconHeight = UiHighDpiProfile::enabled ? UiHighDpiP
 // Plot only ink pixels; the white bits are transparent. No render-time buffers.
 void drawTransparentBitmap(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
                            const bool black) {
-  for (int row = 0; row < icon.h; ++row) {
-    for (int column = 0; column < icon.w; ++column) {
-      if ((icon.bits[row * ((icon.w + 7) / 8) + column / 8] & (0x80U >> (column % 8))) == 0) {
-        renderer.drawPixel(x + column, y + row, black);
-      }
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, icon.w, icon.h, true, black);
 }
 #endif
 
@@ -1096,7 +1090,12 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
     }
   }
 #endif
+#if FREEINK_DEVICE_READPICO
+  // Transient card over a stable page: keep it out of the UI GC16 sweep.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
+#else
   renderer.displayBuffer();
+#endif
   return Rect{x, y, w, h};
 }
 

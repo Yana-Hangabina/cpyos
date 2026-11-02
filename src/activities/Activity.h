@@ -90,6 +90,17 @@ class Activity {
   virtual void debugDismissHint() {}
   virtual void debugOpenJjwxcComment() {}
   virtual void debugOpenFakeJjwxcComment() {}
+  // Serial-only probe for the comment panel's background prefetch: exercise the
+  // real refresh/like paths without a touch screen.
+  virtual void debugRefreshJjwxcComment() {}
+  virtual void debugLikeJjwxcComment() {}
+  virtual void debugOpenJjwxcCacheQueue() {}
+  virtual void debugEnqueueJjwxcCacheQueue() {}
+  virtual void debugEnqueueJjwxcCacheQueueRange(uint32_t from, uint32_t to) {}
+  virtual void debugPauseJjwxcCacheQueue() {}
+  virtual void debugClearJjwxcCacheQueue() {}
+  virtual void debugResumeJjwxcCacheQueue() {}
+  virtual void debugJjwxcCacheQueueStatus() {}
   virtual void debugPageTurn(bool) {}
   virtual void debugDumpPage() {}
   virtual void debugOpenStressComment() {}

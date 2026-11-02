@@ -51,6 +51,19 @@ class ReaderActivity : public Activity {
   virtual bool isAtEndOfBook() const = 0;
   virtual void onReturnFromEndOfBook() {}
 
+  // Tap-zone action dispatch. The base implementation handles the actions every
+  // reader shares (menu, orientation, refresh, home); subclasses extend it with
+  // reader-specific actions (bookmark / dictionary / chapter / percent /
+  // KOReader / auto turn). An action the reader does not support returns false
+  // and is swallowed by loop(), so it never falls through to a page turn.
+  virtual bool handleZoneShortAction(uint8_t action);
+  virtual bool handleZoneLongAction(uint8_t action);
+  // Opens this reader's menu for a MENU tap zone; readers without one return
+  // false (the tap is then inert).
+  virtual bool openZoneMenu() { return false; }
+  // Rotate the reading orientation by +1 (clockwise) / -1 (counter-clockwise).
+  void rotateZoneOrientation(int delta);
+
   virtual void renderBook() = 0;
   virtual void applyInitialOrientation();
   virtual void onEndOfBookRendered() {}

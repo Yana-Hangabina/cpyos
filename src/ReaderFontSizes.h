@@ -11,9 +11,20 @@
 // therefore come from whichever family is active: the built-in or vector set
 // below, or the .cpfont files a user installed for an SD family.
 
-// The unified firmware keeps one offline reader fallback. Other point sizes and
-// style variants are supplied by installed SD-card font families.
+// The unified firmware keeps one offline reader fallback. The bitmap profile
+// still has exactly one size; the scalable system pack can drive every size the
+// reader asks for, so only the *selectable* list grows. The default stays 12pt
+// (CrossPointSettings::DEFAULT_FONT_POINT_SIZE) — this list must not make the
+// out-of-box text larger.
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK) && defined(BOARD_HAS_PSRAM)
+inline constexpr uint8_t BUILTIN_READER_POINT_SIZES[] = {10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34};
+#elif defined(CROSSPOINT_SYSTEM_FONT_PACK)
+// No PSRAM: the pack keeps one small internal-RAM face, so cap the reader menu
+// at the sizes the old bitmap profile exposed.
+inline constexpr uint8_t BUILTIN_READER_POINT_SIZES[] = {10, 12, 14, 16, 18};
+#else
 inline constexpr uint8_t BUILTIN_READER_POINT_SIZES[] = {12};
+#endif
 
 // Vector (.ttf/.otf) fonts offer every whole point size from 8 through 22.
 inline constexpr uint8_t VECTOR_READER_POINT_SIZES[] = {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22};

@@ -114,6 +114,14 @@ ruby -rdigest -e 'puts [
 
 echo "#define CONTROL_18_FONT_ID ($(ruby -rdigest -e 'puts ["./notosans_18_regular.h", "./notosans_18_bold.h"].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'))"
 
+# Reader-only 18pt alias. Fixed rather than content-hashed: NOTOSANS_18 is also
+# UI display text, so the reader needs an id the UI scale never rebinds.
+echo "#define CJK_UI_18_FONT_ID (0x43554A31)"
+# One reader face per point size. The system font pack binds the live
+# TtfEpdFont at this id, so the reader size setting never has to share an id
+# with a UI role that follows the UI scale.
+echo "#define CJK_READER_SIZE_FONT_ID(pt) (0x43555200 | (pt))"
+
 # Font ID 0 is reserved as the "not found" sentinel; emit a compile-time
 # guard for each ID so a hash collision with 0 is caught at build time.
 echo ""
@@ -123,7 +131,9 @@ for id in \
   NOTOSERIF_12_FONT_ID NOTOSERIF_14_FONT_ID NOTOSERIF_16_FONT_ID NOTOSERIF_18_FONT_ID \
   NOTOSANS_12_FONT_ID NOTOSANS_14_FONT_ID NOTOSANS_16_FONT_ID NOTOSANS_18_FONT_ID \
   UI_10_FONT_ID UI_12_FONT_ID SMALL_FONT_ID CHINESE_CHESS_FONT_ID \
-  CONTROL_18_FONT_ID
+  CONTROL_18_FONT_ID CJK_UI_18_FONT_ID
 do
   echo "static_assert($id != 0, \"Font ID collision with sentinel\");"
 done
+echo "static_assert(CJK_READER_SIZE_FONT_ID(10) != 0, \"Font ID collision with sentinel\");"
+echo "static_assert(CJK_READER_SIZE_FONT_ID(34) != 0, \"Font ID collision with sentinel\");"

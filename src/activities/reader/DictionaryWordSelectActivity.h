@@ -13,14 +13,32 @@
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
 // DictionaryDefinitionActivity, Back returns to the reader. On touch devices a
 // touch-down moves the highlight and a tap on a word looks it up directly.
+//
+// The definition viewer reuses this screen in select-only mode: it shows the
+// same page with the same hit-testing, but Confirm/tap returns the chosen word
+// (DictionarySelectionResult) instead of opening a definition, so a recursive
+// lookup stays inside DictionaryDefinitionActivity's own back stack.
 class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                        std::unique_ptr<Page> page, int marginLeft, int marginTop)
+                                        std::unique_ptr<Page> page, int marginLeft, int marginTop,
+                                        bool selectOnly = false)
       : Activity("DictionaryWordSelect", renderer, mappedInput),
-        page(std::move(page)),
+        ownedPage(std::move(page)),
+        page(ownedPage.get()),
         marginLeft(marginLeft),
-        marginTop(marginTop) {}
+        marginTop(marginTop),
+        selectOnly(selectOnly) {}
+
+  // Borrowed-page form used by the definition viewer: the styled definition
+  // Page is owned by the parent activity, which outlives this child.
+  explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Page& page,
+                                        int marginLeft, int marginTop)
+      : Activity("DictionaryWordSelect", renderer, mappedInput),
+        page(&page),
+        marginLeft(marginLeft),
+        marginTop(marginTop),
+        selectOnly(true) {}
 
   void onEnter() override;
   void loop() override;
@@ -48,9 +66,11 @@ class DictionaryWordSelectActivity final : public Activity {
   bool drawHighlightWithSnapshot();
   void drawHints() const;
 
-  std::unique_ptr<Page> page;
+  std::unique_ptr<Page> ownedPage;  // set by the owned-page form
+  Page* page = nullptr;             // owned or borrowed, never null in onEnter
   const int marginLeft;
   const int marginTop;
+  const bool selectOnly;
   int fontId = 0;
   int lineHeight = 0;
 

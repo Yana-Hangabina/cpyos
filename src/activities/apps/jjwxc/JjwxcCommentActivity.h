@@ -36,7 +36,7 @@
 //
 // The endpoint is the PC-compat one the app already uses
 // (lib/JjwxcApi/src/JjwxcComments.h documents the measured shapes):
-//   GET https://www.jjwxc.net/app.jjwxc/Pc/comment/getCommentList?...
+//   GET https://m.jjwxc.net/app.jjwxc/Pc/comment/getCommentList?...
 // It carries the WAP session as `token=urlencode(base64(sid))`, answers JSON
 // (UTF-8 in practice, GBK accepted because the same server has returned both),
 // and pages at `limit=20` with an `offset` counted in comments already shown.
@@ -55,6 +55,9 @@ class JjwxcCommentActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
+  // Deep sleep is an explicit user action (long press). Stop the in-flight
+  // prefetch before onExit waits for the worker, so the wait is bounded.
+  void prepareForSleep() override;
 
  private:
   enum class State : uint8_t {
@@ -78,6 +81,10 @@ class JjwxcCommentActivity final : public Activity {
     LikeReply,
     PostComment,
     PostReply,
+    // Background pass over the other commented paragraphs of this chapter.
+    // It yields between paragraphs when the user starts a foreground action
+    // (like/reply/refresh/more) or leaves the panel.
+    PrefetchChapter,
     DebugStress,
   };
 
@@ -110,8 +117,18 @@ class JjwxcCommentActivity final : public Activity {
   // The request runs on a dedicated 32 KB PSRAM-stacked task. It used to run on
   // the activity task, whose stack is not sized for a wolfSSL handshake: the
   // caching worker died at 56 bytes of headroom with a comparable call chain.
-  void startWorker();
+  bool startWorker(bool quietFailure = false);
   void workerRun();
+  // Chapter-wide background prefetch. It reuses the same worker, transport and
+  // response buffer as the foreground page, so it never holds a second TLS
+  // context and writes the same JJD1 sidecars the app's whole-book pass writes.
+  void startChapterPrefetch();
+  void maybeStartOrResumePrefetch();
+  void prefetchChapter();
+  void startQueuedAction();
+  bool queueForegroundAction(ActionKind kind, uint32_t offset = 0, bool append = false);
+  void delayPrefetch(uint32_t ms);
+  static bool onPrefetchItem(void* ctx, const jjwxc::CommentItem& item, size_t index);
   void startFetch(uint32_t offset, bool append);
   void startRepliesFetch(bool append = false);
   void reapFetch();
@@ -160,6 +177,14 @@ class JjwxcCommentActivity final : public Activity {
   // a live session.
   bool debugFake_ = false;
   bool debugStress_ = false;
+
+ public:
+  // Serial-only probes (see Activity.h). They call the same refresh/like paths a
+  // tap would, so the prefetch/queue behaviour can be exercised without touch.
+  void debugRefreshJjwxcComment() override;
+  void debugLikeJjwxcComment() override;
+
+ private:
 
   JjwxcHttpTransport transport_;
   jjwxc::CookieJar* jar_ = nullptr;
@@ -261,6 +286,31 @@ class JjwxcCommentActivity final : public Activity {
   ActionKind pendingAction_ = ActionKind::None;
   uint32_t pendingOffset_ = 0;
   bool pendingAppend_ = false;
+
+  // Foreground actions started while the prefetch worker is busy are queued,
+  // not dropped. The worker sees foregroundPending_ between paragraphs, yields,
+  // and the loop starts the queued action; prefetch resumes after it applies.
+  std::atomic<bool> foregroundPending_{false};
+  ActionKind queuedAction_ = ActionKind::None;
+  uint32_t queuedOffset_ = 0;
+  bool queuedAppend_ = false;
+  bool prefetching_ = false;
+  bool prefetchPaused_ = false;
+  bool prefetchDone_ = false;
+  bool prefetchAuthStop_ = false;
+  bool prefetchStarted_ = false;
+  uint32_t readyAtMs_ = 0;
+  uint32_t prefetchCursor_ = 0;
+  size_t prefetchCount_ = 0;
+  size_t prefetchFetched_ = 0;
+  size_t prefetchSkipped_ = 0;
+  size_t prefetchFailed_ = 0;
+  size_t prefetchRequests_ = 0;
+  // JJC1 counts + one page of JJD1 items, both PSRAM and both owned by the
+  // activity so the cursor survives a yield. The worker stack stays free for
+  // the TLS handshake.
+  memory::ByteBuffer prefetchCounts_;
+  memory::ByteBuffer prefetchItems_;
   uint32_t actionCommentIndex_ = 0;
   bool actionIsReply_ = false;
   bool actionLike_ = false;

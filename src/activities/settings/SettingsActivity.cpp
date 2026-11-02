@@ -11,6 +11,7 @@
 #include <HalGPIO.h>
 #endif
 #include <Memory.h>
+#include <PngToBmpConverter.h>
 #include <WiFi.h>
 
 #include <algorithm>
@@ -49,7 +50,9 @@
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
+#include "TapZoneSettingsActivity.h"
 #include "TextSettingsActivity.h"
+#include "Typography.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/plugins/PluginCatalogActivity.h"
@@ -136,13 +139,20 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
       return {StrId::STR_ABOUT, 5};
     case SettingAction::Bluetooth:
       return {StrId::STR_SET_GROUP_OTHER, 2};
+    case SettingAction::TapZones:
+      return {StrId::STR_SET_GROUP_TOUCH_GESTURES, 1};
+    case SettingAction::StandbyImage:
+    case SettingAction::LightSleepImage:
+    case SettingAction::DeepSleepImage:
+      return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
     case SettingAction::None:
       break;
   }
 
   // Display
-  if (ptr == &CS::sleepScreen || ptr == &CS::sleepScreenCoverMode || ptr == &CS::sleepScreenCoverFilter ||
-      ptr == &CS::quickResumeSleepScreen || ptr == &CS::standbyShortcutEnabled) {
+  if (ptr == &CS::standbyStyle || ptr == &CS::lightSleepStyle || ptr == &CS::deepSleepStyle ||
+      ptr == &CS::sleepStateBadge || ptr == &CS::sleepScreenCoverMode || ptr == &CS::sleepScreenCoverFilter ||
+      ptr == &CS::standbyShortcutEnabled) {
     return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
   }
   if (ptr == &CS::hideBatteryPercentage || ptr == &CS::refreshFrequency || ptr == &CS::fadingFix ||
@@ -150,7 +160,11 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     return {StrId::STR_SET_GROUP_SCREEN_REFRESH, 1};
   }
   if (ptr == &CS::inxLibraryLayout || ptr == &CS::inxAppsLayout || ptr == &CS::inxTabPosition ||
-      ptr == &CS::uiDensity) {
+      ptr == &CS::uiDensity
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+      || ptr == &CS::uiFontScale
+#endif
+  ) {
     return {StrId::STR_SET_GROUP_LAYOUT, 2};
   }
 
@@ -474,6 +488,9 @@ void SettingsActivity::rebuildSettingsLists() {
   if (!BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  } else {
+    // Touch boards get the tap-zone editor next to the gesture rows it refines.
+    controlsSettings.push_back(SettingInfo::Action(StrId::STR_TAP_ZONES, SettingAction::TapZones));
   }
 #if FREEINK_CAP_BLE_HID_HOST
   controlsSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
@@ -835,7 +852,13 @@ void SettingsActivity::toggleCurrentSetting() {
             SETTINGS.*valuePtr = idx;
             // Kept for the case uiDensity grows past two values; the two-value
             // path above is what runs today.
+#if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
             if (valuePtr == &CrossPointSettings::uiDensity) applyUiCjkFallbacks(renderer, idx != 0);
+#endif
+            if (valuePtr == &CrossPointSettings::uiFontScale) {
+              RenderLock lock;
+              typography::apply(renderer, idx);
+            }
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
             // Preview the sound the user just picked. The tap on the option row
             // already emitted a cue with the old values, so preview() restarts
@@ -1045,6 +1068,22 @@ void SettingsActivity::toggleCurrentSetting() {
           LOG_ERR("SETTINGS", "OOM: KeyboardLayoutsActivity");
         }
         break;
+      case SettingAction::TapZones:
+        // The editor saves on every change and on exit; just repaint on return.
+        startActivityForResultWith<TapZoneSettingsActivity>([this](const ActivityResult&) { requestUpdate(); });
+        break;
+      case SettingAction::StandbyImage:
+        openSleepImagePicker("/.crosspoint/standby.bmp", &CrossPointSettings::standbyStyle,
+                             CrossPointSettings::STANDBY_CUSTOM_IMAGE);
+        break;
+      case SettingAction::LightSleepImage:
+        openSleepImagePicker("/.crosspoint/lightsleep.bmp", &CrossPointSettings::lightSleepStyle,
+                             CrossPointSettings::LIGHT_SLEEP_CUSTOM_IMAGE);
+        break;
+      case SettingAction::DeepSleepImage:
+        openSleepImagePicker("/sleep.bmp", &CrossPointSettings::deepSleepStyle,
+                             CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE);
+        break;
       case SettingAction::None:
         // Do nothing
         break;
@@ -1213,6 +1252,39 @@ void SettingsActivity::openReadingBackgroundPicker() {
           requestUpdate();
         } else {
           optionPopup.show(StrId::STR_FAILED_LOWER, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
+        }
+      },
+      "/", FileBrowserActivity::Mode::PickPng);
+  if (!started) {
+    optionPopup.show(StrId::STR_MEMORY_ERROR, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
+    requestUpdate();
+  }
+}
+
+void SettingsActivity::openSleepImagePicker(const char* destPath, uint8_t CrossPointSettings::* stylePtr,
+                                            const uint8_t customValue) {
+  const bool started = startActivityForResultWith<FileBrowserActivity>(
+      [this, destPath, stylePtr, customValue](const ActivityResult& result) {
+        if (result.isCancelled) return;
+        const auto* selected = std::get_if<FilePathResult>(&result.data);
+        if (!selected) {
+          LOG_ERR("SET", "sleep image picker returned no path");
+          return;
+        }
+
+        GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+        Storage.ensureDirectoryExists("/.crosspoint");
+        // Store a 1-bit BMP next to the reader's other derived images. The
+        // renderer's Bitmap path streams it row by row; no full-frame buffer.
+        if (PngToBmpConverter::pngFileToBmpFile(selected->path.c_str(), destPath, /*crop=*/false)) {
+          SETTINGS.*stylePtr = customValue;
+          SETTINGS.saveToFile();
+          rebuildSettingsLists();
+          requestUpdate();
+        } else {
+          optionPopup.show(StrId::STR_FAILED_LOWER, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0,
+                           [](int) {});
+          requestUpdate();
         }
       },
       "/", FileBrowserActivity::Mode::PickPng);

@@ -10,6 +10,9 @@
 // with the upstream clock face, which remains available as another face.
 class DuckSleepFace final : public StandbyFace {
  public:
+  // showClock=false is the static light-sleep variant: same duck and water,
+  // no minute repaint (the state badge is added by StandbyActivity).
+  explicit DuckSleepFace(bool showClock = true) : showClock_(showClock) {}
   void onEnter() override;
   void onExit() override;
   TickResult tick() override;
@@ -18,6 +21,7 @@ class DuckSleepFace final : public StandbyFace {
   uint32_t secondsUntilNextWake() const override;
 
  private:
+  const bool showClock_;
   uint32_t startMs_ = 0;  // millis() anchor for the pre-sync fallback display
   int32_t lastMin_ = -1;  // last rendered minute tick
   int16_t lastTenMinuteBucket_ = -1;

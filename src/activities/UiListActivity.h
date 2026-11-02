@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
@@ -32,6 +34,12 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Base-owned row action; subclass-registered actions start at ACTION_USER.
   static constexpr freeink::ui::ActionId ACTION_ROW = 1;
   static constexpr freeink::ui::ActionId ACTION_USER = 2;
+  // Swipe-to-delete reveal button. This id is hit-tested directly by the base
+  // (never registered as an FreeInkApp handler), because the shared
+  // FreeInkApp<24, 8> handler table is already full on LibraryListActivity:
+  // an app.on() here would be dropped silently (see AGENTS.md 23.6b).
+  // Deliberately far above the ACTION_USER chain so no subclass can collide.
+  static constexpr freeink::ui::ActionId ACTION_SWIPE_DELETE = 0x7F00;
 
   UiListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                  bool wantsTouchLongPress = false, bool upstreamStyle = false);
@@ -49,6 +57,17 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Touch long-press on a row; only fires when the subclass opted in via the
   // wantsTouchLongPress constructor flag (rows must also carry InputLongPress).
   virtual void onRowLongPress(int index) {}
+  // Swipe-to-delete: a left swipe on a row reveals a trash button on that row
+  // (upstream ba39565c). Nothing is removed without an explicit second tap, and
+  // the subclass's swipeDelete() still goes through its normal confirmation.
+  // Both are touch-only and off unless canSwipeDelete() opts the row in.
+  virtual bool canSwipeDelete(int index) const { return false; }
+  virtual void swipeDelete(int index) {}
+  // Publishes the open row's trash button onto the list's props. Call from
+  // buildScreen right before screen.list(props).
+  void configureSwipeDelete(UiScreen& screen, freeink::ui::ListProps& props);
+  // Drops the revealed row (no-op when none is open).
+  void closeSwipeDelete();
   // The selection/viewport state the loop, sync, and row dispatch operate on.
   // Default is the single `nav` member; UiTabListActivity redirects it to the
   // active tab's per-tab state.
@@ -99,6 +118,16 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Named apart from UiAppHost::routeTouch so the host overload stays visible
   // (not name-hidden) to subclasses with extra touch surfaces.
   bool routeListTouch();
+  // Open-row input: Back/Confirm/tap-elsewhere close it, a tap on the trash
+  // button runs swipeDelete(), a right swipe closes it, and a left swipe on a
+  // row opts into it. Runs before button handling so an open row owns Back.
+  bool handleSwipeDeleteInput();
+
+  // Index of the row whose trash button is revealed (-1 = none). Read from the
+  // render task through configureSwipeDelete, written by the loop task.
+  std::atomic<int16_t> revealedIndex{-1};
+  // Storage for props.reveal; ListProps only borrows the pointer for one build.
+  freeink::ui::ListRevealAction swipeReveal{};
 
   const bool wantsTouchLongPress;
 };

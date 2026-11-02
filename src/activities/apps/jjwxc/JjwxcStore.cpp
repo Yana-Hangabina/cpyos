@@ -437,6 +437,60 @@ std::string commentCountsDir(const char* novelId) { return novelDirectory(novelI
 
 // One byte, root level: it is a global caching preference, not per novel.
 std::string commentBodiesPrefPath() { return std::string(kRoot) + "/commentbodies"; }
+std::string cachePausedPath() { return std::string(kRoot) + "/cache_paused"; }
+
+std::string cacheQueuePath() { return std::string(kRoot) + "/cache_queue.bin"; }
+
+bool loadCacheQueue(JjwxcCacheQueue::Item* out, size_t maxOut, size_t& count) {
+  count = 0;
+  const std::string path = cacheQueuePath();
+  if (!Storage.exists(path.c_str())) return true;
+  HalFile file;
+  if (!Storage.openFileForRead(kTag, path, file)) return false;
+  const uint64_t size = file.fileSize64();
+  if (size == 0 || size > JjwxcCacheQueue::kMaxImageSize) {
+    LOG_ERR(kTag, "cache queue rejected: %llu bytes", static_cast<unsigned long long>(size));
+    return false;
+  }
+  uint8_t image[JjwxcCacheQueue::kMaxImageSize] = {};
+  const int got = file.read(image, static_cast<size_t>(size));
+  if (got != static_cast<int>(size)) return false;
+  if (!JjwxcCacheQueue::decode(image, static_cast<size_t>(size), out, maxOut, count)) {
+    LOG_ERR(kTag, "cache queue rejected: bad image");
+    count = 0;
+    return false;
+  }
+  return true;
+}
+
+bool saveCacheQueue(const JjwxcCacheQueue::Item* items, size_t count) {
+  if (items == nullptr && count != 0) return false;
+  uint8_t image[JjwxcCacheQueue::kMaxImageSize] = {};
+  const size_t bytes = JjwxcCacheQueue::encode(items, count, image, sizeof(image));
+  if (bytes == 0) return false;
+  if (!Storage.ensureDirectoryExists("/.crosspoint") || !Storage.ensureDirectoryExists(kRoot)) return false;
+  const std::string finalPath = cacheQueuePath();
+  const std::string partPath = finalPath + ".part";
+  {
+    HalFile file;
+    if (!Storage.openFileForWrite(kTag, partPath.c_str(), file)) return false;
+    const size_t written = file.write(image, bytes);
+    file.flush();
+    if (written != bytes) {
+      LOG_ERR(kTag, "short cache queue write %u/%u", static_cast<unsigned>(written), static_cast<unsigned>(bytes));
+      return false;
+    }
+  }
+  // FAT rename does not replace an existing file, so remove the old image first
+  // (same rule as saveCommentCounts). A power loss between the two leaves no
+  // queue, which is recoverable; a torn queue is not.
+  Storage.remove(finalPath.c_str());
+  if (!Storage.rename(partPath.c_str(), finalPath.c_str())) {
+    LOG_ERR(kTag, "cache queue rename failed");
+    return false;
+  }
+  return true;
+}
 
 std::string commentCountsPath(const char* novelId, const uint32_t chapterId) {
   char name[40];
@@ -655,6 +709,19 @@ bool saveCacheCommentBodiesPref(const bool enabled) {
   if (!Storage.ensureDirectoryExists("/.crosspoint") || !Storage.ensureDirectoryExists(kRoot)) return false;
   const std::string path = commentBodiesPrefPath();
   return writeSmallFile(path.c_str(), enabled ? "1\n" : "0\n");
+}
+
+bool loadCachePausedPref(bool& paused) {
+  paused = false;
+  std::string stored;
+  if (!readSmallFile(cachePausedPath().c_str(), stored, 8)) return false;
+  paused = !stored.empty() && stored[0] == '1';
+  return true;
+}
+
+bool saveCachePausedPref(const bool paused) {
+  if (!Storage.ensureDirectoryExists("/.crosspoint") || !Storage.ensureDirectoryExists(kRoot)) return false;
+  return writeSmallFile(cachePausedPath().c_str(), paused ? "1\n" : "0\n");
 }
 
 bool ensureBookContentKey(const std::string& epubPath, uint8_t (&key)[16]) {

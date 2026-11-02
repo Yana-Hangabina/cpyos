@@ -94,6 +94,8 @@ void ImageViewerActivity::loadSiblingImages() {
 
 bool ImageViewerActivity::isPng() const { return FsHelpers::hasPngExtension(filePath); }
 
+bool ImageViewerActivity::isJpeg() const { return FsHelpers::hasJpgExtension(filePath); }
+
 bool ImageViewerActivity::preparePreview() {
   if (!Storage.ensureDirectoryExists("/.crosspoint")) return false;
   if (Storage.exists(IMAGE_PREVIEW_PATH) && !Storage.remove(IMAGE_PREVIEW_PATH)) return false;
@@ -129,7 +131,7 @@ void ImageViewerActivity::onEnter() {
   const auto pageHeight = renderer.getScreenHeight();
   Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
-  const bool needsPreview = isPng() || FsHelpers::hasJpgExtension(filePath);
+  const bool needsPreview = isPng() || isJpeg();
   const bool prepared = !needsPreview || preparePreview();
   const char* bitmapPath = needsPreview ? IMAGE_PREVIEW_PATH : filePath.c_str();
   HalFile file;
@@ -350,6 +352,35 @@ void ImageViewerActivity::doSetSleepCover(const char* sourcePath, const bool tra
     }
   }
 
+  commitSleepImage(success, transparent);
+}
+
+void ImageViewerActivity::doSetJpegSleepCover() {
+  if (!imageReady) return;
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+
+  Storage.remove(SLEEP_IMAGE_PART_PATH);
+  bool prepared = false;
+  HalFile inFile, outFile;
+  if (Storage.openFileForRead("IMAGE", filePath.c_str(), inFile) &&
+      Storage.openFileForWrite("IMAGE", SLEEP_IMAGE_PART_PATH, outFile)) {
+    const bool crop = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+    {
+      // JPEGDEC needs the framebuffer-sized scratch the cover path already
+      // lends; without the loan it falls back to the fallible heap.
+      GfxRenderer::FrameBufferLoan loan(renderer);
+      prepared = JpegToBmpConverter::jpegFileToBmpStreamWithSize(inFile, outFile, renderer.getScreenWidth(),
+                                                                renderer.getScreenHeight(), crop);
+    }
+    outFile.flush();
+  }
+  if (!prepared) LOG_ERR("IMAGE", "Failed to build JPEG sleep cover from %s", filePath.c_str());
+
+  commitSleepImage(prepared, /*transparent=*/false);
+}
+
+void ImageViewerActivity::commitSleepImage(const bool prepared, const bool transparent) {
+  bool success = prepared;
   if (success) {
     Storage.remove(SLEEP_IMAGE_BACKUP_PATH);
     const bool hadPrevious = Storage.exists(SLEEP_IMAGE_PATH);
@@ -363,11 +394,11 @@ void ImageViewerActivity::doSetSleepCover(const char* sourcePath, const bool tra
   }
 
   if (success) {
-    const uint8_t previousMode = SETTINGS.sleepScreen;
-    SETTINGS.sleepScreen = transparent ? CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT
-                                       : CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
+    const uint8_t previousStyle = SETTINGS.deepSleepStyle;
+    SETTINGS.deepSleepStyle = transparent ? CrossPointSettings::DEEP_SLEEP_TRANSPARENT
+                                          : CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE;
     if (!SETTINGS.saveToFile()) {
-      SETTINGS.sleepScreen = previousMode;
+      SETTINGS.deepSleepStyle = previousStyle;
       (void)SETTINGS.saveToFile();
       Storage.remove(SLEEP_IMAGE_PATH);
       if (Storage.exists(SLEEP_IMAGE_BACKUP_PATH)) {
@@ -385,8 +416,12 @@ void ImageViewerActivity::doSetSleepCover(const char* sourcePath, const bool tra
 
 void ImageViewerActivity::showSleepCoverOptions() {
   if (!imageReady) return;
+  if (isJpeg()) {
+    doSetJpegSleepCover();
+    return;
+  }
   if (!isPng()) {
-    doSetSleepCover(FsHelpers::hasJpgExtension(filePath) ? IMAGE_PREVIEW_PATH : filePath.c_str(), false);
+    doSetSleepCover(filePath.c_str(), false);
     return;
   }
 

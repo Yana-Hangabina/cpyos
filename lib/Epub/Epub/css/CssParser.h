@@ -50,7 +50,8 @@ class CssParser {
   };
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // 13 - font-weight/font-style: inherit is preserved through the cascade (upstream 1bd323dd)
+  static constexpr uint8_t CSS_CACHE_VERSION = 13;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

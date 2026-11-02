@@ -1253,8 +1253,12 @@ void chKey(void* c, const char* k, size_t len) {
   else if (keyIs(k, len, "chapterSize")) ctx->field = CH_chapterSize;
   else if (keyIs(k, len, "isvip")) ctx->field = CH_isvip;
   else if (keyIs(k, len, "content")) ctx->field = CH_content;
-  else if (keyIs(k, len, "sayBody")) ctx->field = CH_sayBody;
-  else if (keyIs(k, len, "sayBodyV2")) ctx->field = CH_sayBodyV2;
+  // The reply carries the same note twice (`sayBody` and `sayBodyV2`, byte-identical
+  // on every sample). Both are offered to the sink, so the second occurrence must be
+  // dropped here rather than after the first has begun: FieldDecoder keeps streaming
+  // in its decided mode, and feeding both would write the note into the book twice.
+  else if (keyIs(k, len, "sayBody")) ctx->field = ctx->sayBody.sawData() ? CH_None : CH_sayBody;
+  else if (keyIs(k, len, "sayBodyV2")) ctx->field = ctx->sayBody.sawData() ? CH_None : CH_sayBodyV2;
   else if (keyIs(k, len, "code")) ctx->field = CH_code;
   else if (keyIs(k, len, "message")) ctx->field = CH_message;
   else if (keyIs(k, len, "encryptType")) {
@@ -1311,11 +1315,16 @@ void chValue(void* c, const char* v, size_t len, bool finalChunk) {
     case CH_sayBody:
     case CH_sayBodyV2:
       if (ctx->saySink && !ctx->blocked) {
-        if (!ctx->sayBody.sawData()) {
+        // An EMPTY first field must not claim the decoder: the reply carries both
+        // keys and the live service leaves the older one empty on some chapters,
+        // so starting on a zero-length value would suppress a real V2 note.
+        if (!ctx->sayBody.sawData() && len != 0) {
           ctx->sayBody.begin(&gateSay, ctx, ctx->fieldEncrypted(ctx->field));
         }
-        ctx->sayBody.feed(v, len, finalChunk);
-        if (ctx->sayBody.failed()) ctx->failed = true;
+        if (ctx->sayBody.sawData()) {
+          ctx->sayBody.feed(v, len, finalChunk);
+          if (ctx->sayBody.failed()) ctx->failed = true;
+        }
       }
       break;
     default: break;

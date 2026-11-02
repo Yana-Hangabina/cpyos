@@ -18,6 +18,7 @@ class TtfEpdFont;
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <map>
 #include <string>
@@ -86,7 +87,8 @@ class GfxRenderer {
   RenderMode renderMode;
   mutable bool absoluteGrayPlanes = false;
   Orientation orientation;
-  bool fadingFix;
+  // The loop updates this flag while the render task reads refresh policy.
+  std::atomic<bool> fadingFix;
   mutable uint8_t syntheticBoldPixels = 0;
   uint8_t* frameBuffer = nullptr;
   // Band-update snapshot: the framebuffer as last pushed to the panel.
@@ -96,6 +98,18 @@ class GfxRenderer {
   static bool s_areaPushAllowed_;
   static bool s_localClean_;
   static int s_localCleanMaxPercent;
+  // Anti-aliasing for non-glyph art on the 16-level canvas (diagonal lines,
+  // arcs, icon masks). The 1-bit path is untouched. CMD:AA flips this so the
+  // same screen can be compared on device.
+  static bool s_grayAA_;
+  // CMD:AASTATS: plotted pixels and destination pixels per primitive, used to
+  // keep the AA paths inside the frame budget. Cheap integer increments only.
+  static uint32_t s_aaStats_[4];
+  // B/W text coverage thresholds. The 2-bit value is 0..3 (2 = 50%); the
+  // 4-bit value is a raw nibble 0..15 (10 ~= 50%, 7 ~= the old 25% weight).
+  // Reader fast-turn uses the 4-bit face, so it needs the nibble threshold.
+  static uint8_t s_bwGlyphThreshold;
+  static uint8_t s_bwGlyphThreshold4;
   // Union (physical coords) of the rects driven since the last clean.
   mutable int dirtyX_ = 0;
   mutable int dirtyY_ = 0;
@@ -187,6 +201,13 @@ class GfxRenderer {
   void drawPixelDither(int x, int y) const;
   template <Color color>
   void fillArc(int maxRadius, int cx, int cy, int xDir, int yDir) const;
+  // 16-level coverage helpers (see GrayCoverage.h). No-ops unless the native
+  // gray buffer is active; the 1-bit primitives below stay byte-identical.
+  void plotCoverage(int x, int y, float coverage, uint8_t inkLevel) const;
+  void drawLineAA(int x1, int y1, int x2, int y2, float halfWidth, bool state) const;
+  void drawArcAA(int maxRadius, int cx, int cy, int xDir, int yDir, int lineWidth, bool state) const;
+  void fillArcAA(int maxRadius, int cx, int cy, int xDir, int yDir, uint8_t inkLevel) const;
+  static uint8_t grayLevelForColor(Color color);
   // Byte-aligned, orientation-specialized rectangle fill. Rotates the rect's
   // two opposing corners into physical-framebuffer space once, then walks each
   // physical row with head-mask / middle memset / tail-mask byte writes — no
@@ -466,6 +487,22 @@ class GfxRenderer {
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawIcon(const uint8_t bitmap[], int x, int y, int size) const;
   void drawIconInverted(const uint8_t bitmap[], int x, int y, int size) const;
+  // Draw a 1-bit mask (row-major, MSB-first) into a destination box with
+  // box-filtered coverage. maskInverted selects the freeink::Icon convention
+  // (bit 0 = ink); rotate90 is the legacy drawIcon() mapping; mirrorX flips
+  // the source horizontally (the swimming duck). On a 1-bit canvas this is the
+  // historical nearest-neighbour plot, so callers can use it unconditionally.
+  void drawMaskAA(const uint8_t* bits, int srcW, int srcH, int dx, int dy, int dstW, int dstH, bool maskInverted,
+                  bool inkBlack, bool rotate90 = false, bool mirrorX = false) const;
+  // 16-level anti-aliasing kill switch (CMD:AA). Default on.
+  static void setGrayAAEnabled(bool on) { s_grayAA_ = on; }
+  static bool grayAAEnabled() { return s_grayAA_; }
+  // CMD:AASTATS counters: plotted coverage pixels, icon-mask destination
+  // pixels, line/stroke destination pixels, arc destination pixels.
+  static uint32_t aaStat(int index) { return index >= 0 && index < 4 ? s_aaStats_[index] : 0; }
+  static void clearAAStats() {
+    for (auto& value : s_aaStats_) value = 0;
+  }
   bool drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
                   bool preserveTransparency = false) const;
   bool drawBitmapCropToFill(const Bitmap& bitmap, int x, int y, int width, int height) const;
@@ -600,6 +637,13 @@ class GfxRenderer {
   // Runtime knob for the photo A/B; clamped to 5..100, default 60.
   static void setLocalCleanMaxPercent(int percent);
   static int localCleanMaxPercent();
+  // Minimum 2-bit coverage (0..3) that prints ink in BW mode. Default 2 (50%).
+  static void setBwGlyphThreshold(uint8_t coverage);
+  static uint8_t bwGlyphThreshold();
+  // Minimum 4-bit nibble (0..15) for a 4-bit face in BW mode. Default 10
+  // (~50%); the reader's fast turn uses 7 to keep the old 25% weight.
+  static void setBwGlyphThreshold4(uint8_t nibble);
+  static uint8_t bwGlyphThreshold4();
   // State dump for CMD:REFRESHMAP: why a pass would be banded, cleaned or full.
   static bool bandUpdatesSuspended();
   uint8_t refreshCounter() const { return uiFastRefreshCount; }

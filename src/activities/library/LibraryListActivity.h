@@ -6,7 +6,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <vector>
 
 #include "RecentBooksStore.h"
 #include "activities/UiTabListActivity.h"
@@ -59,6 +58,11 @@ class LibraryListActivity final : public UiTabListActivity {
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;
+  // Swipe-to-delete on the plain shelf list (upstream ba39565c). Grouped-by-
+  // letter rows are headings, and the cover grid is a picture, not a row, so
+  // both stay untouched; grid cells keep tap-to-open only.
+  bool canSwipeDelete(int index) const override;
+  void swipeDelete(int index) override;
   int tabCount() const override;
   int activeTab() const override;
   const char* tabLabel(int index) const override;

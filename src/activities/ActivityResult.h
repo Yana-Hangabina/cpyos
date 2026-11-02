@@ -76,6 +76,13 @@ struct FilePathResult {
   std::string path;
 };
 
+// Word picked inside a definition by DictionaryWordSelectActivity's
+// select-only mode. The dictionary viewer looks it up itself, so the nested
+// lookup stays inside one activity and the back stack owns its history.
+struct DictionarySelectionResult {
+  std::string word;
+};
+
 // Returned by the JJWXC app when it was opened from the reader's maintenance
 // menu and finished on its own. The reader uses it to decide whether to
 // reopen its own chapter list.
@@ -91,7 +98,7 @@ struct JjwxcReaderResult {
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
                                    IntervalResult, ChapterRangeResult, PageResult, TxtOffsetResult,
                                    ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
-                                   JjwxcReaderResult>;
+                                   DictionarySelectionResult, JjwxcReaderResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

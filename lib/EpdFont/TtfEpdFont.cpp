@@ -34,28 +34,29 @@ bool reserveChecked(V& v, const size_t need, const size_t step, const size_t cei
   return true;
 }
 
-// Perceptual coverage lift for the 4-bit reader face: lut[a] = round(sqrt(255 * a)),
-// i.e. coverage^0.5. Linear FreeType coverage reads washed out on the 16-level glass;
-// raising the square root deepens anti-aliased edges before quantization. Baked at
-// rasterize time, so glyph cache entries carry the corrected level and every consumer
-// (grayscale16 draw and the 2-bit fallback readers) sees one consistent ink.
+// Perceptual coverage lift for the 4-bit reader face: lut[a] = round(255 *
+// (a/255)^0.6), matching the Read Pico reference firmware's TTF_COVER_GAMMA.
+// Linear FreeType coverage reads washed out on the 16-level glass; the lift
+// deepens anti-aliased edges before quantization without the heavy, blobby
+// edges the old 0.5 table produced. Baked at rasterize time, so glyph cache
+// entries carry the corrected level and every consumer sees one consistent ink.
 constexpr uint8_t kTtfCoverGammaLut[256] = {
-    0,  16, 23, 28, 32, 36, 39, 42, 45, 48, 50, 53, 55, 58, 60, 62,
-    64, 66, 68, 70, 71, 73, 75, 77, 78, 80, 81, 83, 84, 86, 87, 89,
-    90, 92, 93, 94, 96, 97, 98, 100, 101, 102, 103, 105, 106, 107, 108, 109,
-    111, 112, 113, 114, 115, 116, 117, 118, 119, 121, 122, 123, 124, 125, 126, 127,
-    128, 129, 130, 131, 132, 133, 134, 135, 135, 136, 137, 138, 139, 140, 141, 142,
-    143, 144, 145, 145, 146, 147, 148, 149, 150, 151, 151, 152, 153, 154, 155, 156,
-    156, 157, 158, 159, 160, 160, 161, 162, 163, 164, 164, 165, 166, 167, 167, 168,
-    169, 170, 170, 171, 172, 173, 173, 174, 175, 176, 176, 177, 178, 179, 179, 180,
-    181, 181, 182, 183, 183, 184, 185, 186, 186, 187, 188, 188, 189, 190, 190, 191,
-    192, 192, 193, 194, 194, 195, 196, 196, 197, 198, 198, 199, 199, 200, 201, 201,
-    202, 203, 203, 204, 204, 205, 206, 206, 207, 208, 208, 209, 209, 210, 211, 211,
-    212, 212, 213, 214, 214, 215, 215, 216, 217, 217, 218, 218, 219, 220, 220, 221,
-    221, 222, 222, 223, 224, 224, 225, 225, 226, 226, 227, 228, 228, 229, 229, 230,
-    230, 231, 231, 232, 233, 233, 234, 234, 235, 235, 236, 236, 237, 237, 238, 238,
-    239, 240, 240, 241, 241, 242, 242, 243, 243, 244, 244, 245, 245, 246, 246, 247,
-    247, 248, 248, 249, 249, 250, 250, 251, 251, 252, 252, 253, 253, 254, 254, 255,
+      0,   9,  14,  18,  21,  24,  27,  29,  32,  34,  37,  39,  41,  43,  45,  47,
+     48,  50,  52,  54,  55,  57,  59,  60,  62,  63,  65,  66,  68,  69,  71,  72,
+     73,  75,  76,  77,  79,  80,  81,  83,  84,  85,  86,  88,  89,  90,  91,  92,
+     94,  95,  96,  97,  98,  99, 100, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+    111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+    127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 137, 138, 139, 140, 141,
+    142, 143, 144, 145, 145, 146, 147, 148, 149, 150, 151, 151, 152, 153, 154, 155,
+    156, 156, 157, 158, 159, 160, 161, 161, 162, 163, 164, 165, 165, 166, 167, 168,
+    169, 169, 170, 171, 172, 173, 173, 174, 175, 176, 176, 177, 178, 179, 179, 180,
+    181, 182, 182, 183, 184, 185, 185, 186, 187, 188, 188, 189, 190, 191, 191, 192,
+    193, 194, 194, 195, 196, 196, 197, 198, 199, 199, 200, 201, 201, 202, 203, 203,
+    204, 205, 206, 206, 207, 208, 208, 209, 210, 210, 211, 212, 212, 213, 214, 214,
+    215, 216, 216, 217, 218, 218, 219, 220, 220, 221, 222, 222, 223, 224, 224, 225,
+    226, 226, 227, 228, 228, 229, 230, 230, 231, 231, 232, 233, 233, 234, 235, 235,
+    236, 237, 237, 238, 238, 239, 240, 240, 241, 242, 242, 243, 243, 244, 245, 245,
+    246, 247, 247, 248, 248, 249, 250, 250, 251, 251, 252, 253, 253, 254, 254, 255,
 };
 }  // namespace
 
@@ -187,7 +188,10 @@ void TtfEpdFont::initFace(Face& f) {
     // strokes over the threshold.
     freeink::font::FtFont::RenderOptions ro;
     ro.hinting = freeink::font::FtFont::HintingMode::Auto;
-    ro.stemDarkening = true;
+    // 16-level large text keeps the design's thin edges. 12pt (25px) Latin and
+    // digit stems are only one pixel wide; without darkening they render as
+    // mid-gray on the glass and read as "too thin". Darken only the small face.
+    ro.stemDarkening = !f.fourBit || f.sizePx <= 25;
     if (!f.ft.setRenderOptions(ro)) {
       LOG_ERR("TTF", "Auto hinting unavailable (FREEINK_FONT_ENABLE_AUTOHINT not compiled)");
     }
@@ -383,7 +387,7 @@ const EpdGlyph* TtfEpdFont::faultGlyph(Face& f, const uint32_t cp) {
       if (f.fourBit) {
         // Gamma-lift first, then high nibble first; truncation preserves the original
         // two-bit thresholds on fallback.
-        const uint8_t v = kTtfCoverGammaLut[a] >> 4;
+        const uint8_t v = static_cast<uint8_t>((kTtfCoverGammaLut[a] + 8) / 17);
         dst[i >> 1] |= static_cast<uint8_t>(v << ((1 - (i & 1)) * 4));
       } else if (f.twoBit) {
         const uint8_t v = a < 64 ? 0 : (a < 128 ? 1 : (a < 192 ? 2 : 3));

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "JjwxcCacheQueue.h"
+
 #include <Epub/JjwxcCommentSidecar.h>
 #include <HalStorage.h>
 #include <JjwxcCookies.h>
@@ -240,6 +242,16 @@ bool removeCommentBodies(const char* novelId, uint32_t chapterId, uint32_t parag
 // /.crosspoint/jjwxc/commentbodies so it survives restarts.
 bool loadCacheCommentBodiesPref(bool& enabled);
 bool saveCacheCommentBodiesPref(bool enabled);
+// User-paused flag for the background cache queue. It is deliberately separate
+// from the queue items: a system stop (reader/standby/foreground job) must still
+// auto-resume, while an explicit tap on Pause must survive restarts.
+bool loadCachePausedPref(bool& paused);
+bool saveCachePausedPref(bool paused);
+// Persistent background comment-cache queue (JXQ1). A missing file is an empty
+// queue (true, count 0); a corrupt image is rejected (false) and must not crash.
+std::string cacheQueuePath();
+bool loadCacheQueue(JjwxcCacheQueue::Item* out, size_t maxOut, size_t& count);
+bool saveCacheQueue(const JjwxcCacheQueue::Item* items, size_t count);
 std::string coverSourcePath(const char* novelId);
 // The device-wrapped AES-128 content key for the finished EPUB at `epubPath`
 // (bookkey::write). Reuses an existing key when it was wrapped by this device,

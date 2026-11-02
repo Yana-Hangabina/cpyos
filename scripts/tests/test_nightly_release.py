@@ -248,6 +248,8 @@ class NightlyTargetTest(unittest.TestCase):
                 self.write_image(chip_id=0x0005, board='x4').read_bytes()
             )
             (root / 'platformio.ini').write_text('[crosspoint]\nversion = 1.5.8\n')
+            (root / 'build').mkdir()
+            (root / 'build/system_font.dat').write_bytes(b'CPFP' + b'\0' * 28)
             output = root / 'dist/xteink_x4'
 
             def git_value(_root, *args):
@@ -255,7 +257,7 @@ class NightlyTargetTest(unittest.TestCase):
 
             with (
                 mock.patch.object(package_nightly_target, 'verify_partition_csv',
-                                   return_value={'otadata': (0xE000, 0x2000), 'app0': (0x10000, 0x640000), 'app1': (0x650000, 0x640000)}),
+                                   return_value={'otadata': (0xE000, 0x2000), 'app0': (0x10000, 0x640000), 'app1': (0x650000, 0x640000), 'spiffs': (0xC90000, 0x360000)}),
                 mock.patch.object(package_nightly_target, 'git_value', side_effect=git_value),
             ):
                 package_nightly_target.package_target(root, 'xteink_x4', 'stable', output)
@@ -266,7 +268,11 @@ class NightlyTargetTest(unittest.TestCase):
             self.assertEqual(manifest['environment'], 'gh_release')
             self.assertEqual(
                 [asset['role'] for asset in manifest['assets']],
-                ['bootloader', 'partitions', 'firmware'],
+                ['bootloader', 'partitions', 'firmware', 'system_font'],
+            )
+            self.assertEqual(manifest['assets'][-1]['offset'], 0xC90000)
+            self.assertEqual(
+                (output / 'xteink-system_font.dat').read_bytes(), b'CPFP' + b'\0' * 28
             )
 
     def test_publish_jobs_keep_credentials_scoped(self):
