@@ -99,7 +99,8 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.1.0 --output _sit
 | 文件 | 用途 |
 |---|---|
 | `cpyos-readpico-<ver>-full.zip` | 完整安装包（含 `FLASH.md`、`SHA256SUMS`） |
-| `readpico-firmware.bin` | app-only，OTA / 手动升级 |
+| `readpico-firmware.bin` | app-only，OTA / 手动升级（app0） |
+| `readpico-app1.bin` | 同一镜像，升级/仅 app 清单写到 app1（避免设备从非活动槽启动旧固件） |
 | `readpico-bootloader.bin` / `readpico-partitions.bin` / `readpico-boot_app0.bin` | 首次安装 |
 | `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` / `emoji.dat` | 数据分区 |
 | `manifest-install.json` | 网页刷机：完整安装 / 恢复（擦除） |

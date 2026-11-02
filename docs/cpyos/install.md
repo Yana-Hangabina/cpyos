@@ -47,6 +47,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 | `readpico-partitions.bin` | `0x8000` |
 | `readpico-boot_app0.bin` | `0xE000` |
 | `readpico-firmware.bin` | `0x10000` |
+| `readpico-app1.bin` | `0x740000`（升级/仅 app 清单会写） |
 | `pinyin.dat` | `0xE70000` |
 | `web_pack.dat` | `0xEC6000` |
 | `hyphen.dat` | `0xF00000` |
@@ -66,10 +67,13 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
   write_flash \
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \
+  0x740000 readpico-app1.bin \
   0xE70000 pinyin.dat 0xEC6000 web_pack.dat \
   0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \
   0xFD0000 emoji.dat
 ```
+
+★ **升级时两个 app 槽都要写**：设备做过 OTA 后 otadata 会选中 app1，而网页刷机无法读取 otadata 判断活动槽；只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。`manifest-upgrade.json` / `manifest-app.json` 已经同时写 app0 与 app1，手动刷写也要照做。首次安装由 `boot_app0.bin` 选中 app0，不需要 app1。
 
 成功判据是日志里的 **`Hash of data verified.`**，不是退出码。
 
