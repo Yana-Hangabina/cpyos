@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 // --- SdCardFontFamilyInfo helpers ---
 
@@ -412,7 +413,6 @@ void SdCardFontRegistry::scanRoot(const char* rootPath, std::vector<SdCardFontFa
 
 bool SdCardFontRegistry::discover() {
   families_.clear();
-  families_.reserve(MAX_SD_FAMILIES);
 
   // Hidden root is scanned first so it wins on name collisions, matching the
   // sleep-folder pattern (/.sleep preferred over /sleep).
@@ -426,6 +426,13 @@ bool SdCardFontRegistry::discover() {
   // Cap at MAX_SD_FAMILIES
   if (static_cast<int>(families_.size()) > MAX_SD_FAMILIES) {
     families_.resize(MAX_SD_FAMILIES);
+  }
+  // The list is read-only until the next scan. Trim the grown capacity with a
+  // move (shrink_to_fit() is a no-op with -fno-exceptions).
+  if (families_.capacity() != families_.size()) {
+    std::vector<SdCardFontFamilyInfo>(std::make_move_iterator(families_.begin()),
+                                      std::make_move_iterator(families_.end()))
+        .swap(families_);
   }
 
   LOG_DBG("SDREG", "Discovery complete: %d families", static_cast<int>(families_.size()));

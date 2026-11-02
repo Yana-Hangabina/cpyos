@@ -125,15 +125,11 @@ std::string stepValueText(const char* raw) {
   return text;
 }
 
-// D11 (design frames 09/10): the focused row's marker -- a solid ink bar at the
-// row's left edge, the design's alternative to a full-row inversion (inversion
-// stays reserved for current-value semantics). 6x40, BW1: set bit = ink, one
-// byte per row, MSB first.
-constexpr uint8_t kCpyFocusBarBits[40] = {0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC,
-                                          0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC,
-                                          0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC,
-                                          0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC, 0xFC};
-constexpr fui::BitmapRef kCpyFocusBar{kCpyFocusBarBits, 6, 40, fui::BitmapFormat::BW1, true};
+// D11 (design frames 09/10): the focused row's marker is a solid ink bar at
+// the row's left edge, in the sheet margin -- the design's alternative to a
+// full-row inversion (inversion stays reserved for current-value semantics).
+// Both the cursor and the current row use this leading bar (see buildPanel),
+// so the list itself is drawn with its normal row styles.
 
 // Scrub row: two small round-cornered chapter buttons flanking a thin progress
 // track with a round knob -- the reading page's chrome is light, so the
@@ -151,13 +147,7 @@ constexpr int kPanelHeightMaxPercent = 72;
 constexpr int kLandscapePanelHeightPercent = 88;
 }  // namespace
 
-ReaderToolbarUi::ReaderToolbarUi(GfxRenderer& renderer) : UiAppHost(renderer, true), renderer_(renderer) {}
-
-void ReaderToolbarUi::drawContentsFocusFrame() const {
-  if (contentsFocusRect_.width <= 0 || contentsFocusRect_.height <= 0) return;
-  renderer_.drawRoundedRect(contentsFocusRect_.x, contentsFocusRect_.y, contentsFocusRect_.width,
-                            contentsFocusRect_.height, 2, 6, true);
-}
+ReaderToolbarUi::ReaderToolbarUi(GfxRenderer& renderer) : UiAppHost(renderer, true) {}
 
 void ReaderToolbarUi::begin() {
   resetUi();
@@ -394,7 +384,6 @@ void ReaderToolbarUi::buildToolbar(UiScreen& screen) {
 }
 
 void ReaderToolbarUi::buildPanel(UiScreen& screen) {
-  contentsFocusRect_ = freeink::ui::Rect{};
   const auto& tokens = screen.theme();
   const fui::Rect safe = screen.frame().safeRect();
   const int16_t side = tokens.spaceLg;
@@ -738,12 +727,10 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
       model_.rowTail ? static_cast<int16_t>(contents ? badgeGroupW + 12 + contentsButtonFit + 4
                                                      : contentsButtonFit + kContentsTailGap + kBookmarkValueW)
                      : 0;
-  int16_t rowInset = tokens.spaceLg;
-  if (model_.currentChapterIndex >= 0) {
-    // The current-chapter bar lives in this margin, clear of the title. The old
-    // selection bitmap was drawn inside the text area and collided with it.
-    rowInset = std::max<int16_t>(rowInset, kContentsBarW + kContentsBarGap + 4);
-  }
+  // Both leading bars (cursor and current row) are painted below in the
+  // sheet's margin, outside this inset, so the list only needs its usual
+  // title inset.
+  const int16_t rowInset = tokens.spaceLg;
   listProps_.count = static_cast<uint16_t>(std::max(0, model_.itemCount));
   listProps_.action = ACTION_ROW;
   listProps_.inputMask = fui::InputTouch;  // physical buttons stay with the reader
@@ -763,17 +750,11 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   listProps_.valueMaxWidth = tailW > 0 ? tailW : -1;
   if (UITheme::getInstance().usesCpyLayout()) {
     fui::StyleSet rowStyles = fui::defaultListRowStyles();
-    // Never invert a row: the cursor is a 2 px inner frame (Contents) or the
-    // thin focus bar (bookmarks), so the chapter text and its badges keep
-    // their normal ink.
+    // Never invert a row and never add the list's own marker: the cursor and
+    // the current row are both drawn below as a thin leading bar, so chapter
+    // text and its badges keep their normal ink.
     rowStyles.selected = rowStyles.normal;
-    if (contents && model_.fullRowSelection) {
-      listProps_.selectionMarker = fui::SelectionMarker::None;
-    } else {
-      listProps_.selectionMarker = fui::SelectionMarker::Bitmap;
-      listProps_.markerBitmap = kCpyFocusBar;
-      listProps_.markerInset = 6;
-    }
+    listProps_.selectionMarker = fui::SelectionMarker::None;
     listProps_.rowStyles = rowStyles;
   }
   const fui::Rect listRect = screen.body();
@@ -812,7 +793,13 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
     screen.list(listProps_);
   }
 
-  if (!contents && !model_.rowTail && model_.currentChapterIndex < 0) return;
+  // The leading cursor bar is a decoration like the tail buttons, so a panel
+  // without any tail/current-row decoration still has to reach the loop when a
+  // button cursor is shown (More and Text have neither).
+  if (!contents && !model_.rowTail && model_.currentChapterIndex < 0 &&
+      !(UITheme::getInstance().usesCpyLayout() && model_.selectedIndex >= 0)) {
+    return;
+  }
 
   // The list paints rows and their interaction rectangles; these decorations
   // are laid on top in the same frame. Each glyph gets its own rounded square,
@@ -855,53 +842,29 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
     const int index = nav_.top + i;
     const int16_t rowY = static_cast<int16_t>(listRect.y + i * (rowH + listRowGap));
     const bool selected = index == nav_.selected;
-    if (index == model_.currentChapterIndex) {
-      const int16_t barX = static_cast<int16_t>(rowAreaX - kContentsBarGap - kContentsBarW);
-      if (barX >= listRect.x) {
+    // CPY panels mark rows with one thin bar in the sheet's margin (the
+    // wifi-sheet's 5 px focus line), never with a full-row frame or an
+    // inverted ordinal:
+    //   * a button-driven cursor gets a short, slightly wider bar;
+    //   * the row being read keeps a full-height thin bar, and the cursor bar
+    //     replaces it on that row so the two never stack.
+    // The old inner frame plus a white-on-black ordinal chip were painted at
+    // the design column, while the list draws the label one rowInset further
+    // right; the tail of the real ordinal stayed visible beside the chip
+    // ("128.8. …"). Nothing is inverted now, so that mismatch is gone.
+    if (UITheme::getInstance().usesCpyLayout()) {
+      constexpr int16_t kCursorBarW = UiHighDpiProfile::enabled ? 5 : 4;
+      constexpr int16_t kCursorBarH = UiHighDpiProfile::enabled ? 48 : 32;
+      if (selected) {
+        const int16_t barX = static_cast<int16_t>(rowAreaX - kContentsBarGap - kCursorBarW);
+        screen.target().fill(fui::Rect{barX, static_cast<int16_t>(rowY + (rowH - kCursorBarH) / 2),
+                                       kCursorBarW, kCursorBarH},
+                             fui::Paint::solid(fui::Color::Black), 2);
+      } else if ((contents || model_.bookmarkAction) && index == model_.currentChapterIndex) {
+        const int16_t barX = static_cast<int16_t>(rowAreaX - kContentsBarGap - kContentsBarW);
         screen.target().fill(fui::Rect{barX, static_cast<int16_t>(rowY + 4), kContentsBarW,
                                        static_cast<int16_t>(rowH - 8)},
                              fui::Paint::solid(fui::Color::Black));
-      }
-    }
-    const bool framed = contents && rowH > 8 && listRect.width > 8 &&
-                        (selected || (model_.selectedIndex < 0 && index == model_.currentChapterIndex));
-    if (framed) {
-      // Cursor row (button boards) or, on touch boards, the chapter being read:
-      // 2 px inner frame (frame 06 .crow.focus), never a full-row inversion.
-      // The current-chapter bar stays put when the cursor moves away.
-      // Draw the full-row frame straight through the renderer: the FreeInkUI
-      // list leaves a clip at its title column, and a target-side stroke was
-      // cut at x≈500 even though the row is 604 px wide.
-      contentsFocusRect_ = freeink::ui::Rect{static_cast<int16_t>(rowAreaX + 2), static_cast<int16_t>(rowY + 2),
-                                static_cast<int16_t>(rowAreaW - 4), static_cast<int16_t>(rowH - 4)};
-      renderer_.drawRoundedRect(contentsFocusRect_.x, contentsFocusRect_.y, contentsFocusRect_.width,
-                                contentsFocusRect_.height, 2, 6, true);
-      // JJWXC rows carry "87. " as a display-only ordinal; the focused row
-      // inverts just that prefix (frame 06 .crow.focus .nu). The list draws
-      // the label at rowAreaX with the band vertically centred, so a black
-      // chip plus a white redraw lands exactly over it.
-      // Only a button-driven cursor inverts its ordinal. On touch the list has
-      // no cursor, and the white redraw over the current row left a "1." ghost
-      // because the list's label font/inset differ from this overlay.
-      const std::string& labelText = windowLabels_[i];
-      size_t prefixLen = 0;
-      if (model_.selectedIndex < 0) prefixLen = labelText.size();
-      while (prefixLen < labelText.size() && labelText[prefixLen] >= '0' && labelText[prefixLen] <= '9') ++prefixLen;
-      if (prefixLen > 0 && prefixLen + 1 < labelText.size() && labelText[prefixLen] == '.' &&
-          labelText[prefixLen + 1] == ' ') {
-        prefixLen += 2;
-        const std::string prefix = labelText.substr(0, prefixLen);
-        const int16_t lineH = screen.target().lineHeight(tokens.bodyText.font);
-        const int16_t textW =
-            screen.target().measureText(tokens.bodyText.font, prefix.c_str(), tokens.bodyText).width;
-        const int16_t textY = static_cast<int16_t>(rowY + (rowH - lineH) / 2);
-        const int16_t prefixX = rowAreaX;
-        screen.target().fill(fui::Rect{prefixX, textY, static_cast<int16_t>(textW + 2), lineH},
-                             fui::Paint::solid(fui::Color::Black), 2);
-        fui::TextStyle prefixStyle = tokens.bodyText;
-        prefixStyle.color = fui::Color::White;
-        screen.target().text(fui::Rect{prefixX, textY, static_cast<int16_t>(textW + 2), lineH}, prefix.c_str(),
-                             prefixStyle);
       }
     }
     if (!model_.rowTail) continue;

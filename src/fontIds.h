@@ -15,6 +15,13 @@
 #define CHINESE_CHESS_FONT_ID (1005290636)
 #define CONTROL_18_FONT_ID (29318789)
 #define NOTOSERIF_TITLE_FONT_ID (-1094390662)
+// Reader-only 18pt alias. NOTOSANS_18 is also UI display text, so it must be
+// free to follow the UI scale; the reader's 18pt selection uses this id.
+#define CJK_UI_18_FONT_ID (0x43554A31)
+// One reader face per point size. The system font pack binds the live
+// TtfEpdFont at this id, so the reader size setting never has to share an id
+// with a UI role that follows the UI scale.
+#define CJK_READER_SIZE_FONT_ID(pt) (0x43555200 | (pt))
 
 // Font ID 0 is reserved as the "not found" sentinel.
 // Guard against any hash accidentally producing 0.
@@ -32,3 +39,6 @@ static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(CHINESE_CHESS_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(CONTROL_18_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(NOTOSERIF_TITLE_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(CJK_UI_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(CJK_READER_SIZE_FONT_ID(10) != 0, "Font ID collision with sentinel");
+static_assert(CJK_READER_SIZE_FONT_ID(34) != 0, "Font ID collision with sentinel");

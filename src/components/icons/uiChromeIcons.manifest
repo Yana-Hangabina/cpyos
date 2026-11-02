@@ -4,3 +4,5 @@ tab-library = folders
 tab-settings = settings-2
 tab-statistics = chart-line
 tab-apps = layout-grid
+
+tab-search = search

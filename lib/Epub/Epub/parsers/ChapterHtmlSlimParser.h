@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Epub/FootnoteEntry.h"
+#include "Epub/PageLink.h"
 #include "Epub/ParsedText.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
@@ -47,6 +48,22 @@ class ChapterHtmlSlimParser {
   std::string rubyTextBuffer;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  // Bottom of the last text line actually pushed onto the current page (the
+  // layout cursor without any trailing paragraph spacing appended by
+  // endParagraph). applyVerticalBottomAlign() uses it so a page's last line can
+  // be pushed flush to the content bottom without counting that gap as consumed.
+  int16_t currentPageContentBottom = 0;
+  // Height of the most recent text line pushed onto the current page; the
+  // safety cap for how much a single inter-line gap may grow.
+  int16_t currentLineHeight = 0;
+  // Which page element each of the current page's links belongs to, so a shifted
+  // line moves its links by the same delta. Bounded by PageLinkList::MAX_SIZE,
+  // so tracking costs 64 bytes and no allocation.
+  std::array<uint16_t, PageLinkList::MAX_SIZE> currentPageLinkLines{};
+  // A page carrying table rows is never redistributed: rows reset the layout
+  // cursor per cell, so the plain line count/bottom math does not describe them
+  // (upstream 9a7e6b35).
+  bool currentPageHasGridTable = false;
   int fontId;
   float lineCompression;
   uint8_t extraParagraphSpacing;  // 0=off, 1..5=0.5x/0.75x/1x/1.25x/1.5x line height
@@ -56,6 +73,7 @@ class ChapterHtmlSlimParser {
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment;
+  bool verticalBottomAlign;  // redistribute non-final text pages so the last line reaches the content bottom
   uint16_t viewportWidth;
   uint16_t viewportHeight;
   bool hyphenationEnabled;
@@ -207,8 +225,8 @@ class ChapterHtmlSlimParser {
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const float lineCompression, const uint8_t extraParagraphSpacing, const uint8_t firstLineIndent,
-      const int8_t firstLineIndentPx, const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-      const uint16_t viewportHeight,
+      const int8_t firstLineIndentPx, const uint8_t paragraphAlignment, const bool verticalBottomAlign,
+      const uint16_t viewportWidth, const uint16_t viewportHeight,
       const bool hyphenationEnabled, const bool focusReadingEnabled,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
@@ -225,6 +243,7 @@ class ChapterHtmlSlimParser {
         firstLineIndent(firstLineIndent),
         firstLineIndentPx(firstLineIndentPx),
         paragraphAlignment(paragraphAlignment),
+        verticalBottomAlign(verticalBottomAlign),
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
@@ -270,6 +289,13 @@ class ChapterHtmlSlimParser {
 
   bool addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+
+  // Emit the current page through completePageFn. `doBottomAlign` redistributes
+  // a text-only page so the first line stays at the top and the last one reaches
+  // viewportHeight, shifting the page's links in step. The chapter's final page
+  // and pages closed at a chapter boundary pass false so they stay top-aligned.
+  void completeCurrentPage(bool doBottomAlign);
+  void applyVerticalBottomAlign(Page* page);
 
   // Byte progress of the in-flight parse, used to estimate a still-building section's total page
   // count (a giant single-spine book never fully lays out, so its real count is unknown). Valid

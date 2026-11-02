@@ -1,4 +1,5 @@
 #include "CpyTheme.h"
+#include "activities/apps/jjwxc/JjwxcCacheService.h"
 
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -50,13 +51,7 @@ constexpr int kChipGap = 14;
 
 #ifndef CROSSMUX_UI_PROFILE_HIGH_DPI
 void drawIconBits(const GfxRenderer& renderer, const uint8_t* icon, const int x, const int y) {
-  constexpr int rowBytes = (kIconSize + 7) / 8;
-  for (int row = 0; row < kIconSize; ++row) {
-    for (int column = 0; column < kIconSize; ++column) {
-      const uint8_t byte = icon[row * rowBytes + column / 8];
-      if (((byte >> (7 - column % 8)) & 1U) == 0) renderer.drawPixel(x + column, y + row, true);
-    }
-  }
+  renderer.drawMaskAA(icon, kIconSize, kIconSize, x, y, kIconSize, kIconSize, true, true);
 }
 
 UIIcon uiIconForTab(const MainTab tab) {
@@ -95,17 +90,7 @@ const uint8_t* iconForTab(const MainTab tab) {
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
 void drawIconScaled(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y,
                     const int size) {
-  const int rowBytes = (icon.w + 7) / 8;
-  for (int row = 0; row < size; ++row) {
-    const int sourceY = row * icon.h / size;
-    const uint8_t* sourceRow = icon.bits + sourceY * rowBytes;
-    for (int column = 0; column < size; ++column) {
-      const int sourceX = column * icon.w / size;
-      if (((sourceRow[sourceX / 8] >> (7 - (sourceX & 7))) & 1U) == 0) {
-        renderer.drawPixel(x + column, y + row, true);
-      }
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
 }
 
 const freeink::Icon* highDpiTabIcon(const MainTab tab) {
@@ -115,7 +100,9 @@ const freeink::Icon* highDpiTabIcon(const MainTab tab) {
     case MainTab::Library:
       return &icon_tab_library_56;
     case MainTab::Apps:
-      return &icon_search_32;
+      // 56px source like the other tabs; icon_search_32 was upscaled to 40 and
+      // carried its 32px staircase into the tab bar.
+      return &icon_tab_search_56;
     case MainTab::Settings:
       return &icon_tab_settings_56;
     case MainTab::None:
@@ -568,7 +555,7 @@ void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
-  // UI baseline: a shallow wave instead of a straight hairline. The active
+  // wave baseline: a shallow wave instead of a straight hairline. The active
   // item gets three ripple arcs behind its icon and a small duck on the top
   // edge; the bar itself stays 88 px so it stops eating the page.
   constexpr float kTwoPi = 6.2831853f;
@@ -728,7 +715,9 @@ Rect CpyTheme::drawPopup(const GfxRenderer& renderer, const char* message) const
   const int y = (screenH - h) / 2;
   drawCardFrame(renderer, Rect{x, y, w, h}, false);
   renderer.drawText(UI_12_FONT_ID, x + kMarginX, y + kMarginY, shown.c_str(), true, EpdFontFamily::REGULAR);
-  renderer.displayBuffer();
+  // Transient card over a stable page: do not let a run of toasts feed the
+  // periodic UI GC16 sweep. The page's next Normal push resumes it.
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
   return Rect{x, y, w, h};
 }
 
@@ -744,16 +733,8 @@ void CpyTheme::drawEmptyState(const GfxRenderer& renderer, const Rect rect, cons
     const int drawHeight = drawWidth * kEmptyIllustrationHeight / kEmptyIllustrationWidth;
     const int x = rect.x + (rect.width - drawWidth) / 2;
     const int y = rect.y + 8;
-    for (int row = 0; row < drawHeight; ++row) {
-      const int sourceY = row * kEmptyIllustrationHeight / drawHeight;
-      const uint8_t* sourceRow = kEmptyIllustrationBits + sourceY * kEmptyIllustrationStride;
-      for (int column = 0; column < drawWidth; ++column) {
-        const int sourceX = column * kEmptyIllustrationWidth / drawWidth;
-        if (((sourceRow[sourceX / 8] >> (7 - (sourceX & 7))) & 1U) == 0) {
-          renderer.drawPixel(x + column, y + row, true);
-        }
-      }
-    }
+    renderer.drawMaskAA(kEmptyIllustrationBits, kEmptyIllustrationWidth, kEmptyIllustrationHeight, x, y, drawWidth,
+                        drawHeight, true, true);
     if (message != nullptr && *message != '\0' && rect.height >= drawHeight + 64) {
       constexpr int fontId = UI_12_FONT_ID;
       const auto lines = renderer.wrappedText(fontId, message, std::max(1, rect.width - 96), 2);
@@ -977,6 +958,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
   renderer.drawText(labelFont, clockX, metaY, clock);
 
   const time_t now = time(nullptr);
+  int metaLeft = clockX;
   if (now > 1700000000) {
     struct tm local {};
     localtime_r(&now, &local);
@@ -984,11 +966,43 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
     std::snprintf(date, sizeof(date), "%d/%d", local.tm_mon + 1, local.tm_mday);
     const int dateW = renderer.getTextWidth(labelFont, date);
     const int dateX = clockX - 18 - dateW;
-    if (dateX > textX + 8) renderer.drawText(labelFont, dateX, metaY, date);
+    if (dateX > textX + 8) {
+      renderer.drawText(labelFont, dateX, metaY, date);
+      metaLeft = dateX;
+    }
+  }
+
+  // Background paragraph-comment cache state, left of the date. It only exists
+  // while there is work or an unacknowledged completed item.
+  const auto cacheBadge = jjwxc_cache_service::badge();
+  int cacheLeft = metaLeft;
+  if (cacheBadge != jjwxc_cache_service::Badge::None) {
+    constexpr int size = 22;
+    const int x = metaLeft - 12 - size;
+    const int y = centerY - size / 2;
+    cacheLeft = x;
+    switch (cacheBadge) {
+      case jjwxc_cache_service::Badge::Running:
+        renderer.fillRect(x + 9, y + 2, 4, 10, true);
+        renderer.drawLine(x + 4, y + 11, x + 11, y + 18, 3, true);
+        renderer.drawLine(x + 11, y + 18, x + 18, y + 11, 3, true);
+        renderer.drawLine(x + 3, y + 21, x + 19, y + 21, 2, true);
+        break;
+      case jjwxc_cache_service::Badge::Paused:
+        renderer.fillRect(x + 6, y + 3, 4, 16, true);
+        renderer.fillRect(x + 14, y + 3, 4, 16, true);
+        break;
+      case jjwxc_cache_service::Badge::Done:
+        renderer.drawLine(x + 3, y + 12, x + 9, y + 18, 3, true);
+        renderer.drawLine(x + 9, y + 18, x + 19, y + 4, 3, true);
+        break;
+      default:
+        break;
+    }
   }
 
   if (title == nullptr || *title == '\0') return;
-  const int titleRight = clockX - 12;
+  const int titleRight = cacheLeft - 12;
   const std::string shown =
       renderer.truncatedText(labelFont, title, std::max(1, titleRight - textX), EpdFontFamily::BOLD);
   renderer.drawText(labelFont, textX, metaY, shown.c_str(), true, EpdFontFamily::BOLD);
@@ -1072,5 +1086,43 @@ void CpyTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect
                     rect.y + rect.height - 1, true);
 
   const int pillTop = rect.y + (rect.height - CpyMetrics::values.batteryHeight) / 2;
+
+  // Background paragraph-comment cache state. It sits just left of the date (or
+  // the battery when the clock is not set) and only exists while there is work
+  // or an unacknowledged completed item.
+  const auto cacheBadge = jjwxc_cache_service::badge();
+  if (cacheBadge != jjwxc_cache_service::Badge::None) {
+    const int size = 22;
+    int iconRight = right - CpyMetrics::values.batteryWidth - 10;
+    if (now > 1700000000) {
+      struct tm local {};
+      localtime_r(&now, &local);
+      char date[16];
+      std::snprintf(date, sizeof(date), "%d/%d", local.tm_mon + 1, local.tm_mday);
+      iconRight -= renderer.getTextWidth(metaFontId, date) + 10;
+    }
+    const int x = iconRight - size;
+    const int y = rect.y + (rect.height - size) / 2;
+    switch (cacheBadge) {
+      case jjwxc_cache_service::Badge::Running:
+        // Down-arrow into a tray: "downloading".
+        renderer.fillRect(x + 9, y + 2, 4, 10, true);
+        renderer.drawLine(x + 4, y + 11, x + 11, y + 18, 3, true);
+        renderer.drawLine(x + 11, y + 18, x + 18, y + 11, 3, true);
+        renderer.drawLine(x + 3, y + 21, x + 19, y + 21, 2, true);
+        break;
+      case jjwxc_cache_service::Badge::Paused:
+        renderer.fillRect(x + 6, y + 3, 4, 16, true);
+        renderer.fillRect(x + 14, y + 3, 4, 16, true);
+        break;
+      case jjwxc_cache_service::Badge::Done:
+        renderer.drawLine(x + 3, y + 12, x + 9, y + 18, 3, true);
+        renderer.drawLine(x + 9, y + 18, x + 19, y + 4, 3, true);
+        break;
+      default:
+        break;
+    }
+  }
+
   drawBatteryPill(renderer, right, pillTop, batteryPercentageVisible());
 }

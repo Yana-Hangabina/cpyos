@@ -359,6 +359,8 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t fileSize_ = 0;  // bounds glyph bitmap offsets (glyphEntryValid)
+  uint8_t corruptGlyphsLogged_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers
@@ -380,6 +382,9 @@ class SdCardFont {
 #if CONFIG_IDF_TARGET_ESP32C3 && FREEINK_CAP_BLE_HID_HOST
   int32_t findPagedGlyphIndex(const PerStyle& s, uint32_t codepoint, FontFile& file) const;
 #endif
+  // False for a glyph entry the file cannot back (a corrupt .cpfont): its data length must be the
+  // packed size of its pixels and its bitmap must lie inside the file. Logs the first few per font.
+  bool glyphEntryValid(const PerStyle& s, const EpdGlyph& glyph, uint32_t codepoint);
   enum class GlyphReadResult : uint8_t { CacheHit, SourceRead, Failed };
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
   bool ensureGlyphCache() const;

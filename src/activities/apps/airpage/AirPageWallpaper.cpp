@@ -99,10 +99,10 @@ bool AirPageWallpaper::install(const SelectedImage& selected) {
     return false;
   }
 
-  const uint8_t previousMode = SETTINGS.sleepScreen;
-  SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
+  const uint8_t previousStyle = SETTINGS.deepSleepStyle;
+  SETTINGS.deepSleepStyle = CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE;
   if (!SETTINGS.saveToFile()) {
-    SETTINGS.sleepScreen = previousMode;
+    SETTINGS.deepSleepStyle = previousStyle;
     (void)SETTINGS.saveToFile();
     Storage.remove(kSleepImagePath);
     if (hadPrevious) Storage.rename(kSleepImageBackupPath, kSleepImagePath);
@@ -117,7 +117,8 @@ void AirPageWallpaper::recoverInterruptedTransaction() {
   Storage.remove(kSleepImagePartPath);
   if (!Storage.exists(kSleepImageBackupPath)) return;
 
-  if (Storage.exists(kSleepImagePath) && SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM) {
+  if (Storage.exists(kSleepImagePath) &&
+      SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE) {
     Storage.remove(kSleepImageBackupPath);
     return;
   }

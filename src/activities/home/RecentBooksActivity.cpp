@@ -93,6 +93,13 @@ void RecentBooksActivity::activateIndex(const int index) {
   onSelectBook(recentBooks[index].path);
 }
 
+void RecentBooksActivity::swipeDelete(const int index) {
+  if (index < 0 || index >= listCount()) return;
+  app.clearTapFlash();
+  LOG_DBG("RBA", "Swipe remove recent: %s", recentBooks[index].path.c_str());
+  promptRemoveBook(recentBooks[index].path, recentBooks[index].title);
+}
+
 void RecentBooksActivity::onRowLongPress(const int index) {
   if (index < 0 || index >= listCount()) return;
   // Long-press prompts removal from the list (mirrors the Confirm-button hold).
@@ -175,6 +182,7 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
   label.bold = true;
   props.labelText = label;
   syncListViewport(screen, props, /*hasSubtitle=*/true);
+  configureSwipeDelete(screen, props);
   screen.list(props);
 }
 

@@ -153,6 +153,14 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
 }
 
 void DictionaryWordSelectActivity::performLookup() {
+  if (words.empty()) return;
+  if (selectOnly) {
+    // Definition viewer mode: hand the chosen word back to the parent, which
+    // owns the dictionary and the recursive back stack.
+    setResult(ActivityResult{DictionarySelectionResult{std::string(words[selected].text)}});
+    finish();
+    return;
+  }
   popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
@@ -175,13 +183,26 @@ void DictionaryWordSelectActivity::performLookup() {
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result);
+  DictLocation location;
+  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result, &location);
 
   if (found) {
     popup = Popup::None;
-    startActivityForResultWith<DictionaryDefinitionActivity>([this](const ActivityResult&) { requestUpdate(); },
-                                                             std::move(headword), std::move(definition),
-                                                             dict.definitionsAreHtml());
+    // Construct first so the recursive viewer can be armed with the exact
+    // entry location before it enters; the dictionary outlives it because this
+    // activity stays underneath on the stack.
+    auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
+                                                                    std::move(definition),
+                                                                    dict.definitionsAreHtml());
+    if (!activity || !activity->enableLookup(dict, location)) {
+      LOG_ERR("DICT", "OOM: definition activity");
+      popup = Popup::Error;
+      popupMsg = StrId::STR_DICT_LOW_MEMORY;
+      popupTime = millis();
+      requestUpdate();
+      return;
+    }
+    startActivityForResult(std::move(activity), [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
@@ -238,6 +259,11 @@ void DictionaryWordSelectActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (selectOnly) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+    }
     finish();
     return;
   }

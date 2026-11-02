@@ -26,6 +26,9 @@
 #include "JjwxcHttpTransport.h"
 #include "JjwxcPsramAllocator.h"
 #include "JjwxcStore.h"
+#include "JjwxcCacheQueue.h"
+#include "JjwxcCacheService.h"
+#include "JjwxcCommentFetcher.h"
 #include "JjwxcTextWrap.h"
 
 class HalFile;
@@ -61,9 +64,17 @@ class JjwxcActivity final : public Activity {
 
   void onEnter() override;
   void onExit() override;
+  void debugOpenJjwxcCacheQueue() override;
+  void debugEnqueueJjwxcCacheQueue() override;
+  void debugEnqueueJjwxcCacheQueueRange(uint32_t from, uint32_t to) override;
+  void debugPauseJjwxcCacheQueue() override;
+  void debugClearJjwxcCacheQueue() override;
+  void debugResumeJjwxcCacheQueue() override;
+  void debugJjwxcCacheQueueStatus() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override;
+  void prepareForSleep() override;
 
   // One-tap entry from the EPUB reader's menu. The reader pushes this activity
   // as a child, so Back returns to the open book. The request is consumed once.
@@ -79,7 +90,12 @@ class JjwxcActivity final : public Activity {
     RefreshUpdates,
     // Open the WAP search results for a query supplied by the library's search
     // page. Carries no novel id.
-    Search
+    Search,
+    // Open the app's background comment-cache queue. novelId is optional.
+    OpenCacheQueue,
+    // Enqueue the whole book's comment bodies and open the queue. Used by the
+    // book detail action and by the serial test hook.
+    EnqueueComments
   };
   // novelId may be empty ONLY for RefreshUpdates; every other action needs a book.
   static void requestDeepLink(const char* novelId, DeepLinkAction action, uint32_t chapterId = 0,
@@ -115,6 +131,7 @@ class JjwxcActivity final : public Activity {
     ChapterList,
     Downloading,
     Library,
+    CacheQueue,
     Message,
   };
 
@@ -262,28 +279,26 @@ class JjwxcActivity final : public Activity {
   // run passes the range page's toggle and a per-chapter cap, because 10-108
   // requests per chapter would otherwise turn an 18-minute run into days.
   // Bodies already on the card are skipped.
-  void fetchAndStoreCommentCounts(uint32_t chapterId, bool includeBodies,
-                                  uint32_t prefetchMs = 75000, size_t prefetchRequests = static_cast<size_t>(-1));
-  struct CommentPrefetchResult {
-    size_t fetched = 0;
-    size_t skipped = 0;
-    size_t failed = 0;
-    size_t requests = 0;
-    bool budgetReached = false;
-  };
+  // Why a comment request stopped, so the background queue can tell a benign
+  // "nothing left" apart from a dead session or a lost radio.
+  using CommentFetchResult = JjwxcCommentFetcher::FetchResult;
+  CommentFetchResult fetchAndStoreCommentCounts(uint32_t chapterId, bool includeBodies,
+                                                uint32_t prefetchMs = 75000,
+                                                size_t prefetchRequests = static_cast<size_t>(-1));
+  using CommentPrefetchResult = JjwxcCommentFetcher::PrefetchResult;
   // Fetches the first page of every commented paragraph in `counts`. The caller
   // supplies an absolute deadline and a request budget so a whole-book pass can
-  // stop cleanly between paragraphs instead of running for hours.
+  // stop cleanly between paragraphs instead of running for hours. `beginIndex`
+  // lets a resumable pass continue where the previous call stopped.
   CommentPrefetchResult prefetchCommentBodies(uint32_t chapterId, const JjwxcCommentSidecar::Count* counts,
-                                              size_t count, uint32_t deadlineMs, size_t requestBudget);
+                                              size_t count, uint32_t deadlineMs, size_t requestBudget,
+                                              size_t beginIndex = 0);
   // Explicit, resumable whole-book pass over the chapters already on the card.
   // It fetches comment counts for chapters that have no JJC1 sidecar, then the
   // bodies. Existing JJD1 files are skipped, so running it again continues where
   // the last run stopped.
   void prefetchAllCommentBodies();
   void promptPrefetchCommentBodies();
-  static bool onCommentCount(void* ctx, const jjwxc::ParagraphComment& item, size_t index);
-  static bool onPrefetchComment(void* ctx, const jjwxc::CommentItem& item, size_t index);
   void promptRemoveFavorite();
   void showFavoriteClassActions();
   void promptNewFavoriteClass();
@@ -364,6 +379,14 @@ class JjwxcActivity final : public Activity {
   int chapterPageSpan_ = 0;
   int chapterIndexForRow(int row) const;
   void startCaching(uint32_t fromOrdinal, uint32_t toOrdinal, bool openAfter, CacheMode mode);
+
+  // ---- background comment cache queue -------------------------------------
+  void loadCacheQueue();
+  void enqueueCommentQueue(const char* novelId, const char* title, uint32_t fromOrdinal, uint32_t toOrdinal);
+  void enterCacheQueue();
+  void onCacheQueueConfirm();
+  bool queueHasWork() const;
+  void refreshQueueRows();
   // The launch half of startCaching(): the part that runs once Wi-Fi is up, so a
   // withNetwork() that the user backs out of never touches the download state.
   void launchCacheJob(uint32_t fromOrdinal, uint32_t toOrdinal, bool openAfter, CacheMode mode, State origin);
@@ -444,12 +467,16 @@ class JjwxcActivity final : public Activity {
   // anonymously as plaintext JSON with no watermark (verified: PUA=0, zero-width=0), so
   // they stay on the existing jjwxc::fetchChapter path. Only VIP bodies need the sid,
   // the two-stage AES, the CSS displacement and the per-session font watermark.
+  // `onSay` receives the author's note ("作者有话说") after the prose, when the page
+  // carries one. It is plaintext on the page, so it costs no extra request and is
+  // unavailable for exactly the chapters whose body is unavailable (a 302 to /buy).
   jjwxc::Status fetchWapVipChapter(const char* novelId, uint32_t chapterId, jjwxc::ChapterMeta& meta,
-                                   jjwxc::TextSink onText, void* textCtx);
+                                   jjwxc::TextSink onText, void* textCtx, jjwxc::TextSink onSay, void* sayCtx);
   static bool onSearchEntry(void* ctx, const jjwxc::SearchItem& item, size_t index);
   static bool onSearchEntryAdapter(void* ctx, const jjwxc::WapShelfEntry& e, size_t index);
   static bool onChapterEntry(void* ctx, const jjwxc::ChapterEntry& e, size_t index);
   static bool onChapterText(void* ctx, const char* utf8, size_t len);
+  static bool onChapterSay(void* ctx, const char* utf8, size_t len);
   static bool onNovelEntry(void* ctx, const JjwxcStore::NovelRecord& rec, size_t index);
   // Receives `novelIntro`, the long blurb, from the SAX parser. Static because the
   // library's sink API is a function pointer plus a context. The value arrives RAW
@@ -727,6 +754,9 @@ class JjwxcActivity final : public Activity {
   // app entry. A 200-chapter download must not print 200 of them, but the first is the
   // only place the whole chain's sizes and cost are visible together.
   bool vipChainProven_ = false;
+  // Same idea for the author's note: one proof line per app entry, so the feature
+  // being present in the image is observable without logging every chapter.
+  bool vipNoteProven_ = false;
   // The WAP session, not Credentials, is what "logged in" means now: sid is 133
   // characters and Credentials::token is 48. Every UI gate that used to ask
   // cred_.valid() asks this instead.
@@ -748,6 +778,14 @@ class JjwxcActivity final : public Activity {
   std::atomic<bool> jobDone_{false};
   std::atomic<bool> jobCancel_{false};
   bool jobRunning_ = false;
+
+  // ---- background comment cache queue -------------------------------------
+  // Read-only snapshot of the background service's queue, refreshed when its
+  // revision changes. The service is the only writer; this page never mutates it.
+  JjwxcCacheQueue::Item cacheQueue_[JjwxcCacheQueue::kMaxItems];
+  size_t cacheQueueCount_ = 0;
+  jjwxc_cache_service::Status queueStatus_;
+  uint32_t queueSnapshotRevision_ = 0;
   TaskHandle_t jobTask_ = nullptr;
   // True when jobTask_ was created with xTaskCreatePinnedToCoreWithCaps, which puts the
   // stack in PSRAM and the TCB in internal RAM. Such a task MUST be deleted with
@@ -1118,12 +1156,15 @@ class JjwxcActivity final : public Activity {
   // the same number, where it means 12 KB as it always did.
   static constexpr uint32_t kJobStackBytes = 12 * 1024;
   // PSRAM task depth. xTaskCreatePinnedToCoreWithCaps multiplies the depth by
-  // sizeof(StackType_t), so 24K words here is a 96 KB stack. The paragraph-comment
-  // request adds a TLS handshake to www.jjwxc.net on top of the chapter-fetch frame;
-  // at the old 48 KB the high-water mark was 56 bytes and the stack canary fired.
-  // 96 KB leaves ample room for wolfSSL's deepest handshake path. The internal-RAM
-  // fallback keeps 12 KB (it never runs this path on a PSRAM board).
-  static constexpr uint32_t kJobStackPsramDepth = 24 * 1024;
+  // sizeof(StackType_t), so 32K words here is a 128 KB stack.
+  //
+  // This number has been raised twice by measurement, never by guess: at 48 KB the
+  // paragraph-comment request left 56 bytes of high-water mark and the canary fired;
+  // at 96 KB the author's-note pass (a second `wapUndoCssDisplacement`, whose fragment
+  // and span tables live on the stack) left 692 bytes, and the next comment prefetch
+  // overflowed. 128 KB restores ~32 KB of headroom for wolfSSL's deepest handshake.
+  // The internal-RAM fallback keeps 12 KB: a board without PSRAM cannot run this app.
+  static constexpr uint32_t kJobStackPsramDepth = 32 * 1024;
   // Must exceed one chapter's worst-case blocking time, or a request that is merely
   // slow always reaches the forced-delete path -- and deleting a task mid-SD-write can
   // corrupt the filesystem.

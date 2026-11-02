@@ -853,7 +853,6 @@ void PdfReaderActivity::renderToolbarOverlay() {
         model.rowValue = [](int) { return std::string(); };
         model.currentChapterIndex = currentPage;
       }
-      model.fullRowSelection = true;
     } else if (focusedTool == 1) {
       model.panelTitle = tr(STR_TOOL_TYPESETTING);
       model.itemCount = 1;
@@ -893,7 +892,6 @@ void PdfReaderActivity::renderToolbarOverlay() {
         }
         return -1;
       }();
-      model.fullRowSelection = true;
     } else {
       model.panelTitle = tr(STR_TOOL_MORE);
       model.itemCount = 6;

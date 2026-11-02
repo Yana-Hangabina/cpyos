@@ -15,6 +15,7 @@
 #include <ctime>
 #include <new>
 
+#include "BackgroundWork.h"
 #include "NetworkStartup.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -53,6 +54,22 @@ constexpr size_t kReplyBodyBytes = 2048;
 // leaving the "more" path for the rare long one.
 constexpr size_t kReplyPageSize = 20;
 
+// Chapter-wide background prefetch. It starts only after the first page has
+// been on screen for a moment (so a quick look-and-leave never starts a request),
+// then walks the chapter's JJC1 paragraphs one at a time on the existing worker.
+// Budgets bound radio usage on a long chapter; the cursor is persisted only in
+// memory, and already-written JJD1 files make the next panel resume naturally.
+constexpr uint32_t kPrefetchSettleMs = 1500;
+constexpr uint32_t kPrefetchBudgetMs = 60 * 1000;
+constexpr size_t kPrefetchMaxRequests = 30;
+constexpr uint32_t kPrefetchDelayMs = 300;
+constexpr uint32_t kPrefetchFailureDelayMs = 250;
+constexpr int kPrefetchMaxConsecutiveFailures = 3;
+// A background page normally answers in <1 s. Do not let a stalled read hold a
+// queued like/reply, or a Back, for the foreground's full 45 s. Five seconds is
+// still generous for one 20-comment page.
+constexpr int kPrefetchRequestTimeoutMs = 5000;
+
 // Matches the old in-app comment view: every request carries the same referer.
 constexpr const char* kReferer = "https://m.jjwxc.net/book2/";
 
@@ -70,6 +87,12 @@ struct BodyBuffer {
   size_t cap = 0;
   size_t len = 0;
   bool overflow = false;
+};
+
+struct PrefetchBodyCtx {
+  JjwxcCommentSidecar::Bodies::Item* out = nullptr;
+  size_t cap = 0;
+  size_t count = 0;
 };
 
 // Tolerant `"code"` reader. The response is JSON, but this deliberately mirrors
@@ -447,7 +470,8 @@ void JjwxcCommentActivity::onWifiResult(const ActivityResult& result) {
 }
 
 void JjwxcCommentActivity::refresh() {
-  if (refreshing_ || replyLoading_ || loadingMore_ || fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (refreshing_ || replyLoading_ || loadingMore_ || queuedAction_ != ActionKind::None || fetchDone_.load()) return;
+  if (fetchTask_ != nullptr && !prefetching_) return;
   feedback_.clear();
   if (view_ == View::Replies) {
     replyLoading_ = true;
@@ -492,6 +516,11 @@ void JjwxcCommentActivity::refresh() {
   }
 
   if (transport_.networkReady()) {
+    if (fetchTask_ != nullptr) {
+      queueForegroundAction(view_ == View::Replies ? ActionKind::FetchReplies : ActionKind::FetchPage, 0,
+                            /*append=*/false);
+      return;
+    }
     if (view_ == View::Replies) {
       startRepliesFetch();
     } else {
@@ -508,6 +537,15 @@ void JjwxcCommentActivity::fail(const char* text) {
   loadingMore_ = false;
   refreshing_ = false;
   requestUpdate();
+}
+
+void JjwxcCommentActivity::prepareForSleep() {
+  // A long press is an explicit request to power off; let the worker stop at
+  // its next yield and let onExit's join finish. The per-paragraph sidecars are
+  // already durable, so stopping here loses at most the current request.
+  exitRequested_.store(true);
+  foregroundPending_.store(false);
+  prefetchPaused_ = true;
 }
 
 void JjwxcCommentActivity::onExit() {
@@ -542,6 +580,12 @@ void JjwxcCommentActivity::onExit() {
   }
   reapFetch();
   exitRequested_.store(false);
+  prefetching_ = false;
+  prefetchPaused_ = false;
+  foregroundPending_.store(false);
+  queuedAction_ = ActionKind::None;
+  prefetchCounts_.reset();
+  prefetchItems_.reset();
   transport_.resetSession();
   if (wifiBroughtUp_ && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -583,6 +627,7 @@ void JjwxcCommentActivity::fetchPage(const uint32_t offset, const bool append) {
   fetchError_ = nullptr;
   fetchedReceived_ = 0;
   fetchedTotal_ = 0;
+  const uint32_t fetchStartMs = millis();
   auto failPage = [&](const char* text) {
     fetchOk_ = false;
     fetchError_ = text;
@@ -613,7 +658,7 @@ void JjwxcCommentActivity::fetchPage(const uint32_t offset, const bool append) {
   }
   auto* url = reinterpret_cast<char*>(urlBuf_.get());
   const int n = snprintf(url, jjwxc::WapIo::kUrlCap,
-                         "https://www.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
+                         "https://m.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
                          "?versionCode=489&novelId=%s&chapterId=%lu&paragraph_id=%lu&offset=%lu&limit=%u%s%s",
                          novelId_.c_str(), static_cast<unsigned long>(chapterId_),
                          static_cast<unsigned long>(paragraphId_), static_cast<unsigned long>(offset),
@@ -630,6 +675,9 @@ void JjwxcCommentActivity::fetchPage(const uint32_t offset, const bool append) {
   options.referer = kReferer;
   jjwxc::WapResponse response;
   const int http = wap_->get(url, options, &collectBody, &collector, response);
+  const uint32_t requestMs = millis() - fetchStartMs;
+  LOG_INF(kTag, "comment list timing: http=%d request=%lu ms bytes=%u", http, (unsigned long)requestMs,
+          (unsigned)collector.len);
 
   if (http < 0) {
     LOG_ERR(kTag, "comment list request failed: transport=%d", http);
@@ -684,6 +732,8 @@ void JjwxcCommentActivity::fetchPage(const uint32_t offset, const bool append) {
 
   fetchedReceived_ = jjwxc::parseCommentList(buffer, textLen, &onCommentItem, this);
   fetchedTotal_ = jsonCommentTotal(buffer);
+  LOG_INF(kTag, "comment list timing: parse=%lu ms total=%lu ms", (unsigned long)(millis() - fetchStartMs - requestMs),
+          (unsigned long)(millis() - fetchStartMs));
 }
 
 void JjwxcCommentActivity::fetchReplies(const uint32_t offset, const bool append) {
@@ -787,6 +837,301 @@ void JjwxcCommentActivity::fetchReplies(const uint32_t offset, const bool append
   (void)append;
 }
 
+bool JjwxcCommentActivity::onPrefetchItem(void* ctx, const jjwxc::CommentItem& item, size_t) {
+  auto* c = static_cast<PrefetchBodyCtx*>(ctx);
+  if (c->out == nullptr || c->count >= c->cap) return false;
+  auto& out = c->out[c->count];
+  snprintf(out.author, sizeof(out.author), "%s", item.author);
+  snprintf(out.date, sizeof(out.date), "%s", item.date);
+  snprintf(out.ip, sizeof(out.ip), "%s", item.ip);
+  snprintf(out.body, sizeof(out.body), "%s", item.body);
+  snprintf(out.commentId, sizeof(out.commentId), "%s", item.commentId);
+  out.agreeNum = item.agreeNum;
+  out.disagreeNum = item.disagreeNum;
+  out.replyTotal = item.replyTotal;
+  out.readerAgree = item.readerAgree;
+  out.isAuthor = item.isAuthor;
+  ++c->count;
+  return true;
+}
+
+void JjwxcCommentActivity::delayPrefetch(const uint32_t ms) {
+  const uint32_t start = millis();
+  while (millis() - start < ms) {
+    if (exitRequested_.load() || foregroundPending_.load()) return;
+    delay(50);
+  }
+}
+
+// One chapter pass on the existing worker. It never calls requestUpdate(): the
+// UI must not repaint per paragraph (e-ink) and the foreground list is a
+// different paragraph anyway. It yields between paragraphs, so a like/reply/
+// refresh queued by the UI starts within one in-flight request.
+void JjwxcCommentActivity::prefetchChapter() {
+  if (!ensureSession() || !response_ || !urlBuf_) {
+    prefetchDone_ = true;
+    return;
+  }
+
+  if (!prefetchCounts_) {
+    auto countsBuf = memory::makePsramByteBufferNoThrow(JjwxcCommentSidecar::kMaxEntries *
+                                                        sizeof(JjwxcCommentSidecar::Count));
+    if (!countsBuf) {
+      prefetchDone_ = true;
+      return;
+    }
+    prefetchCounts_ = std::move(countsBuf);
+    prefetchCount_ = 0;
+    if (!JjwxcStore::loadCommentCounts(novelId_.c_str(), chapterId_,
+                                      reinterpret_cast<JjwxcCommentSidecar::Count*>(prefetchCounts_.get()),
+                                      JjwxcCommentSidecar::kMaxEntries, prefetchCount_) ||
+        prefetchCount_ == 0) {
+      prefetchDone_ = true;
+      return;
+    }
+    if (prefetchCount_ > JjwxcCommentSidecar::kMaxEntries) prefetchCount_ = JjwxcCommentSidecar::kMaxEntries;
+    prefetchCursor_ = 0;
+    prefetchFetched_ = 0;
+    prefetchSkipped_ = 0;
+    prefetchFailed_ = 0;
+    prefetchRequests_ = 0;
+    LOG_INF(kTag, "chapter prefetch: chapter=%lu paragraphs=%u", static_cast<unsigned long>(chapterId_),
+            static_cast<unsigned>(prefetchCount_));
+  }
+  if (!prefetchItems_) {
+    auto itemsBuf = memory::makePsramByteBufferNoThrow(kPageSize * sizeof(JjwxcCommentSidecar::Bodies::Item));
+    if (!itemsBuf) {
+      prefetchDone_ = true;
+      return;
+    }
+    prefetchItems_ = std::move(itemsBuf);
+  }
+
+  const auto* counts = reinterpret_cast<const JjwxcCommentSidecar::Count*>(prefetchCounts_.get());
+  auto* items = reinterpret_cast<JjwxcCommentSidecar::Bodies::Item*>(prefetchItems_.get());
+  const uint32_t deadline = millis() + kPrefetchBudgetMs;
+  int consecutiveFailures = 0;
+
+  while (prefetchCursor_ < prefetchCount_) {
+    if (exitRequested_.load() || foregroundPending_.load()) {
+      prefetchPaused_ = true;
+      break;
+    }
+    if (prefetchRequests_ >= kPrefetchMaxRequests || static_cast<int32_t>(millis() - deadline) >= 0) {
+      prefetchDone_ = true;  // this panel session stops; a reopened panel starts fresh
+      break;
+    }
+
+    const JjwxcCommentSidecar::Count& c = counts[prefetchCursor_++];
+    // -2 is the site's "author note / chapter end" aggregate; strtoul turns it
+    // into a huge id. The reader only addresses uint16 paragraph indexes, so
+    // anything above that cannot own a bubble and must not be requested.
+    if (c.paragraphId == 0 || c.paragraphId > 0xFFFF || c.total == 0 || c.paragraphId == paragraphId_) continue;
+    const std::string bodyPath = JjwxcStore::commentBodiesPath(novelId_.c_str(), chapterId_, c.paragraphId);
+    if (Storage.exists(bodyPath.c_str())) {
+      ++prefetchSkipped_;
+      continue;
+    }
+
+    char sid[256];
+    char token[400];
+    token[0] = '\0';
+    if (jar_->get("sid", sid, sizeof(sid), cookieClock()) != 0) {
+      char encoded[400];
+      const bool encodedOk = jjwxc::Base64::encode(reinterpret_cast<const uint8_t*>(sid), strlen(sid), encoded,
+                                                    sizeof(encoded)) > 0 &&
+                             jjwxc::wapUrlEncode(encoded, strlen(encoded), token, sizeof(token)) > 0;
+      if (!encodedOk) token[0] = '\0';
+    }
+    auto* url = reinterpret_cast<char*>(urlBuf_.get());
+    const int n = snprintf(url, jjwxc::WapIo::kUrlCap,
+                           "https://m.jjwxc.net/app.jjwxc/Pc/comment/getCommentList"
+                           "?versionCode=489&novelId=%s&chapterId=%lu&paragraph_id=%lu&offset=0&limit=%u%s%s",
+                           novelId_.c_str(), static_cast<unsigned long>(chapterId_),
+                           static_cast<unsigned long>(c.paragraphId), static_cast<unsigned>(kPageSize),
+                           token[0] ? "&token=" : "", token);
+    if (n <= 0 || static_cast<size_t>(n) >= jjwxc::WapIo::kUrlCap) {
+      ++prefetchFailed_;
+      ++consecutiveFailures;
+      continue;
+    }
+
+    ++prefetchRequests_;
+    auto* buffer = reinterpret_cast<char*>(response_.get());
+    buffer[0] = '\0';
+    BodyBuffer collector{buffer, kResponseBytes, 0, false};
+    jjwxc::WapOptions options;
+    options.referer = kReferer;
+    jjwxc::WapResponse response;
+    transport_.setRequestTimeoutMs(kPrefetchRequestTimeoutMs);
+    transport_.setAllowReconnect(false);
+    const int http = wap_->get(url, options, &collectBody, &collector, response);
+    transport_.setAllowReconnect(true);
+    transport_.setRequestTimeoutMs(JjwxcHttpTransport::kDefaultTimeoutMs);
+
+    if (http < 0) {
+      // A background pass must not sit in a 10+ s reconnect handshake while the
+      // reader is open. Stop here; the next panel open starts a fresh pass and
+      // already-fetched JJD1 files are kept.
+      ++prefetchFailed_;
+      LOG_INF(kTag, "chapter prefetch: para=%lu transport=%d stop=network",
+              static_cast<unsigned long>(c.paragraphId), http);
+      prefetchDone_ = true;
+      break;
+    }
+    if (http == 301 || http == 302 || http == 303 || http == 307 || http == 308 ||
+        strstr(response.finalUrl, "/my/login") != nullptr) {
+      prefetchAuthStop_ = true;
+      prefetchDone_ = true;
+      break;
+    }
+    if (http != 200 || collector.overflow || collector.len == 0) {
+      ++prefetchFailed_;
+      ++consecutiveFailures;
+      LOG_INF(kTag, "chapter prefetch: para=%lu http=%d overflow=%d len=%u",
+              static_cast<unsigned long>(c.paragraphId), http, collector.overflow ? 1 : 0,
+              static_cast<unsigned>(collector.len));
+      delayPrefetch(kPrefetchFailureDelayMs);
+      if (consecutiveFailures >= kPrefetchMaxConsecutiveFailures) {
+        prefetchDone_ = true;
+        break;
+      }
+      continue;
+    }
+    buffer[collector.len] = '\0';
+    size_t textLen = collector.len;
+    const auto encoding = txt_encoding::detect(reinterpret_cast<const uint8_t*>(buffer), collector.len, true);
+    if (encoding == txt_encoding::Encoding::Gbk) {
+      const auto converted = txt_encoding::transcodeGbkInPlace(reinterpret_cast<uint8_t*>(buffer), collector.len,
+                                                               kResponseBytes, true);
+      if (converted.rawLength == 0 || converted.utf8Length == 0) {
+        ++prefetchFailed_;
+        ++consecutiveFailures;
+        continue;
+      }
+      textLen = converted.utf8Length;
+      buffer[textLen] = '\0';
+    }
+    const int code = jsonCode(buffer);
+    if (code == 1004 || code == 1001 || code == 10) {
+      prefetchAuthStop_ = true;
+      prefetchDone_ = true;
+      break;
+    }
+    if (code >= 0 && code != 200 && code != 0) {
+      ++prefetchFailed_;
+      ++consecutiveFailures;
+      LOG_INF(kTag, "chapter prefetch: para=%lu code=%d", static_cast<unsigned long>(c.paragraphId), code);
+      delayPrefetch(kPrefetchFailureDelayMs);
+      if (consecutiveFailures >= kPrefetchMaxConsecutiveFailures) {
+        prefetchDone_ = true;
+        break;
+      }
+      continue;
+    }
+
+    PrefetchBodyCtx ctx{items, kPageSize, 0};
+    jjwxc::parseCommentList(buffer, textLen, &JjwxcCommentActivity::onPrefetchItem, &ctx);
+    if (ctx.count == 0) {
+      ++prefetchFailed_;
+      ++consecutiveFailures;
+      delayPrefetch(kPrefetchFailureDelayMs);
+      if (consecutiveFailures >= kPrefetchMaxConsecutiveFailures) {
+        prefetchDone_ = true;
+        break;
+      }
+      continue;
+    }
+    const uint32_t total = jsonCommentTotal(buffer);
+    if (JjwxcStore::saveCommentBodies(novelId_.c_str(), chapterId_, c.paragraphId, items, ctx.count,
+                                      total > ctx.count ? total : static_cast<uint32_t>(ctx.count))) {
+      ++prefetchFetched_;
+      consecutiveFailures = 0;
+    } else {
+      ++prefetchFailed_;
+      ++consecutiveFailures;
+    }
+    delayPrefetch(kPrefetchDelayMs);
+  }
+
+  if (prefetchCursor_ >= prefetchCount_) prefetchDone_ = true;
+  LOG_INF(kTag, "chapter prefetch: fetched=%u skipped=%u failed=%u requests=%u stop=%s",
+          static_cast<unsigned>(prefetchFetched_), static_cast<unsigned>(prefetchSkipped_),
+          static_cast<unsigned>(prefetchFailed_), static_cast<unsigned>(prefetchRequests_),
+          prefetchAuthStop_ ? "auth" : prefetchDone_ ? "done" : "paused");
+}
+
+void JjwxcCommentActivity::startChapterPrefetch() {
+  if (exitRequested_.load()) return;
+  if (prefetching_ || prefetchDone_ || prefetchAuthStop_ || fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (state_ != State::Ready || moreFailed_ || !transport_.networkReady()) return;
+  if (!ensureSession() || !response_ || !urlBuf_) {
+    prefetchDone_ = true;
+    return;
+  }
+  prefetchStarted_ = true;
+  prefetchPaused_ = false;
+  prefetching_ = true;
+  pendingAction_ = ActionKind::PrefetchChapter;
+  if (!startWorker(/*quietFailure=*/true)) {
+    prefetching_ = false;
+    prefetchDone_ = true;
+    pendingAction_ = ActionKind::None;
+  }
+}
+
+void JjwxcCommentActivity::maybeStartOrResumePrefetch() {
+  if (exitRequested_.load()) return;
+  if (foregroundPending_.load() && queuedAction_ == ActionKind::None && !prefetching_) {
+    foregroundPending_.store(false);
+  }
+  if (prefetching_ || prefetchDone_ || prefetchAuthStop_ || foregroundPending_.load()) return;
+  if (fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (state_ != State::Ready || moreFailed_ || !transport_.networkReady()) return;
+  if (!prefetchStarted_ && (readyAtMs_ == 0 || millis() - readyAtMs_ < kPrefetchSettleMs)) return;
+  startChapterPrefetch();
+}
+
+bool JjwxcCommentActivity::queueForegroundAction(const ActionKind kind, const uint32_t offset, const bool append) {
+  if (fetchTask_ == nullptr || !prefetching_) return false;
+  // One queued action at a time. Overwriting would silently lose the first
+  // tap's parameters; the UI flags (refreshing_/replyLoading_/loadingMore_)
+  // normally make the second tap unreachable, and enterReplies enforces it.
+  if (queuedAction_ != ActionKind::None) return false;
+  queuedAction_ = kind;
+  queuedOffset_ = offset;
+  queuedAppend_ = append;
+  foregroundPending_.store(true);
+  requestUpdate();
+  return true;
+}
+
+void JjwxcCommentActivity::startQueuedAction() {
+  const ActionKind queued = queuedAction_;
+  queuedAction_ = ActionKind::None;
+  foregroundPending_.store(false);
+  if (queued == ActionKind::None) return;
+  if (queued == ActionKind::FetchPage) {
+    startFetch(queuedOffset_, queuedAppend_);
+    return;
+  }
+  if (queued == ActionKind::FetchReplies) {
+    startRepliesFetch(queuedAppend_);
+    return;
+  }
+  pendingAction_ = queued;
+  if (!prepareAction()) {
+    pendingAction_ = ActionKind::None;
+    refreshing_ = false;
+    replyLoading_ = false;
+    loadingMore_ = false;
+    requestUpdate();
+    return;
+  }
+  requestUpdate();
+  runActionWhenOnline();
+}
+
 void JjwxcCommentActivity::applyRepliesResult() {
   replyLoading_ = false;
   if (!fetchOk_) {
@@ -876,7 +1221,10 @@ void JjwxcCommentActivity::showActionError() {
 }
 
 void JjwxcCommentActivity::startLikeAction(const uint32_t index, const bool reply) {
-  if (refreshing_ || replyLoading_ || loadingMore_ || fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (refreshing_ || replyLoading_ || loadingMore_ || queuedAction_ != ActionKind::None || fetchDone_.load()) return;
+  // A background prefetch owns the worker but is interruptible between
+  // paragraphs; queue this action instead of dropping it.
+  if (fetchTask_ != nullptr && !prefetching_) return;
   if (reply) {
     if (index >= replies_.size() || parentCommentIndex_ >= comments_.size()) return;
     if (comments_[parentCommentIndex_].commentId[0] == '\0' || replies_[index].replyId[0] == '\0') {
@@ -891,7 +1239,6 @@ void JjwxcCommentActivity::startLikeAction(const uint32_t index, const bool repl
     }
   }
 
-  pendingAction_ = reply ? ActionKind::LikeReply : ActionKind::LikeComment;
   actionCommentIndex_ = index;
   actionIsReply_ = reply;
   actionLike_ = reply ? (replies_[index].readerAgree != 1) : (comments_[index].readerAgree != 1);
@@ -901,6 +1248,11 @@ void JjwxcCommentActivity::startLikeAction(const uint32_t index, const bool repl
   actionMessage_[0] = '\0';
   feedback_.clear();
   refreshing_ = true;
+  if (fetchTask_ != nullptr) {
+    queueForegroundAction(reply ? ActionKind::LikeReply : ActionKind::LikeComment);
+    return;
+  }
+  pendingAction_ = reply ? ActionKind::LikeReply : ActionKind::LikeComment;
   if (!prepareAction()) {
     pendingAction_ = ActionKind::None;
     refreshing_ = false;
@@ -1046,7 +1398,7 @@ void JjwxcCommentActivity::performPostReply() {
   options.referer = kReferer;
   options.contentType = jjwxc::kWapFormContentType;
   jjwxc::WapResponse response;
-  const int http = wap_->post("https://www.jjwxc.net/app.jjwxc/Pc/comment/writeReply", body, bodyLen, options,
+  const int http = wap_->post("https://m.jjwxc.net/app.jjwxc/Pc/comment/writeReply", body, bodyLen, options,
                               &collectBody, &collector, response);
   if (http < 0) {
     actionCode_ = http;
@@ -1145,6 +1497,9 @@ void JjwxcCommentActivity::applyActionResult() {
 }
 
 void JjwxcCommentActivity::enterReplies(const uint32_t commentIndex) {
+  // One network intent at a time: entering replies while a like/refresh/post is
+  // queued would otherwise overwrite the queue slot.
+  if (refreshing_ || replyLoading_ || loadingMore_ || queuedAction_ != ActionKind::None || fetchDone_.load()) return;
   if (commentIndex >= comments_.size()) return;
   if (comments_[commentIndex].commentId[0] == '\0') {
     showFeedback(tr(STR_JJWXC_COMMENT_CACHED_ONLY));
@@ -1179,7 +1534,11 @@ void JjwxcCommentActivity::enterReplies(const uint32_t commentIndex) {
     return;
   }
   if (transport_.networkReady()) {
-    startRepliesFetch();
+    if (fetchTask_ != nullptr) {
+      queueForegroundAction(ActionKind::FetchReplies, 0, /*append=*/false);
+    } else {
+      startRepliesFetch();
+    }
   } else {
     beginWifi(WifiPurpose::Refresh);
   }
@@ -1189,6 +1548,12 @@ void JjwxcCommentActivity::leaveReplies() {
   repliesScrollY_ = scrollY_;
   view_ = View::Comments;
   scrollY_ = commentsScrollY_;
+  // If the replies request had not started yet, drop it: the user left that
+  // view. The prefetch then resumes instead of running a hidden request.
+  if (queuedAction_ == ActionKind::FetchReplies) {
+    queuedAction_ = ActionKind::None;
+    foregroundPending_.store(false);
+  }
   replyLoading_ = false;
   replyFailed_ = false;
   feedback_.clear();
@@ -1223,7 +1588,10 @@ bool JjwxcCommentActivity::handleTap(const int x, const int y) {
 }
 
 void JjwxcCommentActivity::openComposer(const bool reply) {
-  if (refreshing_ || replyLoading_ || fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (refreshing_ || replyLoading_ || queuedAction_ != ActionKind::None || fetchDone_.load()) return;
+  // The keyboard is local; a running prefetch must not block it. The submitted
+  // post is queued below if the worker is still busy.
+  if (fetchTask_ != nullptr && !prefetching_) return;
   if (reply && parentCommentIndex_ >= comments_.size()) return;
   const bool reuseDraft = draftIsReply_ == reply && !draftText_.empty();
   const auto handler = [this, reply](const ActivityResult& result) {
@@ -1243,13 +1611,17 @@ void JjwxcCommentActivity::openComposer(const bool reply) {
       showFeedback(tr(STR_JJWXC_COMMENT_TOO_LONG));
       return;
     }
-    pendingAction_ = reply ? ActionKind::PostReply : ActionKind::PostComment;
     actionOk_ = true;
     actionCode_ = -1;
     actionCaptcha_ = false;
     actionMessage_[0] = '\0';
     feedback_.clear();
     refreshing_ = true;
+    if (fetchTask_ != nullptr) {
+      queueForegroundAction(reply ? ActionKind::PostReply : ActionKind::PostComment);
+      return;
+    }
+    pendingAction_ = reply ? ActionKind::PostReply : ActionKind::PostComment;
     if (!prepareAction()) {
       pendingAction_ = ActionKind::None;
       refreshing_ = false;
@@ -1349,6 +1721,7 @@ void JjwxcCommentActivity::applyFetchResult() {
   commentTotal_ = total > 0 ? total : static_cast<uint32_t>(comments_.size() + (received >= kPageSize ? 1 : 0));
   if (comments_.size() >= kMaxComments) commentTotal_ = static_cast<uint32_t>(comments_.size());
   state_ = State::Ready;
+  readyAtMs_ = millis();
   scrollY_ = 0;
   commentsScrollY_ = 0;
   refreshing_ = false;
@@ -1361,12 +1734,17 @@ void JjwxcCommentActivity::applyFetchResult() {
 }
 
 void JjwxcCommentActivity::loadMore() {
-  if (loadingMore_ || refreshing_ || replyLoading_ || fetchTask_ != nullptr || fetchDone_.load()) return;
+  if (loadingMore_ || refreshing_ || replyLoading_ || queuedAction_ != ActionKind::None || fetchDone_.load()) return;
+  if (fetchTask_ != nullptr && !prefetching_) return;
   if (view_ == View::Replies) {
     if (!replyHasMore()) return;
     replyLoading_ = true;
     moreFailed_ = false;
     requestUpdate();
+    if (fetchTask_ != nullptr) {
+      queueForegroundAction(ActionKind::FetchReplies, 0, /*append=*/true);
+      return;
+    }
     startRepliesFetch(/*append=*/true);
     return;
   }
@@ -1374,6 +1752,10 @@ void JjwxcCommentActivity::loadMore() {
   loadingMore_ = true;
   moreFailed_ = false;
   requestUpdate();
+  if (fetchTask_ != nullptr) {
+    queueForegroundAction(ActionKind::FetchPage, static_cast<uint32_t>(comments_.size()), /*append=*/true);
+    return;
+  }
   startFetch(static_cast<uint32_t>(comments_.size()), /*append=*/true);
 }
 
@@ -1383,8 +1765,8 @@ bool JjwxcCommentActivity::replyHasMore() const {
   return replyTotal_ > replies_.size() && replies_.size() < kMaxReplies;
 }
 
-void JjwxcCommentActivity::startWorker() {
-  if (fetchTask_ != nullptr) return;
+bool JjwxcCommentActivity::startWorker(const bool quietFailure) {
+  if (fetchTask_ != nullptr) return false;
   fetchDone_.store(false);
 #ifdef ARDUINO
   BaseType_t ok = pdFAIL;
@@ -1403,10 +1785,17 @@ void JjwxcCommentActivity::startWorker() {
     if (ok != pdPASS) {
       fetchTask_ = nullptr;
       pendingAction_ = ActionKind::None;
+      if (quietFailure) {
+        // A failed background prefetch must not replace a perfectly good
+        // foreground panel with an OOM page.
+        prefetching_ = false;
+        prefetchDone_ = true;
+        return false;
+      }
       refreshing_ = false;
       replyLoading_ = false;
       fail(tr(STR_JJWXC_ERR_MEMORY));
-      return;
+      return false;
     }
   }
 #else
@@ -1415,6 +1804,7 @@ void JjwxcCommentActivity::startWorker() {
   workerRun();
   fetchDone_.store(true);
 #endif
+  return true;
 }
 
 void JjwxcCommentActivity::startFetch(const uint32_t offset, const bool append) {
@@ -1441,6 +1831,9 @@ void JjwxcCommentActivity::startRepliesFetch(const bool append) {
 
 void JjwxcCommentActivity::workerRun() {
   if (exitRequested_.load()) return;
+  // The standby overlay treats this as "do not light-sleep, do not auto
+  // deep-sleep": the worker owns the radio and the sidecar writes.
+  background_work::Guard backgroundGuard;
   switch (pendingAction_) {
     case ActionKind::FetchPage:
       fetchPage(pendingOffset_, pendingAppend_);
@@ -1459,6 +1852,9 @@ void JjwxcCommentActivity::workerRun() {
       break;
     case ActionKind::PostReply:
       performPostReply();
+      break;
+    case ActionKind::PrefetchChapter:
+      prefetchChapter();
       break;
     case ActionKind::DebugStress:
       // Serial-only teardown stress: allocate/free while the UI pops the panel.
@@ -1507,6 +1903,26 @@ int JjwxcCommentActivity::maxScroll() const {
   return contentHeight_ > viewportHeight_ ? contentHeight_ - viewportHeight_ : 0;
 }
 
+void JjwxcCommentActivity::debugRefreshJjwxcComment() {
+  LOG_INF(kTag, "debug: comment refresh requested");
+  refresh();
+}
+
+void JjwxcCommentActivity::debugLikeJjwxcComment() {
+  if (view_ != View::Comments || comments_.empty()) {
+    LOG_INF(kTag, "debug like: no rows (view=%d rows=%u)", static_cast<int>(view_),
+            static_cast<unsigned>(comments_.size()));
+    return;
+  }
+  LOG_INF(kTag, "debug like: comment 0 id_len=%u total=%u", static_cast<unsigned>(strlen(comments_[0].commentId)),
+          static_cast<unsigned>(commentTotal_));
+  if (comments_[0].commentId[0] == '\0') {
+    LOG_INF(kTag, "debug like: cached-only row; refresh first (COMMENTREFRESH)");
+    return;
+  }
+  startLikeAction(0, /*reply=*/false);
+}
+
 void JjwxcCommentActivity::loop() {
   if (inputBlockUntilMs_ != 0) {
     if (static_cast<int32_t>(millis() - inputBlockUntilMs_) < 0) return;
@@ -1519,13 +1935,20 @@ void JjwxcCommentActivity::loop() {
     } else {
       fetchDone_.store(false);
     }
-    if (pendingAction_ == ActionKind::FetchPage) {
+    const ActionKind completed = pendingAction_;
+    if (completed == ActionKind::PrefetchChapter) {
+      // Background work has no visible result. Do not apply it to the current
+      // paragraph and do not repaint: that would flash the panel once per
+      // paragraph on e-ink for no user-visible change.
+      prefetching_ = false;
+      pendingAction_ = ActionKind::None;
+    } else if (completed == ActionKind::FetchPage) {
       applyFetchResult();
       pendingAction_ = ActionKind::None;
-    } else if (pendingAction_ == ActionKind::FetchReplies) {
+    } else if (completed == ActionKind::FetchReplies) {
       applyRepliesResult();
       pendingAction_ = ActionKind::None;
-    } else if (pendingAction_ != ActionKind::None) {
+    } else if (completed != ActionKind::None) {
       applyActionResult();
     } else {
       // Defensive: a worker never publishes done without an action, but a stale
@@ -1533,8 +1956,16 @@ void JjwxcCommentActivity::loop() {
       refreshing_ = false;
       replyLoading_ = false;
     }
-    requestUpdate();
+    if (completed != ActionKind::PrefetchChapter) requestUpdate();
+    if (queuedAction_ != ActionKind::None) {
+      startQueuedAction();
+    } else if (completed != ActionKind::None) {
+      maybeStartOrResumePrefetch();
+    }
   }
+  // The settle delay after the first page (and any budget pause that a later
+  // foreground action cleared) needs a tick even when no input arrives.
+  maybeStartOrResumePrefetch();
 
   // Toolbar chips are available in every state: refresh, and the one write
   // action that belongs to the current view.

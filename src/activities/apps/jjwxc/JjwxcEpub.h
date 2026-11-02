@@ -69,6 +69,10 @@ class ChapterWriter {
   bool begin(const std::string& finalPath, const char* title);
   // Feed decoded UTF-8 as it arrives from jjwxc::fetchChapter().
   bool feed(const char* data, size_t len);
+  // Closes the prose and opens the author's-note section with a heading. Called at
+  // most once, from the note sink, and only when the note is non-empty: a heading
+  // with nothing under it would claim the author wrote something they did not.
+  bool beginAuthorNote(const char* heading);
   // Closes the document, replaces the target and reports its plaintext size.
   bool finish(uint32_t& outBytes);
   // Discards the partial file. Safe to call when not active.

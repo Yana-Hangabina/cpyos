@@ -58,7 +58,7 @@ pio run -e readpico
 
 **但上表最后一行的结论已经站不住了，记录在此以免后来者重复踩。** 2026-10 的复核发现两件事：
 
-1. **PUA 字体水印是可反解的，且成本远低于估计。** 对三份真实水印字体（`exp/jjfont.ttf`、`jjfont_<novelId>_21.ttf`、`_22.ttf`）逐表比对：三者的 `glyf`/`loca`/`cmap` 表 MD5 各不相同（字形顺序被打乱、PUA 码位重新随机），但**单个字形轮廓的字节集合完全一致**（201 个，三者交集 201）。用其中一份已提取的映射构造「轮廓字节哈希 → 汉字」表后，回头解析另外两份的 cmap+loca，命中率均为 **200/200**。也就是说反解不需要光栅化、不需要参考 CJK 字库、不需要 IoU 匹配，只需一张约 1.4–3.8 KB 的常量表加一次 sfnt 表遍历。另外 WAP **免费章实测零水印**（PUA=0、ZWNJ=0、`@font-face`=0），三层水印只出现在 VIP 章。
+1. **PUA 字体水印是可反解的，且成本远低于估计。** 对三份真实水印字体（`exp/jjfont.ttf`、`jjfont_4465668_21.ttf`、`_22.ttf`）逐表比对：三者的 `glyf`/`loca`/`cmap` 表 MD5 各不相同（字形顺序被打乱、PUA 码位重新随机），但**单个字形轮廓的字节集合完全一致**（201 个，三者交集 201）。用其中一份已提取的映射构造「轮廓字节哈希 → 汉字」表后，回头解析另外两份的 cmap+loca，命中率均为 **200/200**。也就是说反解不需要光栅化、不需要参考 CJK 字库、不需要 IoU 匹配，只需一张约 1.4–3.8 KB 的常量表加一次 sfnt 表遍历。另外 WAP **免费章实测零水印**（PUA=0、ZWNJ=0、`@font-face`=0），三层水印只出现在 VIP 章。
 2. **App API 有一个 WAP 没有的日常代价：它会把用户手机上的晋江 App 顶下线。** App token 由 `androidapi/login` 签发，看起来是单会话的。
 
 配套的 Flash/RAM 复核（读 `firmware.map`，非估算）：GBK→UTF-8 表（`TxtEncoding.cpp.o` 47.7 KB）、wolfSSL AES（`aes.c.o` 10 KB）、FreeType（`ft_*.o` 139.9 KB）、`htmlEntities`、`ChapterHtmlSlimParser` **都已在镜像内**，改 WAP 的净增量约 −3 ~ +12 KB，而当前余量约 159 KB。**Flash 不是障碍。**
@@ -189,7 +189,11 @@ HTTP 层直接复用 `lib/WeReadWebApi` 的 `WeReadHttpClient`，不新增第二
   新段评走键盘输入，正文上限 900 UTF-8 字节且不超过 300 字（站点上限）。所有写动作都要登录，且只在
   用户点按时发生；`code=10` 表示服务端要图形验证码，设备没有 JS，必须停手并提示去手机/网页完成。
   缓存格式升级为 JJD1 v2（保存 `commentId`、赞/回复计数与本人已赞状态），v1 仍可离线阅读，
-  但旧行没有 id，只能刷新后才能互动。**请求主机仍是 `www.jjwxc.net`，不是 WAP 页面**；WAP 原生只有章评。
+  但旧行没有 id，只能刷新后才能互动。**请求主机是 `m.jjwxc.net`（同一个后端，不是 WAP 页面）**；
+  WAP 原生只有章评。2026-10-31 的 m 失败后来定位到：缓存正文打开段评时没有调用
+  `prepareForJjwxcChild()`，reader 的 section/页缓存仍占着内部 RAM，WiFi 关联在
+  15.8 KB / 7.1 KB 下失败；不是 m。现在打开段评前始终释放这份内存，真机已验证 m：
+  handshake 772 ms、HTTP 200、7 段评；www 仅作为回退。详见 AGENTS.md §43。
 - **发现页**：匿名可用，不依赖 session；页面广告/活动条目通过「同 id 锚点 + novelname 优先」规则归一化为书名。
 
 ### 尚未验证

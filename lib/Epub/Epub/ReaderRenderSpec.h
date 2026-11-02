@@ -29,6 +29,10 @@ struct ReaderRenderSpec {
   int8_t characterSpacing = 0;
   uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment = 0;
+  // Vertical page bottom alignment (see CrossPointSettings::verticalBottomAlign).
+  // Part of the cache key: cached pages built top-aligned must not be served
+  // after the toggle flips, and the header field is what makes that impossible.
+  bool verticalBottomAlign = false;
   uint16_t viewportWidth = 0;
   uint16_t viewportHeight = 0;
   bool hyphenationEnabled = false;
@@ -46,6 +50,7 @@ struct ReaderRenderSpec {
            extraParagraphSpacing == other.extraParagraphSpacing && firstLineIndent == other.firstLineIndent &&
            firstLineIndentPx == other.firstLineIndentPx && paragraphIndentSpaces == other.paragraphIndentSpaces && characterSpacing == other.characterSpacing &&
            wordSpacingPercent == other.wordSpacingPercent && paragraphAlignment == other.paragraphAlignment &&
+           verticalBottomAlign == other.verticalBottomAlign &&
            viewportWidth == other.viewportWidth && viewportHeight == other.viewportHeight &&
            hyphenationEnabled == other.hyphenationEnabled && embeddedStyle == other.embeddedStyle &&
            imageRendering == other.imageRendering && focusReadingEnabled == other.focusReadingEnabled &&

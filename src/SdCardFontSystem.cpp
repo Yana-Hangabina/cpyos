@@ -1,5 +1,9 @@
 #include "SdCardFontSystem.h"
 
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "SystemFontPack.h"
+#endif
+
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -12,6 +16,9 @@
 
 #include "CrossPointSettings.h"
 #include "ReaderFontSizes.h"
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "SystemFontPack.h"
+#endif
 #include "fontIds.h"
 
 namespace {
@@ -104,6 +111,22 @@ static_assert(std::size(kReadPicoUiPointSizes) == std::size(kUiFontSizes));
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
   registry_.discover();
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+  // Do this here, before the saved-family load, instead of relying only on
+  // adoptCompleteChineseNotoSans()'s content-profile path: devices upgraded
+  // from the pre-pack firmware already have NotoSansSC saved, and the .cpfont
+  // is 2-bit. Keeping it would hide the 16-level reader path on exactly the
+  // board that has the vector pack. Only the family this firmware used to
+  // auto-select is cleared; manually chosen vector families are untouched.
+  if (system_font_pack::ready() &&
+      strcmp(SETTINGS.sdFontFamilyName, COMPLETE_CHINESE_NOTO_SANS_FAMILY) == 0) {
+    const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
+    if (family != nullptr && !family->vector) {
+      SETTINGS.clearSdFontFamily();
+      LOG_INF("SDFS", "cleared legacy auto-selected NotoSansSC .cpfont; system vector pack is the reader face");
+    }
+  }
+#endif
   adoptCompleteChineseNotoSans();
 
   // Register this system as the SD font ID resolver in settings.
@@ -244,6 +267,24 @@ void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) { manager_.unloa
 
 bool SdCardFontSystem::adoptCompleteChineseNotoSans() {
 #ifdef ENABLE_CHINESE_VERSION
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+  // The unified vector pack supersedes the old auto-adopted SD NotoSansSC
+  // .cpfont. That file is 2-bit, so keeping it would hide the 16-level reader
+  // path precisely on the target where the pack exists. Clear only the family
+  // this function used to select; any other SD family remains the user's call.
+  if (system_font_pack::ready() &&
+      strcmp(SETTINGS.sdFontFamilyName, COMPLETE_CHINESE_NOTO_SANS_FAMILY) == 0) {
+    const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
+    if (family != nullptr && !family->vector) {
+      SETTINGS.clearSdFontFamily();
+      LOG_INF("SDFS", "cleared auto-selected NotoSansSC .cpfont; using the system vector pack");
+      return true;
+    }
+  }
+  // Do not auto-select the SD .cpfont while the pack is ready. A user can still
+  // pick a vector SD family manually and keep it.
+  return false;
+#else
   if (SETTINGS.contentProfile != CrossPointSettings::ContentProfile::China || SETTINGS.sdFontFamilyName[0] != '\0' ||
       !registry_.findFamily(COMPLETE_CHINESE_NOTO_SANS_FAMILY))
     return false;
@@ -257,12 +298,24 @@ bool SdCardFontSystem::adoptCompleteChineseNotoSans() {
   }
   LOG_INF("SDFS", "Using installed NotoSansSC in place of the Chinese built-in font");
   return true;
+#endif
 #else
   return false;
 #endif
 }
 
 void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // The scalable pack already covers every UI role at the selected scale and
+  // is bound by typography::apply(). Loading the SD family's extra UI sizes on
+  // top would clear those bindings, duplicate four FreeType/bitmap families and
+  // (on Read Pico) make the UI depend on the card. The reader size still loads
+  // through ensureLoaded(); only these UI extras are skipped.
+  if (system_font_pack::ready()) {
+    (void)renderer;
+    return;
+  }
+#endif
 #if defined(ENABLE_CHINESE_VERSION) && !(defined(SIMULATOR) && FREEINK_DEVICE_READPICO) && !defined(BOARD_HAS_PSRAM)
   // No-PSRAM firmware keeps only the reader size resident.
   (void)renderer;

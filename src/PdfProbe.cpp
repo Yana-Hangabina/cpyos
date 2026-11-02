@@ -1,5 +1,9 @@
 #if defined(CROSSPOINT_MUPDF)
 
+#if !defined(BOARD_HAS_PSRAM) && !defined(CROSSPOINT_EMULATED)
+#error "CROSSPOINT_MUPDF is a PSRAM/readpico-only feature; do not enable it on C3"
+#endif
+
 #include "mupdf/fitz.h"
 
 // Link-probe: forces the PDF interpreter and its dependencies into the

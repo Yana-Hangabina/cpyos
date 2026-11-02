@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <HalDisplay.h>
 #include <Logging.h>
 
 #include <mutex>
@@ -100,6 +101,11 @@ class PersistableStore : public PersistableStoreBase {
   }
 
   bool saveToFile() const {
+    // Present barrier: every store write goes to the SD card, which can stall
+    // the line feeder for longer than its cushion if it lands mid-scan. Waiting
+    // (bounded) for the scan in flight costs at most one frame and removes that
+    // overlap; the barrier is a no-op on panels that never report a scan.
+    display.waitForScanIdle();
     std::lock_guard<std::mutex> lock(storeMutex);
     JsonDocument doc;
     static_cast<const T*>(this)->toJson(doc);

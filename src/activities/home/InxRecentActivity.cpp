@@ -34,17 +34,7 @@ namespace {
 // drawIcon() rotates its input; these 48px Lucide assets are already upright
 // and are used unscaled-by-rotation throughout the settings UI.
 void drawMaskIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y, const int size) {
-  const int rowBytes = (icon.w + 7) / 8;
-  for (int row = 0; row < size; ++row) {
-    const int sourceY = row * icon.h / size;
-    const uint8_t* sourceRow = icon.bits + sourceY * rowBytes;
-    for (int column = 0; column < size; ++column) {
-      const int sourceX = column * icon.w / size;
-      if (((sourceRow[sourceX / 8] >> (7 - (sourceX & 7))) & 1U) == 0) {
-        renderer.drawPixel(x + column, y + row, true);
-      }
-    }
-  }
+  renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
 }
 
 const char* sourceLabelForPath(const std::string& path) {  if (path.rfind("/JJWXC/", 0) == 0) return I18N.get(StrId::STR_SOURCE_JJWXC);
@@ -64,7 +54,7 @@ std::string relativeDayLabel(const uint32_t timestamp) {
   return buf;
 }
 
-// refreshed UI progress: a thin sine baseline, a solid 10 px band over the read
+// wave progress: a thin sine baseline, a solid 10 px band over the read
 // portion, and a short marker at the boundary. Drawing it per pixel keeps the
 // wave crisp on the 1-bit panel; the line is only ~600 px wide.
 void drawWaveProgress(const GfxRenderer& renderer, const Rect rect, const int percent) {
@@ -658,9 +648,9 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     const char* resumeLabel = tr(STR_CONTINUE_READING);
     renderer.drawText(UI_10_FONT_ID, barX + 24, resumeY, resumeLabel, false, EpdFontFamily::BOLD);
     const int arrowX = barX + 24 + renderer.getTextWidth(UI_10_FONT_ID, resumeLabel, EpdFontFamily::BOLD) + 12;
-    const int arrowY = resumeY + renderer.getLineHeight(UI_10_FONT_ID) / 2;
-    renderer.drawLine(arrowX, arrowY - 6, arrowX + 7, arrowY, false);
-    renderer.drawLine(arrowX + 7, arrowY, arrowX, arrowY + 6, false);
+    // A glyph, not two drawLine() strokes: on the 16-level Home canvas this
+    // keeps the chevron anti-aliased like the white label (drawLine is 1-bit).
+    renderer.drawText(UI_10_FONT_ID, arrowX, resumeY, ">", false, EpdFontFamily::BOLD);
     char pctText[8];
     std::snprintf(pctText, sizeof(pctText), "%d%%", pct);
     const int pctW = renderer.getTextWidth(UI_10_FONT_ID, pctText, EpdFontFamily::BOLD);
@@ -754,8 +744,9 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     const int chevX = rects.recentCard.x + rects.recentCard.width - 20;
     const int allX = chevX - 10 - allW;
     renderer.drawText(SMALL_FONT_ID, allX, rects.recentCard.y + 16, all);
-    renderer.drawLine(chevX, rects.recentCard.y + 20, chevX + 6, rects.recentCard.y + 26, true);
-    renderer.drawLine(chevX + 6, rects.recentCard.y + 26, chevX, rects.recentCard.y + 32, true);
+    // Same reason as the continue chevron: use a font glyph so the 16-level
+    // canvas can anti-alias it instead of thresholding drawLine() pixels.
+    renderer.drawText(SMALL_FONT_ID, chevX - 2, rects.recentCard.y + 16, ">", true, EpdFontFamily::REGULAR);
 
     bool anyExtra = false;
     for (int i = 0; i < 3; ++i) {

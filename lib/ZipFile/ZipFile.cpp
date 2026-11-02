@@ -145,6 +145,11 @@ bool streamDeflatedPrefix(HalFile& file, Print& out, const size_t chunkSize, con
 }  // namespace
 
 bool ZipFile::loadFileStatSlim(const char* filename, FileStatSlim* fileStat) {
+  if (lastLookupValid && lastLookupName == filename) {
+    *fileStat = lastLookup;
+    return true;
+  }
+
   const ScopedOpenClose zip{*this};
   if (!zip) return false;
 
@@ -187,6 +192,9 @@ bool ZipFile::loadFileStatSlim(const char* filename, FileStatSlim* fileStat) {
         fileStat->localHeaderOffset = entry.localHeaderOffset;
         lastCentralDirPos = file.position();
         lastCentralDirPosValid = true;
+        lastLookupName = filename;
+        lastLookup = *fileStat;
+        lastLookupValid = true;
         found = true;
         break;
       }
@@ -309,6 +317,8 @@ bool ZipFile::open() {
   if (!Storage.openFileForRead("ZIP", filePath, file)) {
     return false;
   }
+  // A reopen may see a different file on disk; the memoized lookup must not survive it.
+  lastLookupValid = false;
   return true;
 }
 
@@ -319,6 +329,8 @@ bool ZipFile::close() {
   }
   lastCentralDirPos = 0;
   lastCentralDirPosValid = false;
+  // The archive may change before the next open.
+  lastLookupValid = false;
   return true;
 }
 

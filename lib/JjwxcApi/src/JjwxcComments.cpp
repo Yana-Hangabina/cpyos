@@ -294,7 +294,7 @@ size_t buildCommentAgreeUrl(char* out, size_t outCap, const bool like, const cha
   out[0] = '\0';
   size_t pos = 0;
   if (!appendRaw(out, outCap, pos,
-                 "https://www.jjwxc.net/app.jjwxc/Pc/Comment/addAgree?agreetype=") ||
+                 "https://m.jjwxc.net/app.jjwxc/Pc/Comment/addAgree?agreetype=") ||
       !appendRaw(out, outCap, pos, like ? "1" : "-1") ||
       !appendRaw(out, outCap, pos, "&novelid=") || !appendRaw(out, outCap, pos, novelId) ||
       !appendRaw(out, outCap, pos, "&chapterid=") || !appendNumber(out, outCap, pos, chapterId) ||
@@ -313,7 +313,7 @@ size_t buildCommentReplyListUrl(char* out, size_t outCap, const char* novelId, c
   out[0] = '\0';
   size_t pos = 0;
   if (!appendRaw(out, outCap, pos,
-                 "https://www.jjwxc.net/app.jjwxc/Pc/comment/getReplyList?novelid=") ||
+                 "https://m.jjwxc.net/app.jjwxc/Pc/comment/getReplyList?novelid=") ||
       !appendRaw(out, outCap, pos, novelId) || !appendRaw(out, outCap, pos, "&chapterid=") ||
       !appendNumber(out, outCap, pos, chapterId) || !appendRaw(out, outCap, pos, "&commentid=") ||
       !appendRaw(out, outCap, pos, commentId) || !appendRaw(out, outCap, pos, "&offset=") ||
@@ -331,7 +331,7 @@ size_t buildCommentWriteUrl(char* out, size_t outCap, const char* novelId, const
   out[0] = '\0';
   size_t pos = 0;
   if (!appendRaw(out, outCap, pos,
-                 "https://www.jjwxc.net/app.jjwxc/Pc/comment/writeComment?novelid=") ||
+                 "https://m.jjwxc.net/app.jjwxc/Pc/comment/writeComment?novelid=") ||
       !appendRaw(out, outCap, pos, novelId) || !appendRaw(out, outCap, pos, "&chapterid=") ||
       !appendNumber(out, outCap, pos, chapterId) || !appendRaw(out, outCap, pos, "&paragraph_id=") ||
       !appendNumber(out, outCap, pos, paragraphId) || !appendRaw(out, outCap, pos, "&commentBody=") ||

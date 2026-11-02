@@ -33,6 +33,7 @@ extern void disarmScanWatchdog();
 #include "BandPolicy.h"
 #include "ChangedBand.h"
 #include "GlyphBitmap.h"
+#include "GrayCoverage.h"
 #include "Memory.h"
 
 namespace {
@@ -591,6 +592,10 @@ static_assert(dilate2BitCoverage(0, 3, 3, 3, 0) == 0);  // Off preserves the ori
 
 static void draw2BitGlyphPixel(const GfxRenderer& renderer, const GfxRenderer::RenderMode renderMode, const int x,
                                const int y, const bool pixelState, const uint8_t coverage) {
+  // BW has no midtones: threshold at 50% like the reference firmware. The old
+  // map treated any nonzero coverage as ink (25%), which fattened thin CJK
+  // horizontals and left stair-stepped edges on every 1-bit page.
+  if (renderMode == GfxRenderer::BW && coverage < GfxRenderer::bwGlyphThreshold()) return;
   const auto pixel = GfxRenderer::mapTwoBitGlyphCoverage(renderMode, coverage);
   if (!pixel.draw) return;
   renderer.drawPixel(x, y, renderMode == GfxRenderer::BW ? pixelState : pixel.state);
@@ -618,9 +623,12 @@ static uint8_t get2BitCoverage(const uint8_t* bitmap, const int pixelPosition, c
 // inversion. Coverage 0 must be SKIPPED rather than painted white: those pixels are not
 // part of the glyph, and the 16-level buffer is pushed as a whole frame, unlike the
 // LSB/MSB planes, where a zero bit only means "not this plane".
-static void draw4BitGlyphPixel(const GfxRenderer& renderer, const int x, const int y, const uint8_t coverage) {
+static void draw4BitGlyphPixel(const GfxRenderer& renderer, const int x, const int y, const uint8_t coverage,
+                               const bool inverted) {
+  // coverage 0 is background. For inverted text the button/card has already
+  // painted that background black, so skipping is correct here too.
   if (coverage == 0) return;
-  const uint8_t gray = static_cast<uint8_t>((15u - coverage) * 17u);
+  const uint8_t gray = static_cast<uint8_t>((inverted ? coverage : 15u - coverage) * 17u);
   renderer.drawGrayscale16Pixel(x, y, gray);
 }
 
@@ -781,8 +789,11 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
     }
 
-    if (is4Bit && renderer.isGrayscale16Active() && pixelState && syntheticBoldPixels == 0) {
-      // Native coverage is used only for unmodified black glyphs.
+    if (is4Bit && renderer.isGrayscale16Active() && syntheticBoldPixels == 0) {
+      // Native coverage works for inverted (white-on-black) text too. Leaving
+      // it out was why the Home "continue reading" button's white glyphs fell
+      // back to the 1-bit threshold path and showed diagonal stair-steps.
+      const bool inverted = !pixelState;
       for (int glyphY = 0; glyphY < height; glyphY++) {
         const int outerCoord = outerBase + glyphY;
         for (int glyphX = 0; glyphX < width; glyphX++) {
@@ -794,7 +805,7 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
             screenX = innerBase + glyphX;
             screenY = outerCoord;
           }
-          draw4BitGlyphPixel(renderer, screenX, screenY, get4BitCoverage(bitmap, glyphY * width + glyphX));
+          draw4BitGlyphPixel(renderer, screenX, screenY, get4BitCoverage(bitmap, glyphY * width + glyphX), inverted);
         }
       }
     } else if (is2Bit || is4Bit) {
@@ -810,8 +821,18 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
               screenX = innerBase + glyphX;
               screenY = outerCoord;
             }
-            draw2BitGlyphPixel(renderer, renderMode, screenX, screenY, pixelState,
-                               get2BitCoverage(bitmap, glyphY * width + glyphX, is4Bit));
+            const int pos = glyphY * width + glyphX;
+            if (is4Bit && renderMode == GfxRenderer::BW) {
+              // The 4-bit face carries 16 coverage nibbles. Threshold the raw
+              // nibble so fast-turn readers can keep the old 25% weight while
+              // UI pages stay at ~50%; reducing to 2 bits first would throw
+              // away the intermediate level this tuning needs.
+              if (get4BitCoverage(bitmap, pos) < GfxRenderer::bwGlyphThreshold4()) continue;
+              renderer.drawPixel(screenX, screenY, pixelState);
+            } else {
+              draw2BitGlyphPixel(renderer, renderMode, screenX, screenY, pixelState,
+                                 get2BitCoverage(bitmap, pos, is4Bit));
+            }
           }
           continue;
         }
@@ -1331,6 +1352,174 @@ const char* resolveVisualText(const char* text, std::string& visualBuffer, const
 }
 }  // namespace
 
+uint8_t GfxRenderer::grayLevelForColor(const Color color) {
+  switch (color) {
+    case Color::Black:
+      return 0;
+    case Color::White:
+      return 15;
+    case Color::LightGray:
+      return 10;  // 170, the same tone fillRectImpl writes
+    case Color::DarkGray:
+      return 5;  // 85
+    case Color::Clear:
+    default:
+      return 15;
+  }
+}
+
+// Composite one pixel of AA geometry over whatever the 16-level canvas already
+// holds. Compositing (rather than replacing) is what lets black ink sit on a
+// black card and white ink on a black capsule without a fringe.
+void GfxRenderer::plotCoverage(const int x, const int y, const float coverage, const uint8_t inkLevel) const {
+  if (grayscale16Buffer == nullptr || coverage <= 0.0f) return;
+  if (x < clipLeft_ || y < clipTop_ || x >= clipRight_ || y >= clipBottom_) return;
+  if (_stripActive) return;  // native gray and strip targets are exclusive
+  int phyX = 0;
+  int phyY = 0;
+  rotateCoordinates(orientation, x, y, &phyX, &phyY, panelWidth, panelHeight);
+  if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) return;
+  const size_t index = static_cast<size_t>(phyY) * (panelWidth / 2) + (phyX / 2);
+  const unsigned shift = (phyX & 1) * 4;
+  const uint8_t oldLevel = static_cast<uint8_t>((grayscale16Buffer[index] >> shift) & 0x0F);
+  const uint8_t level = gray_aa::blendLevel(oldLevel, coverage, inkLevel);
+  // Interior pixels of a filled shape already hold the ink level. Skipping them
+  // avoids the write path; the 1-bit proxy is consistent because every previous
+  // write of this level went through the same threshold.
+  if (level == oldLevel) return;
+  ++s_aaStats_[0];
+  // Write both planes here rather than calling drawGrayscale16Pixel(): that
+  // would rotate/clip a second time and then call drawPixel() for a third pass.
+  grayscale16Buffer[index] = static_cast<uint8_t>((grayscale16Buffer[index] & ~(0x0Fu << shift)) | (level << shift));
+  const uint8_t bit = static_cast<uint8_t>(1u << (7 - (phyX & 7)));
+  uint8_t* const row = frameBuffer + static_cast<size_t>(phyY) * panelWidthBytes;
+  if (framebufferState(renderMode, level < 8)) {
+    row[phyX >> 3] &= static_cast<uint8_t>(~bit);
+  } else {
+    row[phyX >> 3] |= bit;
+  }
+}
+
+void GfxRenderer::drawLineAA(const int x1, const int y1, const int x2, const int y2, const float halfWidth,
+                             const bool state) const {
+  const uint8_t ink = state ? 0 : 15;
+  const float pad = halfWidth + 1.0f;
+  const int minX = static_cast<int>(std::floor(std::min(x1, x2) - pad));
+  const int maxX = static_cast<int>(std::ceil(std::max(x1, x2) + pad));
+  const int minY = static_cast<int>(std::floor(std::min(y1, y2) - pad));
+  const int maxY = static_cast<int>(std::ceil(std::max(y1, y2) + pad));
+  s_aaStats_[2] += static_cast<uint32_t>(maxX - minX + 1) * static_cast<uint32_t>(maxY - minY + 1);
+  for (int y = minY; y <= maxY; ++y) {
+    for (int x = minX; x <= maxX; ++x) {
+      const float cov = gray_aa::lineCoverage(static_cast<float>(x), static_cast<float>(y), static_cast<float>(x1),
+                                              static_cast<float>(y1), static_cast<float>(x2), static_cast<float>(y2),
+                                              halfWidth);
+      if (cov > 0.0f) plotCoverage(x, y, cov, ink);
+    }
+  }
+}
+
+namespace {
+// Largest integer dx whose pixel centre at row dy is within `radius` of the
+// arc centre. -1 when the row is outside the circle.
+int arcRowExtent(const float radius, const int dy) {
+  const float t = radius * radius - static_cast<float>(dy) * static_cast<float>(dy);
+  if (t <= 0.0f) return -1;
+  return static_cast<int>(std::sqrt(t));
+}
+
+// Smallest integer dx at row dy whose centre is at or beyond `radius`.
+int arcRowInner(const float radius, const int dy) {
+  const float t = radius * radius - static_cast<float>(dy) * static_cast<float>(dy);
+  if (t <= 0.0f) return 0;
+  const float root = std::sqrt(t);
+  const int whole = static_cast<int>(root);
+  return static_cast<float>(whole) < root ? whole + 1 : whole;
+}
+}  // namespace
+
+// The interior of a rounded corner is fully covered, so it is written as a
+// row span; only the one or two pixels on the circle's edge need coverage. On
+// the Home dashboard the corner squares were most of the AA pixel budget.
+void GfxRenderer::drawArcAA(const int maxRadius, const int cx, const int cy, const int xDir, const int yDir,
+                            const int lineWidth, const bool state) const {
+  if (maxRadius <= 0) return;
+  const int stroke = std::min(lineWidth, maxRadius);
+  const uint8_t ink = state ? 0 : 15;
+  const float rOuter = static_cast<float>(maxRadius);
+  const float rInner = static_cast<float>(maxRadius - stroke);
+  const float outerEdge = rOuter + 0.5f;
+  const float outerFull = rOuter - 0.5f;
+  const float innerEdge = rInner + 0.5f;
+  const float innerFull = rInner - 0.5f;
+
+  for (int dy = 0; dy <= maxRadius; ++dy) {
+    const int py = cy + yDir * dy;
+    const int xOutEdge = arcRowExtent(outerEdge, dy);
+    if (xOutEdge < 0) continue;
+    const int xOutFull = arcRowExtent(outerFull, dy);
+    const int xInFull = innerEdge > 0.0f ? arcRowInner(innerEdge, dy) : 0;
+    const int xInLow = innerFull > 0.0f ? arcRowExtent(innerFull, dy) : -1;
+    s_aaStats_[3] += static_cast<uint32_t>(xOutEdge + 1);
+
+    // Fully covered band -> opaque span.
+    if (xOutFull >= xInFull) {
+      const int start = xDir > 0 ? cx + xInFull : cx - xOutFull;
+      fillRect(start, py, xOutFull - xInFull + 1, 1, state);
+    }
+    // Fractional edges.
+    const int innerFirst = std::max(0, xInLow + 1);
+    const int innerLast = xInFull - 1;
+    for (int dx = innerFirst; dx <= innerLast && dx <= xOutEdge; ++dx) {
+      const int px = cx + xDir * dx;
+      const float cov = gray_aa::bandCoverage(static_cast<float>(px), static_cast<float>(py),
+                                              static_cast<float>(cx), static_cast<float>(cy), rOuter, rInner);
+      if (cov > 0.0f) plotCoverage(px, py, cov, ink);
+    }
+    for (int dx = std::max(0, xOutFull + 1); dx <= xOutEdge; ++dx) {
+      const int px = cx + xDir * dx;
+      const float cov = gray_aa::bandCoverage(static_cast<float>(px), static_cast<float>(py),
+                                              static_cast<float>(cx), static_cast<float>(cy), rOuter, rInner);
+      if (cov > 0.0f) plotCoverage(px, py, cov, ink);
+    }
+  }
+}
+
+void GfxRenderer::fillArcAA(const int maxRadius, const int cx, const int cy, const int xDir, const int yDir,
+                            const uint8_t inkLevel) const {
+  if (maxRadius <= 0) return;
+  const Color color = inkLevel == 0     ? Color::Black
+                      : inkLevel == 15  ? Color::White
+                      : inkLevel == 10  ? Color::LightGray
+                                        : Color::DarkGray;
+  const float outerEdge = static_cast<float>(maxRadius) + 0.5f;
+  const float outerFull = static_cast<float>(maxRadius) - 0.5f;
+  for (int dy = 0; dy <= maxRadius; ++dy) {
+    const int py = cy + yDir * dy;
+    const int xEdge = arcRowExtent(outerEdge, dy);
+    if (xEdge < 0) continue;
+    const int xFull = arcRowExtent(outerFull, dy);
+    s_aaStats_[3] += static_cast<uint32_t>(xEdge + 1);
+    if (xFull >= 0) {
+      const int start = xDir > 0 ? cx : cx - xFull;
+      if (color == Color::Black) {
+        fillRect(start, py, xFull + 1, 1, true);
+      } else if (color == Color::White) {
+        fillRect(start, py, xFull + 1, 1, false);
+      } else {
+        fillRectDither(start, py, xFull + 1, 1, color);
+      }
+    }
+    for (int dx = std::max(0, xFull + 1); dx <= xEdge; ++dx) {
+      const int px = cx + xDir * dx;
+      const float cov =
+          gray_aa::diskCoverage(static_cast<float>(px), static_cast<float>(py), static_cast<float>(cx),
+                                static_cast<float>(cy), static_cast<float>(maxRadius));
+      if (cov > 0.0f) plotCoverage(px, py, cov, inkLevel);
+    }
+  }
+}
+
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   if (x1 == x2) {
@@ -1348,6 +1537,13 @@ void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) con
       drawPixel(x, y1, state);
     }
   } else {
+    // Diagonal lines are the only ones that stair-step: an axis-aligned 1 px
+    // line lands exactly on the pixel grid. On the 16-level canvas give the
+    // diagonal a fractional edge; the 1-bit path keeps Bresenham byte for byte.
+    if (grayscale16Buffer != nullptr && s_grayAA_) {
+      drawLineAA(x1, y1, x2, y2, 0.5f, state);
+      return;
+    }
     // Bresenham's line algorithm — integer arithmetic only
     int dx = x2 - x1;
     int dy = y2 - y1;
@@ -1396,6 +1592,10 @@ void GfxRenderer::drawRect(const int x, const int y, const int width, const int 
 
 void GfxRenderer::drawArc(const int maxRadius, const int cx, const int cy, const int xDir, const int yDir,
                           const int lineWidth, const bool state) const {
+  if (grayscale16Buffer != nullptr && s_grayAA_) {
+    drawArcAA(maxRadius, cx, cy, xDir, yDir, lineWidth, state);
+    return;
+  }
   const int stroke = std::min(lineWidth, maxRadius);
   const int innerRadius = std::max(maxRadius - stroke, 0);
   const int outerRadius = maxRadius;
@@ -1937,6 +2137,13 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
   }
 
   auto fillArcTemplated = [this](int maxRadius, int cx, int cy, int xDir, int yDir, Color color) {
+    // The straight bands above are pixel-exact; only the rounded corner can
+    // stair-step. On the 16-level canvas rasterise it with coverage and the
+    // same tone the band fill used.
+    if (grayscale16Buffer != nullptr && s_grayAA_ && color != Color::Clear) {
+      fillArcAA(maxRadius, cx, cy, xDir, yDir, grayLevelForColor(color));
+      return;
+    }
     switch (color) {
       case Color::Clear:
         break;
@@ -1995,37 +2202,88 @@ void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, co
   display.drawImage(bitmap, rotatedX, rotatedY, width, height);
 }
 
-void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size) const {
-  // Plot the icon pixel-by-pixel through drawPixel (which applies the orientation
-  // transform) instead of the byte-aligned framebuffer blit. The blit snaps the
-  // icon's position to 8px (one byte) along the rotated axis, which prevents it
-  // from aligning with adjacent text; per-pixel plotting is pixel-precise.
-  // Icons are square and 1bpp (MSB-first, bit==0 = ink). The (size-1-row, col)
-  // mapping reproduces the Portrait orientation the blit produced; drawIcon is
-  // only called by the UI themes, which all render in forced Portrait.
-  const int rowBytes = (size + 7) / 8;
-  for (int row = 0; row < size; row++) {
-    for (int col = 0; col < size; col++) {
-      const uint8_t byte = bitmap[row * rowBytes + (col >> 3)];
-      const bool ink = ((byte >> (7 - (col & 7))) & 1) == 0;
-      if (ink) {
-        drawPixel(x + (size - 1 - row), y + col, true);
+void GfxRenderer::drawMaskAA(const uint8_t* bits, const int srcW, const int srcH, const int dx, const int dy,
+                             const int dstW, const int dstH, const bool maskInverted, const bool inkBlack,
+                             const bool rotate90, const bool mirrorX) const {
+  if (bits == nullptr || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+  const bool aa = grayscale16Buffer != nullptr && s_grayAA_;
+  const int rowBytes = (srcW + 7) / 8;
+  const uint8_t inkLevel = inkBlack ? 0 : 15;
+  const bool native = (dstW == srcW && dstH == srcH);
+  if (aa) s_aaStats_[1] += static_cast<uint32_t>(dstW) * static_cast<uint32_t>(dstH);
+
+  if (!aa) {
+    // Historical nearest-neighbour plot. Kept byte-identical so every 1-bit
+    // page (and every non-ReadPico panel) is unaffected.
+    if (rotate90) {
+      for (int row = 0; row < srcH; ++row) {
+        for (int col = 0; col < srcW; ++col) {
+          const uint8_t byte = bits[row * rowBytes + (col >> 3)];
+          const bool ink = maskInverted ? ((byte >> (7 - (col & 7))) & 1u) == 0
+                                        : ((byte >> (7 - (col & 7))) & 1u) != 0;
+          if (ink) drawPixel(dx + (srcH - 1 - row), dy + col, inkBlack);
+        }
       }
+      return;
+    }
+    for (int oy = 0; oy < dstH; ++oy) {
+      const int sy = oy * srcH / dstH;
+      for (int ox = 0; ox < dstW; ++ox) {
+        int sx = ox * srcW / dstW;
+        if (mirrorX) sx = srcW - 1 - sx;
+        const uint8_t byte = bits[sy * rowBytes + (sx >> 3)];
+        const bool ink = maskInverted ? ((byte >> (7 - (sx & 7))) & 1u) == 0
+                                      : ((byte >> (7 - (sx & 7))) & 1u) != 0;
+        if (ink) drawPixel(dx + ox, dy + oy, inkBlack);
+      }
+    }
+    return;
+  }
+
+  if (rotate90) {
+    // 90-degree mapping used by drawIcon(): source row -> logical x, source
+    // column -> logical y. Coverage is computed in source space, so the
+    // rotation cannot change the anti-aliasing.
+    for (int sy = 0; sy < srcH; ++sy) {
+      for (int sx = 0; sx < srcW; ++sx) {
+        const float cov = gray_aa::maskNeighbourhoodUniform(bits, rowBytes, srcW, srcH, sx, sy, maskInverted)
+                              ? gray_aa::maskTexel(bits, rowBytes, srcW, srcH, sx, sy, maskInverted)
+                              : gray_aa::maskCoverage(bits, rowBytes, srcW, srcH, static_cast<float>(sx),
+                                                      static_cast<float>(sy), 1.0f, 1.0f, maskInverted);
+        if (cov > 0.0f) plotCoverage(dx + (srcH - 1 - sy), dy + sx, cov, inkLevel);
+      }
+    }
+    return;
+  }
+
+  const float su = static_cast<float>(srcW) / static_cast<float>(dstW);
+  const float sv = static_cast<float>(srcH) / static_cast<float>(dstH);
+  for (int oy = 0; oy < dstH; ++oy) {
+    for (int ox = 0; ox < dstW; ++ox) {
+      float cov;
+      if (native && !mirrorX &&
+          gray_aa::maskNeighbourhoodUniform(bits, rowBytes, srcW, srcH, ox, oy, maskInverted)) {
+        cov = gray_aa::maskTexel(bits, rowBytes, srcW, srcH, ox, oy, maskInverted);
+      } else {
+        float u0 = static_cast<float>(ox) * su;
+        const float v0 = static_cast<float>(oy) * sv;
+        if (mirrorX) u0 = static_cast<float>(srcW) - u0 - su;
+        cov = gray_aa::maskCoverage(bits, rowBytes, srcW, srcH, u0, v0, su, sv, maskInverted);
+      }
+      if (cov > 0.0f) plotCoverage(dx + ox, dy + oy, cov, inkLevel);
     }
   }
 }
 
+void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, const int size) const {
+  // Icons are square and 1bpp (MSB-first, bit==0 = ink). drawMaskAA keeps the
+  // legacy (size-1-row, col) mapping so callers do not change, and adds
+  // coverage on the 16-level canvas.
+  drawMaskAA(bitmap, size, size, x, y, size, size, true, true, true);
+}
+
 void GfxRenderer::drawIconInverted(const uint8_t bitmap[], const int x, const int y, const int size) const {
-  const int rowBytes = (size + 7) / 8;
-  for (int row = 0; row < size; row++) {
-    for (int col = 0; col < size; col++) {
-      const uint8_t byte = bitmap[row * rowBytes + (col >> 3)];
-      const bool ink = ((byte >> (7 - (col & 7))) & 1) == 0;
-      if (ink) {
-        drawPixel(x + (size - 1 - row), y + col, false);
-      }
-    }
-  }
+  drawMaskAA(bitmap, size, size, x, y, size, size, true, false, true);
 }
 
 bool GfxRenderer::drawBitmapCropToFill(const Bitmap& bitmap, const int x, const int y, const int targetWidth,
@@ -2562,15 +2820,54 @@ void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoi
   if (numPoints < 3) return;
 
   // Find bounding box
+  int minX = xPoints[0], maxX = xPoints[0];
   int minY = yPoints[0], maxY = yPoints[0];
   for (int i = 1; i < numPoints; i++) {
+    if (xPoints[i] < minX) minX = xPoints[i];
+    if (xPoints[i] > maxX) maxX = xPoints[i];
     if (yPoints[i] < minY) minY = yPoints[i];
     if (yPoints[i] > maxY) maxY = yPoints[i];
   }
 
   // Clip to screen
+  if (minX < 0) minX = 0;
+  if (maxX >= getScreenWidth()) maxX = getScreenWidth() - 1;
   if (minY < 0) minY = 0;
   if (maxY >= getScreenHeight()) maxY = getScreenHeight() - 1;
+
+  if (grayscale16Buffer != nullptr && s_grayAA_) {
+    // 4x4 point-in-polygon coverage. The 1-bit scanline below is exact for a
+    // 1bpp panel; on the 16-level canvas the integer steps of a small triangle
+    // (the shelf sort arrow) read as jaggies. Vertices keep the pixel-centre
+    // convention the scanline path uses, so the shape does not move.
+    const uint8_t ink = state ? 0 : 15;
+    constexpr int kSamples = 4;
+    for (int y = minY; y <= maxY; ++y) {
+      for (int x = minX; x <= maxX; ++x) {
+        int inside = 0;
+        for (int sy = 0; sy < kSamples; ++sy) {
+          const float py = static_cast<float>(y) - 0.5f + (static_cast<float>(sy) + 0.5f) / kSamples;
+          for (int sx = 0; sx < kSamples; ++sx) {
+            const float px = static_cast<float>(x) - 0.5f + (static_cast<float>(sx) + 0.5f) / kSamples;
+            bool in = false;
+            for (int i = 0, j = numPoints - 1; i < numPoints; j = i++) {
+              const float yi = static_cast<float>(yPoints[i]);
+              const float yj = static_cast<float>(yPoints[j]);
+              if ((yi > py) != (yj > py)) {
+                const float xCross =
+                    static_cast<float>(xPoints[i]) +
+                    (py - yi) * static_cast<float>(xPoints[j] - xPoints[i]) / (yj - yi);
+                if (px < xCross) in = !in;
+              }
+            }
+            if (in) ++inside;
+          }
+        }
+        if (inside > 0) plotCoverage(x, y, static_cast<float>(inside) / (kSamples * kSamples), ink);
+      }
+    }
+    return;
+  }
 
   // Allocate node buffer for scanline algorithm
   auto nodeX = makeUniqueNoThrow<int[]>(numPoints);
@@ -2680,6 +2977,8 @@ bool s_bandPushFullPage = false;
 void GfxRenderer::setBandPushFullPage(const bool fullPage) { s_bandPushFullPage = fullPage; }
 
 bool GfxRenderer::s_areaPushAllowed_ = true;
+bool GfxRenderer::s_grayAA_ = true;
+uint32_t GfxRenderer::s_aaStats_[4] = {0, 0, 0, 0};
 bool GfxRenderer::bandUpdatesSuspended() { return s_bandSuspended; }
 
 // On by default: the 2026-10-29 photo gate compared PHOTODEMO 0 (two whole-screen
@@ -2687,6 +2986,8 @@ bool GfxRenderer::bandUpdatesSuspended() { return s_bandSuspended; }
 // indistinguishable, so a sweep can clean what changed instead of flashing the
 // whole panel. CMD:CLEAN 0 and `localCleanFits` (union > 60%) keep the old path.
 bool GfxRenderer::s_localClean_ = true;
+uint8_t GfxRenderer::s_bwGlyphThreshold = 2;
+uint8_t GfxRenderer::s_bwGlyphThreshold4 = 10;
 int GfxRenderer::s_localCleanMaxPercent = static_cast<int>(band_policy::kMaxLocalCleanPercent);
 
 void GfxRenderer::setLocalCleanMaxPercent(const int percent) {
@@ -2696,6 +2997,14 @@ int GfxRenderer::localCleanMaxPercent() { return s_localCleanMaxPercent; }
 
 void GfxRenderer::setLocalCleanEnabled(const bool enabled) { s_localClean_ = enabled; }
 bool GfxRenderer::localCleanEnabled() { return s_localClean_; }
+void GfxRenderer::setBwGlyphThreshold(const uint8_t coverage) {
+  s_bwGlyphThreshold = coverage > 3 ? 3 : coverage;
+}
+uint8_t GfxRenderer::bwGlyphThreshold() { return s_bwGlyphThreshold; }
+void GfxRenderer::setBwGlyphThreshold4(const uint8_t nibble) {
+  s_bwGlyphThreshold4 = nibble > 15 ? 15 : nibble;
+}
+uint8_t GfxRenderer::bwGlyphThreshold4() { return s_bwGlyphThreshold4; }
 
 namespace {
 GfxRenderer::RenderStats s_renderStats;

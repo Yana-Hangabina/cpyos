@@ -18,6 +18,11 @@ class RecentBooksActivity final : public UiListActivity {
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   void onRowLongPress(int index) override;
+  // Swipe a row left to reveal the remove button (upstream ba39565c). It reuses
+  // this page's existing "remove from recents" confirmation, never deletes a
+  // file, and the removal still needs an explicit confirm.
+  bool canSwipeDelete(int index) const override { return index >= 0 && index < listCount(); }
+  void swipeDelete(int index) override;
   // Confirm activates on RELEASE here (a hold is "remove from list"), and Back
   // goes home rather than finishing.
   bool handleButtons() override;

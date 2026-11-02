@@ -11,14 +11,19 @@ import urllib.error
 import urllib.request
 from urllib.parse import urljoin, urlparse
 
+from pathlib import Path
+
+import package_nightly_target
 from build_nightly_index import valid_manifest
 from generate_ota_notes import validate_notes
 from nightly_targets import CHANNELS, FLAVOR_TOKENS, TARGETS, asset_name, manifest_name, targets_for
 
+ROOT = Path(__file__).resolve().parent.parent
+
 
 SHA40 = re.compile(r'^[0-9a-f]{40}$')
 SHA256 = re.compile(r'^[0-9a-f]{64}$')
-ASSET_NAME = re.compile(r'^[a-z0-9][a-z0-9._-]*\.bin$')
+ASSET_NAME = re.compile(r'^[a-z0-9][a-z0-9._-]*\.(bin|dat)$')
 OFFSETS = {'bootloader': 0x0000, 'partitions': 0x8000, 'boot_app0': 0xE000, 'firmware': 0x10000}
 
 
@@ -59,14 +64,26 @@ def validate_url(url, index_url, channel):
 
 
 def expected_assets(target_id, channel):
+    target = TARGETS[target_id]
     roles = (
         tuple(OFFSETS)
-        if TARGETS[target_id]['fullInstall']
+        if target['fullInstall']
         else ('bootloader', 'partitions', 'firmware')
-        if channel == 'stable'
+        if channel == 'stable' or target.get('dataAssets')
         else ('firmware',)
     )
-    return [(role, asset_name(target_id, f'{role}.bin'), OFFSETS[role]) for role in roles]
+    expected = [(role, asset_name(target_id, f'{role}.bin'), OFFSETS[role]) for role in roles]
+    data_assets = target.get('dataAssets', ())
+    if data_assets:
+        layout = package_nightly_target.verify_partition_csv(
+            ROOT, target.get('partitionsCsv', 'partitions.csv'))
+        for role, source_name, partition_name, inner in data_assets:
+            expected.append((
+                role,
+                asset_name(target_id, source_name),
+                layout[partition_name][0] + inner,
+            ))
+    return expected
 
 
 def verify_release(index_url, expected_sha, channel, fetch=fetch_bytes):

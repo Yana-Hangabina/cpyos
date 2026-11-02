@@ -1,7 +1,16 @@
 // Paragraph comments (段评): the two PC-compat endpoints, both GET + token.
 //
+// These PC-compat endpoints go to m.jjwxc.net. A host OpenSSL test showed the
+// m PC endpoint accepts TLS 1.2 + AES128/AES256, ALPN/no ALPN and maxfragment
+// 512/2048; the device's earlier m failures were traced to the comment panel
+// opening with the reader's section/page cache still held, which starved the
+// Wi-Fi association (15.8 KB free / 7.1 KB largest) — not to m. The reader now
+// always calls prepareForJjwxcChild() before the panel, and the device verified
+// m: 772 ms handshake, HTTP 200, 7 comments. www remains a fallback only.
+// See AGENTS.md §43.
+//
 // Measured live 2026-10-17:
-//   GET https://www.jjwxc.net/app.jjwxc/Pc/comment/getNovelParagraphCommentNum
+//   GET https://m.jjwxc.net/app.jjwxc/Pc/comment/getNovelParagraphCommentNum
 //       ?versionCode=489&novelid=..&chapterid=..&token=<sid or base64(sid)>
 //     -> {"code":"200","data":[{"paragraph_id":"29","comment_total":"3",
 //          "show_type":"0"}, ...]}

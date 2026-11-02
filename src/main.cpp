@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <DeviceSecret.h>
+#if FREEINK_DEVICE_READPICO
+#include <EpdiyLcd.h>
+#endif
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -22,6 +25,7 @@
 #include <TrustedTime.h>
 #include <VectorFontSupport.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <XteinkDetect.h>
 #if FREEINK_CAP_TOUCH
 #include <esp_sntp.h>
@@ -29,19 +33,20 @@
 #include <builtinFonts/all.h>
 
 #include <cstring>
-#include <fcntl.h>
 
 #include "AchievementsStore.h"
 #include "BleInput.h"
 #include "BootTimings.h"
+#include "BackgroundWork.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "ReadingStatsStore.h"
-#include "EmojiFont.h"
 #include "RecentBooksStore.h"
+#include "TlsProbe.h"
+#include "EmojiFont.h"
 #include "SdCardFontSystem.h"
 #include "UiCjkFallbacks.h"
 #include "Epub/hyphenation/HyphenationEmbedding.h"
@@ -51,20 +56,22 @@
 #if defined(CROSSPOINT_EXTERNAL_FONTS)
 #include "ExternalFontPackStorage.h"
 #endif
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "SystemFontPack.h"
+#include "Typography.h"
+#endif
 #include "WifiCredentialStore.h"
-#include "network/OtaUpdater.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
-#include "activities/apps/AppsMenuActivity.h"
 #include "activities/home/FindBooksActivity.h"
-#include "activities/util/KeyboardEntryActivity.h"
-#include "activities/util/PhotoDemoActivity.h"
 #include "activities/reader/EpubReaderActivity.h"
-#include "activities/reader/ReaderRefresh.h"
 #include "activities/home/MyActivity.h"
 #include "activities/library/LibraryListActivity.h"
+#include "activities/reader/ReaderRefresh.h"
+#include <LibraryBuilder.h>
 #ifdef BOARD_HAS_PSRAM
 #include "activities/apps/jjwxc/JjwxcActivity.h"
+#include "activities/apps/jjwxc/JjwxcCacheService.h"
 #endif
 #if defined(CROSSPOINT_MUPDF)
 #include "activities/reader/PdfReaderActivity.h"
@@ -76,11 +83,21 @@
 #include "activities/settings/SettingsSearchActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
+#include "activities/apps/2048/Game2048Activity.h"
+#include "activities/apps/AppsMenuActivity.h"
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "activities/util/FontCompareActivity.h"
+#endif
+#include "activities/util/PhotoDemoActivity.h"
+#include "activities/apps/sokoban/SokobanGameActivity.h"
+#include "activities/apps/minesweeper/MinesweeperGameActivity.h"
 #endif
 #include "activities/settings/LanguageSelectActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "network/OtaUpdater.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
@@ -114,9 +131,7 @@ FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts
 static unsigned long allowSleepAt = 0;
 constexpr unsigned long READING_STATS_CHECKPOINT_IDLE_MS = 15UL * 1000UL;
 static unsigned long lastX4ProPowerClickAt = 0;
-// CMD:NOSLEEP keeps the unit awake for serial soaks; auto-sleep would otherwise
-// dead-stop a long device regression in the middle.
-static bool g_debugNoSleep = false;
+static bool g_debugNoSleep = false;  // CMD:NOSLEEP (serial soaks only)
 
 // Scan watchdog for the windowed (area) push. That path has no bounded wait
 // inside epdiy -- a scan that never completes blocks its caller forever, and this
@@ -153,6 +168,73 @@ void armScanWatchdog(const uint32_t timeoutMs) {
 }
 
 void disarmScanWatchdog() { s_scanWatchdogDeadlineMs = 0; }
+
+namespace {
+
+bool g_battLogActive = false;
+unsigned long g_battLogNext = 0;
+unsigned long g_battLogUntil = 0;
+constexpr unsigned long kBattLogIntervalMs = 60000;
+constexpr const char* kBattLogPath = "/.crosspoint/battlog.txt";
+
+void batteryLogStop() {
+  // The log opens per sample instead of holding a handle: the SD card is also
+  // used by reading, file transfer and USB-MSC, and a writer left open for
+  // hours would outlive every one of those ownership boundaries.
+  g_battLogActive = false;
+  g_battLogNext = 0;
+  g_battLogUntil = 0;
+}
+
+bool batteryLogAppend(const char* data, const size_t len) {
+  HalFile file = Storage.open(kBattLogPath, O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) return false;
+  const bool ok = file.write(reinterpret_cast<const uint8_t*>(data), len) == len && file.close();
+  return ok;
+}
+
+bool batteryLogStart(const unsigned minutes) {
+  batteryLogStop();
+  if (minutes == 0) return true;
+  char header[96];
+  const int n = snprintf(header, sizeof(header), "# cpyos battlog boot_ms=%lu interval_ms=%lu\n", millis(),
+                         kBattLogIntervalMs);
+  if (!batteryLogAppend(header, static_cast<size_t>(n))) {
+    LOG_ERR("BATT", "cannot open %s", kBattLogPath);
+    return false;
+  }
+  g_battLogActive = true;
+  g_battLogNext = millis();
+  g_battLogUntil = millis() + minutes * 60000UL;
+  return true;
+}
+
+void batteryLogService() {
+  if (!g_battLogActive) return;
+  const unsigned long now = millis();
+  if (static_cast<long>(now - g_battLogNext) < 0) return;
+  if (static_cast<long>(now - g_battLogUntil) >= 0) {
+    batteryLogStop();
+    return;
+  }
+  const auto battery = powerManager.readBatteryTelemetry();
+  char line[176];
+  const int n = snprintf(line, sizeof(line), "%lu,mv=%u,soc=%u,chg=%u,usb=%d,cpu=%u,wifi=%d,wstatus=%d,reader=%d\n",
+                         now, static_cast<unsigned>(battery.millivolts), static_cast<unsigned>(battery.socPermille),
+                         static_cast<unsigned>(battery.chargeState), gpio.isUsbConnected() ? 1 : 0,
+                         getCpuFrequencyMhz(), static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
+                         activityManager.isReaderActivity() ? 1 : 0);
+  if (!batteryLogAppend(line, static_cast<size_t>(n))) {
+    LOG_ERR("BATT", "write failed; stopping battery log");
+    batteryLogStop();
+    return;
+  }
+  logSerial.printf("[BATT] %s", line);
+  g_battLogNext += kBattLogIntervalMs;
+}
+
+}  // namespace
+
 
 namespace {
 constexpr unsigned long X4PRO_POWER_DOUBLE_CLICK_MS = 500;
@@ -214,18 +296,20 @@ static bool wakePowerReleasePending = false;
 // families, other sizes, and style variants come from SD .cpfont files.
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
 #include <builtinFonts/notosans_12_regular.h>
+#if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include <builtinFonts/notosans_cjk_14.h>
 #include <builtinFonts/notosans_cjk_16.h>
+#endif
 #if !defined(CROSSPOINT_EXTERNAL_FONTS)
 #include <builtinFonts/notoserif_title_23.h>
 #endif
 #endif
 
-#if defined(CROSSPOINT_EXTERNAL_FONTS)
+#if defined(CROSSPOINT_EXTERNAL_FONTS) || defined(CROSSPOINT_SYSTEM_FONT_PACK)
 // Read Pico: the 12pt GB2312 face and the title serif are loaded from
-// /.crosspoint/font_pack.dat into PSRAM by setupDisplayAndFonts().  Keeping the
-// static EpdFontData here (not the pack buffer) means EpdFont's pointer stays
-// valid once the loader fills it.
+// /.crosspoint/font_pack.dat into PSRAM by setupDisplayAndFonts(). C3's
+// system font pack registers the real vector faces under these ids later.
+// Keeping the static EpdFontData here means EpdFont's pointer stays valid.
 static EpdFontData externalCjk12Data;
 static const EpdFontData& cjk12Face() { return externalCjk12Data; }
 #else
@@ -249,7 +333,8 @@ EpdFontFamily titleSerifFamily(&titleSerifFont);
 #endif
 
 void useBuiltinFontFallback() {
-#if defined(CROSSPOINT_EXTERNAL_FONTS) && defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+#if defined(CROSSPOINT_EXTERNAL_FONTS) && defined(CROSSMUX_UI_PROFILE_HIGH_DPI) && \
+    !defined(CROSSPOINT_SYSTEM_FONT_PACK)
   externalCjk12Data = notosans_cjk_14;
   externalTitleData = notosans_cjk_14;
 #endif
@@ -295,7 +380,23 @@ extern EpdFont ui12RegularFont;
 extern EpdFont ui12BoldFont;
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
-#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+// System font pack: the real 10/12/14/16/18pt faces are registered after
+// setupDisplay by SystemFontPack. The 8pt built-in subset stays as the
+// emergency fallback when the pack is absent (app-only OTA before the first
+// full install); the other placeholders are dropped and replaced at boot.
+static EpdFontData emptyCjk10Data;
+static EpdFontData emptyCjk14Data;
+static EpdFontData emptyCjk16Data;
+EpdFont cjk8Font(&notosans_cjk_8);
+EpdFont cjk10Font(&emptyCjk10Data);
+EpdFont cjk14Font(&emptyCjk14Data);
+EpdFont cjk16Font(&emptyCjk16Data);
+EpdFontFamily cjk8FontFamily(&cjk8Font);
+EpdFontFamily cjk10FontFamily(&cjk10Font);
+EpdFontFamily ui14FallbackFamily(&cjk14Font);
+EpdFontFamily ui16FallbackFamily(&cjk16Font);
+#elif defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
 // Size-matched CJK faces for the UI, with the wide 12pt face behind them.
 // The 14pt/16pt subsets carry only the i18n vocabulary (803 glyphs), so UI
 // copy keeps the size the theme was designed around; a string containing a
@@ -308,10 +409,6 @@ EpdFont cjk16Font(&notosans_cjk_16);
 EpdFontFamily cjk10FontFamily(&cjk14Font);
 EpdFontFamily ui14FallbackFamily(&cjk14Font);
 EpdFontFamily ui16FallbackFamily(&cjk16Font);
-static EpdFont rtlRegularFont(&ubuntu_12_regular);
-static EpdFont rtlBoldFont(&ubuntu_12_bold);
-static EpdFontFamily rtlFontFamily(&rtlRegularFont, &rtlBoldFont);
-static constexpr int kRtlFontId = 0x52544C0C;
 #else
 EpdFont cjk8Font(&notosans_cjk_8);
 EpdFont cjk10Font(&notosans_cjk_10);
@@ -320,6 +417,13 @@ EpdFontFamily cjk10FontFamily(&cjk10Font);
 #endif
 EpdFont cjk12Font(&cjk12Face());
 EpdFontFamily cjk12FontFamily(&cjk12Font);
+
+#ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
+static EpdFont rtlRegularFont(&ubuntu_12_regular);
+static EpdFont rtlBoldFont(&ubuntu_12_bold);
+static EpdFontFamily rtlFontFamily(&rtlRegularFont, &rtlBoldFont);
+static constexpr int kRtlFontId = 0x52544C0C;
+#endif
 
 // Chinese chess piece glyphs (subset CJK font, 14 characters at 16pt).
 EpdFont chineseChessPieceFont(&chinese_chess_16);
@@ -564,6 +668,8 @@ static void deliverSleepPluginEvents() {
   // same sleep, and a progress-sync plugin usually subscribes to it alone.
   if (!pluginevents::wantsConnectAny()) return;
   if (powerManager.getBatteryPercentage() < 20) return;
+  // Sleep can be the first WiFi use since boot or deep-sleep wake.
+  WIFI_STORE.loadFromFile();
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
   if (!cred) return;
 
@@ -582,72 +688,6 @@ static void deliverSleepPluginEvents() {
   }
 }
 
-namespace {
-
-bool g_battLogActive = false;
-unsigned long g_battLogNext = 0;
-unsigned long g_battLogUntil = 0;
-constexpr unsigned long kBattLogIntervalMs = 60000;
-constexpr const char* kBattLogPath = "/.crosspoint/battlog.txt";
-
-void batteryLogStop() {
-  // The log opens per sample instead of holding a handle: the SD card is also
-  // used by reading, file transfer and USB-MSC, and a writer left open for
-  // hours would outlive every one of those ownership boundaries.
-  g_battLogActive = false;
-  g_battLogNext = 0;
-  g_battLogUntil = 0;
-}
-
-bool batteryLogAppend(const char* data, const size_t len) {
-  HalFile file = Storage.open(kBattLogPath, O_WRONLY | O_CREAT | O_APPEND);
-  if (!file) return false;
-  const bool ok = file.write(reinterpret_cast<const uint8_t*>(data), len) == len && file.close();
-  return ok;
-}
-
-bool batteryLogStart(const unsigned minutes) {
-  batteryLogStop();
-  if (minutes == 0) return true;
-  char header[96];
-  const int n = snprintf(header, sizeof(header), "# cpyos battlog boot_ms=%lu interval_ms=%lu\n", millis(),
-                         kBattLogIntervalMs);
-  if (!batteryLogAppend(header, static_cast<size_t>(n))) {
-    LOG_ERR("BATT", "cannot open %s", kBattLogPath);
-    return false;
-  }
-  g_battLogActive = true;
-  g_battLogNext = millis();
-  g_battLogUntil = millis() + minutes * 60000UL;
-  return true;
-}
-
-void batteryLogService() {
-  if (!g_battLogActive) return;
-  const unsigned long now = millis();
-  if (static_cast<long>(now - g_battLogNext) < 0) return;
-  if (static_cast<long>(now - g_battLogUntil) >= 0) {
-    batteryLogStop();
-    return;
-  }
-  const auto battery = powerManager.readBatteryTelemetry();
-  char line[176];
-  const int n = snprintf(line, sizeof(line), "%lu,mv=%u,soc=%u,chg=%u,usb=%d,cpu=%u,wifi=%d,wstatus=%d,reader=%d\n",
-                         now, static_cast<unsigned>(battery.millivolts), static_cast<unsigned>(battery.socPermille),
-                         static_cast<unsigned>(battery.chargeState), gpio.isUsbConnected() ? 1 : 0,
-                         getCpuFrequencyMhz(), static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()),
-                         activityManager.isReaderActivity() ? 1 : 0);
-  if (!batteryLogAppend(line, static_cast<size_t>(n))) {
-    LOG_ERR("BATT", "write failed; stopping battery log");
-    batteryLogStop();
-    return;
-  }
-  logSerial.printf("[BATT] %s", line);
-  g_battLogNext += kBattLogIntervalMs;
-}
-
-}  // namespace
-
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   bleinput::stop();
@@ -660,10 +700,9 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   deliverSleepPluginEvents();
 
+  (void)fromTimeout;  // one deep-sleep style; the timeout is no longer an exception
   const bool isQuickResumeSleep =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+      SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
   // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
   // it visible until the first useful reader or home paint replaces it.
   APP_STATE.showBootScreen = false;
@@ -708,7 +747,6 @@ void enterDeepSleep(bool fromTimeout = false) {
   BuzzerFeedback::shutdown();
 #endif
   display.deepSleep();
-  batteryLogStop();
 #if !FREEINK_DEVICE_EEGO_A4
   Storage.prepareForDeepSleep();
 #endif
@@ -785,26 +823,43 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
   renderer.insertFont(CJK_UI_8_FONT_ID, cjk8FontFamily);
   renderer.insertFont(CJK_UI_10_FONT_ID, cjk10FontFamily);
   renderer.insertFont(CJK_UI_12_FONT_ID, cjk12FontFamily);
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // The pack is the real source; if it is missing, every CJK role falls back
+  // to the built-in 8pt subset instead of an empty stub.
+  renderer.setFallbackFont(SMALL_FONT_ID, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(CONTROL_18_FONT_ID, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(UI_10_FONT_ID, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_8_FONT_ID);
+  renderer.setFallbackFont(NOTOSANS_18_FONT_ID, CJK_UI_8_FONT_ID);
+#else
   renderer.setFallbackFont(SMALL_FONT_ID, CJK_UI_8_FONT_ID);
   renderer.setFallbackFont(CONTROL_18_FONT_ID, CJK_UI_12_FONT_ID);
   renderer.setFallbackFont(UI_10_FONT_ID, CJK_UI_10_FONT_ID);
   renderer.setFallbackFont(UI_12_FONT_ID, CJK_UI_12_FONT_ID);
   renderer.setFallbackFont(NOTOSANS_18_FONT_ID, CJK_UI_12_FONT_ID);
+#endif
   renderer.insertFont(BaseTheme::STATUS_NUMERIC_FONT_ID, smallFontFamily);
 #if FREEINK_DEVICE_READPICO
   renderer.insertFont(READER_STATUS_FONT_ID, smallFontFamily);
   renderer.insertFont(READER_ESTIMATE_FONT_ID, ui10FontFamily);
   renderer.setFallbackFont(READER_STATUS_FONT_ID, CJK_UI_8_FONT_ID);
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  renderer.setFallbackFont(READER_ESTIMATE_FONT_ID, CJK_UI_8_FONT_ID);
+#else
   renderer.setFallbackFont(READER_ESTIMATE_FONT_ID, CJK_UI_10_FONT_ID);
+#endif
 #endif
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   renderer.insertFont(UiHighDpiProfile::reader12FontId, offlineReaderFontFamily);
   renderer.insertFont(CJK_UI_14_FONT_ID, ui14FallbackFamily);
   renderer.insertFont(CJK_UI_16_FONT_ID, ui16FallbackFamily);
+#if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
   // The CJK size policy lives in one place: comfortable = size-matched 14/16pt
   // for UI copy with the wide 12pt face behind, compact = all 12pt. Driven by
-  // SETTINGS.uiDensity, so there is no second "Chinese size" setting.
+  // SETTINGS.uiDensity, so there is no second "Chinese size" setting. The
+  // vector pack has a full family at every size, so it needs no fallback chain.
   applyUiCjkFallbacks(renderer, SETTINGS.uiDensity != 0);
+#endif
   renderer.insertFont(kRtlFontId, rtlFontFamily);
   renderer.setFallbackFont(CJK_UI_12_FONT_ID, kRtlFontId);
   // Title serif: registered here so the whole-run fallback resolves too — a
@@ -820,6 +875,16 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
     LOG_INF("FONT", "Clean restart before font load: free=%u, maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
   }
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // C3 has no built-in full CJK face. Load the streaming vector pack after the
+  // built-in registration table exists, and before SD fonts (a user-selected SD
+  // reader font may still override the reader id).
+  if (!system_font_pack::begin(renderer)) {
+    LOG_ERR("MAIN", "system font pack unavailable; Chinese UI will be incomplete");
+  } else {
+    typography::apply(renderer, SETTINGS.uiFontScale);
+  }
+#endif
   sdFontSystem.begin(renderer);
   // Bundled mono emoji face (data partition, OFL Noto Emoji subset). Failure is
   // non-fatal: no emoji pack simply leaves the old tofu behaviour.
@@ -1064,6 +1129,12 @@ void setup() {
   }
 
   HalSystem::checkPanic();
+  // The background paragraph-comment queue owns a long-lived task and reads its
+  // state from the card; start it only once storage is mounted. C3 has no
+  // PSRAM and no JJWXC App, so the service is compiled out there.
+#ifdef BOARD_HAS_PSRAM
+  jjwxc_cache_service::begin();
+#endif
 
   const bool settingsLoaded = SETTINGS.loadFromFile();
 #if FREEINK_DEVICE_READPICO
@@ -1235,6 +1306,13 @@ void setup() {
               snapshotTarget == SilentRebootTarget::ReaderSuppressFontPrompt) &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
+    // ReaderActivity::create() can fail (OOM, vanished file). There is no
+    // current activity then, and the setup wait at the bottom of this block
+    // would block forever because the render task has nothing to render.
+    if (!activityManager.currentActivityPtr()) {
+      LOG_ERR("MAIN", "Silent reader resume failed to start; going home");
+      activityManager.goHome();
+    }
   } else if (resume == BootResume::Silent && snapshotTarget == SilentRebootTarget::JoinNetwork) {
     activityManager.goToJoinNetwork();
   } else if (resume == BootResume::Silent && snapshotTarget == SilentRebootTarget::Settings) {
@@ -1246,10 +1324,11 @@ void setup() {
     // openEpubPath + lastSleepFromReader from a prior session.
     activityManager.goHome();
   } else if (APP_STATE.readerActivityLoadCount > 0 && !APP_STATE.openEpubPath.empty()) {
-    // A flash/reset while a book was open leaves this stale marker. It is not a
-    // book fault: the old "opening this book was interrupted" modal interrupted
-    // every ordinary flash. Drop the resume marker and go Home; a real panic is
-    // already routed to the crash report above.
+    // The old "opening this book was interrupted" page is gone: it interrupted
+    // the user and provided no copy protection. A stale resume state (a real
+    // crash, a flash, an OTA or a software reset) is cleared silently and the
+    // device lands on Home; a genuine panic already went to the crash report
+    // above. The reset reason is kept in the log for diagnosis.
     LOG_INF("RECOVERY", "dropping stale reader resume state for '%s' (%s reboot)",
             APP_STATE.openEpubPath.c_str(), HalSystem::isRebootDeliberate() ? "deliberate" : "interrupted");
     APP_STATE.openEpubPath.clear();
@@ -1259,9 +1338,10 @@ void setup() {
     activityManager.goHome();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
-    // Boot to home screen if no book is open, last sleep was not from reader,
-    // back is held, or the removed recovery page left a stale count. Clear that
-    // count so a later boot is not held on Home by it.
+    // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
+    // crashed (indicated by readerActivityLoadCount > 0). The count is stale
+    // bookkeeping from the removed recovery page; clear it so a later boot is
+    // not held on Home by it.
     if (APP_STATE.readerActivityLoadCount > 0) {
       APP_STATE.readerActivityLoadCount = 0;
       APP_STATE.saveToFile();
@@ -1280,6 +1360,12 @@ void setup() {
     // reader resume also clears the retained frame.
     if (needsWakeRefresh) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
     activityManager.goToReader(path, allowFastInitialReaderRefresh);
+    // Same guard as the silent-resume branch above: a failed reader allocation
+    // must not leave setup waiting for a first frame that can never arrive.
+    if (!activityManager.currentActivityPtr()) {
+      LOG_ERR("MAIN", "Reader resume failed to start; going home");
+      activityManager.goHome();
+    }
   }
 
   if (resume == BootResume::Silent) {
@@ -1418,8 +1504,6 @@ void loop() {
     lastMemPrint = millis();
   }
 
-  batteryLogService();
-
   // Handle incoming serial commands,
   // nb: we use logSerial from logging to avoid deprecation warnings
   if (logSerial.available() > 0) {
@@ -1433,29 +1517,15 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
-      } else if (cmd == "BATT") {
-        const auto b = powerManager.readBatteryTelemetry();
-        logSerial.printf("BATT valid=%d mv=%u soc=%u chg=%u usb=%d cpu=%u reader=%d\n", b.valid ? 1 : 0,
-                         static_cast<unsigned>(b.millivolts), static_cast<unsigned>(b.socPermille),
-                         static_cast<unsigned>(b.chargeState), gpio.isUsbConnected() ? 1 : 0, getCpuFrequencyMhz(),
-                         activityManager.isReaderActivity() ? 1 : 0);
-      } else if (cmd == "NET") {
-        logSerial.printf("NET mode=%d status=%d cpu=%u usb=%d reader=%d\n", static_cast<int>(WiFi.getMode()),
-                         static_cast<int>(WiFi.status()), getCpuFrequencyMhz(), gpio.isUsbConnected() ? 1 : 0,
-                         activityManager.isReaderActivity() ? 1 : 0);
-      } else if (cmd.startsWith("BATTLOG")) {
-        const int minutes = cmd.length() > 7 ? cmd.substring(7).toInt() : 30;
-        if (minutes <= 0) {
-          batteryLogStop();
-          logSerial.printf("BATTLOG stopped\n");
-        } else {
-          const bool ok = batteryLogStart(static_cast<unsigned>(minutes));
-          logSerial.printf("BATTLOG %s for %d min\n", ok ? "started" : "failed", minutes);
-        }
       } else if (cmd == "FIND") {
         activityManager.pushActivity(std::make_unique<FindBooksActivity>(renderer, mappedInputManager));
       } else if (cmd == "MY") {
         activityManager.pushActivity(std::make_unique<MyActivity>(renderer, mappedInputManager));
+      } else if (cmd == "LIBDIRTY") {
+        // Force the next Library entry through the reconciliation walk, for the
+        // cold-entry latency measurement (the popup that used to follow it is gone).
+        library::markLibraryIndexDirty();
+        LOG_INF("PERF", "library index marked dirty");
       } else if (cmd == "LIBRARY") {
         activityManager.goToLibrary();
       } else if (cmd == "HOME") {
@@ -1512,37 +1582,12 @@ void loop() {
           const int space = cmd.indexOf(' ');
           activity->debugSetContentsFilter(space > 0 ? cmd.substring(space + 1).toInt() : 1);
         }
-      } else if (cmd.startsWith("PANEL")) {
-        if (auto* activity = activityManager.currentActivityPtr()) {
-          const int space = cmd.indexOf(' ');
-          activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
-        }
-      } else if (cmd == "APPS") {
-        activityManager.pushActivity(makeUniqueNoThrow<AppsMenuActivity>(renderer, mappedInputManager));
-      } else if (cmd == "KEYBOARD") {
-        activityManager.pushActivity(
-            makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test", "", 64, InputType::Text));
-      } else if (cmd == "TYPE") {
-        if (auto* activity = activityManager.currentActivityPtr()) activity->debugTypeChar();
-      } else if (cmd == "ROWUP" || cmd == "ROWDOWN") {
-        if (auto* activity = activityManager.currentActivityPtr()) {
-          activity->debugMoveRing(cmd == "ROWDOWN" ? 1 : -1);
-        }
-      } else if (cmd == "CLOSEPANEL") {
-        if (auto* activity = activityManager.currentActivityPtr()) activity->debugCloseOverlay();
-      } else if (cmd == "PUSHSTATS") {
-        const auto st = GfxRenderer::takeRenderStats();
-        logSerial.printf("PUSHSTATS sweep_caller=%u override=%u cadence=%u local_fb=%u\n",
-                         static_cast<unsigned>(st.fullFromCaller), static_cast<unsigned>(st.fullFromOverride),
-                         static_cast<unsigned>(st.fullFromCadence),
-                         static_cast<unsigned>(st.fullFromLocalFallback));
-        logSerial.printf("PUSHSTATS page=%u sweep=%u band=%u clean=%u skipped=%u band_px=%llu page_px=%llu\n",
-                         static_cast<unsigned>(st.pagePushes), static_cast<unsigned>(st.sweepPushes),
-                         static_cast<unsigned>(st.bandPushes), static_cast<unsigned>(st.cleanPushes),
-                         static_cast<unsigned>(st.skippedPushes),
-                         static_cast<unsigned long long>(st.bandAreaPixels),
-                         static_cast<unsigned long long>(st.pageAreaPixels));
+      } else if (cmd == "MINES") {
+        activityManager.pushActivity(makeUniqueNoThrow<MinesweeperGameActivity>(
+            renderer, mappedInputManager, MinesweeperBoard::Difficulty::Easy));
       } else if (cmd == "GRAYSTATS") {
+        // Grayscale/16-level scan entry points since the last take (the paths that
+        // bypass displayBuffer, e.g. the Home dashboard and image pages).
         logSerial.printf("GRAYSTATS gray=%u\n", static_cast<unsigned>(HalDisplay::takeGrayScanCount()));
       } else if (cmd == "REFRESHMAP") {
         auto* activity = activityManager.currentActivityPtr();
@@ -1559,42 +1604,57 @@ void loop() {
             GfxRenderer::areaPushAllowed() ? "on" : "blocked", GfxRenderer::localCleanEnabled() ? "on" : "off",
             GfxRenderer::localCleanMaxPercent(), static_cast<unsigned>(renderer.refreshCounter()),
             static_cast<unsigned>(renderer.refreshInterval()), ux, uy, uw, uh);
-      } else if (cmd.startsWith("CLEANMAX")) {
+      } else if (cmd.startsWith("NOFULL")) {
+        // Experiment: demote every reader GC16 (cadence and chapter start) to
+        // the differential profile so ghost accumulation can be observed.
         const int space = cmd.indexOf(' ');
-        GfxRenderer::setLocalCleanMaxPercent(space > 0 ? cmd.substring(space + 1).toInt() : 60);
-        LOG_INF("GFX", "local clean max union = %d%%", GfxRenderer::localCleanMaxPercent());
-      } else if (cmd.startsWith("CLEAN")) {
-        // 1 = a scheduled sweep cleans only the rect that changed since the last
-        // clean (windowed GC16); 0 = the classic whole-screen GC16.
-        const int space = cmd.indexOf(' ');
-        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        GfxRenderer::setLocalCleanEnabled(on);
-        LOG_INF("GFX", "local clean %s", on ? "ON (rect GC16)" : "off (full sweeps)");
-      } else if (cmd.startsWith("BANDS")) {
+        ReaderUtils::fullRefreshSuppressed() = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        LOG_INF("PERF", "reader full refresh suppressed=%d", ReaderUtils::fullRefreshSuppressed() ? 1 : 0);
+      } else if (cmd.startsWith("DU")) {
+        // Experiment: let reader page turns keep the DU profile (~40x less panel
+        // time). Session-only; a reboot restores the GL16 default.
         const int space = cmd.indexOf(' ');
         const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        GfxRenderer::setBandUpdatesSuspended(!on);
-        LOG_INF("GFX", "band updates %s", on ? "allowed" : "suspended (full-page only)");
-      } else if (cmd.startsWith("NOSLEEP")) {
+        GfxRenderer::setExperimentalReaderDu(on);
+        LOG_INF("PERF", "reader DU experiment=%d", on ? 1 : 0);
+      } else if (cmd == "SCANSTATS") {
+        uint32_t frames = 0;
+        uint64_t us = 0;
+        renderer.takePanelPushStats(&frames, &us);
+        logSerial.printf("SCANSTATS frames=%u us=%llu\n", static_cast<unsigned>(frames),
+                         static_cast<unsigned long long>(us));
+      } else if (cmd == "BATT") {
+        const auto b = powerManager.readBatteryTelemetry();
+        logSerial.printf("BATT valid=%d mv=%u soc=%u chg=%u usb=%d cpu=%u reader=%d\n", b.valid ? 1 : 0,
+                         static_cast<unsigned>(b.millivolts), static_cast<unsigned>(b.socPermille),
+                         static_cast<unsigned>(b.chargeState), gpio.isUsbConnected() ? 1 : 0, getCpuFrequencyMhz(),
+                         activityManager.isReaderActivity() ? 1 : 0);
+      } else if (cmd.startsWith("BATTLOG")) {
+        const int minutes = cmd.length() > 7 ? cmd.substring(7).toInt() : 30;
+        if (minutes <= 0) {
+          batteryLogStop();
+          logSerial.printf("BATTLOG stopped\n");
+        } else {
+          const bool ok = batteryLogStart(static_cast<unsigned>(minutes));
+          logSerial.printf("BATTLOG %s for %d min\n", ok ? "started" : "failed", minutes);
+        }
+      } else if (cmd.startsWith("FASTTURN")) {
         const int space = cmd.indexOf(' ');
-        g_debugNoSleep = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        LOG_INF("SLP", "debug no-sleep %s", g_debugNoSleep ? "ON (serial soak)" : "off");
-      } else if (cmd.startsWith("AREAPUSH")) {
+        if (space > 0) {
+          SETTINGS.fastPageTurn = cmd.substring(space + 1).toInt() != 0 ? 1 : 0;
+          SETTINGS.saveToFile();
+        }
+        LOG_INF("PERF", "fastPageTurn=%d", SETTINGS.fastPageTurn);
+      } else if (cmd.startsWith("RIPPLE")) {
         const int space = cmd.indexOf(' ');
-        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        GfxRenderer::setAreaPushAllowed(on);
-        LOG_INF("GFX", "area push %s", on ? "ALLOWED" : "blocked (full-page fallback)");
-      } else if (cmd.startsWith("BANDPUSH")) {
-        const int space = cmd.indexOf(' ');
-        const bool full = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        GfxRenderer::setBandPushFullPage(full);
-        LOG_INF("GFX", "band push = %s", full ? "full page (bisect)" : "windowed");
-      } else if (cmd.startsWith("PHOTODEMO")) {
-        const int space = cmd.indexOf(' ');
-        const int mode = space > 0 ? cmd.substring(space + 1).toInt() : 0;
-        activityManager.pushActivity(makeUniqueNoThrow<PhotoDemoActivity>(renderer, mappedInputManager, mode));
+        if (space > 0) {
+          SETTINGS.pageTurnEffect = cmd.substring(space + 1).toInt() != 0 ? 1 : 0;
+          SETTINGS.saveToFile();
+        }
+        LOG_INF("PERF", "pageTurnEffect=%d", SETTINGS.pageTurnEffect);
       } else if (cmd.startsWith("CADENCE")) {
-        // "CADENCE on|off [pages]" — the two Settings -> Display rows, persisted.
+        // "CADENCE on|off [pages]" — the two settings rows, for device tests.
+        // Persists, so a reboot does not silently undo an experiment.
         const int space = cmd.indexOf(' ');
         if (space > 0) {
           const String arg = cmd.substring(space + 1);
@@ -1611,11 +1671,151 @@ void loop() {
         LOG_INF("PERF", "cadence=%d pages=%d (reader %d pages, ui %d pushes)",
                 SETTINGS.periodicFullRefresh ? 1 : 0, SETTINGS.readerRefreshPages,
                 SETTINGS.getRefreshFrequency(), SETTINGS.getUiRefreshInterval());
-      } else if (cmd.startsWith("NOFULL")) {
-        // Session-only: demote every reader GC16 for ghost experiments.
+      } else if (cmd.startsWith("PROFILE")) {
+        // Legacy tier mapping for older scripts: 0..2 enable the cadence at
+        // 5/15/30 pages, 3 turns it off.
         const int space = cmd.indexOf(' ');
-        ReaderUtils::fullRefreshSuppressed() = space > 0 && cmd.substring(space + 1).toInt() != 0;
-        LOG_INF("PERF", "reader full refresh suppressed=%d", ReaderUtils::fullRefreshSuppressed() ? 1 : 0);
+        const int tier = space > 0 ? cmd.substring(space + 1).toInt() : -1;
+        if (tier >= 0 && tier < CrossPointSettings::REFRESH_FREQUENCY_COUNT) {
+          SETTINGS.periodicFullRefresh = tier == CrossPointSettings::REFRESH_NEVER ? 0 : 1;
+          SETTINGS.readerRefreshPages = tier == CrossPointSettings::REFRESH_CLEAR ? 5
+                                        : tier == CrossPointSettings::REFRESH_RELAXED ? 30
+                                                                                      : 15;
+          SETTINGS.saveToFile();
+          LOG_INF("PERF", "refresh profile %d -> cadence=%d pages=%d", tier, SETTINGS.periodicFullRefresh,
+                  SETTINGS.readerRefreshPages);
+        }
+      } else if (cmd.startsWith("DIRECTION")) {
+        // 0 = swipe left / tap right advances (the standard mapping);
+        // 1 = the left-hand mirror (swipe right / tap left advances).
+        const int space = cmd.indexOf(' ');
+        const int direction = space > 0 ? cmd.substring(space + 1).toInt() : -1;
+        if (direction >= 0 && direction < 2) {
+          SETTINGS.pageTurnDirection = static_cast<uint8_t>(direction);
+          SETTINGS.saveToFile();
+          LOG_INF("READER", "page turn direction = %d (%s)", direction,
+                  direction ? "swipe right / tap left advances" : "swipe left / tap right advances");
+        }
+      } else if (cmd.startsWith("CLEANMAX")) {
+        // Dirty-union threshold for a rect clean, for the photo A/B (default 60%).
+        const int space = cmd.indexOf(' ');
+        GfxRenderer::setLocalCleanMaxPercent(space > 0 ? cmd.substring(space + 1).toInt() : 60);
+        LOG_INF("GFX", "local clean max union = %d%%", GfxRenderer::localCleanMaxPercent());
+      } else if (cmd.startsWith("PHOTODEMO")) {
+        // 0 = whole-screen sweeps (today's behaviour), 1 = rect local clean.
+        const int space = cmd.indexOf(' ');
+        const int mode = space > 0 ? cmd.substring(space + 1).toInt() : 0;
+        activityManager.pushActivity(
+            makeUniqueNoThrow<PhotoDemoActivity>(renderer, mappedInputManager, mode));
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+      } else if (cmd.startsWith("FONTDEMO")) {
+        // Same-screen A/B: old 1-bit / old 4-level / new 16-level.
+        // Optional argument selects the point size; no argument uses the saved
+        // reader size (default stays 12pt).
+        const int space = cmd.indexOf(' ');
+        const int pointSize = space > 0 ? cmd.substring(space + 1).toInt() : 0;
+        activityManager.pushActivity(
+            makeUniqueNoThrow<FontCompareActivity>(renderer, mappedInputManager, pointSize));
+#endif
+      } else if (cmd == "APPS") {
+        activityManager.pushActivity(makeUniqueNoThrow<AppsMenuActivity>(renderer, mappedInputManager));
+      } else if (cmd == "SOKOBAN") {
+        activityManager.pushActivity(makeUniqueNoThrow<SokobanGameActivity>(renderer, mappedInputManager));
+      } else if (cmd == "2048") {
+        activityManager.pushActivity(
+            makeUniqueNoThrow<Game2048Activity>(renderer, mappedInputManager));
+      } else if (cmd.startsWith("GAMEMOVE")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugGameMove(space > 0 ? cmd.substring(space + 1).toInt() : 1);
+        }
+      } else if (cmd == "KEYBOARD") {
+        activityManager.pushActivity(makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test",
+                                                                             "", 64, InputType::Text));
+      } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
+        if (auto* activity = activityManager.currentActivityPtr())
+          activity->debugMoveRing(cmd == "ROWDOWN" ? 1 : -1);
+      } else if (cmd == "PUSHSTATS") {
+        const auto st = GfxRenderer::takeRenderStats();
+        logSerial.printf("PUSHSTATS sweep_caller=%u override=%u cadence=%u local_fb=%u\n",
+                         static_cast<unsigned>(st.fullFromCaller), static_cast<unsigned>(st.fullFromOverride),
+                         static_cast<unsigned>(st.fullFromCadence),
+                         static_cast<unsigned>(st.fullFromLocalFallback));
+        logSerial.printf("PUSHSTATS page=%u sweep=%u band=%u clean=%u skipped=%u band_px=%llu page_px=%llu\n",
+                         static_cast<unsigned>(st.pagePushes), static_cast<unsigned>(st.sweepPushes),
+                         static_cast<unsigned>(st.bandPushes), static_cast<unsigned>(st.cleanPushes),
+                         static_cast<unsigned>(st.skippedPushes),
+                         static_cast<unsigned long long>(st.bandAreaPixels),
+                         static_cast<unsigned long long>(st.pageAreaPixels));
+      } else if (cmd.startsWith("GRAYAA")) {
+        // Diagnostic A/B for the 16-level canvas anti-aliasing: icons, diagonal
+        // lines, arcs and rounded corners. Default on; 1-bit pages never use it.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 ? cmd.substring(space + 1).toInt() != 0 : true;
+        GfxRenderer::setGrayAAEnabled(on);
+        LOG_INF("GFX", "16-level AA %s", on ? "ON" : "off");
+        if (auto* activity = activityManager.currentActivityPtr()) activity->requestUpdate();
+      } else if (cmd == "AASTATS") {
+        logSerial.printf("AASTATS plotted=%u mask_px=%u line_px=%u arc_px=%u\n",
+                         static_cast<unsigned>(GfxRenderer::aaStat(0)),
+                         static_cast<unsigned>(GfxRenderer::aaStat(1)),
+                         static_cast<unsigned>(GfxRenderer::aaStat(2)),
+                         static_cast<unsigned>(GfxRenderer::aaStat(3)));
+        GfxRenderer::clearAAStats();
+      } else if (cmd.startsWith("CLEAN")) {
+        // 1 = a scheduled sweep cleans only the rect that changed since the last
+        // clean (windowed GC16); 0 = the classic whole-screen GC16.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setLocalCleanEnabled(on);
+        LOG_INF("GFX", "local clean %s", on ? "ON (rect GC16)" : "off (full sweeps)");
+      } else if (cmd.startsWith("BANDS")) {
+        // Kill switch for the band path: 0 = every push is a full page, the
+        // pre-band behaviour. Lets a suspected windowed-push problem be A/B'd
+        // on one build.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setBandUpdatesSuspended(!on);
+        LOG_INF("GFX", "band updates %s", on ? "allowed" : "suspended (full-page only)");
+      } else if (cmd.startsWith("NOSLEEP")) {
+        const int space = cmd.indexOf(' ');
+        g_debugNoSleep = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        LOG_INF("SLP", "debug no-sleep %s", g_debugNoSleep ? "ON (serial soak)" : "off");
+      } else if (cmd.startsWith("AREAPUSH")) {
+        // Re-enable the quarantined windowed scan (see GfxRenderer). Default off.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setAreaPushAllowed(on);
+        LOG_INF("GFX", "area push %s", on ? "ALLOWED (quarantined path)" : "blocked (full-page fallback)");
+      } else if (cmd.startsWith("BANDPUSH")) {
+        // 1 = band decision still runs, but the pass goes out as a full page.
+        const int space = cmd.indexOf(' ');
+        const bool full = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        GfxRenderer::setBandPushFullPage(full);
+        LOG_INF("GFX", "band push = %s", full ? "full page (bisect)" : "windowed");
+      } else if (cmd.startsWith("AAWAVE")) {
+#if FREEINK_DEVICE_READPICO
+        // A/B for the §4.8 ghost-budget experiment: 0 = text-turn table (held
+        // diagonal, current look), 1 = real-diagonal GL16.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        freeink::epdiyLcdSetAaRealDiagonal(on);
+        LOG_INF("PWR", "AA gray waveform = %s", on ? "real-diagonal GL16" : "text-turn (held diagonal)");
+#endif
+      } else if (cmd == "TYPE") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugTypeChar();
+      } else if (cmd.startsWith("AREATEST")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugAreaTest(space > 0 ? cmd.substring(space + 1).toInt() : 1);
+        }
+      } else if (cmd == "CLOSEPANEL") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugCloseOverlay();
+      } else if (cmd.startsWith("PANEL")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
+        }
       } else if (cmd.startsWith("READ")) {
         String path = "/BOOKS/test.epub";
         const int space = cmd.indexOf(' ');
@@ -1627,7 +1827,9 @@ void loop() {
       } else if (cmd == "TRANSFER") {
         activityManager.goToFileTransfer();
       } else if (cmd == "JJWXC") {
+#ifdef BOARD_HAS_PSRAM
         activityManager.goToJjwxc();
+#endif
       } else if (cmd.startsWith("DETAIL")) {
 #ifdef BOARD_HAS_PSRAM
         const int space = cmd.indexOf(' ');
@@ -1644,15 +1846,56 @@ void loop() {
         JjwxcActivity::requestSearchDeepLink("\xE6\x88\x91");
         activityManager.goToJjwxc();
 #endif
+      } else if (cmd == "NET") {
+        // Radio state probe for the power experiments (mode, status, CPU, USB).
+        logSerial.printf("NET mode=%d status=%d cpu=%u\n", static_cast<int>(WiFi.getMode()),
+                         static_cast<int>(WiFi.status()), static_cast<unsigned>(getCpuFrequencyMhz()));
+      } else if (cmd.startsWith("TLSPROBE")) {
+        // Diagnostic-only: handshake probe, plus an optional HTTP/1.1 exchange.
+        String rest = cmd.substring(8);
+        rest.trim();
+        bool http = false;
+        if (rest.startsWith("http ")) {
+          http = true;
+          rest = rest.substring(5);
+          rest.trim();
+        }
+        const int space = rest.indexOf(' ');
+        String hostArg = space > 0 ? rest.substring(0, space) : rest;
+        rest = space > 0 ? rest.substring(space + 1) : String();
+        rest.trim();
+        char host[64];
+        if (hostArg == "m") {
+          snprintf(host, sizeof(host), "m.jjwxc.net");
+        } else if (hostArg == "www") {
+          snprintf(host, sizeof(host), "www.jjwxc.net");
+        } else {
+          snprintf(host, sizeof(host), "%s", hostArg.c_str());
+        }
+        if (http) {
+          const int pathSpace = rest.indexOf(' ');
+          String pathArg = pathSpace > 0 ? rest.substring(0, pathSpace) : rest;
+          String tail = pathSpace > 0 ? rest.substring(pathSpace + 1) : String();
+          tail.trim();
+          if (pathArg.length() == 0) pathArg = "/";
+          char path[512];
+          snprintf(path, sizeof(path), "%s", pathArg.c_str());
+          const bool useSid = tail.indexOf("sid") >= 0;
+          const bool useFull = tail.indexOf("full") >= 0;
+          const bool keepAlive = tail.indexOf("keep") >= 0;
+          runHttpProbe(host, path, useSid, useFull, keepAlive);
+        } else {
+          const int ballastKb = rest.length() > 0 ? rest.toInt() : 0;
+          runTlsProbe(host, ballastKb);
+        }
       } else if (cmd == "WIFI") {
-        activityManager.pushActivity(
-            std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, /*keepRadioOnExit=*/false));
+        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
+      } else if (cmd == "SLEEP") {
+        activityManager.goToSleep(false);
       } else if (cmd == "STANDBY") {
         activityManager.goToReaderStandby();
       } else if (cmd == "WAKE") {
         activityManager.debugWakeStandby();
-      } else if (cmd == "SLEEP") {
-        activityManager.goToSleep(false);
       } else if (cmd == "OTAPROBE") {
         // Diagnostics only: fetch the release manifest, then measure every OTA
         // download route and print the winner. Requires an active Wi-Fi link.
@@ -1702,22 +1945,63 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenStressComment();
       } else if (cmd == "FAKECOMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenFakeJjwxcComment();
+      } else if (cmd == "COMMENTREFRESH") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugRefreshJjwxcComment();
+      } else if (cmd == "COMMENTLIKE") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugLikeJjwxcComment();
       } else if (cmd == "COMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcComment();
+      } else if (cmd == "JJCACHEUI") {
+#ifdef BOARD_HAS_PSRAM
+        JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::OpenCacheQueue);
+        activityManager.pushActivity(std::make_unique<JjwxcActivity>(renderer, mappedInputManager));
+#endif
+      } else if (cmd.startsWith("JJCACHEENQR")) {
+#ifdef BOARD_HAS_PSRAM
+        int from = 0, to = 0;
+        if (sscanf(cmd.c_str() + 11, "%d %d", &from, &to) == 2 && from >= 0 && to >= from) {
+          if (auto* activity = activityManager.currentActivityPtr()) {
+            activity->debugEnqueueJjwxcCacheQueueRange(static_cast<uint32_t>(from), static_cast<uint32_t>(to));
+          }
+        }
+#endif
+      } else if (cmd.startsWith("JJCACHEENQ")) {
+#ifdef BOARD_HAS_PSRAM
+        String novelId = cmd.substring(10);
+        novelId.trim();
+        JjwxcActivity::requestDeepLink(novelId.c_str(), JjwxcActivity::DeepLinkAction::EnqueueComments);
+        activityManager.pushActivity(std::make_unique<JjwxcActivity>(renderer, mappedInputManager));
+#endif
+      } else if (cmd == "WIFIOFF") {
+        // Diagnostic: simulate losing the AP mid-queue. The queue must stop on
+        // NeedsWifi without a retry loop or reconnect attempts.
+        WiFi.disconnect(true);
+        delay(50);
+        WiFi.mode(WIFI_OFF);
+        esp_wifi_deinit();
+        LOG_INF("NET", "debug: radio forced off");
+      } else if (cmd == "JJCACHECLEAR") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugClearJjwxcCacheQueue();
+      } else if (cmd == "JJCACHEPAUSE") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugPauseJjwxcCacheQueue();
+      } else if (cmd == "JJCACHERESUME") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugResumeJjwxcCacheQueue();
+      } else if (cmd == "JJCACHESTATUS") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugJjwxcCacheQueueStatus();
       } else if (cmd == "EMOJI") {
-        // On-device probe for the bundled emoji fallback: the message page draws
-        // through drawText(), so this exercises font + per-run split.
-        activityManager.goToFullScreenMessage("Emoji \xF0\x9F\x98\x80\xF0\x9F\x91\x8D\xE2\x9D\xA4\xEF\xB8\x8F\xF0\x9F\x9A\x80 \xE4\xB8\xAD\xE6\x96\x87",
-                                              EpdFontFamily::BOLD, "Noto Emoji subset / fallback", false);
+        // Temporary on-device probe for the bundled emoji fallback: the message
+        // page draws through drawText(), so this exercises font + per-run split.
+        activityManager.goToFullScreenMessage("Emoji 😀👍❤️🚀 中文", EpdFontFamily::BOLD,
+                                              "Noto Emoji subset / fallback", false);
       }
 #if defined(CROSSPOINT_MUPDF)
       else if (cmd == "PDF") {
         for (int i = 0; i <= 4; ++i) {
-          const std::string cache = "/.crosspoint/pdf_test/page_" + std::to_string(i) + ".bmp";
+          const std::string cache = "/.crosspoint/pdf_1404219513/page_" + std::to_string(i) + ".bmp";
           if (Storage.exists(cache.c_str())) Storage.remove(cache.c_str());
         }
         PdfReaderActivity::debugInitialPage = 0;
-        LOG_ERR("PDF", "serial CMD:PDF opening the test PDF");
+        LOG_ERR("PDF", "serial CMD:PDF opening /BOOKS/test.pdf");
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
             renderer, mappedInputManager, "/BOOKS/test.pdf", false));
       } else if (cmd == "PDFNEXT") {
@@ -1760,7 +2044,7 @@ void loop() {
         // Rebuild the whole big-PDF page cache from page 1.  Debug-only: it
         // drops the cache directory (meta/progress included) and leaves
         // debugInitialPage at -1 so loop() does the background caching.
-        Storage.removeDir("/.crosspoint/pdf_test");
+        Storage.removeDir("/.crosspoint/pdf_1508938855");
         PdfReaderActivity::debugInitialPage = -1;
         LOG_ERR("PDF", "serial CMD:PDFCACHE rebuilding the big-PDF cache");
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
@@ -1774,7 +2058,7 @@ void loop() {
         if (page < 0) page = 0;
         PdfReaderActivity::debugInitialPage = page;
         // Same debug-only cache path the PDF command uses (fnv of the book).
-        const std::string stale = "/.crosspoint/pdf_test/page_" + std::to_string(page) + ".bmp";
+        const std::string stale = "/.crosspoint/pdf_1508938855/page_" + std::to_string(page) + ".bmp";
         if (Storage.exists(stale.c_str())) Storage.remove(stale.c_str());
         LOG_ERR("PDF", "serial CMD:PDFBIG opening big PDF at page %d", page + 1);
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
@@ -1796,13 +2080,8 @@ void loop() {
   // that drives auto-downclock. Standby (a clock face) wants deep sleep blocked
   // but still benefits from the framework dropping CPU to LOW_POWER_FREQ.
 
-  // A press that woke the device (boot or light sleep) must never also become an
-  // in-app long-press: Standby's light-sleep wake sets this through
-  // MappedInputManager. Swallow the entire press, and clear only on release.
-  const bool powerWakePending = wakePowerReleasePending || mappedInputManager.powerWakeReleasePending();
-  if (powerWakePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
+  if (wakePowerReleasePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
     wakePowerReleasePending = false;
-    mappedInputManager.clearPowerWakeRelease();
     return;
   }
 
@@ -1864,8 +2143,12 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (sleepTimeoutMs > 0 && !g_debugNoSleep && !activityManager.preventAutoSleep() &&
-      millis() - lastActivityTime >= sleepTimeoutMs) {
+  // CMD:NOSLEEP 1 keeps the unit awake for long serial soaks. Auto-sleep suspends
+  // USB-Serial/JTAG, which looks exactly like a hang (port enumerated, no data),
+  // and this board has no reset button; a minutes-long idle test must not depend
+  // on the user's sleep-timeout setting.
+  if (sleepTimeoutMs > 0 && !g_debugNoSleep && !background_work::active() &&
+      !activityManager.preventAutoSleep() && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
@@ -1878,6 +2161,13 @@ void loop() {
   static bool powerReleasedSinceWake = false;
   if (!gpio.isPressed(HalGPIO::BTN_POWER)) powerReleasedSinceWake = true;
 
+  // A light-sleep wake does not reboot the chip, so powerReleasedSinceWake is
+  // already true by then. Track the key that actually woke the device instead:
+  // until it is released it must not act as a new in-app press (which would
+  // reopen standby) or as a long press (which would put it straight back to
+  // sleep). NotePowerWakeFromSleep() is set by the standby light-sleep path.
+  const bool powerWakeBlocked = mappedInputManager.powerWakeReleasePending();
+
   // On X4 Pro with SLEEP, a press still within the click window is a
   // double-click candidate — let it be released and evaluated above instead
   // of sleeping on button-down.
@@ -1885,7 +2175,7 @@ void loop() {
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP &&
                                         gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
 
-  if (!powerWakePending && !x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
+  if (!x4ProAwaitingClickWindow && !powerWakeBlocked && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -1895,6 +2185,27 @@ void loop() {
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
+  }
+
+  // Short power press = standby overlay. This is the default on Read Pico and
+  // works from any screen; the activity below is preserved (reader position,
+  // comment-cache worker) and the next press/Back pops back to it. Reader
+  // actions such as PAGE_TURN/FOOTNOTES keep their own binding and are not
+  // intercepted here.
+  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STANDBY && !powerWakeBlocked &&
+      powerReleasedSinceWake && millis() >= allowSleepAt && !activityManager.isStandbyActivity() &&
+      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
+    LOG_DBG("MAIN", "Power short press -> standby");
+    activityManager.goToStandby();
+    return;
+  }
+
+  // Consume the wake barrier after the handlers above have ignored the key for
+  // this frame: the release edge and "not pressed" are safe from the next frame
+  // on. Clearing before the handlers would turn a held wake press into standby.
+  if (powerWakeBlocked && (mappedInputManager.wasReleased(MappedInputManager::Button::Power) ||
+                           !gpio.isPressed(HalGPIO::BTN_POWER))) {
+    mappedInputManager.clearPowerWakeRelease();
   }
 
 #if FREEINK_DEVICE_PAPERMONO
@@ -1908,17 +2219,6 @@ void loop() {
     return;
   }
 #endif
-
-  // Reader power-key standby: a short press shows the clock and light-sleeps;
-  // the next press wakes this same reader. Long holds still reach deep sleep
-  // through the block above, and the release that woke the device is filtered
-  // by wakePowerReleasePending.
-  if (activityManager.isReaderForeground() && !powerWakePending && millis() >= allowSleepAt &&
-      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
-    LOG_DBG("MAIN", "Reader power short press -> standby");
-    activityManager.goToReaderStandby();
-    return;
-  }
 
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
   if (mappedInputManager.homeButtonAction() == HomeButtonAction::ToggleFrontlight) {
@@ -1947,6 +2247,26 @@ void loop() {
   if (gpio.wasInputModalityChanged() && gpio.hasTouch() && UITheme::getInstance().hasMainTabs() &&
       !activityManager.isReaderActivity()) {
     activityManager.requestUpdate();
+  }
+#endif
+
+  // Idle rail release: after 8 s without a push, drop the panel's HV rails. The
+  // image is bistable, so the glass keeps the frame; the next push re-raises them
+  // (20 ms settle). Try-lock so this never waits behind a render.
+  {
+    RenderLock idleLock(RenderLock::Mode::Try);
+    if (idleLock.ownsLock()) renderer.idlePowerTick(millis());
+  }
+
+  batteryLogService();
+
+#ifdef BOARD_HAS_PSRAM
+  jjwxc_cache_service::poll();
+  static uint32_t lastCacheBadgeVersion = 0;
+  const uint32_t cacheBadgeVersion = jjwxc_cache_service::badgeVersion();
+  if (cacheBadgeVersion != lastCacheBadgeVersion) {
+    lastCacheBadgeVersion = cacheBadgeVersion;
+    if (!activityManager.isStandbyActivity()) activityManager.requestUpdate();
   }
 #endif
 
@@ -1991,9 +2311,6 @@ void loop() {
       return;
     }
     skipLoopDelay = activityManager.skipLoopDelay();
-    // kiikoread's rails_idle_check: after 8 s without a frame the panel driver drops
-    // the HV rails. Runs under the render lock, so it can never race a scan.
-    if (!skipLoopDelay) renderer.idlePowerTick(millis());
   }
 
   // Add delay at the end of the loop to prevent tight spinning

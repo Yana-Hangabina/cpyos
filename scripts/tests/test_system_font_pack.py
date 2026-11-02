@@ -1,0 +1,100 @@
+"""The committed font asset, its embedded carrier and the C3 spiffs budget.
+
+Two copies of the same font exist on purpose: the TTF is the source for the C3
+pack, and the `.def` carrier is linked into Read Pico app0. This test fails if
+one is edited without the other, if the carrier does not inflate back to the
+TTF, or if the C3 pack no longer fits the spiffs partition.
+"""
+
+import csv
+import struct
+import sys
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parents[1]
+ROOT = SCRIPTS.parent
+sys.path.insert(0, str(SCRIPTS))
+
+FONT = ROOT / 'assets' / 'fonts' / 'CPYOSHanSansSC-Regular-8105.ttf'
+CARRIER = ROOT / 'assets' / 'fonts' / 'cpyos_han_sans.def'
+CHARSET = ROOT / 'assets' / 'fonts' / 'chars_8105.txt'
+
+
+def spiffs_size():
+    with (ROOT / 'partitions.csv').open(newline='') as stream:
+        for row in csv.reader(line for line in stream if not line.lstrip().startswith('#')):
+            if len(row) >= 5 and row[0].strip() == 'spiffs':
+                return int(row[4].strip(), 0)
+    raise AssertionError('partitions.csv has no spiffs row')
+
+
+class SystemFontPackTest(unittest.TestCase):
+    def test_carrier_inflates_to_the_committed_ttf(self):
+        font = FONT.read_bytes()
+        blob = CARRIER.read_bytes()
+        magic, version, header_size, raw_size, raw_crc, compressed_size = struct.unpack(
+            '<4sHHIII', blob[:20])
+        self.assertEqual(magic, b'CPFZ')
+        self.assertEqual(version, 1)
+        self.assertEqual(header_size, 32)
+        self.assertEqual(raw_size, len(font))
+        self.assertEqual(compressed_size, len(blob) - 32)
+        self.assertEqual(raw_crc, zlib.crc32(font) & 0xFFFFFFFF)
+
+        inflater = zlib.decompressobj(-15)
+        raw = inflater.decompress(blob[32:]) + inflater.flush()
+        self.assertEqual(raw, font)
+        self.assertTrue(inflater.eof)
+        self.assertEqual(raw[:4], b'\x00\x01\x00\x00')
+
+    def test_c3_pack_fits_spiffs_with_headroom(self):
+        # The C3 installer writes the CPFP wrapper at the start of spiffs.
+        font = FONT.read_bytes()
+        self.assertLess(len(font) + 32, spiffs_size() * 0.9)
+
+    def test_charset_is_covered(self):
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:  # host test run without the font toolchain
+            self.skipTest('fontTools not installed')
+        cmap = TTFont(FONT).getBestCmap()
+        chars = {c for c in CHARSET.read_text(encoding='utf-8') if c.strip()}
+        self.assertEqual(len(chars), 8105)
+        missing = sorted(c for c in chars if ord(c) not in cmap)
+        self.assertEqual(missing, [])
+
+    def test_byline_punctuation_is_covered(self):
+        # Home bylines and the "progress · date" line contain U+00B7. If the
+        # system face misses it, resolveTextFontId falls the whole string back
+        # to the 8pt emergency face, which is exactly the "small author/date"
+        # regression seen on device.
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:
+            self.skipTest('fontTools not installed')
+        cmap = TTFont(FONT).getBestCmap()
+        # U+00B7 byline separator plus the navigation glyphs used by STR_BACK/
+        # STR_EXIT/STR_HOME/STR_PREV/STR_NEXT and the date hint's minus sign.
+        for codepoint in (0x00B7, 0x30FB, 0x00AB, 0x00BB, 0x2212):
+            self.assertIn(codepoint, cmap)
+
+    def test_generator_round_trips(self):
+        import build_system_font_pack
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / 'system_font.dat'
+            embedded = Path(temp) / 'font.def'
+            sys.argv = [
+                'build_system_font_pack.py', '--font', str(FONT),
+                '--out', str(out), '--embedded-out', str(embedded),
+            ]
+            build_system_font_pack.main()
+            self.assertEqual(embedded.read_bytes(), CARRIER.read_bytes())
+            self.assertEqual(out.read_bytes()[32:], FONT.read_bytes())
+
+
+if __name__ == '__main__':
+    unittest.main()

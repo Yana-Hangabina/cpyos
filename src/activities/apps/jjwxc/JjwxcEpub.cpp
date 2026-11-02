@@ -416,6 +416,16 @@ bool ChapterWriter::feed(const char* data, const size_t len) {
   return true;
 }
 
+bool ChapterWriter::beginAuthorNote(const char* heading) {
+  if (!active_) return false;
+  if (!closeParagraph()) return false;
+  if (!putLiteral("<h2 class=\"jj-note\">")) return false;
+  for (const char* p = heading; p && *p; ++p) {
+    if (!putEscaped(*p)) return false;
+  }
+  return putLiteral("</h2>");
+}
+
 bool ChapterWriter::finish(uint32_t& outBytes) {
   outBytes = 0;
   if (!active_) return false;

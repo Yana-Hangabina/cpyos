@@ -52,6 +52,7 @@ void UiTabListActivity::onRowAction(const fui::ActionEvent& event) {
 }
 
 void UiTabListActivity::moveRingTo(const int ringIndex) {
+  closeSwipeDelete();
   activeNav().requestSelection(ringIndex);
   requestUpdate();
 }

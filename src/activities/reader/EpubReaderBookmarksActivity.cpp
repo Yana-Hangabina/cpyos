@@ -35,9 +35,8 @@ void EpubReaderBookmarksActivity::onEnter() {
     return;
   }
 
-  if (!BookmarkFile::load(epubPath, bookmarks)) {
-    bookmarks.shrink_to_fit();
-  }
+  // BookmarkFile::load() clears `bookmarks` first; a missing file leaves it empty.
+  BookmarkFile::load(epubPath, bookmarks);
   LOG_DBG("EPB", "Loaded %d bookmarks for book: %s", static_cast<int>(bookmarks.size()), epubPath.c_str());
   rebuildBookmarkRowItems();
 }

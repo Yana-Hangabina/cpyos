@@ -76,6 +76,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool showDictionaryMessage = false;
   unsigned long dictionaryMessageTime = 0UL;
   bool currentPageBookmarked = false;
+  // Top-right bookmark hit target; the drawing/tap path is available on every
+  // board, so this stays outside the PSRAM-only JJWXC block.
+  Rect bookmarkCornerRect_{};
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
   unsigned long lastRenderCompleteMs = 0;
@@ -416,6 +419,8 @@ class EpubReaderActivity final : public ReaderActivity {
   TtfEpdFont* embeddedFont_ = nullptr;
   memory::ByteBuffer embeddedFontBytes_;
   int embeddedFontId_ = 0;
+  bool embeddedFontFourBit_ = false;
+  bool loggedReaderFaceMode_ = false;
 #endif
 
   uint16_t buildViewportWidth = 0;
@@ -501,8 +506,6 @@ class EpubReaderActivity final : public ReaderActivity {
   bool jjwxcMoreActive_ = false;
   uint32_t jjwxcMoreChapters_ = 0;
   Rect jjwxcActionRect_{};
-  // Bottom-right? no: top-right corner bookmark target, in physical screen coords.
-  Rect bookmarkCornerRect_{};
   uint32_t jjwxcActionChapterId_ = 0;
   int jjwxcActionOrdinal_ = -1;
   bool jjwxcActionPurchase_ = false;
@@ -570,6 +573,14 @@ class EpubReaderActivity final : public ReaderActivity {
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   bool jumpToFraction(float fraction);
   void jumpToPercent(int percent);
+  // Reader tap-zone dispatch (see ReaderActivity). EPUB adds bookmark,
+  // dictionary, chapter jump, footnotes, percent jump, KOReader sync and auto
+  // page turn; the shared orientation / refresh / home actions fall through to
+  // the base class.
+  bool handleZoneShortAction(uint8_t action) override;
+  bool handleZoneLongAction(uint8_t action) override;
+  bool openZoneMenu() override;
+  void gotoNextZoneChapter();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Jump to a progress point read from a bookmark (the activity path and the
   // in-sheet bookmarks panel share this body).

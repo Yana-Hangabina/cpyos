@@ -38,6 +38,7 @@ OTA_SEGMENT = (('firmware', 'firmware.bin', 0x10000),)
 # 7.19 MiB slots for MuPDF while the shared partitions.csv kept 6.25 MiB, and a
 # second copy of the map is exactly the drift this check exists to catch.
 PARTITION_LAYOUT_ROWS = ('otadata', 'app0', 'app1')
+DATA_PARTITION_ROWS = ('spiffs',)
 FLASH_BYTES = 16 * 1024 * 1024
 
 
@@ -67,7 +68,7 @@ def verify_partition_csv(root, csv_name='partitions.csv'):
             if len(row) < 5:
                 continue
             name = row[0].strip()
-            if name in PARTITION_LAYOUT_ROWS:
+            if name in PARTITION_LAYOUT_ROWS + DATA_PARTITION_ROWS:
                 found[name] = (int(row[3].strip(), 0), int(row[4].strip(), 0))
     missing = [name for name in PARTITION_LAYOUT_ROWS if name not in found]
     if missing:
@@ -79,7 +80,63 @@ def verify_partition_csv(root, csv_name='partitions.csv'):
         raise SystemExit(f'{csv_name} has a gap or overlap between the OTA slots: {found!r}')
     if app1[0] + app1[1] > FLASH_BYTES:
         raise SystemExit(f'{csv_name} runs past the {FLASH_BYTES} byte flash: {found!r}')
+    if 'spiffs' in found:
+        spiffs = found['spiffs']
+        if spiffs[1] == 0:
+            raise SystemExit(f'{csv_name} has an empty spiffs partition: {found!r}')
+        if spiffs[0] < app1[0] + app1[1]:
+            raise SystemExit(f'{csv_name} spiffs overlaps the OTA slots: {found!r}')
+        if spiffs[0] + spiffs[1] > FLASH_BYTES:
+            raise SystemExit(f'{csv_name} runs past the {FLASH_BYTES} byte flash: {found!r}')
     return found
+
+
+def data_asset_segments(root, target):
+    """Resolve the target's data blobs against its own partition table.
+
+    A data asset is (role, file name, partition name, inner offset). The file
+    must live in build/ and fit the remainder of that partition; offsets are
+    never repeated here, so a partition-table change cannot silently disagree
+    with what the flasher writes.
+    """
+    layout = verify_partition_csv(root, target.get('partitionsCsv', 'partitions.csv'))
+    segments = []
+    for role, source_name, partition_name, inner in target.get('dataAssets', ()):
+        if partition_name not in layout:
+            raise SystemExit(f'{target["deviceSlug"]}: no {partition_name} partition for {role}')
+        base, size = layout[partition_name]
+        source = root / 'build' / source_name
+        if not source.is_file():
+            raise SystemExit(
+                f'missing data asset {source}; run scripts/build_system_font_pack.py for C3 targets'
+            )
+        if inner >= size or source.stat().st_size > size - inner:
+            raise SystemExit(
+                f'{source.name} ({source.stat().st_size} B) does not fit {partition_name} '
+                f'({size - inner} B free at +{inner:#x})'
+            )
+        segments.append((role, source_name, base + inner))
+    return segments
+
+
+def segments_for(root, target_id, channel):
+    target = TARGETS[target_id]
+    if target['fullInstall']:
+        segments = FULL_INSTALL_SEGMENTS
+    else:
+        # C3 full install: bootloader + table + app, but never boot_app0, so a
+        # manual flash cannot rewrite OTA selection. Used for both channels
+        # because the font pack is a data-partition blob and a nightly user
+        # still needs a complete, self-contained image to flash.
+        segments = STABLE_C3_SEGMENTS
+    # The C3 font pack is not OTA-able, so it always rides with the package.
+    # An OTA client only takes the firmware role and ignores the rest.
+    return tuple(segments) + tuple(data_asset_segments(root, target))
+
+
+def full_install_segments(root, target_id):
+    """Segments a browser/first-install page must write for this target."""
+    return segments_for(root, target_id, 'stable')
 
 
 def find_boot_app0():
@@ -133,6 +190,21 @@ def firmware_uses_data_packs(path):
     return b'JILP' in data or b'CWP1' in data
 
 
+def firmware_streams_system_font_from_spiffs(path):
+    """True when the app reads its CJK face from the data partition (C3).
+
+    The markers are emitted by SystemFontPack.cpp. Read Pico embeds the
+    compressed carrier in app0 and reports EMBEDDED instead, so it needs no
+    data asset. A C3 package without the spiffs blob would boot with only the
+    8pt emergency fallback.
+    """
+    data = Path(path).read_bytes()
+    return (
+        b'CROSSPOINT-SYSTEM-FONT-PACK-V1' in data
+        and b'CROSSPOINT-SYSTEM-FONT-PACK-EMBEDDED-V1' not in data
+    )
+
+
 def package_target(root, target_id, channel, output):
     target = TARGETS[target_id]
     if channel not in target['supportedChannels']:
@@ -142,16 +214,16 @@ def package_target(root, target_id, channel, output):
     output.mkdir(parents=True, exist_ok=True)
     partitions = verify_partition_csv(root, target.get('partitionsCsv', 'partitions.csv'))
 
-    segments = (
-        FULL_INSTALL_SEGMENTS
-        if target['fullInstall']
-        else STABLE_C3_SEGMENTS
-        if channel == 'stable'
-        else OTA_SEGMENT
-    )
+    segments = segments_for(root, target_id, channel)
+    data_roles = {role for role, _name, _partition, _inner in target.get('dataAssets', ())}
     assets = []
     for role, source_name, offset in segments:
-        source = find_boot_app0() if role == 'boot_app0' else build / source_name
+        if role == 'boot_app0':
+            source = find_boot_app0()
+        elif role in data_roles:
+            source = root / 'build' / source_name
+        else:
+            source = build / source_name
         destination = output / asset_name(target_id, source_name)
         copy_asset(source, destination)
         assets.append({
@@ -187,6 +259,20 @@ def package_target(root, target_id, channel, output):
                 "device's data partition must already match or the app falls back "
                 'to English / the web recovery page.'
             )
+
+    if firmware_streams_system_font_from_spiffs(firmware) and not any(
+        asset['role'] == 'system_font' for asset in assets
+    ):
+        if channel == 'stable':
+            raise SystemExit(
+                f'{target_id}: firmware streams its CJK face from spiffs but the '
+                'package has no system_font asset; run '
+                'scripts/build_system_font_pack.py before packaging.'
+            )
+        print(
+            f'warning: {target_id}: OTA artifact streams its CJK face from spiffs; '
+            'the device must already have the system font pack installed.'
+        )
 
     config = configparser.ConfigParser()
     config.read(root / 'platformio.ini')

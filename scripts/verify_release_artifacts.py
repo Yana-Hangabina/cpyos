@@ -56,9 +56,10 @@ ESP_IMAGE_MAGIC = 0xE9
 BOARD_TAG_PREFIX = b'CROSSPOINT-BOARD-V1:'
 # PlatformIO writes the project directory name into esp_app_desc.project_name.
 # A checkout of this fork is usually named cpyos while an upstream checkout is
-# crossmux. The guard exists to catch Espressif's prebuilt core, whose name is
-# arduino-lib-builder, so both of our own names are valid.
-PROJECT_NAMES = ('crossmux', 'cpyos')
+# crossmux; the local release workspace is cpyos-public. The guard exists to
+# catch Espressif's prebuilt core, whose name is arduino-lib-builder, so every
+# name this project is checked out under is valid.
+PROJECT_NAMES = ('crossmux', 'cpyos', 'cpyos-public')
 
 
 def fail(message):

@@ -36,6 +36,8 @@ class HalFile {
     opened_ = false;
     return true;
   }
+  // SdCardFont::glyphEntryValid bounds glyph bitmaps against the payload size.
+  size_t size() const { return sdFontTestFile.size(); }
   void open() {
     opened_ = true;
     position_ = 0;

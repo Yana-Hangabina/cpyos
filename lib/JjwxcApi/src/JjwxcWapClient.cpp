@@ -135,7 +135,7 @@ int WapClient::perform(const char* method, const char* url, const char* body, co
     out.location[0] = '\0';
 
     char host[Cookie::kDomainCap] = {};
-    // Paths here are short (/vip/<novelId>/21, /my/login?login_mode=jjwxc); a longer
+    // Paths here are short (/vip/4465668/21, /my/login?login_mode=jjwxc); a longer
     // one is truncated, which only weakens path matching and never sends a cookie to
     // the wrong host -- every cookie this app holds is Path=/.
     char path[192] = {};

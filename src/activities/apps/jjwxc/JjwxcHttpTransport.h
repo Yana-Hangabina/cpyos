@@ -28,6 +28,17 @@ class JjwxcHttpTransport final : public jjwxc::Transport {
   void resetSession();
   uint32_t reusedRequests() const;
 
+  // Background work (the comment panel's chapter prefetch) must not hold the
+  // foreground behind a 45 s read. It restores the default immediately after
+  // each request. This bounds the read, not a stuck connect, but the prefetch
+  // reuses the warmed session from the first page.
+  static constexpr int kDefaultTimeoutMs = 45000;
+  void setRequestTimeoutMs(const int ms) { requestTimeoutMs_ = ms > 0 ? ms : kDefaultTimeoutMs; }
+  // The background comment prefetch must not spend 10+ s reconnecting a session
+  // it does not need. A stale keep-alive fails the background request; the
+  // foreground action that follows still owns the normal one-shot reconnect.
+  void setAllowReconnect(const bool allow) { allowReconnect_ = allow; }
+
  private:
   static constexpr size_t kIoBufferSize = 4096;
   // Two sessions, keyed by host. A free-chapter run alternates app-cdn (body) and
@@ -54,5 +65,7 @@ class JjwxcHttpTransport final : public jjwxc::Transport {
 
   SessionSlot slots_[kSessionSlots];
   uint32_t useCounter_ = 0;
+  int requestTimeoutMs_ = kDefaultTimeoutMs;
+  bool allowReconnect_ = true;
   uint8_t ioBuffer_[kIoBufferSize] = {};
 };
