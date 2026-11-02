@@ -79,7 +79,9 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
 
 ## 3. 设备内 OTA
 
-已安装 CPYOS 0.1.0 后：
+★ **0.2.1 及更早版本请使用官网网页刷机升级到 0.2.2 或更新版本**，不要依赖设备内 OTA：这些版本的清单仍在 GitHub Pages，部分网络无法访问，设备会一直显示检查更新失败或极慢。网页刷机「从 CPYOS 升级」/完整包会同时写 app0、app1 与五个数据包；升级一次后即可正常使用设备 OTA。
+
+已安装 CPYOS 0.2.2 或更新版本后：
 
 1. 连接 Wi-Fi；
 2. **设置 → 系统 → 检查更新**；
@@ -88,7 +90,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
 OTA 只写 app0，不动数据分区、SD 卡、书库和设置。因此，如果某个版本同时改了语言包 / 网页包 / 拼音 / 断词 / emoji 数据，**不能只做 OTA 得到全部语言**：设备会保留旧数据包；语言包键数不符时，未内嵌的 33 种语言会回退英文（中文与英文在固件内，不受影响），网页包不兼容时显示恢复页。0.2.0 的语言包有变化，中文 app-only OTA 仍完整，其他语言请用「从 CPYOS 升级」或完整安装包重写数据分区。发布说明会标注需要完整安装的版本。固件读取：
 
 ```
-https://yana-hangabina.github.io/cpyos/ota/readpico.json
+https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json
 ```
 
 清单里的 `tag_name` 是语义版本（`0.1.0`），固件按前三段比较。首次从 CrossMux 1.6.5 切换必须使用完整安装包，因为分区表不同；仅刷 app 会让固件在错误的分区基址上找数据包，表现为语言包 / 拼音 / 断词静默失效。

@@ -75,6 +75,10 @@ Rect getReadyListRect(const GfxRenderer& renderer) {
 }  // namespace
 
 void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
+  // The check runs without touch input, so the power manager would otherwise
+  // downclock to 80 MHz; TLS at 80 MHz makes the manifest fetch and the
+  // firmware probe needlessly slow.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   if (!success) {
     LOG_ERR("OTA", "WiFi connection failed, exiting");
     finish();
@@ -553,6 +557,10 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
 void OtaUpdateActivity::runUpdateInstall() {
   LOG_DBG("OTA", "New update available, starting download...");
+  // Hold 240 MHz for the whole download/flash. Without this the OTA runs at
+  // 80 MHz (no input reaches the UI), and the 2 KB TLS records plus flash
+  // writes drop to a few KB/s on a slow mirror.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   // A power loss mid-flash can brick a device with no BOOT/RESET button.
   if (powerManager.getBatteryPercentage() < 20) {
     LOG_ERR("OTA", "Update refused: battery below 20%%");

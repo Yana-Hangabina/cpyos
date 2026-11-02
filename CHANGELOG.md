@@ -2,6 +2,21 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.2.2 — 2026-11-02
+
+### 修复
+
+- **设备 OTA 清单不再依赖 GitHub Pages**：部分网络无法访问 `yana-hangabina.github.io`，设备会停在 `Release check fetch failed`。清单改从 GitHub Release 的 `latest` 资产读取，经 `gh-proxy.com`：
+  `https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json`
+- 下载镜像扩展为 7 个：`gh-proxy.org`、`git.yylx.win`、`ghfast.top`、`gh-proxy.com`、`github.tbap.top`、`gh.dpik.top`、`ghproxy.net`；设备探测首字节与 32 KB 吞吐后选择可用线路。发布清单的固件 URL 使用 `gh-proxy.com` 前缀。
+- **OTA 全程持有 240 MHz 锁**：此前无触摸输入时电源管理把 CPU 降到 80 MHz，叠加 2 KB TLS 记录和逐块 flash 写入，实测只有约 4 KB/s；现在检查与下载/安装期间保持 240 MHz。
+
+### 升级说明
+
+- ★ **0.2.1 及更早版本请使用官网网页刷写升级到 0.2.2 或更新版本**，不要依赖设备内 OTA：这些版本的清单仍在 GitHub Pages，部分网络无法访问，设备会一直检查失败或极慢。官网「从 CPYOS 升级」/完整安装包会同时写 app0、app1 与五个数据包。
+- 0.2.2 及以后：设备 OTA 走镜像清单并保持高频；数据包未变化时只写 app 分区。
+
+
 ## 0.2.1 — 2026-11-02
 
 ### 修复
