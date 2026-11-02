@@ -1,12 +1,15 @@
 #pragma once
 
+#include <Print.h>
 #include <Stream.h>
 
 #include "OpdsParser.h"
 
+// Print adapter so HttpDownloader::fetchUrl(url, Stream&) can feed a parser.
+// Takes any Print (OpdsParser for Atom, OpdsFeed for either format).
 class OpdsParserStream : public Stream {
  public:
-  explicit OpdsParserStream(OpdsParser& parser);
+  explicit OpdsParserStream(Print& parser);
 
   // That functions are not implemented for that stream
   int available() override;
@@ -19,5 +22,5 @@ class OpdsParserStream : public Stream {
   ~OpdsParserStream() override;
 
  private:
-  OpdsParser& parser;
+  Print& parser;
 };

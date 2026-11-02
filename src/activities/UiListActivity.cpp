@@ -1,5 +1,6 @@
 #include "UiListActivity.h"
 
+#include <FreeInkUIIcon.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -9,6 +10,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
+#include "components/icons/listIcons.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -31,6 +33,7 @@ void UiListActivity::onEnter() {
   Activity::onEnter();
   activeNav().reset();
   resetUi();
+  revealedIndex.store(-1);
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
   app.setScreen(&UiListActivity::screenTrampoline, this);
   requestUpdate();
@@ -80,12 +83,97 @@ bool UiListActivity::routeListTouch() {
 }
 
 void UiListActivity::moveSelectionTo(const int index) {
+  closeSwipeDelete();
   activeNav().requestSelection(index);
   requestUpdate();
 }
 
+bool UiListActivity::handleSwipeDeleteInput() {
+  if (!mappedInput.hasTouch()) return false;
+  const int openRow = revealedIndex.load();
+  int x = 0;
+  int y = 0;
+  if (openRow >= 0) {
+    // Back/Confirm dismiss the open row first; the row must never outlive the
+    // gesture that opened it.
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      closeSwipeDelete();
+      return true;
+    }
+    if (mappedInput.wasScreenTapped(x, y)) {
+      fui::Interaction hit;
+      bool onDelete = false;
+      {
+        RenderLock lock(*this);
+        onDelete = routingReady() && app.hitPublished(x, y, ACTION_SWIPE_DELETE, hit) && hit.value == openRow;
+        // A tap anywhere else is "never mind": deliver the release off-target so
+        // the pressed-row state is dropped, then repaint without the button.
+        if (!onDelete && routingReady()) {
+          app.route(fui::InputSnapshot{.touchReleased = true, .touchX = -1, .touchY = -1});
+        }
+      }
+      if (!onDelete) {
+        closeSwipeDelete();
+        return true;
+      }
+      // The press frame was routed to the row (the reveal is only checked on
+      // release), so drop any pending tap flash before the confirmation opens.
+      app.clearTapFlash();
+      closeSwipeDelete();
+      swipeDelete(openRow);
+      return true;
+    }
+  }
+
+  // Swipe queries are non-consuming, so falling through keeps the vertical
+  // scroll (base loop) and the library's swipe paging intact.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe != MappedInputManager::SwipeDir::Left) {
+    if (openRow >= 0 && swipe != MappedInputManager::SwipeDir::None) {
+      // Right (back/cancel), Up/Down (scroll): any other gesture closes the row
+      // and is then handled by its normal owner.
+      closeSwipeDelete();
+    }
+    return false;
+  }
+
+  // Left swipe: reveal on the row it started on. The start point matters — a
+  // swipe that ends on the neighbouring row must not arm that one.
+  int sx = 0;
+  int sy = 0;
+  int ex = 0;
+  int ey = 0;
+  if (!mappedInput.wasSwipeGeometry(sx, sy, ex, ey)) return false;
+  fui::Interaction hit;
+  {
+    RenderLock lock(*this);
+    if (!routingReady() || !app.hitPublished(sx, sy, ACTION_ROW, hit) || !canSwipeDelete(hit.value)) return false;
+  }
+  revealedIndex.store(hit.value);
+  requestUpdate();
+  return true;
+}
+
+void UiListActivity::closeSwipeDelete() {
+  if (revealedIndex.exchange(-1) >= 0) requestUpdate();
+}
+
+void UiListActivity::configureSwipeDelete(UiScreen& screen, fui::ListProps& props) {
+  const int row = revealedIndex.load();
+  if (row < 0 || row >= listCount() || !canSwipeDelete(row)) return;
+  swipeReveal.index = static_cast<int16_t>(row);
+  swipeReveal.action = ACTION_SWIPE_DELETE;
+  // 32 px reads better on the two-line shelf rows and stays crisp at both UI
+  // densities; the SDK scales with Contain inside the button.
+  swipeReveal.icon = fui::bitmapFromIcon(icon_trash_2_32);
+  swipeReveal.width = static_cast<int16_t>(screen.theme().rowHeight + screen.theme().spaceSm * 2);
+  props.reveal = &swipeReveal;
+}
+
 void UiListActivity::loop() {
   if (handleCustomInput()) return;
+  if (handleSwipeDeleteInput()) return;
   if (handleButtons()) return;
   if (routeListTouch()) return;
 

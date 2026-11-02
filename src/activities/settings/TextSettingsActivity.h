@@ -48,6 +48,7 @@ class TextSettingsActivity final : public UiTabListActivity {
     Alignment,
     ScreenMargin,
     VerticalText,
+    VerticalBottomAlign,
     Count
   };
   enum class StyleRow {
@@ -103,6 +104,10 @@ class TextSettingsActivity final : public UiTabListActivity {
 
   std::string layoutValueText(int row) const;
   std::string styleValueText(int row) const;
+  // Visible Layout row -> enum. The bottom-align row is absent while vertical
+  // text is on (columns are right-aligned, never bottom-aligned), the same
+  // pattern as styleRowAt() for the conditionally hidden guide rows.
+  LayoutRow layoutRowAt(int visibleIndex) const;
   StyleRow styleRowAt(int visibleIndex) const;
   int styleRowCount() const;
   // Button-hint label for Confirm at the current ring position.

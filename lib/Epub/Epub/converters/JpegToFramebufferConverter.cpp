@@ -9,6 +9,7 @@
 #include <Logging.h>
 #include <Memory.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <new>
@@ -29,9 +30,14 @@ struct JpegContext {
   int screenWidth{0};
   int screenHeight{0};
 
-  // Source dimensions after JPEGDEC's built-in scaling
+  // Visible source dimensions after JPEGDEC's built-in scaling
   int scaledSrcWidth{0};
   int scaledSrcHeight{0};
+  // Source columns/rows trimmed from each edge by RenderConfig::sourceCropX/Y
+  // (in post-JPEGDEC-scale units). Mirrors PngToFramebufferConverter so a crop
+  // request means the same thing on both decoders (upstream 15503ac3).
+  int cropLeft{0};
+  int cropTop{0};
 
   // Final output dimensions
   int dstWidth{0};
@@ -167,8 +173,8 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   GfxRenderer& renderer = *ctx->renderer;
   const int cfgX = ctx->config->x;
   const int cfgY = ctx->config->y;
-  const int blockX = pDraw->x;
-  const int blockY = pDraw->y;
+  const int blockX = pDraw->x - ctx->cropLeft;
+  const int blockY = pDraw->y - ctx->cropTop;
 
   // Determine destination pixel range covered by this source block
   const int srcYEnd = blockY + blockH;
@@ -431,6 +437,13 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (!validateAndStoreDimensions(jpeg->getWidth(), jpeg->getHeight(), sourceDimensions, "JPEG")) return false;
   const int srcWidth = sourceDimensions.width;
   const int srcHeight = sourceDimensions.height;
+  // sourceCropX/Y trim the same fraction from each side (see RenderConfig).
+  // Everything below scales/crops in "visible" space; cropLeft/cropTop then
+  // translate JPEGDEC's full-image block origin into it.
+  const float cropX = std::clamp(config.sourceCropX, 0.0f, 0.99f);
+  const float cropY = std::clamp(config.sourceCropY, 0.0f, 0.99f);
+  const int visibleWidth = srcWidth - 2 * static_cast<int>(srcWidth * cropX / 2);
+  const int visibleHeight = srcHeight - 2 * static_cast<int>(srcHeight * cropY / 2);
 
   bool isProgressive = jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE;
   if (isProgressive) {
@@ -444,15 +457,16 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   if (config.useExactDimensions && config.maxWidth > 0 && config.maxHeight > 0) {
     destWidth = config.maxWidth;
     destHeight = config.maxHeight;
-    targetScale = (float)destWidth / srcWidth;
+    targetScale = (float)destWidth / visibleWidth;
   } else {
-    float scaleX = (config.maxWidth > 0 && srcWidth > config.maxWidth) ? (float)config.maxWidth / srcWidth : 1.0f;
-    float scaleY = (config.maxHeight > 0 && srcHeight > config.maxHeight) ? (float)config.maxHeight / srcHeight : 1.0f;
+    float scaleX = (config.maxWidth > 0 && visibleWidth > config.maxWidth) ? (float)config.maxWidth / visibleWidth : 1.0f;
+    float scaleY =
+        (config.maxHeight > 0 && visibleHeight > config.maxHeight) ? (float)config.maxHeight / visibleHeight : 1.0f;
     targetScale = (scaleX < scaleY) ? scaleX : scaleY;
     if (targetScale > 1.0f) targetScale = 1.0f;
 
-    destWidth = (int)(srcWidth * targetScale);
-    destHeight = (int)(srcHeight * targetScale);
+    destWidth = (int)(visibleWidth * targetScale);
+    destHeight = (int)(visibleHeight * targetScale);
   }
 
   // Choose JPEGDEC built-in scaling for coarse downscaling.
@@ -476,6 +490,14 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   ctx.scaledSrcWidth = (srcWidth + jpegScaleDenom - 1) / jpegScaleDenom;
   ctx.scaledSrcHeight = (srcHeight + jpegScaleDenom - 1) / jpegScaleDenom;
+  ctx.cropLeft = static_cast<int>(ctx.scaledSrcWidth * cropX / 2);
+  ctx.cropTop = static_cast<int>(ctx.scaledSrcHeight * cropY / 2);
+  ctx.scaledSrcWidth -= 2 * ctx.cropLeft;
+  ctx.scaledSrcHeight -= 2 * ctx.cropTop;
+  if (ctx.scaledSrcWidth <= 0 || ctx.scaledSrcHeight <= 0) {
+    LOG_ERR("JPG", "Crop leaves no pixels for %s", imagePath.c_str());
+    return false;
+  }
   ctx.dstWidth = destWidth;
   ctx.dstHeight = destHeight;
   ctx.fineScaleFPX = (int32_t)((int64_t)destWidth * FP_ONE / ctx.scaledSrcWidth);

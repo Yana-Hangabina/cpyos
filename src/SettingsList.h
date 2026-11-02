@@ -207,15 +207,27 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
-    std::vector<StrId> sleepScreenValues(CrossPointSettings::SLEEP_SCREEN_MODE_COUNT);
-    sleepScreenValues[CrossPointSettings::DARK] = StrId::STR_DARK;
-    sleepScreenValues[CrossPointSettings::LIGHT] = StrId::STR_LIGHT;
-    sleepScreenValues[CrossPointSettings::CUSTOM] = StrId::STR_CUSTOM;
-    sleepScreenValues[CrossPointSettings::COVER] = StrId::STR_COVER;
-    sleepScreenValues[CrossPointSettings::COVER_CUSTOM] = StrId::STR_COVER_CUSTOM;
-    sleepScreenValues[CrossPointSettings::BLANK] = StrId::STR_NONE_OPT;
-    sleepScreenValues[CrossPointSettings::QUICK_RESUME] = StrId::STR_QUICK_RESUME;
-    sleepScreenValues[CrossPointSettings::TRANSPARENT] = StrId::STR_TRANSPARENT;
+    // Standby/light/deep sleep content styles. Polarity is not an option here:
+    // the global dark mode (screenInverted) decides it for every style.
+    const std::vector<StrId> standbyStyleValues = {
+        StrId::STR_FACE_DUCK_SLEEP,
+        StrId::STR_FACE_SLOPPY_CLOCK,
+        StrId::STR_FACE_CHINESE_CALENDAR,
+        StrId::STR_CUSTOM_IMAGE,
+    };
+    const std::vector<StrId> lightSleepStyleValues = {
+        StrId::STR_LIGHT_SLEEP_DUCK_STATIC,
+        StrId::STR_LIGHT_SLEEP_FOLLOW,
+        StrId::STR_CUSTOM_IMAGE,
+    };
+    const std::vector<StrId> deepSleepStyleValues = {
+        StrId::STR_DEEP_SLEEP_NIGHT,
+        StrId::STR_CUSTOM_IMAGE,
+        StrId::STR_COVER,
+        StrId::STR_QUICK_RESUME,
+        StrId::STR_TRANSPARENT,
+        StrId::STR_NONE_OPT,
+    };
 
     std::vector<StrId> statusBarClockValues(CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT);
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_HIDE] = StrId::STR_HIDE;
@@ -223,7 +235,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
-    constexpr size_t entryCount = 85
+    constexpr size_t entryCount = 93
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -237,7 +249,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                                   + 1
 #endif
 #if FREEINK_DEVICE_READPICO
-                                  + 1
+                                  + 2
+#endif
+#if CROSSPOINT_CAP_BUZZER_FEEDBACK
+                                  + 3
 #endif
         ;
     // ponytail: Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
@@ -245,16 +260,26 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     // clang-format off
     v.insert(v.end(), {
         // --- Display ---
-        SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen, std::move(sleepScreenValues),
-                          "sleepScreen", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_STANDBY_STYLE, &CrossPointSettings::standbyStyle, standbyStyleValues,
+                          "standbyStyle", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_LIGHT_SLEEP_STYLE, &CrossPointSettings::lightSleepStyle, lightSleepStyleValues,
+                          "lightSleepStyle", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_DEEP_SLEEP_STYLE, &CrossPointSettings::deepSleepStyle, deepSleepStyleValues,
+                          "deepSleepStyle", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_SLEEP_STATE_BADGE, &CrossPointSettings::sleepStateBadge,
+                            "sleepStateBadge", StrId::STR_CAT_DISPLAY),
+    });
+    v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                           {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
-        SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                          StrId::STR_CAT_DISPLAY),
+    });
+    v.insert(v.end(), {
+        SettingInfo::Action(StrId::STR_STANDBY_IMAGE, SettingAction::StandbyImage),
+        SettingInfo::Action(StrId::STR_LIGHT_SLEEP_IMAGE, SettingAction::LightSleepImage),
+        SettingInfo::Action(StrId::STR_DEEP_SLEEP_IMAGE, SettingAction::DeepSleepImage),
     });
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_STANDBY_TITLE, &CrossPointSettings::standbyShortcutEnabled,
@@ -289,6 +314,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Enum(StrId::STR_UI_DENSITY, &CrossPointSettings::uiDensity,
                           {StrId::STR_DENSITY_COMFORTABLE, StrId::STR_DENSITY_COMPACT}, "uiDensity",
                           StrId::STR_CAT_DISPLAY),
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+        SettingInfo::Enum(StrId::STR_UI_FONT_SCALE, &CrossPointSettings::uiFontScale,
+                          {StrId::STR_FONT_SCALE_COMPACT, StrId::STR_FONT_SCALE_STANDARD,
+                           StrId::STR_FONT_SCALE_LARGE, StrId::STR_FONT_SCALE_XLARGE},
+                          "uiFontScale", StrId::STR_CAT_DISPLAY),
+#endif
     });
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
@@ -433,11 +464,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // 放在阅读分类而不是控制分类：它是"这本书怎么翻"的阅读行为，和它旁边的阅读菜单样式
         // 同类；控制分类里那些是手势类型本身。
         // / Page-turn direction (mirrored). An enum rather than a toggle because the two
-        // options name themselves -- "left to right / right to left" says what the mirror
-        // does, where on/off does not -- the same shape as imageScaling.
-        // Sits in the reader category rather than controls because it is a reading behaviour
-        // (how this book turns), like the reader-menu style next to it. The controls entries
-        // are gesture types themselves.
+        // / Page-turn direction (mirrored). The two option labels name the gesture that
+        // turns to the NEXT page (swipe left/tap right vs swipe right/tap left), because
+        // "left to right / right to left" was read as a reading direction and contradicted
+        // the actual left-hand mirror. Sits in the reader category rather than controls
+        // because it is a reading behaviour, like the reader-menu style next to it.
         SettingInfo::Enum(StrId::STR_PAGE_TURN_DIRECTION, &CrossPointSettings::pageTurnDirection,
                           {StrId::STR_PAGE_TURN_LTR, StrId::STR_PAGE_TURN_RTL}, "pageTurnDirection",
                           StrId::STR_CAT_READER),
@@ -481,7 +512,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #if FREEINK_CAP_TOUCH
         SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                           {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
-                           StrId::STR_FOOTNOTES, StrId::STR_CONFIRM},
+                           StrId::STR_FOOTNOTES, StrId::STR_CONFIRM, StrId::STR_STANDBY_ACTION},
                           "shortPwrBtn", StrId::STR_CAT_CONTROLS),
 #else
         SettingInfo::Enum(
@@ -489,7 +520,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
 #endif
-        // Erased below unless an IMU is present.
+        // Hidden from the UI without an IMU; it stays in the base list so the
+        // saved value survives a failed probe.
         SettingInfo::Enum(StrId::STR_MOTION_PAGE_TURN, &CrossPointSettings::motionPageTurn,
                           {StrId::STR_STATE_OFF, StrId::STR_MOTION_TILT, StrId::STR_MOTION_TILT_REVERSED,
                            StrId::STR_MOTION_SHAKE, StrId::STR_MOTION_SHAKE_REVERSED},
@@ -686,9 +718,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     };
     // Double-click power frontlight shortcut only exists on the X4 Pro.
     if (!BoardConfig::isX4Pro()) eraseEntry(StrId::STR_DBL_CLICK_PWR_LIGHT);
-    // Motion page turn needs an IMU.
-    if (!halTiltSensor.isAvailable()) eraseEntry(StrId::STR_MOTION_PAGE_TURN);
-    return v;
+    // entryCount is asserted against every capability combination by the
+    // settings API test, so the reservation above is exact; the row erased on
+    // non-X4-Pro boards is the one slot left over. Rebuild at the exact final
+    // size so this table (the only copy resident for the whole session) carries
+    // no slack at all — a SettingInfo is 144 B on the ESP32 targets.
+    return std::vector<SettingInfo>(std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
   }();
 
   return baseList;
@@ -801,6 +836,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     auto it =
         std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
     v.insert(it, buildDictionarySetting(*dictionaries));
+  }
+  // Motion page turn needs an IMU. UI-only: toJson()/fromJson() walk the base
+  // list, so it must stay there and keep the saved value across a failed probe.
+  if (!halTiltSensor.isAvailable()) {
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [](const SettingInfo& s) { return s.nameId == StrId::STR_MOTION_PAGE_TURN; }),
+            v.end());
   }
   return v;
 }

@@ -38,6 +38,10 @@ enum class SettingAction {
   Plugins,
   KeyboardLayouts,
   HomeButton,
+  TapZones,
+  StandbyImage,
+  LightSleepImage,
+  DeepSleepImage,
 };
 
 struct SettingInfo {
@@ -281,6 +285,7 @@ class SettingsActivity final : public UiTabListActivity {
   unsigned long lastBuzzerPreviewMs_ = 0;
   void openReadingBackgroundMenu();
   void openReadingBackgroundPicker();
+  void openSleepImagePicker(const char* destPath, uint8_t CrossPointSettings::* stylePtr, uint8_t customValue);
   void confirmRestoreSystemSettings();
   void releaseListsForMemoryHungryChild();
   void rebuildSettingsLists();

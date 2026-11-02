@@ -21,6 +21,9 @@
 #include "NetworkStartup.h"
 #include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "Typography.h"
+#endif
 #include "TextSettingsPreview.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/settings/FontDownloadActivity.h"
@@ -41,7 +44,7 @@ constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,      StrId::ST
                                          StrId::STR_FIRST_LINE_INDENT, StrId::STR_FIRST_LINE_INDENT,
                                          StrId::STR_PARAGRAPH_INDENTATION,
                                          StrId::STR_ALIGNMENT,         StrId::STR_SCREEN_MARGIN,
-                                         StrId::STR_VERTICAL_TEXT};
+                                         StrId::STR_VERTICAL_TEXT,     StrId::STR_VERTICAL_BOTTOM_ALIGN};
 constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_OFF, StrId::STR_VERTICAL_ON};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING,
                                         StrId::STR_READING_GUIDE_LINE,
@@ -185,10 +188,16 @@ void TextSettingsActivity::onEnter() {
 }
 
 void TextSettingsActivity::onExit() {
+  RenderLock lock;
   // Release .cpfont preview faces; the vector-font cache has a separate lifetime.
   if (renderer.hasFrameBuffer()) {
     sdFontSystem.releaseLoadedFont(renderer);
   }
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // The reader behind this sheet was laid out for the previous size; load the
+  // selected one before it repaints.
+  typography::apply(renderer, SETTINGS.uiFontScale);
+#endif
   Activity::onExit();
 }
 
@@ -210,7 +219,7 @@ void TextSettingsActivity::rebuildRowItems() {
         item.label = sizes_[i].name.c_str();
         break;
       case Tab::Layout:
-        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[i]);
+        item.label = I18N.get(LAYOUT_ROW_NAME_IDS[static_cast<int>(layoutRowAt(i))]);
         break;
       case Tab::Style:
         item.label = I18N.get(STYLE_ROW_NAME_IDS[static_cast<int>(styleRowAt(i))]);
@@ -386,6 +395,14 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
     }
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
     rowItems_[i].toggle = false;
+    if (tab_ == Tab::Layout) {
+      // Boolean layout rows draw as the same capsule/checkbox the Style tab
+      // uses. layoutRowAt() keeps this in step with the row list (the
+      // bottom-align row is absent in vertical layout).
+      if (layoutRowAt(i) == LayoutRow::VerticalBottomAlign) {
+        GUI.setCheckboxRow(rowItems_[i], SETTINGS.verticalBottomAlign);
+      }
+    }
     if (tab_ == Tab::Style) {
       switch (styleRowAt(i)) {
         case StyleRow::FocusReading:
@@ -616,10 +633,13 @@ void TextSettingsActivity::applySize(int listIndex) {
   SETTINGS.fontPointSize = sizes_[listIndex].pointSize;
   if (SETTINGS.sdFontFamilyName[0] != '\0') SETTINGS.sdFontFlashPreload = 0;
   sdFontSystem.ensureLoaded(renderer);
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  typography::apply(renderer, SETTINGS.uiFontScale);
+#endif
 }
 
 void TextSettingsActivity::confirmLayoutRow(int row) {
-  switch (static_cast<LayoutRow>(row)) {
+  switch (layoutRowAt(row)) {
     case LayoutRow::ParaSpacing:
       optionPopup_.show(StrId::STR_EXTRA_SPACING, EXTRA_SPACING_IDS, static_cast<int>(std::size(EXTRA_SPACING_IDS)),
                         SETTINGS.extraParagraphSpacing, [](int idx) {
@@ -634,6 +654,16 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                           SETTINGS.verticalText = static_cast<uint8_t>(idx);
                           SETTINGS.saveToFile();
                         });
+      // The bottom-align row disappears in vertical layout, so rebuild the row
+      // list and keep the ring inside it (same pattern as the guide rows).
+      rebuildRowItems();
+      activeNav().selected = std::min<int>(activeNav().selected, listCount());
+      requestUpdate();
+      break;
+    case LayoutRow::VerticalBottomAlign:
+      // Plain on/off toggle, like the Style tab's boolean rows.
+      SETTINGS.verticalBottomAlign = SETTINGS.verticalBottomAlign ? 0 : 1;
+      SETTINGS.saveToFile();
       requestUpdate();
       break;
     case LayoutRow::FirstLineIndent:
@@ -731,7 +761,7 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
 }
 
 std::string TextSettingsActivity::layoutValueText(int row) const {
-  switch (static_cast<LayoutRow>(row)) {
+  switch (layoutRowAt(row)) {
     case LayoutRow::LineSpacing: {
       const uint8_t v = SETTINGS.lineSpacing;
       return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
@@ -766,6 +796,9 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
     }
     case LayoutRow::ScreenMargin:
       return std::to_string(SETTINGS.screenMargin);
+    case LayoutRow::VerticalBottomAlign:
+      // Drawn as a checkbox row; no trailing value text.
+      return "";
 
     default:
       return "";
@@ -885,14 +918,27 @@ int TextSettingsActivity::listCount() const {
       return static_cast<int>(fonts_.size());
     case Tab::Size:
       return static_cast<int>(sizes_.size());
-    case Tab::Layout:
-      return static_cast<int>(LayoutRow::Count);
+    case Tab::Layout: {
+      static_assert(std::size(LAYOUT_ROW_NAME_IDS) == static_cast<size_t>(LayoutRow::Count),
+                    "LAYOUT_ROW_NAME_IDS must list every LayoutRow in order");
+      // The bottom-align row is hidden in vertical layout; it is the last row,
+      // so dropping it cannot shift any other row's index.
+      return static_cast<int>(LayoutRow::Count) - (SETTINGS.verticalText != 0 ? 1 : 0);
+    }
     case Tab::Style:
       return styleRowCount();
 
     default:
       return 0;
   }
+}
+
+TextSettingsActivity::LayoutRow TextSettingsActivity::layoutRowAt(const int visibleIndex) const {
+  const int row = (SETTINGS.verticalText != 0 && visibleIndex >= static_cast<int>(LayoutRow::VerticalBottomAlign))
+                      ? visibleIndex + 1
+                      : visibleIndex;
+  if (row < 0 || row >= static_cast<int>(LayoutRow::Count)) return LayoutRow::LineSpacing;
+  return static_cast<LayoutRow>(row);
 }
 
 const SdCardFontFileInfo* TextSettingsActivity::fontFileForFamily(const int listIndex, const uint8_t pointSize) const {

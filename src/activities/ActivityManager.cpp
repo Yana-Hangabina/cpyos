@@ -10,6 +10,7 @@
 #include <VectorFontSupport.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "BootTimings.h"
 #include "CrossPointSettings.h"
@@ -264,7 +265,14 @@ void ActivityManager::loop() {
     if (!handleHomeStandbyInput()) currentActivity->loop();
   }
 
-  while (pendingAction.load() != PendingAction::None) {
+  while (pendingAction.load() != PendingAction::None || deferredPush) {
+    if (pendingAction.load() == PendingAction::None) {
+      // deferredPush is the only reason this iteration exists: a push requested
+      // while another transition was queued. Apply it now, in order.
+      if (RenderLock::peek()) break;
+      pendingActivity = std::move(deferredPush);
+      pendingAction.store(PendingAction::Push);
+    }
     if (pendingAction.load() == PendingAction::Pop) {
       if (RenderLock::peek()) break;
       RenderLock lock;
@@ -287,6 +295,22 @@ void ActivityManager::loop() {
         lock.unlock();  // goHome may acquire its own lock
         goHome();
         continue;  // Will launch goHome immediately
+
+      } else if (!stackActivities.back() || stackActivities.back()->name == "Boot") {
+        // BootActivity's splash paints nothing outside the Post-Ota mode
+        // (render() returns immediately) and it has no loop(), so resuming it
+        // would leave the panel on whatever frame was last presented and swallow
+        // every key press. It has no business being a parent; anything that pops
+        // back to it is a bug, so recover to Home instead of stranding the UI.
+        // A null entry is the same kind of invalid parent.
+        LOG_ERR("ACT", "Popped to an invalid parent; going home instead");
+        while (!stackActivities.empty()) {
+          if (stackActivities.back()) stackActivities.back()->onExit();
+          stackActivities.pop_back();
+        }
+        lock.unlock();  // goHome may acquire its own lock
+        goHome();
+        continue;
 
       } else {
         currentActivity = std::move(stackActivities.back());
@@ -334,16 +358,20 @@ void ActivityManager::loop() {
         exitActivity(lock);
         // Clear the stack
         while (!stackActivities.empty()) {
-          stackActivities.back()->onExit();
+          if (stackActivities.back()) stackActivities.back()->onExit();
           stackActivities.pop_back();
         }
       } else if (pendingAction.load() == PendingAction::Push) {
-        // Move current activity to stack
-        stackActivities.push_back(std::move(currentActivity));
+        // Move current activity to stack. A null current means the push was
+        // requested before any activity existed (failed boot routing); never
+        // store a null parent, because popping it would dereference it.
+        if (currentActivity) {
+          stackActivities.push_back(std::move(currentActivity));
+          LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
+        }
         // The parent's header back rect must not route taps on the pushed
         // screen (which may draw no header of its own).
         HeaderBackTapTarget::clear();
-        LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
       pendingAction.store(PendingAction::None);
       currentActivity = std::move(pendingActivity);
@@ -549,6 +577,12 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   cancelIdleRender();
   mappedInput.resetHomeButtonInput();
   standbyBackState = StandbyBackState::Idle;
+  if (deferredPush) {
+    // A root replacement is the newer intent; do not let an older queued push
+    // reappear on top of the screen the user just navigated to.
+    LOG_DBG("ACT", "Replace drops a deferred push");
+    deferredPush.reset();
+  }
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
@@ -647,15 +681,7 @@ bool ActivityManager::isReaderForeground() const {
   return currentActivity && currentActivity->isReaderActivity();
 }
 
-void ActivityManager::goToReaderStandby() {
-  if (!isReaderForeground()) return;
-  auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput, /*returnOnWake=*/true);
-  if (!activity) {
-    LOG_ERR("ACT", "OOM: reader standby");
-    return;
-  }
-  pushActivity(std::move(activity));
-}
+void ActivityManager::goToReaderStandby() { goToStandby(); }
 
 void ActivityManager::debugWakeStandby() { StandbyActivity::debugWakeNow(); }
 
@@ -750,7 +776,23 @@ void ActivityManager::goToAirPage() { replaceActivityWith<AirPageActivity>(); }
 
 void ActivityManager::goToBuddy() { replaceActivityWith<BuddyActivity>(); }
 
-void ActivityManager::goToStandby() { replaceActivityWith<StandbyActivity>(); }
+void ActivityManager::goToStandby() {
+  // Standby is an overlay, never a replacement: the activity below keeps its
+  // state (reader position, comment cache worker) and Back/power pops to it.
+  if (isStandbyActivity()) return;
+  // Do not queue a second standby behind a first one: two overlays stack, so
+  // the next wake pops to an identical clock face and looks like a dead key.
+  if ((pendingActivity && pendingActivity->name == "Standby") ||
+      (deferredPush && deferredPush->name == "Standby")) {
+    return;
+  }
+  auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: standby");
+    return;
+  }
+  pushActivity(std::move(activity));
+}
 
 #ifdef ENABLE_CHINESE_VERSION
 void ActivityManager::goToChineseChess() { replaceActivityWith<ChineseChessMenuActivity>(); }
@@ -767,10 +809,19 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   cancelIdleRender();
   mappedInput.resetHomeButtonInput();
   standbyBackState = StandbyBackState::Idle;
-  if (pendingActivity) {
-    // Should never happen in practice
-    LOG_ERR("ACT", "pendingActivity while pushActivity is not expected");
-    pendingActivity.reset();
+  if (pendingAction.load() != PendingAction::None || pendingActivity) {
+    // A transition is already queued -- most often the boot routing's Replace
+    // (goToBoot then goHome) or a tab switch. Overwriting it would drop that
+    // navigation, and the queued Push would capture whatever is still current:
+    // at boot that is the splash, whose render() paints nothing and which has no
+    // input loop, so the pushed screen's pop would land on a dead activity with
+    // a stale frame. Queue the push behind the pending transition instead.
+    if (deferredPush) {
+      LOG_ERR("ACT", "pushActivity while another push is deferred; keeping the newest");
+    }
+    deferredPush = std::move(activity);
+    LOG_DBG("ACT", "Push deferred behind a pending activity change");
+    return;
   }
   pendingActivity = std::move(activity);
   pendingAction = PendingAction::Push;
@@ -780,15 +831,23 @@ void ActivityManager::popActivity() {
   cancelIdleRender();
   mappedInput.resetHomeButtonInput();
   standbyBackState = StandbyBackState::Idle;
-  if (pendingActivity) {
-    // Should never happen in practice
-    LOG_ERR("ACT", "pendingActivity while popActivity is not expected");
-    pendingActivity.reset();
+  if (pendingAction.load() != PendingAction::None || pendingActivity) {
+    // The activity that asked to pop is already being replaced or popped;
+    // honouring this stale request would overwrite the queued transition.
+    LOG_DBG("ACT", "Pop ignored: another activity change is already queued");
+    return;
   }
   pendingAction = PendingAction::Pop;
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+
+bool ActivityManager::stackPreventAutoSleep() const {
+  return std::any_of(stackActivities.begin(), stackActivities.end(),
+                     [](const auto& activity) { return activity->preventAutoSleep(); });
+}
+
+bool ActivityManager::isStandbyActivity() const { return currentActivity && currentActivity->name == "Standby"; }
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();

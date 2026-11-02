@@ -31,6 +31,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/MoonIcon.h"
+#include "util/SleepBadge.h"
 
 namespace {
 
@@ -506,12 +507,10 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
-  const bool renderQuickResume =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  (void)fromTimeout;  // deep sleep has one style; timeout is no longer an exception
+  const bool renderQuickResume = SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
   const bool preservesCurrentFrame =
-      renderQuickResume || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT;
+      renderQuickResume || SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT;
   if (display.isInverted() && preservesCurrentFrame) renderer.invertScreen();
 
   if (renderQuickResume) {
@@ -529,7 +528,7 @@ void SleepActivity::onEnter() {
   // night-mode reader render.
   display.setInverted(false);
 
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT) {
+  if (SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT) {
     // Transparent mode retains the current framebuffer. Materialize any
     // output-level inversion first so the retained content keeps its visible
     // polarity after the display driver returns to normal.
@@ -609,19 +608,13 @@ void SleepActivity::onEnter() {
   renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 #endif
 
-  switch (SETTINGS.sleepScreen) {
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
+  switch (SETTINGS.deepSleepStyle) {
+    case (CrossPointSettings::DEEP_SLEEP_BLANK):
       return renderBlankSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
+    case (CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE):
       return renderCustomSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER):
+    case (CrossPointSettings::DEEP_SLEEP_COVER):
       return renderCoverSleepScreen();
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
-      if (APP_STATE.lastSleepFromReader) {
-        return renderCoverSleepScreen();
-      } else {
-        return renderCustomSleepScreen();
-      }
     default:
       return renderDefaultSleepScreen();
   }
@@ -696,9 +689,12 @@ void SleepActivity::renderDefaultSleepScreen() const {
   }
   GUI.drawSleepScreen(renderer, tr(STR_SLEEPING), bookTitle, readPercent);
 
-  // Make sleep screen dark unless light is selected in settings
-  if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::LIGHT) {
-    renderer.invertScreen();
+  // The night scene is a built-in style: its polarity follows the global dark
+  // mode, exactly like every other screen. DARK/LIGHT are no longer values.
+  if (SETTINGS.screenInverted) renderer.invertScreen();
+  if (SETTINGS.sleepStateBadge != CrossPointSettings::SLEEP_BADGE_OFF) {
+    // The night scene's battery capsule owns the bottom-right corner.
+    drawSleepStateBadge(renderer, tr(STR_DEEP_SLEEP), /*topLeft=*/false, /*bottomLeft=*/true);
   }
 
   renderer.displayBuffer(HalDisplay::FULL_REFRESH);
@@ -721,6 +717,10 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   const bool hasGreyscale =
       bitmap.hasGreyscale() && (preserveBackground || SETTINGS.sleepScreenCoverFilter ==
                                                           CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
+  // Custom artwork follows the same global dark mode as every other screen.
+  // (16-level grayscale images cannot be polarity-swapped this way; they keep
+  // their own values and are documented as a grayscale exception.)
+  const bool invertCustomForDark = SETTINGS.screenInverted != 0;
 
   if (nativeCustomImage && !preserveBackground && renderer.getGrayscaleLevels() == 16 &&
       SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER) {
@@ -739,9 +739,15 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     return;
   }
+  // The badge is a 1-bit mark; grayscale planes do not carry it, so skip it
+  // there rather than leaving a badge that disappears in the gray composite.
+  if (!preserveBackground && !hasGreyscale && SETTINGS.sleepStateBadge != CrossPointSettings::SLEEP_BADGE_OFF) {
+    drawSleepStateBadge(renderer, tr(STR_DEEP_SLEEP));
+  }
 
-  if (!preserveBackground &&
-      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
+  const bool filterInverts =
+      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE;
+  if (!preserveBackground && (filterInverts != invertCustomForDark)) {
     renderer.invertScreen();
   }
 
@@ -886,15 +892,9 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
 }
 
 void SleepActivity::renderCoverSleepScreen() const {
-  void (SleepActivity::*renderNoCoverSleepScreen)() const;
-  switch (SETTINGS.sleepScreen) {
-    case (CrossPointSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
-      renderNoCoverSleepScreen = &SleepActivity::renderCustomSleepScreen;
-      break;
-    default:
-      renderNoCoverSleepScreen = &SleepActivity::renderDefaultSleepScreen;
-      break;
-  }
+  // A missing cover falls back to the built-in night scene. There is no
+  // COVER_CUSTOM hybrid any more: one style, one fallback.
+  void (SleepActivity::*renderNoCoverSleepScreen)() const = &SleepActivity::renderDefaultSleepScreen;
 
   if (APP_STATE.openEpubPath.empty()) {
     return (this->*renderNoCoverSleepScreen)();

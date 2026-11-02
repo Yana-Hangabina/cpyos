@@ -6,31 +6,32 @@
 
 TEST(TokenBoundary, OrdinaryWordGapIsBreakableAndJustifiable) {
   EXPECT_TRUE(TokenBoundary::allowsBreak(/*continues=*/false, /*noSpaceBefore=*/false));
-  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*noSpaceBefore=*/false,
-                                              /*isSpaceToken=*/false));
+  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*isStretchableSpace=*/false));
 }
 
 TEST(TokenBoundary, CjkZeroWidthGapIsBreakableAndJustifiable) {
   EXPECT_TRUE(TokenBoundary::allowsBreak(/*continues=*/false, /*noSpaceBefore=*/true));
-  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*noSpaceBefore=*/true,
-                                              /*isSpaceToken=*/false));
+  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*isStretchableSpace=*/false));
 }
 
 TEST(TokenBoundary, AttachedTextIsNeitherBreakableNorJustifiable) {
   EXPECT_FALSE(TokenBoundary::allowsBreak(/*continues=*/true, /*noSpaceBefore=*/false));
-  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*noSpaceBefore=*/false,
-                                               /*isSpaceToken=*/false));
+  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*isStretchableSpace=*/false));
 }
 
 TEST(TokenBoundary, ExplicitHyphenBoundaryIsBreakableButNotJustifiable) {
   EXPECT_TRUE(TokenBoundary::allowsBreak(/*continues=*/true, /*noSpaceBefore=*/true));
-  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*noSpaceBefore=*/true,
-                                               /*isSpaceToken=*/false));
+  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*isStretchableSpace=*/false));
 }
 
+// A literal space token that carries a continuation (typically a no-break space) is stretched.
 TEST(TokenBoundary, LiteralAttachedSpaceRemainsJustifiable) {
-  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*noSpaceBefore=*/false,
-                                              /*isSpaceToken=*/true));
+  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*isStretchableSpace=*/true));
+}
+
+// ... but a space token whose continuation was dropped (it ends the line) is not a gap.
+TEST(TokenBoundary, TrailingSpaceTokenIsNotJustifiable) {
+  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*isStretchableSpace=*/true));
 }
 
 TEST(TokenBoundary, VisibleExplicitHyphensAllowBreaks) {

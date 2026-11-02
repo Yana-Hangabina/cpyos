@@ -8,6 +8,8 @@
 #include <Logging.h>
 #include <OpdsStream.h>
 
+#include <cstring>
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/CatalogScreens.h"
@@ -103,27 +105,31 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   std::string url = UrlUtils::buildUrl(server.url, path);
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
-  OpdsParser parser;
+  // One body, either an Atom (1.x) feed or an OPDS 2.0 JSON document; OpdsFeed
+  // sniffs the payload and picks the matching streaming parser.
+  OpdsFeed feed;
   {
-    OpdsParserStream stream{parser};
+    OpdsParserStream stream{feed};
     if (!HttpDownloader::fetchUrl(url, stream, server.username, server.password)) {
       fail(StrId::STR_FETCH_FEED_FAILED);
       return;
     }
   }
 
-  if (!parser) {
+  if (feed.error()) {
+    LOG_ERR("OPDS", "Could not parse feed (%s): %s", feed.isJson() ? "JSON" : "XML", url.c_str());
     fail(StrId::STR_PARSE_FEED_FAILED);
     return;
   }
+  LOG_DBG("OPDS", "Feed parsed as %s", feed.isJson() ? "OPDS 2.0 JSON" : "OPDS 1.x Atom");
 
-  searchTemplate = parser.getSearchTemplate();
-  const auto& nextUrl = parser.getNextPageUrl();
-  const auto& prevUrl = parser.getPrevPageUrl();
-  const bool feedTruncated = parser.truncated();
+  searchTemplate = feed.getSearchTemplate();
+  const auto& nextUrl = feed.getNextPageUrl();
+  const auto& prevUrl = feed.getPrevPageUrl();
+  const bool feedTruncated = feed.truncated();
   // Reset selection before swapping in a potentially shorter feed.
   nav.reset();
-  entries = std::move(parser).getEntries();
+  entries = feed.takeEntries();
 
   entries.reserve(entries.size() + (prevUrl.empty() ? 0 : 1) + (nextUrl.empty() ? 0 : 1));
   prevRowPresent = !prevUrl.empty();
@@ -153,7 +159,14 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
   for (const auto& entry : entries) {
     fui::ListItem item;
     item.label = entry.title.c_str();
-    if (entry.type == OpdsEntryType::BOOK && !entry.author.empty()) item.subtitle = entry.author.c_str();
+    // OPDS 2.0 rows may carry a description but no author; showing it beats an
+    // empty subtitle, and 1.x entries simply have neither.
+    if (entry.type == OpdsEntryType::BOOK) {
+      if (!entry.author.empty())
+        item.subtitle = entry.author.c_str();
+      else if (!entry.summary.empty())
+        item.subtitle = entry.summary.c_str();
+    }
     if (entry.type == OpdsEntryType::NAVIGATION) item.value = ">";
     item.actionValue = static_cast<int16_t>(rowItems.size());
     rowItems.push_back(item);
@@ -245,9 +258,27 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   }
 
   std::string url = searchTemplate;
-  const std::string placeholder = "{searchTerms}";
-  const size_t pos = url.find(placeholder);
-  if (pos != std::string::npos) url.replace(pos, placeholder.length(), pluginhttp::urlEncodeQuery(query));
+  const std::string encoded = pluginhttp::urlEncodeQuery(query);
+  // OPDS 1.x templates use {searchTerms}; OPDS 2.0 follows RFC 6570 and may use
+  // {?query}/{&query} (or a bare {query}) instead.
+  struct Placeholder {
+    const char* token;
+    std::string replacement;
+  };
+  std::string queryPrefix = url.find('?') == std::string::npos ? "?query=" : "&query=";
+  const Placeholder placeholders[] = {
+      {"{searchTerms}", encoded},
+      {"{?query}", queryPrefix + encoded},
+      {"{&query}", "&query=" + encoded},
+      {"{query}", encoded},
+  };
+  for (const auto& placeholder : placeholders) {
+    const size_t pos = url.find(placeholder.token);
+    if (pos != std::string::npos) {
+      url.replace(pos, strlen(placeholder.token), placeholder.replacement);
+      break;
+    }
+  }
 
   navigationHistory.push_back(currentPath);
   currentPath = url;

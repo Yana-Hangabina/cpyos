@@ -19,91 +19,36 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <string>
 
+#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#include "BackgroundWork.h"
 #include "CrossPointSettings.h"
 #include "NetworkStartup.h"
+#include "StandbyImageFace.h"
+#include "StandbyTime.h"
 #include "activities/ActivityResult.h"
 #include "activities/network/WifiSelectionActivity.h"
-#include "util/PaginationDots.h"
+#include "fontIds.h"
+#include "util/SleepBadge.h"
 #include "util/TimeUtils.h"
+#include "WifiCredentialStore.h"
+#include "components/UITheme.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "ChineseCalendarFace.h"
 #endif
 #include "DuckSleepFace.h"
 #include "SloppyClockFace.h"
-#include "StandbyTime.h"
-#include "WifiCredentialStore.h"
-#include "components/UITheme.h"
-#include "fontIds.h"
 
 namespace {
 
 constexpr uint32_t kWifiTimeoutMs = 15000u;  // Same as WifiSelectionActivity
 constexpr uint32_t kNtpTimeoutMs = 12000u;
 constexpr uint32_t kSyncDelayMs = 1500u;
-#if CROSSPOINT_EMULATED == 0
-constexpr uint32_t kMaxLightSleepSeconds = 60u;
-#endif
-
-// Face factory table. Add new faces by appending a row here and including the
-// corresponding header above. Each entry also declares an isAvailable()
-// predicate so faces can be hidden under specific runtime conditions (e.g.
-// orientation-only). When a face is unavailable it is skipped during cycling
-// and the bottom pager-dot strip collapses accordingly.
-struct FaceEntry {
-  std::unique_ptr<StandbyFace> (*create)();
-  bool (*isAvailable)(int sw, int sh);
-};
-constexpr FaceEntry kFaces[] = {
-    // The CPY default face leads the rotation.
-    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<DuckSleepFace>(); },
-     [](int, int) { return true; }},
-    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<SloppyClockFace>(); },
-     [](int, int) { return true; }},
-#ifdef ENABLE_CHINESE_VERSION
-    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<ChineseCalendarFace>(); },
-     [](int sw, int sh) { return sh > sw; }},  // portrait only
-#endif
-};
-constexpr uint8_t kFaceCount = static_cast<uint8_t>(sizeof(kFaces) / sizeof(kFaces[0]));
-
-uint8_t countAvailableFaces(int sw, int sh) {
-  uint8_t n = 0;
-  for (uint8_t i = 0; i < kFaceCount; ++i) {
-    if (kFaces[i].isAvailable(sw, sh)) ++n;
-  }
-  return n;
-}
-
-// Map a "rank among available faces" (0-based) back to a kFaces[] index.
-// Returns kFaceCount if none match (only happens when no face is available,
-// which can't currently occur since SloppyClockFace is always available).
-uint8_t availableFaceIndexFromRank(int sw, int sh, uint8_t rank) {
-  uint8_t seen = 0;
-  for (uint8_t i = 0; i < kFaceCount; ++i) {
-    if (!kFaces[i].isAvailable(sw, sh)) continue;
-    if (seen == rank) return i;
-    ++seen;
-  }
-  return kFaceCount;
-}
-
-uint8_t rankOfAvailableFace(int sw, int sh, uint8_t faceIdx) {
-  uint8_t seen = 0;
-  for (uint8_t i = 0; i < kFaceCount; ++i) {
-    if (!kFaces[i].isAvailable(sw, sh)) continue;
-    if (i == faceIdx) return seen;
-    ++seen;
-  }
-  return 0;  // faceIdx is unavailable — caller treats it as "use the first"
-}
 
 // Once per power-on, Standby may push the WiFi selection UI to help the user
 // get online for clock sync. After it has been shown (regardless of whether the
 // user connected or cancelled), subsequent Standby entries within the same
 // session will not re-prompt — the explicit way to retry is Settings → WiFi.
-// This module-scope flag persists across activity destroy/recreate.
 bool g_promptedForWifiThisSession = false;
 bool g_debugWakeRequested = false;
 
@@ -126,39 +71,80 @@ void logStandbyWake(const char* reason) {
 #endif
 }
 
-// Bottom-center page indicator dots. One dot per face, filled for the current
-// face. Drawn only in Normal mode — hidden once we go Immersive. Shares the dot
-// style with the Apps menu via drawPaginationDots().
-constexpr int kDotBottomInset = 24;  // distance from bottom edge to top of dots
+}  // namespace
 
-void drawFaceDots(const GfxRenderer& renderer, int sw, int sh, uint8_t total, uint8_t current) {
-  drawPaginationDots(renderer, sw, sh - kDotBottomInset, total, current);
+StandbyFace* StandbyActivity::activeFace() const {
+  if (phase_ == Phase::LightSleep && lightFace_) return lightFace_.get();
+  return standbyFace_.get();
 }
 
-}  // namespace
+bool StandbyActivity::buildStandbyFace() {
+  std::unique_ptr<StandbyFace> face;
+  switch (SETTINGS.standbyStyle) {
+    case CrossPointSettings::STANDBY_SLOPPY_CLOCK:
+      face = makeUniqueNoThrow<SloppyClockFace>();
+      break;
+#ifdef ENABLE_CHINESE_VERSION
+    case CrossPointSettings::STANDBY_CALENDAR:
+      if (renderer.getScreenHeight() > renderer.getScreenWidth()) {
+        face = makeUniqueNoThrow<ChineseCalendarFace>();
+      }
+      break;
+#endif
+    case CrossPointSettings::STANDBY_CUSTOM_IMAGE:
+      face = makeUniqueNoThrow<StandbyImageFace>("/.crosspoint/standby.bmp");
+      if (face && !static_cast<StandbyImageFace*>(face.get())->valid()) {
+        face.reset();
+      }
+      break;
+    case CrossPointSettings::STANDBY_DUCK_SLEEP:
+    default:
+      break;
+  }
+  if (!face) {
+    // Missing custom image / unavailable calendar: the duck is the safe default.
+    face = makeUniqueNoThrow<DuckSleepFace>(/*showClock=*/true);
+  }
+  if (!face) return false;
+  face->onEnter();
+  standbyFace_ = std::move(face);
+  return true;
+}
+
+bool StandbyActivity::buildLightFace() {
+  lightFace_.reset();
+  if (SETTINGS.lightSleepStyle == CrossPointSettings::LIGHT_SLEEP_FOLLOW_STANDBY) {
+    // Reuse the standby face (including its minute clock). activeFace() falls
+    // back to standbyFace_ when lightFace_ is null.
+    return standbyFace_ != nullptr;
+  }
+  std::unique_ptr<StandbyFace> face;
+  if (SETTINGS.lightSleepStyle == CrossPointSettings::LIGHT_SLEEP_CUSTOM_IMAGE) {
+    face = makeUniqueNoThrow<StandbyImageFace>("/.crosspoint/lightsleep.bmp");
+    if (face && !static_cast<StandbyImageFace*>(face.get())->valid()) face.reset();
+  }
+  if (!face) face = makeUniqueNoThrow<DuckSleepFace>(/*showClock=*/false);
+  if (!face) return false;
+  face->onEnter();
+  lightFace_ = std::move(face);
+  return true;
+}
 
 void StandbyActivity::onEnter() {
   Activity::onEnter();
-  logStandbyWake(returnOnWake_ ? "enter-reader" : "enter");
+  // Any non-reader standby is a cache window: the service silently uses the
+  // saved network and keeps the device awake (BackgroundWork) until the queue
+  // finishes or the link fails. From the reader the reader flag is still set,
+  // so this is a no-op.
+  jjwxc_cache_service::onStandbyEntered();
+  logStandbyWake("enter");
   LOG_DBG("STANDBY", "onEnter free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
-  // Normal standby starts on the duck face; the reader's power-key standby is a
-  // clock screen, so start one rank later (Sloppy Clock).
-  const uint8_t wantedRank = returnOnWake_ ? 1 : 0;
-  faceIndex_ = availableFaceIndexFromRank(renderer.getScreenWidth(), renderer.getScreenHeight(), wantedRank);
-  if (faceIndex_ >= kFaceCount) faceIndex_ = 0;
-  if (!kFaces[faceIndex_].isAvailable(renderer.getScreenWidth(), renderer.getScreenHeight())) {
-    const uint8_t idx = availableFaceIndexFromRank(renderer.getScreenWidth(), renderer.getScreenHeight(), 0);
-    if (idx < kFaceCount) faceIndex_ = idx;
-  }
-  inverseMode_ = false;
-  currentFace_ = kFaces[faceIndex_].create();
-  if (!currentFace_) {
+  phase_ = Phase::Standby;
+  if (!buildStandbyFace()) {
     LOG_ERR("STANDBY", "OOM allocating face");
     activityManager.goToApps();
     return;
   }
-  currentFace_->onEnter();
-  mode_ = DisplayMode::Normal;
   lastInputMs_ = millis();
   powerArmed_ = false;
   powerArmAtMs_ = millis() + 350;
@@ -181,40 +167,22 @@ void StandbyActivity::onExit() {
       break;
   }
   syncState_ = SyncState::Idle;
-  if (currentFace_) {
-    currentFace_->onExit();
-    currentFace_.reset();
+  if (lightFace_) {
+    lightFace_->onExit();
+    lightFace_.reset();
+  }
+  if (standbyFace_) {
+    standbyFace_->onExit();
+    standbyFace_.reset();
   }
   LOG_DBG("STANDBY", "onExit free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
   Activity::onExit();
 }
 
-void StandbyActivity::switchFace(int8_t delta) {
-  const int sw = renderer.getScreenWidth();
-  const int sh = renderer.getScreenHeight();
-  const uint8_t avail = countAvailableFaces(sw, sh);
-  if (avail <= 1) return;
-
-  const uint8_t curRank = rankOfAvailableFace(sw, sh, faceIndex_);
-  const uint8_t newRank = static_cast<uint8_t>((curRank + avail + delta) % avail);
-  const uint8_t newIdx = availableFaceIndexFromRank(sw, sh, newRank);
-  if (newIdx >= kFaceCount || newIdx == faceIndex_) return;
-
-  if (currentFace_) currentFace_->onExit();
-  currentFace_.reset();
-  faceIndex_ = newIdx;
-  currentFace_ = kFaces[faceIndex_].create();
-  if (!currentFace_) {
-    LOG_ERR("STANDBY", "OOM switching face");
-    activityManager.goToApps();
-    return;
-  }
-  currentFace_->onEnter();
-  requestUpdate();
-}
-
 void StandbyActivity::startTimeSync() {
   if (TimeUtils::isClockValid() || !SETTINGS.clockAutoSync) return;
+  // A background cache owns the radio; don't fight it for a clock sync.
+  if (background_work::active()) return;
 
   // Another activity (e.g. Settings → WiFi) may have already connected the
   // device. Skip our own WiFi.begin in that case and request a clock sync.
@@ -263,9 +231,7 @@ bool StandbyActivity::trySilentWifiConnect() {
   NetworkStartup::setMode(renderer, WIFI_STA);
   // Fresh-slate disconnect (radio off + erase cached AP) so the next begin()
   // latches the exact creds we just loaded, not whatever the radio retained
-  // from a previous session. The disconnect(false) form used by the teardown
-  // paths is deliberately different — there we want to keep the AP cached
-  // for the next silent-connect attempt.
+  // from a previous session.
   WiFi.disconnect(true, true);
   delay(100);
   if (pass.empty()) {
@@ -280,13 +246,10 @@ bool StandbyActivity::trySilentWifiConnect() {
 }
 
 void StandbyActivity::promptForWifi() {
-  // Set the flag before pushing so a synchronous edge-case completion can't
-  // re-prompt. autoConnect=false: the UI must not retry the same credential
-  // we just failed on; let the user pick.
   g_promptedForWifiThisSession = true;
   LOG_DBG("STANDBY", "Prompting WiFi selection UI");
-  // ActivityManager owns the picker across frames; stack lifetime is insufficient.
-  auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false);
+  auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false,
+                                                           /*keepRadioOnExit=*/false);
   if (!activity) {
     LOG_ERR("STANDBY", "OOM: WifiSelectionActivity (%u bytes)", static_cast<unsigned>(sizeof(WifiSelectionActivity)));
     return;
@@ -387,10 +350,6 @@ void StandbyActivity::stopTimeSyncWifi() {
   WiFi.disconnect(false);
   delay(100);
   WiFi.mode(WIFI_OFF);
-  // Fully release the WiFi driver so HalPowerManager::setPowerSaving() can
-  // actually drop the CPU to LOW_POWER_FREQ — it short-circuits while WiFi is
-  // active (see HalPowerManager.cpp). Return value is ignored;
-  // ESP_ERR_WIFI_NOT_INIT is fine if we never connected.
   esp_wifi_deinit();
 }
 
@@ -402,9 +361,10 @@ void StandbyActivity::completeTimeSync() {
 }
 
 void StandbyActivity::processFaceTick(const bool waitForUpdate) {
-  if (!currentFace_) return;
+  StandbyFace* face = activeFace();
+  if (!face) return;
 
-  switch (currentFace_->tick()) {
+  switch (face->tick()) {
     case StandbyFace::TickResult::None:
       return;
     case StandbyFace::TickResult::Redraw:
@@ -413,10 +373,8 @@ void StandbyActivity::processFaceTick(const bool waitForUpdate) {
 #if CROSSPOINT_EMULATED == 0
 #if FREEINK_DEVICE_READPICO
       // The face's own ~10-minute cleanup signal. Standby ticks present as
-      // TransientUi (calm -- no GC16 flash every minute at the bedside), so this
-      // is the only residue cleanup a standby face gets on this panel. Make it a
-      // real GC16 sweep; it used to fall through to nothing here (the HALF request
-      // below is Xteink-only), which left the calm face ghosting unbounded.
+      // TransientUi, so this is the only residue cleanup a calm face gets on
+      // this panel. Make it a real GC16 sweep.
       renderer.requestNextRefresh(HalDisplay::FULL_REFRESH);
 #else
       if (gpio.isXteinkDevice()) renderer.requestNextRefresh(HalDisplay::HALF_REFRESH);
@@ -431,9 +389,30 @@ void StandbyActivity::processFaceTick(const bool waitForUpdate) {
     requestUpdate();
 }
 
+bool StandbyActivity::canEnterLightSleep() const {
+#if CROSSPOINT_EMULATED == 0
+  if (phase_ != Phase::Standby) return false;
+  if (background_work::active()) return false;
+  const bool syncActive = syncState_ != SyncState::Idle;
+  const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
+  return !syncActive && !wifiActive && !gpio.isUsbConnected() && powerManager.canStandbyLightSleep(gpio);
+#else
+  return false;
+#endif
+}
+
+void StandbyActivity::enterLightSleep() {
+  if (!buildLightFace()) return;
+  phase_ = Phase::LightSleep;
+  // Paint the light-sleep face before the CPU stops; a custom image is a full
+  // frame, while "follow standby" only adds the badge on the next tick.
+  requestUpdateAndWait();
+}
+
 bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
 #if CROSSPOINT_EMULATED == 0
-  if (mode_ != DisplayMode::Immersive || !currentFace_) return false;
+  if (phase_ != Phase::LightSleep) return false;
+  if (background_work::active()) return false;
 
   const bool syncActive = syncState_ != SyncState::Idle;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
@@ -442,7 +421,9 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
     return false;
   }
 
-  const uint32_t seconds = std::clamp<uint32_t>(currentFace_->secondsUntilNextWake(), 1, kMaxLightSleepSeconds);
+  StandbyFace* face = activeFace();
+  if (!face) return false;
+  const uint32_t seconds = std::clamp<uint32_t>(face->secondsUntilNextWake(), 1, 60);
   HalPowerManager::LightSleepWakeReason wakeReason;
   {
     RenderLock lock;
@@ -450,28 +431,29 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
   }
   switch (wakeReason) {
     case HalPowerManager::LightSleepWakeReason::Timer:
-      processFaceTick(true);
+      // Static light-sleep images do not repaint; a clock-following style does.
+      processFaceTick(/*waitForUpdate=*/true);
       return true;
     case HalPowerManager::LightSleepWakeReason::PowerButton:
-      // Swallow the rest of this press in main: a wake hold is not a new
-      // in-app long-press, and it must not hand the host to the PMU.
       logStandbyWake("power");
       mappedInput.notePowerWakeFromSleep();
-      if (returnOnWake_) {
-        finish();
-        return true;
-      }
-      mode_ = DisplayMode::Normal;
-      lastInputMs_ = millis();
-      requestUpdate();
+      finish();
       return true;
     case HalPowerManager::LightSleepWakeReason::Failed: {
       char reason[32];
       const int n = snprintf(reason, sizeof(reason), "failed(%u/%d)",
                              static_cast<unsigned>(HalPowerManager::lastLightSleepFailure()),
-                             HalPowerManager::lastLightSleepError());
+                             static_cast<int>(HalPowerManager::lastLightSleepError()));
       if (n > 0) logStandbyWake(reason);
+      // Light sleep refused (USB/WiFi/hardware): return to the standby face
+      // rather than leaving the light-sleep image on screen.
+      phase_ = Phase::Standby;
+      if (lightFace_) {
+        lightFace_->onExit();
+        lightFace_.reset();
+      }
       lastInputMs_ = millis();
+      requestUpdate();
       return true;
     }
   }
@@ -490,136 +472,63 @@ void StandbyActivity::loop() {
   }
   if (g_debugWakeRequested) {
     g_debugWakeRequested = false;
-    if (returnOnWake_) {
-      logStandbyWake("debug");
-      finish();
-      return;
-    }
+    logStandbyWake("debug");
+    finish();
+    return;
   }
+  // Standby is an overlay: Back and the power key both return to the caller
+  // (reader, settings page, home). There is no in-standby style cycling.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (returnOnWake_) {
-      logStandbyWake("back");
-      finish();
-    } else {
-      activityManager.goHome();
-    }
+    logStandbyWake("back");
+    finish();
     return;
   }
-
-  const auto swipe = mappedInput.wasSwipe();
-  if (swipe != MappedInputManager::SwipeDir::None) {
-    lastInputMs_ = millis();
-    if (mode_ == DisplayMode::Immersive) {
-      mode_ = DisplayMode::Normal;
-      requestUpdate();
-      return;
-    }
-    if (swipe == MappedInputManager::SwipeDir::Left) {
-      switchFace(1);
-    } else if (swipe == MappedInputManager::SwipeDir::Right) {
-      switchFace(-1);
-    } else if (currentFace_) {
-      if (swipe == MappedInputManager::SwipeDir::Up) {
-        currentFace_->onPageNext();
-      } else {
-        currentFace_->onPagePrev();
-      }
-      requestUpdate();
-    }
-    return;
-  }
-
-  int touchX = 0;
-  int touchY = 0;
-  if (mappedInput.wasScreenTapped(touchX, touchY)) {
-    lastInputMs_ = millis();
-    if (mode_ == DisplayMode::Immersive) {
-      mode_ = DisplayMode::Normal;
-    } else {
-      inverseMode_ = !inverseMode_;
-    }
-    requestUpdate();
-    return;
-  }
-
-  // Up/Down: page navigation, dispatched to the current face.
-  //   - SloppyClock: each press rerolls the style (treated as a shake).
-  //   - ChineseCalendar: Up = previous day, Down = next day.
-  // Pressing either button from Immersive wakes back to Normal first.
-  const bool upPressed = mappedInput.wasReleased(MappedInputManager::Button::Up);
-  const bool downPressed = mappedInput.wasReleased(MappedInputManager::Button::Down);
-  if (upPressed || downPressed) {
-    lastInputMs_ = millis();
-    if (mode_ == DisplayMode::Immersive) {
-      mode_ = DisplayMode::Normal;
-      requestUpdate();
-    } else if (currentFace_) {
-      if (upPressed) {
-        currentFace_->onPagePrev();
-      } else {
-        currentFace_->onPageNext();
-      }
-      requestUpdate();
-    }
-    return;
-  }
-
-  // Left/Right: cycle through faces. With only one face installed this is a
-  // silent no-op (the keystroke is consumed but nothing visible changes).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    lastInputMs_ = millis();
-    if (mode_ == DisplayMode::Immersive) {
-      mode_ = DisplayMode::Normal;
-      requestUpdate();
-      return;
-    }
-    const int8_t delta = mappedInput.wasReleased(MappedInputManager::Button::Right) ? +1 : -1;
-    switchFace(delta);
-    return;
-  }
-
-  // Power short-press: dedicated wake from Immersive back to Normal. Long-
-  // press is handled by main.cpp's global shutdown path.
   if (mappedInput.wasReleased(MappedInputManager::Button::Power)) {
     lastInputMs_ = millis();
-    if (returnOnWake_ && powerArmed_) {
+    if (powerArmed_) {
       logStandbyWake("power-release");
       finish();
-      return;
-    }
-    if (mode_ == DisplayMode::Immersive) {
-      mode_ = DisplayMode::Normal;
-      requestUpdate();
     }
     return;
   }
 
-  // Confirm toggles inverse (black background / white content) regardless of
-  // Normal vs. Immersive.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    lastInputMs_ = millis();
-    inverseMode_ = !inverseMode_;
-    requestUpdate();
-    return;
+  const bool bgActive = background_work::active();
+  if (bgActive != lastBackgroundActive_) {
+    lastBackgroundActive_ = bgActive;
+    requestUpdate();  // add/remove the "caching" badge
   }
 
   pumpTimeSync();
 
   const uint32_t idle = millis() - lastInputMs_;
-  if (mode_ == DisplayMode::Normal && idle >= 5000u) {
-    mode_ = DisplayMode::Immersive;
-    requestUpdate();
+  if (phase_ == Phase::Standby && idle >= standby_time::kLightSleepIdleMs && canEnterLightSleep()) {
+    enterLightSleep();
+    if (tryLightSleep(idle)) return;
+    // enterLightSleep painted a face but light sleep was refused; the helper
+    // above already restored Standby.
     return;
   }
 
-  if (tryLightSleep(idle)) return;
+  if (phase_ == Phase::LightSleep) {
+    if (tryLightSleep(idle)) return;
+    // Conditions changed (USB, radio, or a background job started): show the
+    // standby face again and keep running.
+    phase_ = Phase::Standby;
+    if (lightFace_) {
+      lightFace_->onExit();
+      lightFace_.reset();
+    }
+    lastInputMs_ = millis();
+    requestUpdate();
+    return;
+  }
 
   processFaceTick(false);
 }
 
 void StandbyActivity::render(RenderLock&&) {
-  if (!currentFace_) return;
+  StandbyFace* face = activeFace();
+  if (!face) return;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int sw = renderer.getScreenWidth();
@@ -633,85 +542,42 @@ void StandbyActivity::render(RenderLock&&) {
   const int overlayTop = std::max(metrics.topPadding, viewTop);
 
   renderer.clearScreen();
-
-  // Face renders inside the physically viewable screen regardless of mode. Normal
-  // chrome is overlaid without reflow; the unsynced warning remains in Immersive.
   {
     const GfxRenderer::ClipScope clip(renderer, faceViewport.x, faceViewport.y, faceViewport.width,
                                       faceViewport.height);
-    currentFace_->render(renderer, faceViewport);
+    face->render(renderer, faceViewport);
   }
 
   const bool clockValid = TimeUtils::isClockValid();
-  if (!clockValid) {
+  if (!clockValid && phase_ == Phase::Standby) {
     UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, overlayTop, tr(STR_STANDBY_SYNCING));
   }
 
-  if (mode_ != DisplayMode::Normal) {
-    if (inverseMode_) renderer.invertScreen();
-    // TransientUi: a calm bedside face must not flash GC16 on the periodic sweep.
-    // The face's ~10-minute RedrawWithGhostCleanup signal arms the cleanup FULL.
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
-    // Opt-in faces (老黄历) get a 4-level gray LUT enhancement layered on the BW
-    // image. Only fires in Immersive — Normal-mode navigation needs the
-    // ~300-500ms FAST_REFRESH and can't afford the ~2s gray LUT. inverseMode_
-    // short-circuits because invertScreen is BW-only and mixes poorly with gray.
-    if (currentFace_->wantsGrayscale() && !inverseMode_) applyGrayscalePass(faceViewport);
-    return;
+  if (phase_ == Phase::LightSleep && SETTINGS.sleepStateBadge != CrossPointSettings::SLEEP_BADGE_OFF) {
+    drawSleepStateBadge(renderer, tr(STR_LIGHT_SLEEP));
+  }
+  if (background_work::active()) {
+    // A background cache is why light sleep is not being entered; say so
+    // instead of looking like a frozen clock.
+    drawSleepStateBadge(renderer, tr(STR_BACKGROUND_CACHING), /*topLeft=*/true);
   }
 
-  // No face-name label: the face itself is the label, and "鸭睡水波" above a
-  // clock read as clutter on the device (user feedback, 2026-10-16). The
-  // battery stays; the unsynced warning above still covers the !clockValid
-  // case.
+  if (phase_ == Phase::Standby) {
+    // The battery capsule is standby chrome. Light sleep and a background job
+    // keep it out of the face: the state badge is the only extra mark there.
+    GUI.drawStatusBarBattery(renderer, sw - viewRight - metrics.batteryWidth - metrics.contentSidePadding,
+                             overlayTop, /*showPercent=*/false);
+  }
 
-  // Top-right battery (no percentage text). It used to be the legacy 16x12
-  // outline -- ~1.4 mm at 297 ppi and the only place in the UI where the
-  // battery was not the capsule. Use the same capsule as the status bars;
-  // the width comes from the theme metrics so both densities match.
-  GUI.drawStatusBarBattery(renderer, sw - viewRight - metrics.batteryWidth - metrics.contentSidePadding, overlayTop,
-                           /*showPercent=*/false);
-
-  const uint8_t availFaces = countAvailableFaces(sw, sh);
-  const uint8_t curRank = rankOfAvailableFace(sw, sh, faceIndex_);
-  drawFaceDots(renderer, sw, sh, availFaces, curRank);
-
-  // Calm, non-blinking face: standby ticks present as TransientUi. On Read Pico
-  // every push is a full-page differential scan, and a Normal push would join the
-  // periodic GC16 sweep and flash the face every few minutes. Instead the face's
-  // own ~10-minute RedrawWithGhostCleanup signal (processFaceTick) arms a GC16
-  // that bounds the residue, so the per-minute ticks stay calm and clean.
-  if (inverseMode_) renderer.invertScreen();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
-// Two extra renders (LSB then MSB) into scratch buffers, composited with the BW
-// backup by the gray LUT waveform. Mirrors EpubReaderActivity.cpp:813-837. The
-// caller gates invocation (passive Immersive vs interactive on-demand); this
-// just runs the pass unconditionally.
-void StandbyActivity::applyGrayscalePass(const Rect& viewport) {
-  if (!renderer.storeBwBuffer()) {
-    LOG_ERR("STANDBY", "Grayscale pass skipped: storeBwBuffer failed");
-    return;
-  }
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  {
-    const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
-    currentFace_->render(renderer, viewport);
-  }
-  renderer.copyGrayscaleLsbBuffers();
-
-  renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  {
-    const GfxRenderer::ClipScope clip(renderer, viewport.x, viewport.y, viewport.width, viewport.height);
-    currentFace_->render(renderer, viewport);
-  }
-  renderer.copyGrayscaleMsbBuffers();
-
-  renderer.displayGrayBuffer();
-  renderer.setRenderMode(GfxRenderer::BW);
-  renderer.restoreBwBuffer();
+bool StandbyActivity::preventAutoSleep() {
+  // While a background cache is actually running, auto deep sleep would suspend
+  // the radio or kill the worker; keep the overlay awake and show the badge.
+  // Do not consult the activity below: a finished-but-unreaped JJWXC job keeps
+  // its own preventAutoSleep() true until it is polled, and that would block
+  // sleep forever while the standby overlay is on top. The background guard
+  // ends with the worker body, which is the real "still working" signal.
+  return background_work::active();
 }

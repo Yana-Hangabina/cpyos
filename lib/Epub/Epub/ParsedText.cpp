@@ -192,35 +192,40 @@ std::vector<Hyphenator::BreakInfo> hangulLineEndBreaks(const std::string& word) 
 }
 
 std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
-  struct CodepointBoundary {
-    uint32_t cp;
-    size_t endOffset;
-  };
-
-  std::vector<CodepointBoundary> codepoints;
-  codepoints.reserve(text.size());
-  bool hasCjkBreakable = false;
-
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.data());
   const auto* const start = ptr;
+  uint32_t previous = utf8NextCodepoint(&ptr);
+  if (previous == 0) return {};
+  bool hasCjkBreakable = utf8IsCjkBreakable(previous);
+  // Count first so words without accepted boundaries need no storage.
+  size_t boundaryCount = 0;
+
   while (*ptr) {
-    const uint32_t cp = utf8NextCodepoint(&ptr);
-    if (cp == 0) break;
-    if (utf8IsCjkBreakable(cp)) {
+    const uint32_t current = utf8NextCodepoint(&ptr);
+    if (current == 0) break;
+    if (utf8IsCjkBreakable(current)) {
       hasCjkBreakable = true;
     }
-    codepoints.push_back({cp, static_cast<size_t>(ptr - start)});
+    if (hasCjkBreakOpportunityBetween(previous, current)) {
+      ++boundaryCount;
+    }
+    previous = current;
   }
 
-  if (!hasCjkBreakable || codepoints.size() < 2) return {};
+  if (!hasCjkBreakable || boundaryCount == 0) return {};
 
   std::vector<size_t> allowedOffsets;
-  allowedOffsets.reserve(codepoints.size() - 1);
-  for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
-    const uint32_t current = codepoints[i].cp;
-    const uint32_t next = codepoints[i + 1].cp;
-    if (!hasCjkBreakOpportunityBetween(current, next)) continue;
-    allowedOffsets.push_back(codepoints[i].endOffset);
+  allowedOffsets.reserve(boundaryCount);
+  ptr = start;
+  previous = utf8NextCodepoint(&ptr);
+  while (*ptr) {
+    const size_t offset = static_cast<size_t>(ptr - start);
+    const uint32_t current = utf8NextCodepoint(&ptr);
+    if (current == 0) break;
+    if (hasCjkBreakOpportunityBetween(previous, current)) {
+      allowedOffsets.push_back(offset);
+    }
+    previous = current;
   }
   return allowedOffsets;
 }
@@ -1450,11 +1455,20 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
   return true;
 }
 
-bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, const size_t lastBreakAt,
+bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, size_t lastBreakAt,
                              const size_t lineCount, const int pageWidth, const std::vector<uint16_t>& wordWidths,
                              const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
                              const std::function<bool(std::unique_ptr<TextBlock>, uint32_t, bool)>& processLine,
                              const GfxRenderer& renderer, const int fontId, const bool paragraphFinal) {
+  // A no-break space (or any carried attached space) at the head of a wrapped line is an
+  // artifact of the break, not content: dropping it keeps the next line flush with the
+  // margin instead of indenting it by one space. Only a wrapped line is adjusted; the first
+  // line of a paragraph keeps its explicit leading spaces and its first-line indent.
+  if (lineIndex > 0) {
+    while (lastBreakAt + 1 < lineBreak && continuesVec[lastBreakAt] && wordAt(lastBreakAt) == " ") {
+      ++lastBreakAt;
+    }
+  }
   const size_t lineWordCount = lineBreak - lastBreakAt;
   const uint32_t lineVisibleOffset = visibleOffsetAt(lastBreakAt);
 
@@ -1496,8 +1510,11 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
     lineWordWidthSum += wordWidths[lastBreakAt + wordIdx];
     if (wordIdx == 0) continue;
     const size_t boundaryIdx = lastBreakAt + wordIdx;
-    const bool isSpaceToken = lineWords[wordIdx] == " ";
-    if (TokenBoundary::isJustifiableGap(continuesVec[boundaryIdx], noSpaceBeforeVec[boundaryIdx], isSpaceToken)) {
+    // A literal space token only stretches when the word after it continues the attachment;
+    // a trailing space or a no-break space that ends a run is not a justifyable gap.
+    const bool isStretchableSpace =
+        lineWords[wordIdx] == " " && wordIdx + 1 < lineWordCount && continuesVec[boundaryIdx + 1];
+    if (TokenBoundary::isJustifiableGap(continuesVec[boundaryIdx], isStretchableSpace)) {
       actualGapCount++;
     }
     if (continuesVec[boundaryIdx]) {
@@ -1602,7 +1619,8 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, con
                                                 reorderedStylesScratch[wordIdx - 1]),
                        wordSpacingPercent);
       } else if (wordIdx > 0 && reorderedContinuesScratch[wordIdx]) {
-        if (reorderedWordsScratch[wordIdx] == " ") {
+        if (reorderedWordsScratch[wordIdx] == " " && wordIdx + 1 < reorderedWidthsScratch.size() &&
+            reorderedContinuesScratch[wordIdx + 1]) {
           reorderedGapCount++;
         }
         reorderedNaturalGaps += renderer.getKerning(fontId, lastCodepoint(reorderedWordsScratch[wordIdx - 1]),

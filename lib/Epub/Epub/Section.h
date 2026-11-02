@@ -1,4 +1,5 @@
 #pragma once
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -43,7 +44,14 @@ class Section {
   // and the in-RAM page-offset table.
   struct BuildContext {
     std::unique_ptr<ChapterHtmlSlimParser> parser;
-    std::vector<PageLutEntry> lut;
+    // A deque, not a vector: a long chapter can grow this past a thousand pages, and an
+    // incremental build appends while the heap is already fragmented by the parser. A
+    // vector would then need one contiguous block per reallocation (18 KB at 1500 pages,
+    // 12 B/entry) and can fail late in the chapter; deque nodes are fixed-size (one 512 B
+    // node per 42 entries) and never move existing entries. Indexing, size(), back() and
+    // range-for behave identically, and the on-disk LUT format is unchanged (it is written
+    // straight from this iteration).
+    std::deque<PageLutEntry> lut;
     std::string parsePath;
     std::string contentBase;
     std::string imageBasePath;

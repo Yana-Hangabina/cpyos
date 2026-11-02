@@ -109,11 +109,12 @@ def build(target_id, dist_dir, output_dir, root=None, manifest_name=MANIFEST_NAM
     partitions = package_nightly_target.verify_partition_csv(
         root, target.get('partitionsCsv', 'partitions.csv'))
 
-    # The same segment list the full-install package uses: a page that offered a
-    # different set would flash a device into a layout its own table disagrees with.
+    # The same segment list the target's full-install package uses (including a
+    # C3 font pack); a page that offered a different set would flash a device
+    # into a layout its own table disagrees with.
     parts = []
     copied = []
-    for role, source_name, offset in package_nightly_target.FULL_INSTALL_SEGMENTS:
+    for role, source_name, offset in package_nightly_target.full_install_segments(root, target_id):
         asset = dist_dir / nightly_targets.asset_name(target_id, source_name)
         if not asset.is_file():
             fail(f'{asset} is missing; run scripts/package_nightly_target.py {target_id} first')

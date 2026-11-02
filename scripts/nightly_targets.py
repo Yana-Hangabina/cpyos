@@ -11,6 +11,11 @@ TARGETS = {
         'environments': {'stable': 'gh_release', 'nightly': 'gh_release_rc'},
         'supportedChannels': ['stable', 'nightly'],
         'fullInstall': False,
+        'partitionsCsv': 'partitions.csv',
+        # No-PSRAM targets stream the scalable CJK face from spiffs; the full
+        # install writes it in the same pass as the app, so nobody has to copy
+        # a font by hand after flashing.
+        'dataAssets': (('system_font', 'system_font.dat', 'spiffs', 0),),
     },
     'sticky': {
         'deviceSlug': 'sticky',

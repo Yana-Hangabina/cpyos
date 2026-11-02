@@ -30,6 +30,12 @@ class XtcReaderActivity final : public ReaderActivity {
   std::string getBookAuthor() const override { return xtc ? xtc->getAuthor() : ""; }
   std::string getBookThumbBmpPath() const override { return xtc ? xtc->getThumbBmpPath() : ""; }
   bool handleFormatInput() override;
+  // A MENU tap zone opens the chapter list, the same surface the Confirm key
+  // and the centre menu tap open on this reader.
+  bool openZoneMenu() override {
+    openChapterSelection();
+    return true;
+  }
   void renderBook() override;
   void applyInitialOrientation() override;
 

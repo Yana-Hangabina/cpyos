@@ -48,7 +48,7 @@ python3 scripts/tests/test_release_artifacts.py
 - `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（取决于检出目录名，关键在于不是 `arduino-lib-builder`）；
 - 芯片 ID、板级 tag `readpico`；
 - 镜像不超过 7.19 MiB app0 槽；
-- `build/data_manifest.txt` 与磁盘上的四个 blob 的大小 / SHA-256 一致；
+- `build/data_manifest.txt` 与磁盘上的五个 blob 的大小 / SHA-256 一致；
 - 镜像版本不带 `-dirty`。
 
 ## 打 tag 与工作流
@@ -101,7 +101,7 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.1.0 --output _sit
 | `cpyos-readpico-<ver>-full.zip` | 完整安装包（含 `FLASH.md`、`SHA256SUMS`） |
 | `readpico-firmware.bin` | app-only，OTA / 手动升级 |
 | `readpico-bootloader.bin` / `readpico-partitions.bin` / `readpico-boot_app0.bin` | 首次安装 |
-| `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` | 数据分区 |
+| `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` / `emoji.dat` | 数据分区 |
 | `manifest-install.json` | 网页刷机：完整安装 / 恢复（擦除） |
 | `manifest-upgrade.json` | 网页刷机：CPYOS 升级（保留 NVS） |
 | `manifest-app.json` | 仅 app |
@@ -149,8 +149,8 @@ git update-index --assume-unchanged freeink-sdk
 OTA 只写 app0，不写数据分区。语言包、Web 资源包、拼音和断词表都留在设备原来的数据分区里，所以：
 
 - **0.1.0 是首个公开版本，首次必须用完整安装包**，四个数据包会随安装写入；之后从 0.1.0 做 OTA 是安全的。
-- 以后任何版本只要改了 `i18n_pack.dat` 的键数 / 内容签名、`web_pack.dat`、`hyphen.dat` 或 `pinyin.dat`，**不能只发 OTA**：设备的旧包会被固件拒绝（语言包键数不符时回退英文，网页显示恢复页）。这种版本必须要求完整安装，或者在实现数据分区 OTA 之前不要把它标成可通过设备 OTA 更新。
-- 发布前比较上一版与本次的四个 blob 头（键数、contentSignature、schema）和 `SHA256SUMS`；不同就按“需要完整安装”发布，并在 release notes 里写明。`build/data_manifest.txt` 是本次包的唯一描述，不要手抄数字。
+- 以后任何版本只要改了 `i18n_pack.dat` 的键数 / 内容签名、`web_pack.dat`、`hyphen.dat` 或 `pinyin.dat`，**不能只发 OTA**：设备的旧包会被固件拒绝（语言包键数不符时，未内嵌的 33 种语言回退英文；中文/英文在固件内不受影响；网页显示恢复页）。这种版本必须要求完整安装，或者在实现数据分区 OTA 之前不要把它标成可通过设备 OTA 更新。
+- 发布前比较上一版与本次的五个 blob 头（键数、contentSignature、schema）和 `SHA256SUMS`；不同就按“需要完整安装”发布，并在 release notes 里写明。`build/data_manifest.txt` 是本次包的唯一描述，不要手抄数字。
 
 ## Pages 环境与 tag 部署
 

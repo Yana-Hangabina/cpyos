@@ -83,7 +83,6 @@ class ReaderToolbarUi : public UiAppHost {
     // the current chapter in Contents, the bookmark on the open page in
     // Bookmarks.
     int currentChapterIndex = -1;
-    bool fullRowSelection = false;  // invert the whole cursor row (no side bar)
     // JJWXC Contents: draw the fixed "update chapter list" strip above the
     // list. It is chrome, not a selectable row: it never scrolls away and the
     // capacitor-key cursor never lands on it.
@@ -130,9 +129,6 @@ class ReaderToolbarUi : public UiAppHost {
   void setModel(const Model& model) { model_ = model; }
   // Paint into the framebuffer (no refresh, no clear). Run from the render task.
   void render();
-  // Draw the 604 px Contents focus frame after the FreeInkUI canvas is
-  // blitted; the list component clips its own target at the title column.
-  void drawContentsFocusFrame() const;
   // Route one loop-task input frame; returns the action it mapped to, if any.
   Routed route(const MappedInputManager& input);
 
@@ -150,8 +146,6 @@ class ReaderToolbarUi : public UiAppHost {
   int grabberZoneBottom() const { return sheetTop_ + 64; }
 
  private:
-  freeink::ui::Rect contentsFocusRect_{};
-  GfxRenderer& renderer_;
   static void screenFn(UiScreen& screen, void* user);
   static void onAction(const freeink::ui::ActionEvent& event, void* user);
   void buildToolbar(UiScreen& screen);

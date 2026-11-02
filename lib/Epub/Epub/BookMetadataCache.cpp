@@ -136,14 +136,23 @@ bool BookMetadataCache::beginTocPass() {
     return false;
   }
 
+  spineHrefIndex.reset();
   if (spineCount >= LARGE_SPINE_THRESHOLD) {
-    spineHrefIndex.clear();
-    spineHrefIndex.resize(spineCount);
+    // One nothrow allocation: on failure createTocEntry scans the spine file
+    // for every TOC entry instead (slow but correct), and nothing aborts.
+    spineHrefIndex = makeUniqueNoThrow<SpineHrefIndexEntry[]>(static_cast<size_t>(spineCount));
+    if (!spineHrefIndex) {
+      LOG_ERR("BMC", "Failed to allocate %u B spine href index; scanning %d spine items per TOC entry",
+              static_cast<unsigned>(sizeof(SpineHrefIndexEntry) * static_cast<size_t>(spineCount)), spineCount);
+    }
+  }
+  if (spineHrefIndex) {
     spineFile.seek(0);
     for (int i = 0; i < spineCount; i++) {
       SpineEntry entry;
       if (!readSpineEntry(spineFile, entry)) {
         LOG_ERR("BMC", "Spine tmp file is truncated at entry %d", i);
+        spineHrefIndex.reset();
         spineFile.close();
         tocFile.close();
         return false;
@@ -154,15 +163,12 @@ bool BookMetadataCache::beginTocPass() {
       idx.spineIndex = static_cast<int16_t>(i);
       spineHrefIndex[i] = idx;
     }
-    std::sort(spineHrefIndex.begin(), spineHrefIndex.end(),
+    std::sort(spineHrefIndex.get(), spineHrefIndex.get() + spineCount,
               [](const SpineHrefIndexEntry& a, const SpineHrefIndexEntry& b) {
                 return a.hrefHash < b.hrefHash || (a.hrefHash == b.hrefHash && a.hrefLen < b.hrefLen);
               });
     spineFile.seek(0);
-    useSpineHrefIndex = true;
     LOG_DBG("BMC", "Using fast index for %d spine items", spineCount);
-  } else {
-    useSpineHrefIndex = false;
   }
 
   // Wrapper OOM is fine: createTocEntry falls back to unbuffered writes.
@@ -180,9 +186,9 @@ bool BookMetadataCache::endTocPass() {
   tocFile.close();
   spineFile.close();
 
-  spineHrefIndex.clear();
-  spineHrefIndex.shrink_to_fit();
-  useSpineHrefIndex = false;
+  // Release the index (and its whole allocation) with the TOC pass; every open
+  // book used to keep one deque node alive for a lookup it never repeats.
+  spineHrefIndex.reset();
 
   return flushed && !buildIoFailed;
 }
@@ -457,17 +463,19 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
 
   int16_t spineIndex = -1;
 
-  if (useSpineHrefIndex) {
+  if (spineHrefIndex) {
     uint64_t targetHash = fnvHash64(href);
     uint16_t targetLen = static_cast<uint16_t>(href.size());
 
+    const SpineHrefIndexEntry* begin = spineHrefIndex.get();
+    const SpineHrefIndexEntry* end = begin + spineCount;
     auto it =
-        std::lower_bound(spineHrefIndex.begin(), spineHrefIndex.end(), SpineHrefIndexEntry{targetHash, targetLen, 0},
+        std::lower_bound(begin, end, SpineHrefIndexEntry{targetHash, targetLen, 0},
                          [](const SpineHrefIndexEntry& a, const SpineHrefIndexEntry& b) {
                            return a.hrefHash < b.hrefHash || (a.hrefHash == b.hrefHash && a.hrefLen < b.hrefLen);
                          });
 
-    while (it != spineHrefIndex.end() && it->hrefHash == targetHash && it->hrefLen == targetLen) {
+    while (it != end && it->hrefHash == targetHash && it->hrefLen == targetLen) {
       spineIndex = it->spineIndex;
       break;
     }
