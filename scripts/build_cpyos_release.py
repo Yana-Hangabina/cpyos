@@ -162,6 +162,7 @@ Use `manifest-install.json` (or the web flasher on the project site). It writes:
 | readpico-partitions.bin | 0x8000 |
 | readpico-boot_app0.bin | 0xE000 |
 | readpico-firmware.bin | 0x10000 |
+| readpico-app1.bin | 0x740000 (upgrade / app-only manifests) |
 | pinyin.dat / web_pack.dat / hyphen.dat / i18n_pack.dat / emoji.dat | data partition |
 
 The install manifest asks the browser to erase the chip. That is required when
@@ -170,8 +171,11 @@ coming from the factory partition layout (7.19 MiB slots vs the factory table at
 
 ## Upgrade from an existing CPYOS install
 
-Use `manifest-upgrade.json`: it writes the app and data packs only, keeps NVS
-and the partition table, and does not erase.
+Use `manifest-upgrade.json`: it writes the app to **both** OTA slots and the
+data packs, keeps NVS and the partition table, and does not erase. Both slots
+are written because a device that has already used OTA boots from app1, and the
+browser cannot read otadata to choose the active slot; an app0-only write would
+be silently ignored. `manifest-app.json` follows the same rule.
 
 ## Device OTA
 
@@ -181,17 +185,22 @@ asset entry `firmware.bin` inside that JSON.
 
 ## Manual esptool
 
+Upgrade (or first install after writing the bootloader and partition table):
+
 ```bash
 esptool.py --chip esp32s3 write_flash \\
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \\
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \\
+  0x740000 readpico-app1.bin \\
   0xE70000 pinyin.dat 0xEC6000 web_pack.dat \\
   0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \\
   0xFD0000 emoji.dat
 ```
 
-Verify every file against `SHA256SUMS` before flashing. A complete chip backup
-before the first install is strongly recommended.
+For an existing CPYOS install, skip the bootloader/partition/boot_app0 part and
+write both app slots plus the data packs. Verify every file against
+`SHA256SUMS` before flashing. A complete chip backup before the first install is
+strongly recommended.
 '''
 
 
@@ -233,6 +242,21 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     firmware_asset = next(item for item in app_parts if item['role'] == 'firmware')
     if firmware_asset['size'] > partitions['app0'][1]:
         fail(f'{firmware_asset["name"]} is {firmware_asset["size"]} bytes but app0 is {partitions["app0"][1]}')
+    if firmware_asset['size'] > partitions['app1'][1]:
+        fail(f'{firmware_asset["name"]} is {firmware_asset["size"]} bytes but app1 is {partitions["app1"][1]}')
+
+    # A device that has run an OTA boots from app1 (otadata seq), and the
+    # browser flasher cannot read otadata to pick the active slot. Writing only
+    # app0 would therefore look successful while the device kept booting the
+    # old app1. Upgrade and app-only manifests write BOTH app slots; the image
+    # is byte-identical, so whichever slot the bootloader picks is current.
+    app1_name = nightly_targets.asset_name(TARGET_ID, 'app1.bin')
+    copy(firmware_source, output / app1_name)
+    app1_part = {'role': 'firmware_app1', 'name': app1_name, 'offset': partitions['app1'][0],
+                 'size': (output / app1_name).stat().st_size,
+                 'sha256': sha256_file(output / app1_name)}
+    if app1_part['sha256'] != firmware_asset['sha256']:
+        fail('the app1 copy is not byte-identical to the app0 firmware')
 
     data_rows = read_data_manifest(root)
     for row in data_rows:
@@ -240,8 +264,16 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         print(f'  data {row["role"]:<6} 0x{row["offset"]:06x} {row["size"]:>8} B  {row["name"]}')
 
     install_parts = parts(app_parts, data_rows)
-    update_parts = parts([item for item in app_parts if item['role'] == 'firmware'], data_rows)
-    app_only = parts([item for item in app_parts if item['role'] == 'firmware'], [])
+    update_parts = parts([firmware_asset, app1_part], data_rows)
+    app_only = parts([firmware_asset, app1_part], [])
+
+    def require_both_slots(parts_list, label):
+        offsets = {item['offset'] for item in parts_list}
+        if partitions['app0'][0] not in offsets or partitions['app1'][0] not in offsets:
+            fail(f'{label} must write both app0 and app1; got {sorted(hex(o) for o in offsets)}')
+
+    require_both_slots(update_parts, 'manifest-upgrade.json')
+    require_both_slots(app_only, 'manifest-app.json')
 
     write_json(output / 'manifest-install.json', build_manifest('install', version, install_parts, True))
     write_json(output / 'manifest-upgrade.json', build_manifest('upgrade', version, update_parts, False))

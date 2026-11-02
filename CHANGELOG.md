@@ -2,6 +2,19 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.2.1 — 2026-11-02
+
+### 修复
+
+- **浏览器升级清单同时写 app0 与 app1**：设备做过 OTA 后 otadata 选中 app1，网页刷机无法读取活动槽；此前升级/仅 app 清单只写 app0，会显示写入成功但设备仍从 app1 启动旧固件。`manifest-upgrade.json` / `manifest-app.json` 现在写两个 app 槽（`readpico-firmware.bin` + `readpico-app1.bin`）与五个数据包；首次安装仍由 `boot_app0` 选中 app0。
+- 手动刷写文档与 `FLASH.md` 同步说明两个 app 槽。
+
+### 升级说明
+
+- 0.2.0 → 0.2.1：数据包未变化，设备 OTA 只写 app 分区即可；浏览器升级使用本版本的 `manifest-upgrade.json`。
+- 0.1.x → 0.2.1：语言包有变化；中文/英文内嵌，app-only OTA 后中文完整，其他 33 种语言需完整升级重写数据分区。
+
+
 ## 0.2.0 — 2026-11-02
 
 ### 新增

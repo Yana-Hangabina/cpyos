@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Upgrade manifests now write both app slots",
+    "Fixes OTA devices stuck on the old app1",
+    "Install manifest still selects app0",
+    "Data packs unchanged from 0.2.0",
+    "Chinese UI works after an app-only OTA",
+    "Other 33 languages need the full upgrade"
+  ],
+  "zh": [
+    "升级清单同时写 app0 与 app1",
+    "修复做过 OTA 的设备停在旧 app1",
+    "首次安装仍选中 app0 启动槽",
+    "数据包与 0.2.0 相同",
+    "仅刷 app 后中文界面完整",
+    "其他 33 种语言需完整升级"
+  ]
+}
