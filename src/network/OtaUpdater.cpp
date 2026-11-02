@@ -100,7 +100,9 @@ std::string selectFastestDownloadUrl(const std::string& advertised) {
   add("direct", origin);
   if (isGithubHosted(origin)) {
     // Keep these in the same order as CPYOS_DOWNLOAD_MIRRORS.
-    static constexpr const char* kMirrorLabels[] = {"ghfast.top", "gh-proxy.com"};
+    static constexpr const char* kMirrorLabels[] = {"gh-proxy.org", "git.yylx.win", "ghfast.top",
+                                                      "gh-proxy.com", "github.tbap.top", "gh.dpik.top",
+                                                      "ghproxy.net"};
     static_assert(sizeof(kMirrorLabels) / sizeof(kMirrorLabels[0]) ==
                   CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT);
     for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {

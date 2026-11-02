@@ -72,7 +72,7 @@ EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅
 已安装 CPYOS 0.1.0 或更新版本后：**设置 → 系统 → 检查更新**。OTA 只写 app0，不动 SD 卡、书库和设置。固件从项目官网的静态 OTA 清单读取更新：
 
 ```
-https://yana-hangabina.github.io/cpyos/ota/readpico.json
+https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json
 ```
 
 首次从 CrossMux 1.6.5 或出厂固件切换请使用完整安装包，因为两边的分区表不同。

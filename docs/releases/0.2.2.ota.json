@@ -1,0 +1,18 @@
+{
+  "en": [
+    "OTA manifest no longer depends on GitHub Pages",
+    "Manifest comes from the GitHub latest release asset",
+    "OTA holds 240 MHz and probes faster mirrors",
+    "Versions up to 0.2.1 need the web flasher",
+    "Data packs unchanged from 0.2.1",
+    "Chinese UI stays complete after an app-only OTA"
+  ],
+  "zh": [
+    "OTA 清单不再依赖 GitHub Pages",
+    "清单改从 GitHub Release latest 资产读取",
+    "OTA 全程保持高频并探测更快镜像",
+    "0.2.1 及更早版本请用官网刷写",
+    "数据包与 0.2.1 相同",
+    "仅刷 app 后中文界面完整"
+  ]
+}

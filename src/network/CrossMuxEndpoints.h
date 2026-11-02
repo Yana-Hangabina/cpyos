@@ -18,8 +18,13 @@ inline constexpr char CPYOS_OTA_URL[] = CPYOS_OTA_MANIFEST_URL;
 // release asset so older firmware (which cannot probe) also gets a fast path;
 // 0.1.2+ strips the prefix and measures every candidate before downloading.
 inline constexpr const char* CPYOS_DOWNLOAD_MIRRORS[] = {
+    "https://gh-proxy.org/",
+    "https://git.yylx.win/",
     "https://ghfast.top/",
     "https://gh-proxy.com/",
+    "https://github.tbap.top/",
+    "https://gh.dpik.top/",
+    "https://ghproxy.net/",
 };
 inline constexpr size_t CPYOS_DOWNLOAD_MIRROR_COUNT =
     sizeof(CPYOS_DOWNLOAD_MIRRORS) / sizeof(CPYOS_DOWNLOAD_MIRRORS[0]);
