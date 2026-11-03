@@ -39,4 +39,12 @@ size_t encodeUtf8(uint32_t codepoint, uint8_t* output);
 // Maps a consumed UTF-8 prefix back to bytes in the original GBK stream.
 size_t gbkSourceLength(const uint8_t* utf8, size_t utf8Length);
 
+// Encodes UTF-8 text into the two-byte GBK subset. Intended for query strings the
+// server echoes back into a GB18030 page: sending UTF-8 bytes there produces a page
+// that is neither valid UTF-8 nor valid GBK. Returns false (writing nothing) when a
+// code point has no GBK form or the output does not fit, so the caller can fall
+// back to UTF-8 rather than truncating or substituting silently.
+bool encodeGbkFromUtf8(const char* utf8, size_t utf8Length, uint8_t* output, size_t outputCapacity,
+                       size_t& outputLength);
+
 }  // namespace txt_encoding

@@ -109,6 +109,8 @@ class GfxRenderer {
   // 4-bit value is a raw nibble 0..15 (10 ~= 50%, 7 ~= the old 25% weight).
   // Reader fast-turn uses the 4-bit face, so it needs the nibble threshold.
   static uint8_t s_bwGlyphThreshold;
+  static bool s_grayscaleTextBinary;
+  static uint8_t s_grayscaleTextBinaryThreshold4;
   static uint8_t s_bwGlyphThreshold4;
   // Union (physical coords) of the rects driven since the last clean.
   mutable int dirtyX_ = 0;
@@ -639,6 +641,12 @@ class GfxRenderer {
   static int localCleanMaxPercent();
   // Minimum 2-bit coverage (0..3) that prints ink in BW mode. Default 2 (50%).
   static void setBwGlyphThreshold(uint8_t coverage);
+  // Preview-only: threshold glyph coverage to pure ink/blank while drawing on the
+  // 16-level canvas. The text-settings sheet uses it to show the reader's 1-bit
+  // (fast page turn) result next to the normal 16-level one; nothing else sets it.
+  static void setGrayscaleTextBinary(bool enabled, uint8_t threshold4 = 7);
+  static bool grayscaleTextBinary();
+  static uint8_t grayscaleTextBinaryThreshold4();
   static uint8_t bwGlyphThreshold();
   // Minimum 4-bit nibble (0..15) for a 4-bit face in BW mode. Default 10
   // (~50%); the reader's fast turn uses 7 to keep the old 25% weight.

@@ -78,6 +78,16 @@ class SdCardFontSystem {
     return false;
 #endif
   }
+  // Serial/preview-facing switch: see ttfPreviewBudget_. Takes effect on the next
+  // ensureLoaded().
+  void setPreviewBudget(const bool preview) {
+#if CROSSPOINT_VECTOR_FONTS
+    ttfPreviewBudget_ = preview;
+#else
+    (void)preview;
+#endif
+  }
+
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
@@ -158,6 +168,12 @@ class SdCardFontSystem {
   std::string ttfFamily_;     // loaded vector family name ("" = none)
   int ttfFontId_ = 0;         // renderer font id for ttf_ (0 = none)
   uint8_t ttfPointSize_ = 0;  // size ttf_ was built at
+  // Preview budget: while the reader's text-settings sheet is up, only its sample
+  // line and the UI strings are drawn, so the reader face runs with a small glyph
+  // cache (128 KB / 512 glyphs) instead of the 1 MB / 4096 needed for a whole
+  // reading page. Changing this forces a reload in ensureLoaded(); the caller
+  // restores the full budget on exit (see TextSettingsActivity::onExit()).
+  bool ttfPreviewBudget_ = false;
   // 正文那个矢量字面是否按 4 位覆盖度加载 —— 16 级文字通路的开关，在 loadTtfFamily()
   // 里按面板能力决定。见 EpubReaderActivity 的 use16LevelText。
   // / Whether the reader's vector face was loaded with 4-bit coverage: the switch for the

@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Chinese JJWXC search returns correct titles and authors",
+    "Leaving text settings no longer freezes the device",
+    "Text settings preview switches between 1-bit and 16-level",
+    "A stuck full-page scan now restarts the device",
+    "Bionic reading weight is consistent on every font family",
+    "Data packs unchanged; app-only OTA keeps Chinese UI"
+  ],
+  "zh": [
+    "修复晋江中文搜索的标题与作者乱码",
+    "离开文字设置不再卡死设备",
+    "文字设置新增 1 位与 16 级预览开关",
+    "整页推屏卡住时自动重启恢复",
+    "专注阅读在各类字体上显示一致",
+    "数据包未变化，仅刷 app 后中文完整"
+  ]
+}

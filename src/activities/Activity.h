@@ -84,6 +84,8 @@ class Activity {
   virtual bool presentsGrayscale() const { return false; }
   // Serial-only soak hook: moves the list ring like a NavNext/NavPrevious press.
   virtual void debugMoveRing(int) {}
+  // Serial-only soak hook: performs the Confirm action at the current ring position.
+  virtual void debugConfirm() {}
   // Serial-only soak hook: performs one game move (0..3 = up/right/down/left).
   virtual void debugGameMove(int) {}
   virtual void debugSetTab(int) {}

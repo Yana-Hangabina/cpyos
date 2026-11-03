@@ -141,12 +141,22 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
     layout.key = key;
   }
 
+  // Match what a reader page would actually look like: fast page turn draws the
+  // 1-bit glyphs the reader produces (no midtones), everything else gets the
+  // 16-level canvas the page now provides. The flag only affects this preview.
+  // Binary only when the sheet is showing the 1-bit mode; 16-level keeps the
+  // coverage the face provides (see TextSettingsActivity::previewUsesGrayscale).
+  GfxRenderer::setGrayscaleTextBinary(SETTINGS.fastPageTurn != 0 || SETTINGS.textAntiAliasing == 0, 7);
+
   // Draw the sample twice so the paragraph gap is visible
   GfxRenderer::SyntheticBoldScope syntheticBold(renderer, SETTINGS.fakeBold);
   int y = textTop;
   for (int paragraph = 0; paragraph < 2; paragraph++) {
     for (const auto& line : layout.lines) {
-      if (y + lineH > textBottomLimit) return;
+      if (y + lineH > textBottomLimit) {
+        GfxRenderer::setGrayscaleTextBinary(false);
+        return;
+      }
       line->render(renderer, fontId, textLeft, y);
       const int guideY = y + lineAdvance + SETTINGS.readingGuideLineOffset;
       if (SETTINGS.readingGuideLineEnabled &&
@@ -157,6 +167,7 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previ
     }
     y += paragraphGap;
   }
+  GfxRenderer::setGrayscaleTextBinary(false);
 }
 
 }  // namespace textsettings

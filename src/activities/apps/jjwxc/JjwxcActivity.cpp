@@ -2387,6 +2387,32 @@ const uint8_t* findBytes(const uint8_t* hay, size_t hayLen, const char* needle) 
   return nullptr;
 }
 
+// Percent-encodes a user-typed query in the encoding the WAP pages are served in.
+//
+// The pages are GB18030 and the site echoes the keyword back verbatim: into <title>,
+// and split across a highlight <span> inside every result title. A UTF-8 keyword
+// therefore lands as raw UTF-8 bytes inside a GBK document, and three things go wrong
+// at once:
+//   * the page is then valid as neither encoding, so detect() falls back to UTF-8 and
+//     the GBK author names are shown as U+FFFD diamonds / tofu;
+//   * the highlight span cuts the echoed UTF-8 sequence in half, so the closing
+//     `</span>` ends up inside the parsed title (JjwxcWapShelf::copyText carries the
+//     split bytes through, it does not invent the tag);
+//   * author search (t=2) matches nothing at all because the site compares GBK bytes.
+// Sending the keyword in GBK keeps the whole page in one encoding. Characters with no
+// GBK form fall back to the previous UTF-8 encoding instead of failing the search.
+size_t encodeWapQuery(const std::string& utf8, char* out, const size_t outCap) {
+  char gbk[128];
+  size_t gbkLen = 0;
+  if (utf8.size() <= sizeof(gbk) &&
+      txt_encoding::encodeGbkFromUtf8(utf8.c_str(), utf8.size(), reinterpret_cast<uint8_t*>(gbk), sizeof(gbk),
+                                      gbkLen)) {
+    return jjwxc::wapUrlEncode(gbk, gbkLen, out, outCap);
+  }
+  LOG_INF(kTag, "query has no GBK form (%u bytes); sending it as UTF-8", (unsigned)utf8.size());
+  return jjwxc::wapUrlEncode(utf8.c_str(), utf8.size(), out, outCap);
+}
+
 // Backs jjwxc::PuaLookup with the map the font parser built. Returning 0 for an
 // unmapped code point is deliberate and load-bearing: wapPageToText counts those and
 // reports them, so a font whose glyph set is not in the shipped table fails loudly
@@ -2832,7 +2858,7 @@ jjwxc::Status JjwxcActivity::fetchWapSearch() {
   wap_->setNowUnix(cookieClock());
 
   char encoded[96];
-  if (jjwxc::wapUrlEncode(keyword_.c_str(), keyword_.size(), encoded, sizeof(encoded)) == 0) {
+  if (encodeWapQuery(keyword_, encoded, sizeof(encoded)) == 0) {
     LOG_ERR(kTag, "search keyword would not fit the encoded cap (%u bytes)", (unsigned)keyword_.size());
     return jjwxc::Status::Protocol;
   }
@@ -3220,10 +3246,9 @@ jjwxc::Status JjwxcActivity::runAdvancedSearch() {
     }
   }
 
-  char keyword[96];
+  char keyword[128];
   keyword[0] = '\0';
-  if (!advKeyword_.empty() &&
-      jjwxc::wapUrlEncode(advKeyword_.c_str(), advKeyword_.size(), keyword, sizeof(keyword)) == 0) {
+  if (!advKeyword_.empty() && encodeWapQuery(advKeyword_, keyword, sizeof(keyword)) == 0) {
     LOG_ERR(kTag, "advanced keyword would not fit the encoded cap");
     return jjwxc::Status::Protocol;
   }

@@ -95,6 +95,11 @@ class HalStorage {
     StorageLock& operator=(const StorageLock&) = delete;
   };
 
+  // Serial-only diagnostics: name of the task holding the SD transaction lock,
+  // or nullptr. A UI task frozen with the render mutex free is either inside an
+  // SD operation or waiting here; this tells the two apart.
+  const char* debugMutexHolderName() const;
+
  private:
   static HalStorage instance;
 

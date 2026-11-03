@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <atomic>
 #include <BoardConfig.h>
 #include <DeviceSecret.h>
 #if FREEINK_DEVICE_READPICO
@@ -141,13 +142,38 @@ static bool g_debugNoSleep = false;  // CMD:NOSLEEP (serial soaks only)
 static unsigned long s_scanWatchdogDeadlineMs = 0;
 static bool s_scanWatchdogStarted = false;
 
+// Serial-only stuck detector. The reported "font settings freeze" leaves the loop
+// task blocked in a wait that is NOT the render mutex (the render task is idle and
+// the mutex is free), and nothing reboots, so the only way to see it is from a
+// task that keeps running. This one watches a heartbeat the main loop bumps; when
+// it stops for 10 s it dumps every task's state plus the holders of the render,
+// storage and power mutexes, once per 10 s, so device_log/live.log carries the
+// answer for the next occurrence. Costs one atomic bump per loop pass.
+static std::atomic<uint32_t> s_loopHeartbeat{0};
+static void stuckDetectorTask(void*) {
+  uint32_t lastSeen = 0;
+  unsigned long lastDump = 0;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    const uint32_t beat = s_loopHeartbeat.load(std::memory_order_relaxed);
+    if (beat != lastSeen) {
+      lastSeen = beat;
+      continue;
+    }
+    if (millis() - lastDump < 10000) continue;
+    lastDump = millis();
+    logSerial.printf("STUCK loop heartbeat stopped for 10 s; dumping task state\n");
+    activityManager.debugDumpTaskStates();
+  }
+}
+
 namespace {
 void scanWatchdogTask(void*) {
   for (;;) {
     vTaskDelay(pdMS_TO_TICKS(200));
     const unsigned long deadline = s_scanWatchdogDeadlineMs;
     if (deadline != 0 && static_cast<long>(millis() - deadline) > 0) {
-      ESP_LOGE("SCANWD", "windowed push did not return in time; restarting");
+      ESP_LOGE("SCANWD", "panel push did not return in time; restarting");
       vTaskDelay(pdMS_TO_TICKS(100));
       esp_restart();
     }
@@ -1392,9 +1418,13 @@ void setup() {
   // Ensure we're not still holding the power button before leaving setup
   waitForPowerRelease();
   allowSleepAt = millis() + 2000;
+
+  // Serial-only: start the stuck detector that names the blocking lock.
+  xTaskCreate(stuckDetectorTask, "stuckdet", 3072, nullptr, 0, nullptr);
 }
 
 void loop() {
+  s_loopHeartbeat.fetch_add(1, std::memory_order_relaxed);
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
@@ -1732,6 +1762,35 @@ void loop() {
       } else if (cmd == "KEYBOARD") {
         activityManager.pushActivity(makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test",
                                                                              "", 64, InputType::Text));
+      } else if (cmd == "WATCH") {
+        // Serial-only: a low-priority task that keeps dumping task states, so a
+        // UI task frozen on a mutex can still be diagnosed (CMD: lines are read by
+        // the frozen task and stop being serviced).
+        static bool watchStarted = false;
+        if (!watchStarted) {
+          watchStarted = true;
+          xTaskCreatePinnedToCore(
+              [](void*) {
+                for (;;) {
+                  vTaskDelay(pdMS_TO_TICKS(3000));
+                  activityManager.debugDumpTaskStates();
+                }
+              },
+              "statewatch", 4096, nullptr, 0, nullptr, 0);
+          logSerial.printf("WATCH started\n");
+        }
+      } else if (cmd == "TASKS") {
+        activityManager.debugDumpTaskStates();
+      } else if (cmd.startsWith("BOLD")) {
+        // Serial-only: set the fake-bold level so the preview can be compared A/B
+        // without walking the settings UI.
+        const int space = cmd.indexOf(' ');
+        SETTINGS.fakeBold = space > 0 ? static_cast<uint8_t>(cmd.substring(space + 1).toInt()) : 0;
+        SETTINGS.saveToFile();
+        activityManager.requestUpdate();
+        logSerial.printf("BOLD=%u\n", (unsigned)SETTINGS.fakeBold);
+      } else if (cmd == "CONFIRM") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugConfirm();
       } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
         if (auto* activity = activityManager.currentActivityPtr())
           activity->debugMoveRing(cmd == "ROWDOWN" ? 1 : -1);

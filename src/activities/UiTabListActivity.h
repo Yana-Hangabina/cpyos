@@ -68,6 +68,13 @@ class UiTabListActivity : public UiListActivity {
   // viewport to itself.
   void moveRingTo(int ringIndex);
   void debugMoveRing(int delta) override;
+  // Extra control placed in the tab band by a subclass (e.g. the text-settings
+  // preview switch). ACTION_TAB with this value routes here instead of a tab.
+  // Positive on purpose: the action router drops negative values, and a single
+  // missed filter is what made the first version of the preview switch dead.
+  static constexpr int16_t kTabBarExtraAction = 1000;
+  virtual void onTabBarExtraAction() {}
+  void debugConfirm() override;
 
   // --- screen helpers --------------------------------------------------------
   // The shared tab band: theme-driven pill treatment (label-hugging Lyra vs

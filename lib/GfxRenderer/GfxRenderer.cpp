@@ -596,6 +596,12 @@ static void draw2BitGlyphPixel(const GfxRenderer& renderer, const GfxRenderer::R
   // map treated any nonzero coverage as ink (25%), which fattened thin CJK
   // horizontals and left stair-stepped edges on every 1-bit page.
   if (renderMode == GfxRenderer::BW && coverage < GfxRenderer::bwGlyphThreshold()) return;
+  if (renderMode != GfxRenderer::BW && GfxRenderer::grayscaleTextBinary()) {
+    // Same 1-bit emulation for 2-bit (.cpfont) faces: 50% coverage is ink.
+    if (coverage < 2) return;
+    renderer.drawPixel(x, y, pixelState);
+    return;
+  }
   const auto pixel = GfxRenderer::mapTwoBitGlyphCoverage(renderMode, coverage);
   if (!pixel.draw) return;
   renderer.drawPixel(x, y, renderMode == GfxRenderer::BW ? pixelState : pixel.state);
@@ -628,6 +634,13 @@ static void draw4BitGlyphPixel(const GfxRenderer& renderer, const int x, const i
   // coverage 0 is background. For inverted text the button/card has already
   // painted that background black, so skipping is correct here too.
   if (coverage == 0) return;
+  if (GfxRenderer::grayscaleTextBinary()) {
+    // 1-bit emulation for the settings preview: ink or nothing, the same call the
+    // reader's fast mode makes at the 1-bit buffer.
+    if (coverage < GfxRenderer::grayscaleTextBinaryThreshold4()) return;
+    renderer.drawGrayscale16Pixel(x, y, inverted ? 255 : 0);
+    return;
+  }
   const uint8_t gray = static_cast<uint8_t>((inverted ? coverage : 15u - coverage) * 17u);
   renderer.drawGrayscale16Pixel(x, y, gray);
 }
@@ -1213,10 +1226,46 @@ void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const 
     return;
   }
 
-  const uint8_t activeSyntheticBoldPixels =
-      syntheticBoldPixels != 0 && (style & EpdFontFamily::BOLD) != 0 ? syntheticBoldPixels : 0;
+  // Weight rules, one place for all of them:
+  //   * fake bold (SETTINGS.fakeBold) makes EVERY glyph heavier -- it is a user
+  //     "make the text heavier" switch, so it is not gated on BOLD style;
+  //   * a run the book marks BOLD must stay one step heavier than the body, so:
+  //       - with fake bold off and a real bold design (vector families synthesize
+  //         one via wght/embolden; built-in families ship one) the design is used;
+  //       - with fake bold off and NO bold design (.cpfont families, single style)
+  //         the run gets a 1 px faux bold. Before this, focus reading silently did
+  //         nothing on those families while vector fonts showed bold word prefixes;
+  //       - with fake bold on, the body gets N px and bold runs N+1 (capped at 3),
+  //         so turning fake bold on does not flatten the emphasis;
+  //   * when a dilation applies the regular design is drawn instead, so a bold
+  //     run is never doubled (design bold + dilation).
+  const bool boldRequested = (style & EpdFontFamily::BOLD) != 0;
+  bool familyHasBoldDesign = true;
+  {
+    const auto probe = fontMap.find(fontId);
+    if (probe != fontMap.end()) {
+      familyHasBoldDesign = probe->second.getData(EpdFontFamily::BOLD) != probe->second.getData(EpdFontFamily::REGULAR);
+    }
+  }
+  uint8_t boldPixels = syntheticBoldPixels;
+  bool stripBoldStyle = boldPixels != 0;
+  if (boldRequested) {
+    if (!familyHasBoldDesign) {
+      // No bold design to fall back on: a 1 px faux bold keeps focus-reading word
+      // prefixes (and CSS bold) visible on .cpfont families too, one step heavier
+      // than the body when fake bold is on.
+      if (boldPixels < 3) ++boldPixels;
+      stripBoldStyle = true;  // never request a face that does not exist
+    } else {
+      // A real/synthesized bold design: keep it and let fake bold dilate on top, so
+      // "fake bold + focus reading" keeps the emphasis instead of flattening both
+      // to the same dilation.
+      stripBoldStyle = false;
+    }
+  }
+  const uint8_t activeSyntheticBoldPixels = boldPixels;
   const auto renderStyle =
-      activeSyntheticBoldPixels != 0
+      stripBoldStyle
           ? static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(style) & ~static_cast<uint8_t>(EpdFontFamily::BOLD))
           : style;
 
@@ -2987,6 +3036,8 @@ bool GfxRenderer::bandUpdatesSuspended() { return s_bandSuspended; }
 // whole panel. CMD:CLEAN 0 and `localCleanFits` (union > 60%) keep the old path.
 bool GfxRenderer::s_localClean_ = true;
 uint8_t GfxRenderer::s_bwGlyphThreshold = 2;
+bool GfxRenderer::s_grayscaleTextBinary = false;
+uint8_t GfxRenderer::s_grayscaleTextBinaryThreshold4 = 7;
 uint8_t GfxRenderer::s_bwGlyphThreshold4 = 10;
 int GfxRenderer::s_localCleanMaxPercent = static_cast<int>(band_policy::kMaxLocalCleanPercent);
 
@@ -3001,6 +3052,12 @@ void GfxRenderer::setBwGlyphThreshold(const uint8_t coverage) {
   s_bwGlyphThreshold = coverage > 3 ? 3 : coverage;
 }
 uint8_t GfxRenderer::bwGlyphThreshold() { return s_bwGlyphThreshold; }
+void GfxRenderer::setGrayscaleTextBinary(const bool enabled, const uint8_t threshold4) {
+  s_grayscaleTextBinary = enabled;
+  s_grayscaleTextBinaryThreshold4 = threshold4 > 15 ? 15 : threshold4;
+}
+bool GfxRenderer::grayscaleTextBinary() { return s_grayscaleTextBinary; }
+uint8_t GfxRenderer::grayscaleTextBinaryThreshold4() { return s_grayscaleTextBinaryThreshold4; }
 void GfxRenderer::setBwGlyphThreshold4(const uint8_t nibble) {
   s_bwGlyphThreshold4 = nibble > 15 ? 15 : nibble;
 }

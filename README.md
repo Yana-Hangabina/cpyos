@@ -13,10 +13,10 @@
 首页只保留上次读到、最近阅读、近 7 天阅读和晋江更新；书架、找书、我的共用一条水线与底部导航。设置从「我的」进入分类子页，返回路径始终回到「我的」，不再跳到旧的设置界面。找书页把微信读书、晋江、本地书、OPDS 的登录与书架入口直接摊开，每个来源有自己的会话。
 
 ### 晋江文学城原生客户端
-- 书架翻页、书籍详情、章节列表窗口化与跳章、书籍 / 作者 / 高级搜索、发现与 14 个榜单来源、收藏夹管理。
+- 书架翻页、书籍详情、章节列表窗口化与跳章、书籍 / 作者 / 高级搜索（中文关键词按 GBK 发送）、发现与 14 个榜单来源、收藏夹管理。
 - 免费章节和已购买的 VIP 章节都可以缓存、离线阅读并同步进度。
 - 章节购买、价格确认、6 位支付密码（可选记住，设备密钥 AES-256-GCM 封装）、未购章占位、重试未购章。
-- 段评计数、正文离线缓存、点赞、回复、发表段评；所有写操作只在用户点按时发生。
+- 段评计数、正文离线缓存、点赞、回复、发表段评；所有写操作只在用户点按时发生。段评正文可在后台按队列缓存（待机或 Wi-Fi 恢复时继续，队列页可暂停）。
 - 阅读进度双向同步、书架追更快照；读到末页可继续下载新章。
 - 成品 EPUB 与章节正文使用设备绑定密钥加密；阅读器退出时清理明文派生缓存。
 
@@ -28,14 +28,17 @@
 扫码登录、书架浏览、EPUB 下载与离线阅读、阅读进度同步。微信读书、晋江和本地书共用书架，并显示来源徽标。
 
 ### 中文阅读
+- 统一可缩放中文字体：UI、书名 / 作者、晋江 App 与阅读正文共用一套覆盖 8,105 字 + GB2312 的字族，随固件提供，首次启动释放到 SD 后流式读取。
+- UI 字号（紧凑 / 标准 / 大 / 特大）与阅读字号（10–34pt）分开设置；生僻字可放 SD 卡完整字体。
 - 离线拼音书名搜索与连续拼音输入（349 KB 数据表，随数据分区刷入）。
 - 11 种语言断词自动机，按需从数据分区加载。
-- GB2312 常用字 12pt 兜底 + 14/16pt UI 字面；生僻字可放 SD 卡完整字体。
 - SD 卡 TTF / OTF / TTC；EPUB 内嵌字体；带自有字体的书自动使用书内字体。
 
 ### 墨水屏显示与翻页
+- 16 级文字与界面抗锯齿：4-bit 覆盖度、50% B/W 阈值，斜线、圆角、图标与反色文字都参与灰度合成。
+- 列带（局部）刷新与局部残影清理；四个主界面之间切换不再整屏闪。
 - 水波纹翻页（移植自 kiikoread，按 Read Pico 内部内存改为 8 KiB 热窗）。
-- 黑白快速翻页、异步推屏、前向预绘。
+- 黑白快速翻页（DU 波形）、异步推屏、前向预绘；整页推屏有 8 秒扫描看门狗。
 - 状态栏时钟每分钟局部刷新；全刷屏与屏幕修复。
 - gamma 覆盖 LUT、TEXTTURN 白→中灰提前回浅（均移植自 kiikoread）。
 - 倾斜 / 摇晃体感翻页，阈值移植自 kiikoread。
@@ -44,7 +47,7 @@
 EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅读统计与热力图、待机表盘、最近阅读、续读卡。支持 KOReader 进度同步。
 
 ### 系统与连接
-设备 OTA、SD 卡固件更新、浏览器传书与设置、WebDAV、OPDS、Calibre 无线、可选的 USB 大容量存储；33 种 UI 语言按需加载；崩溃恢复页保护上次打开的书。
+设备 OTA、SD 卡固件更新、浏览器传书与设置、WebDAV、OPDS、Calibre 无线、可选的 USB 大容量存储；33 种 UI 语言按需加载；崩溃报告页记录重启原因与上次启动阶段。
 
 ## 设备与发布
 
@@ -52,9 +55,9 @@ EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅
 |---|---|
 | 目标设备 | Read Pico（小纸 Pico，RDP-G01-W），ESP32-S3，684×1216 16 灰阶 |
 | 预编译包 | **只提供 Read Pico**；上游其它目标仍可从源码构建 |
-| 当前版本 | **0.1.0**（CPYOS 独立版本号，从 0.1.0 开始，不接续 CrossMux 1.x） |
+| 当前版本 | **0.2.3**（CPYOS 独立版本号，从 0.1.0 开始，不接续 CrossMux 1.x） |
 | 安装方式 | 浏览器 Web Serial 刷机、完整安装包、设备 OTA、SD 卡固件更新 |
-| 分区 | app0 / app1 各 7.19 MiB，数据分区 1.5 MiB（拼音 / 断词 / 语言包 / Web 资源） |
+| 分区 | app0 / app1 各 7.19 MiB，数据分区 1.5 MiB（拼音 / 断词 / 语言包 / Web 资源 / emoji） |
 
 ### 第一次安装
 
@@ -69,21 +72,23 @@ EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅
 
 ### 设备内 OTA
 
-已安装 CPYOS 0.1.0 或更新版本后：**设置 → 系统 → 检查更新**。OTA 只写 app0，不动 SD 卡、书库和设置。固件从项目官网的静态 OTA 清单读取更新：
+已安装 CPYOS 0.2.2 或更新版本后：**设置 → 系统 → 检查更新**。OTA 写入非活动的 app 槽（app0 或 app1），不动数据分区、SD 卡、书库和设置。固件从 GitHub Release 的 `latest` 资产读取更新（经镜像前缀）：
 
 ```
 https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json
 ```
 
+0.2.1 及更早版本的清单仍在 GitHub Pages，部分网络无法访问；请先用官网网页刷写升级一次。数据包有变化的版本不能只做 app-only OTA，发布说明会标注。
+
 首次从 CrossMux 1.6.5 或出厂固件切换请使用完整安装包，因为两边的分区表不同。
 
 ## 版本与发布
 
-版本号由 `platformio.ini` 的 `[crosspoint] version` 定义，Git tag 必须与它完全一致（例如 `0.1.0`，不带 `v`）。发布工作流会：
+版本号由 `platformio.ini` 的 `[crosspoint] version` 定义；Git tag 是 `cpyos-X.Y.Z`（例如 `cpyos-0.2.3`），产品版本仍是裸 `X.Y.Z`。发布工作流会：
 
 1. 构建 `readpico` 环境，校验 `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（不是 `arduino-lib-builder`）、板级 tag、芯片、app0 槽大小；
-2. 生成拼音 / 断词 / 语言包 / Web 资源包，并生成 `build/data_manifest.txt`；
-3. 产出完整安装包、升级包、应用固件、Web 刷机 manifest、OTA 清单和 `SHA256SUMS`；
+2. 生成拼音 / 断词 / 语言包 / Web 资源 / emoji 包，并生成 `build/data_manifest.txt`；
+3. 产出完整安装包、升级包（同时写 app0 与 app1）、应用固件、Web 刷机 manifest、OTA 清单和 `SHA256SUMS`；
 4. 创建 GitHub Release，并部署 GitHub Pages（官网 + 网页刷机 + OTA 清单）。
 
 维护者步骤见 [docs/cpyos/release.md](docs/cpyos/release.md)，用户更新说明见 [docs/cpyos/install.md](docs/cpyos/install.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
@@ -115,10 +120,10 @@ python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.
 python3 scripts/generate_data_manifest.py
 
 # 组装发布包（不发布也能生成）
-python3 scripts/build_cpyos_release.py --version 0.1.0
+python3 scripts/build_cpyos_release.py --version 0.2.3
 ```
 
-产物在 `dist/cpyos/0.1.0/`。构建判据不要只看退出码：日志里要有 `[SUCCESS]`，镜像的 `esp_app_desc.project_name` 必须是 `crossmux` 或 `cpyos`（不能是 `arduino-lib-builder`）。桌面模拟器：
+产物在 `dist/cpyos/0.2.3/`。构建判据不要只看退出码：日志里要有 `[SUCCESS]`，镜像的 `esp_app_desc.project_name` 必须是 `crossmux` 或 `cpyos`（不能是 `arduino-lib-builder`）。桌面模拟器：
 
 ```bash
 pio run -e simulator_readpico -t run_simulator

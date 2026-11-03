@@ -32,6 +32,14 @@ class TextSettingsActivity final : public UiTabListActivity {
   void onExit() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return fontLoadState_.load() != FontLoadState::Idle; }
+  // 16-bit preview needs the 16-level canvas (that is where the anti-aliasing
+  // exists), and a gray commit always drives the whole panel -- fine, because that
+  // mode is the "look at the glyph edges" mode. The 1-bit preview is the opposite
+  // trade: a 1-bit page, banded pushes, so moving the selection does not flash the
+  // screen on every key.
+  bool previewUsesGrayscale() const;
+  bool wantsBandUpdates() const override { return !previewUsesGrayscale(); }
+  bool presentsGrayscale() const override { return previewUsesGrayscale(); }
   bool handleHomeGesture() override;
 
  private:
@@ -77,10 +85,12 @@ class TextSettingsActivity final : public UiTabListActivity {
   void buildTabBar(UiScreen& screen, bool boldLabels = false) override;
   void activateIndex(int index) override;
   void onTabAction(int index) override;
+  void onTabBarExtraAction() override;
   void stepTab(int direction) override { switchTab(direction); }
   void drawChrome() override;
   void drawFooter() override;
   bool handleButtons() override;
+  void debugConfirm() override;
   bool handleCustomInput() override;
 
   void applyFamily(int listIndex);

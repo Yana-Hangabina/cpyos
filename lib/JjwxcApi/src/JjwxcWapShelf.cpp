@@ -360,7 +360,24 @@ void copyText(char* dst, size_t dstCap, const char* src, size_t srcLen) {
       }
     }
     size_t n = utf8SeqLen(static_cast<uint8_t>(src[i]));
-    if (n == 0 || n > srcLen - i) n = 1;  // not UTF-8: carry the byte through
+    if (n == 0) n = 1;  // not UTF-8: carry the byte through
+    if (n > 1) {
+      // Copy only the continuation bytes that are really there. A highlight tag can
+      // split a multi-byte character -- the live search page emits
+      // `<span style="color:red">E6 88</span>91`, i.e. the echo of the keyword was
+      // inserted by byte offset and landed mid-sequence. Taking `n` bytes blindly
+      // swallowed the '<' of the closing tag, so the tag itself was then copied as
+      // text and `</span>` showed up inside the title. Stopping at the first
+      // non-continuation byte lets the next iteration see the tag and skip it, and
+      // the bytes after it rejoin the sequence into the character the site meant.
+      size_t have = 1;
+      while (have < n && i + have < srcLen && (static_cast<uint8_t>(src[i + have]) & 0xC0) == 0x80) ++have;
+      // Running out of run means the page ended mid-character; carry the single byte
+      // as before. Stopping on anything else (markup, or corrupt data) copies only
+      // the continuation bytes that exist.
+      n = (i + have >= srcLen) ? 1 : have;
+    }
+    if (n > srcLen - i) n = srcLen - i;
     if (o + n > dstCap - 1) break;
     memcpy(dst + o, src + i, n);
     o += n;

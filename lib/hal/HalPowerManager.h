@@ -22,7 +22,11 @@ class HalPowerManager {
 
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect lock mode, clock transitions, and isLowPower
+  SemaphoreHandle_t modeMutex = nullptr;
+ public:
+  // Serial-only diagnostics (see HalStorage::debugMutexHolderName).
+  const char* debugModeMutexHolderName() const;
+ private:  // Protect lock mode, clock transitions, and isLowPower
 
  public:
   enum class LightSleepWakeReason : uint8_t {
