@@ -369,3 +369,9 @@ HalFile HalFile::openNextFile() {
 }
 bool HalFile::isOpen() const { return impl != nullptr && impl->file.isOpen(); }  // already thread-safe, no need to wrap
 HalFile::operator bool() const { return isOpen(); }
+
+const char* HalStorage::debugMutexHolderName() const {
+  if (storageMutex == nullptr) return "(uninit)";
+  TaskHandle_t holder = xSemaphoreGetMutexHolder(storageMutex);
+  return holder != nullptr ? pcTaskGetName(holder) : "(none)";
+}

@@ -12,8 +12,8 @@
 - **Refreshed UI** — home, library, find-books and settings redesigned around what a Read Pico actually shows. Every source (WeRead, JJWXC, local files, OPDS) exposes its own sign-in and shelf on the find-books screen.
 - Free chapters and purchased VIP chapters can be cached, read offline and synced.
 - **WeRead** — QR sign-in, shelf, EPUB download, offline reading and progress sync, sharing one library with JJWXC and local books.
-- **Chinese reading** — offline pinyin search and IME, 11 hyphenation languages, GB2312 fallback, SD-card TTF/OTF/TTC and embedded EPUB fonts.
-- **E-ink display** — water-ripple page turn, fast black/white page turn, asynchronous pushes, area-refresh clock, screen repair and kiikoread-derived gamma/TEXTTURN tuning.
+- **Chinese reading** — one scalable CJK family covering 8,105 standard characters plus GB2312, shared by the UI, titles, the JJWXC app and body text; UI and reading sizes are separate (reading 10–34pt), and richer SD-card fonts can fill in rarer characters. Offline pinyin search/IME, 11 hyphenation languages, SD-card TTF/OTF/TTC and embedded EPUB fonts.
+- **E-ink display** — 16-level text and UI anti-aliasing (4-bit coverage, 50% B/W threshold), banded/partial refresh with local ghost cleanup, water-ripple page turn, fast DU page turn, asynchronous pushes, a scan watchdog on every full-page push, area-refresh clock, screen repair and kiikoread-derived gamma/TEXTTURN tuning.
 - **Reading and library** — EPUB, TXT, CBZ, FB2, experimental PDF; bookmarks, annotations, dictionary, reading statistics, standby faces and KOReader progress sync.
 - **System** — device OTA, SD-card firmware update, browser transfer/settings, WebDAV, OPDS, Calibre wireless, optional USB MSC and 33 UI languages loaded from the data partition.
 - **Encryption** — the packaged EPUB and cached chapter text use device-bound keys; plaintext reader caches are removed on exit.
@@ -32,11 +32,13 @@ python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 
 Then use desktop Chrome/Edge on the [project site](https://yana-hangabina.github.io/cpyos/#install). Use **First install / recovery** when coming from factory firmware or CrossMux 1.6.5 (it rebuilds the partition table), and **Upgrade from CPYOS** for an existing CPYOS installation.
 
-After 0.1.0 is installed, update on the device via **Settings → System → Check for updates**. OTA writes app0 only and keeps the SD card, books and settings. The firmware reads its manifest from:
+After CPYOS 0.2.2 or newer is installed, update on the device via **Settings → System → Check for updates**. OTA writes the inactive app slot (app0 or app1) and keeps the data partition, SD card, books and settings. The firmware reads its manifest from the GitHub Release `latest` asset (through a mirror prefix):
 
 ```
-https://yana-hangabina.github.io/cpyos/ota/readpico.json
+https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json
 ```
+
+Versions up to 0.2.1 still point at GitHub Pages, which some networks cannot reach; use the website flasher once to upgrade them. Releases that change the data packs require a full install rather than an app-only OTA; the release notes say so.
 
 See [docs/cpyos/install.md](docs/cpyos/install.md) for the complete procedure.
 
@@ -56,10 +58,10 @@ python3 scripts/build_web_pack.py
 python3 scripts/generate_hyphenation_db.py
 python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.whl
 python3 scripts/generate_data_manifest.py
-python3 scripts/build_cpyos_release.py --version 0.1.0
+python3 scripts/build_cpyos_release.py --version 0.2.3
 ```
 
-The release bundle is written to `dist/cpyos/0.1.0/`. Check `[SUCCESS]` in the build log and `esp_app_desc.project_name` is `crossmux` or `cpyos` in the image (not `arduino-lib-builder`), not just the process exit code. See [docs/cpyos/release.md](docs/cpyos/release.md) for the maintainer checklist.
+The release bundle is written to `dist/cpyos/0.2.3/`. Check `[SUCCESS]` in the build log and `esp_app_desc.project_name` is `crossmux` or `cpyos` in the image (not `arduino-lib-builder`), not just the process exit code. See [docs/cpyos/release.md](docs/cpyos/release.md) for the maintainer checklist.
 
 ## Upstream sync
 

@@ -106,6 +106,10 @@ class ActivityManager {
   // (CFF's cf2_interpT2CharString frame alone is ~16 KB); the periodic memory
   // log prints this so a creeping regression is visible before it canaries.
   uint32_t renderStackMinFreeBytes() const;
+  // Serial-only diagnostics: dumps every task's state plus who holds the render
+  // mutex and who is waiting for it. Used to tell "UI blocked on renderingMutex"
+  // apart from "render task stuck inside render()" without a debugger.
+  void debugDumpTaskStates();
   void cancelIdleRender() { idleRenderGeneration.fetch_add(1, std::memory_order_relaxed); }
   bool idleRenderCancelled(uint32_t generation) const {
     return generation != idleRenderGeneration.load(std::memory_order_relaxed) || isSwitchPending() ||

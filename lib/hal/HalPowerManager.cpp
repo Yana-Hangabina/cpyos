@@ -542,3 +542,9 @@ HalPowerManager::Lock::~Lock() {
   }
   xSemaphoreGive(powerManager.modeMutex);
 }
+
+const char* HalPowerManager::debugModeMutexHolderName() const {
+  if (modeMutex == nullptr) return "(uninit)";
+  TaskHandle_t holder = xSemaphoreGetMutexHolder(modeMutex);
+  return holder != nullptr ? pcTaskGetName(holder) : "(none)";
+}

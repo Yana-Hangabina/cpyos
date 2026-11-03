@@ -263,7 +263,15 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, bool allowFlashCache)
   }
 }
 
-void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) { manager_.unloadAll(renderer); }
+void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) {
+  manager_.unloadAll(renderer);
+#if CROSSPOINT_VECTOR_FONTS
+  // The vector reader face is not owned by manager_ — without this, "release the
+  // resident SD font" left it loaded. That made the text-settings preview budget
+  // (128 KB) stick for the reader, which then re-rasterised most of every page.
+  unloadTtf(renderer);
+#endif
+}
 
 bool SdCardFontSystem::adoptCompleteChineseNotoSans() {
 #ifdef ENABLE_CHINESE_VERSION
@@ -473,6 +481,16 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
   // Working headroom that must remain in internal DRAM after a resident load
   // (FreeType face setup, glyph caches, and the rest of the system).
   static constexpr size_t kInternalHeadroom = 96 * 1024;
+  // Contiguous PSRAM that must survive a resident copy: the reader face's glyph
+  // arena is 1 MB on Read Pico and FreeType's face tables are allocated after
+  // this buffer, so a copy that eats the last megabyte strands the loader.
+  static constexpr size_t kResidentContiguousReserve = 1024 * 1024;
+  // Family-level cap. The per-file checks below only look at what is free right
+  // now, so a family that ships four style files could spend the whole 8 MB one
+  // file at a time. Cap the aggregate: above it, later styles stream (which is
+  // slower but bounded). 4 MB leaves room for the reader face, three UI faces,
+  // the glyph arena and the rest of the firmware.
+  static constexpr size_t kFamilyResidentMax = 4 * 1024 * 1024;
   HalFile f = Storage.open(path.c_str());
   if (!f) {
     LOG_ERR("SDFS", "Failed to open TTF: %s", path.c_str());
@@ -489,16 +507,44 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
   // otherwise it competes with everything else in internal DRAM. PsramAlloc
   // aborts on OOM, so this gate is load-bearing on no-PSRAM boards (X4/C3):
   // fall back to streaming instead of attempting an allocation that can fail.
+  //
+  // On PSRAM boards the budget is per FAMILY, not per file: up to four style
+  // files are opened, then FreeType copies each face's cmap/loca/hmtx, then the
+  // reader glyph arena takes 1 MB and every UI fallback takes its own face. A
+  // font that merely fits the largest block at the moment we read it can still
+  // leave the loader with no room to stand the face up -- and then PsramAlloc
+  // aborts the firmware. Keeping kResidentContiguousReserve free turns that into
+  // a streaming load, which is the path that is supposed to absorb this.
+  const size_t familyReserve = kResidentContiguousReserve;
+  size_t residentTotal = 0;
+  for (const auto& src : ttfSources_) {
+    if (src.present && !src.streamed) residentTotal += src.bytes.size();
+  }
   bool resident = len <= kResidentMax;
-  if (resident && heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < len) {
-    const size_t internalFree = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (internalFree < len + kInternalHeadroom) {
-      LOG_DBG("SDFS", "TTF %s (%u KB) too large for DRAM (largest block %u KB), streaming", path.c_str(),
-              static_cast<unsigned>(len / 1024), static_cast<unsigned>(internalFree / 1024));
-      resident = false;
+  if (resident && residentTotal + len > kFamilyResidentMax) {
+    LOG_INF("SDFS", "TTF %s (%u KB) would push the family past %u MB resident; streaming", path.c_str(),
+            static_cast<unsigned>(len / 1024), static_cast<unsigned>(kFamilyResidentMax / 1024 / 1024));
+    resident = false;
+  }
+  if (resident) {
+    const size_t psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (psramLargest >= len) {
+      if (psramLargest < len + familyReserve) {
+        LOG_INF("SDFS", "TTF %s (%u KB) would leave < %u KB PSRAM; streaming instead", path.c_str(),
+                static_cast<unsigned>(len / 1024), static_cast<unsigned>(familyReserve / 1024));
+        resident = false;
+      }
+    } else {
+      const size_t internalFree = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+      if (internalFree < len + kInternalHeadroom) {
+        LOG_DBG("SDFS", "TTF %s (%u KB) too large for DRAM (largest block %u KB), streaming", path.c_str(),
+                static_cast<unsigned>(len / 1024), static_cast<unsigned>(internalFree / 1024));
+        resident = false;
+      }
     }
   }
   if (resident) {
+    LOG_DBG("SDFS", "Resident TTF %s (%u KB) in PSRAM", path.c_str(), static_cast<unsigned>(len / 1024));
     s.bytes.resize(len);
     const int got = f.read(s.bytes.data(), len);
     f.close();
@@ -515,7 +561,11 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
     // loca, hmtx) sit before the multi-MB glyf table, so serving the first
     // 1 MB from RAM turns each glyph fault's 4-6 scattered SD seeks into one
     // glyf read. Gated per source so a small-PSRAM board takes what fits.
-    static constexpr size_t kStreamPrefix = 1024 * 1024;
+    // The prefix holds the runtime tables (cmap/loca/hmtx) that every glyph fault
+    // reads. A reading session wants the full megabyte so a page turn does not go
+    // back to the card; the settings preview draws one sample line, so a quarter of
+    // that is enough and the difference stays available to the rest of the system.
+    const size_t kStreamPrefix = ttfPreviewBudget_ ? 256 * 1024 : 1024 * 1024;
     const size_t prefix = len < kStreamPrefix ? len : kStreamPrefix;
     if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) > prefix + 256 * 1024) {
       s.bytes.resize(prefix);
@@ -573,6 +623,12 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
   // internal DRAM, and the build must win: below this floor, skip the
   // fallback (built-in bitmap UI fonts keep covering Latin UI text).
   static constexpr size_t kUiFallbackMinInternalHeap = 160 * 1024;
+  // Same idea on PSRAM boards: each fallback is another FreeType face, and a
+  // face copies the font's cmap/loca/hmtx for itself. When a big vector family
+  // has already taken most of the PSRAM, one more face can be the allocation
+  // that aborts (PsramAlloc does not return null). Skipping the fallback only
+  // costs UI text fidelity -- the built-in bitmap faces still cover it.
+  static constexpr size_t kUiFallbackMinPsramBlock = 512 * 1024;
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   ttfUi_.reserve(std::size(kUiFontSizes));
   ttfUiIds_.reserve(std::size(kUiFontSizes));
@@ -586,13 +642,18 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
       continue;
     }
 #endif
-    if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) == 0) {
+    const size_t psramBlock = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (psramBlock == 0) {
       const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
       if (internalFree < kUiFallbackMinInternalHeap) {
         LOG_DBG("SDFS", "Skipping TTF UI fallback @%upt (%u KB internal free)", ui.pointSize,
                 static_cast<unsigned>(internalFree / 1024));
         continue;
       }
+    } else if (psramBlock < kUiFallbackMinPsramBlock) {
+      LOG_DBG("SDFS", "Skipping TTF UI fallback @%upt (largest PSRAM block %u KB)", ui.pointSize,
+              static_cast<unsigned>(psramBlock / 1024));
+      continue;
     }
     auto f = makeUniqueNoThrow<TtfEpdFont>();
     if (!f) {
@@ -627,9 +688,12 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   snapFontPointSizeTo(
       snapToNearestPointSize(VECTOR_READER_POINT_SIZES, std::size(VECTOR_READER_POINT_SIZES), SETTINGS.fontPointSize));
   const uint8_t size = SETTINGS.fontPointSize;
+  const bool previewBudget = ttfPreviewBudget_;
 
   // Already loaded, same family + size, and disk unchanged → nothing to do.
-  if (!registryWasDirty && ttf_ && ttfFamily_ == family.name && ttfPointSize_ == size) return;
+  if (!registryWasDirty && ttf_ && ttfFamily_ == family.name && ttfPointSize_ == size &&
+      ttfPreviewBudget_ == previewBudget)
+    return;
 
   // Reader-face glyph-cache budget (used by both the resize fast path and the
   // full load below): the default 32 KB holds ~90 CJK glyphs, but a CJK page
@@ -647,8 +711,12 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   // / When the panel does 16 levels, load the reader's vector face with 4-bit coverage:
   // FreeType already computes 8 bits, and packing to 2 discards the anti-aliasing depth.
   const bool fourBit = renderer.getGrayscaleLevels() == 16;
-  const size_t cacheBytes = havePsram ? 1024 * 1024 : 32 * 1024;
-  const uint16_t maxGlyphs = havePsram ? 4096 : 768;
+  // Settings preview: only the sample line and the UI strings are ever drawn while
+  // that sheet is up, so a 128 KB / 512-glyph cache is plenty and leaves ~0.9 MB of
+  // PSRAM for everything else. TextSettingsActivity restores the full budget on
+  // exit, when the reader repaints a real page.
+  const size_t cacheBytes = havePsram ? (ttfPreviewBudget_ ? 128 * 1024 : 1024 * 1024) : 32 * 1024;
+  const uint16_t maxGlyphs = havePsram ? (ttfPreviewBudget_ ? 512 : 4096) : 768;
 
   // Same family, only the reader size changed (size preview): the open style
   // sources and the size-independent UI fallbacks don't need rebuilding — just
@@ -656,7 +724,7 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   // instead of reopening all four and rebuilding every UI fallback.
   // 上面已按面板能力决定 fourBit；这里直接用它驱动加载。
   // / fourBit is decided above, next to the cache budget it also sizes.
-  if (!registryWasDirty && ttf_ && ttfFamily_ == family.name) {
+  if (!registryWasDirty && ttf_ && ttfFamily_ == family.name && ttfPreviewBudget_ == previewBudget) {
     renderer.unregisterTtfFont(ttfFontId_);
     renderer.removeFont(ttfFontId_);
     if (ttf_->load(size, /*twoBit=*/true, cacheBytes, maxGlyphs, fourBit)) {
@@ -666,6 +734,9 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
       renderer.registerTtfFont(ttfFontId_, ttf_.get());
       ttfPointSize_ = size;
       ttfFourBit_ = fourBit;
+      ttfPreviewBudget_ = previewBudget;
+      LOG_DBG("SDFS", "Reader TTF face resized: %u KB cache / %u glyphs (%s)", static_cast<unsigned>(cacheBytes / 1024),
+              static_cast<unsigned>(maxGlyphs), previewBudget ? "preview budget" : "reading budget");
       return;
     }
     // Resize failed: fall through to a clean full reload.
@@ -719,13 +790,16 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   // Seed the regular face's glyph cache; other styles + glyphs fault on demand.
   ttf_->build(" ");
   ttfFourBit_ = fourBit;
+  ttfPreviewBudget_ = previewBudget;
 
   ttfFontId_ = computeTtfFontId(family.name.c_str(), size);
   renderer.insertFont(ttfFontId_, ttf_->family());
   renderer.registerTtfFont(ttfFontId_, ttf_.get());
   ttfFamily_ = family.name;
   ttfPointSize_ = size;
-  LOG_DBG("SDFS", "Reader TTF face loaded (heap free %u, max block %u)", (unsigned)ESP.getFreeHeap(),
+  LOG_DBG("SDFS", "Reader TTF face loaded: %u KB cache / %u glyphs (%s), heap free %u, max block %u",
+          static_cast<unsigned>(cacheBytes / 1024), static_cast<unsigned>(maxGlyphs),
+          previewBudget ? "preview budget" : "reading budget", (unsigned)ESP.getFreeHeap(),
           (unsigned)ESP.getMaxAllocHeap());
   setupTtfUiFallbacks(renderer);  // CJK/script UI fallback at the built-in UI sizes
   LOG_DBG("SDFS", "Loaded TTF font: %s @ %upt (id %d)", family.name.c_str(), size, ttfFontId_);

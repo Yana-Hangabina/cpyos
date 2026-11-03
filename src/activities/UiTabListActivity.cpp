@@ -38,6 +38,10 @@ int UiTabListActivity::ringPos() const {
 
 void UiTabListActivity::tabActionTrampoline(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<UiTabListActivity*>(user);
+  if (event.value == kTabBarExtraAction) {
+    self->onTabBarExtraAction();
+    return;
+  }
   if (event.value < 0 || event.value >= self->tabCount()) return;
   self->onTabAction(event.value);
 }
@@ -62,6 +66,12 @@ void UiTabListActivity::debugMoveRing(const int delta) {
   if (ringSize <= 1) return;
   const int next = ((ringPos() + delta) % ringSize + ringSize) % ringSize;
   moveRingTo(next);
+}
+
+void UiTabListActivity::debugConfirm() {
+  // Same action Confirm performs on a row. The tab bar (ring 0) has no generic
+  // meaning -- subclasses own that -- so it is left alone.
+  if (ringPos() > 0) activateIndex(ringPos() - 1);
 }
 
 void UiTabListActivity::navigateButtons() {

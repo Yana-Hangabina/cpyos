@@ -6,6 +6,10 @@
 #include <EpdiyLcd.h>
 #include <HalPowerManager.h>
 #include <Logging.h>
+// Defined in src/main.cpp. The task they drive restarts the firmware when a scan
+// does not come back (see ScanWatchdogGuard below).
+extern void armScanWatchdog(uint32_t timeoutMs);
+extern void disarmScanWatchdog();
 #endif
 
 // Global HalDisplay instance
@@ -147,10 +151,35 @@ struct ScanPowerGuard {
   ScanPowerGuard() {}
 };
 #endif
+
+#if FREEINK_DEVICE_READPICO
+// ★ A panel push can block the render task forever. epdiy's render_lcd.c waits on
+// its frame/feed semaphores with portMAX_DELAY, so a scan that never completes --
+// the E0470 gate ring can lock up after a bad frame (docs/engineering/
+// read-pico-refresh-stability.md) -- freezes the whole UI: the loop task then
+// blocks forever on the render mutex and nothing reboots. This board has no reset
+// button, so the only way out used to be pulling power.
+//
+// Every synchronous push is therefore wrapped in the scan watchdog. Until now it
+// only covered windowed/area pushes; the font-settings screen pushes full pages,
+// and a stuck one showed up as an unresponsive device. 8 s is ~4x the slowest
+// legitimate frame (a GC16 full page is ~0.45 s), so a slow scan still finishes;
+// a stuck one restarts the firmware and leaves an ESP_LOGE("SCANWD") line.
+constexpr uint32_t kPanelPushWatchdogMs = 8000;
+struct ScanWatchdogGuard {
+  ScanWatchdogGuard() { armScanWatchdog(kPanelPushWatchdogMs); }
+  ~ScanWatchdogGuard() { disarmScanWatchdog(); }
+};
+#else
+struct ScanWatchdogGuard {
+  ScanWatchdogGuard() {}
+};
+#endif
 }  // namespace
 
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen, DisplayRefreshContext context) {
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -167,7 +196,10 @@ void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode, DisplayRefresh
   einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode), convertRefreshContext(context));
 }
 
-void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
+void HalDisplay::waitRefreshComplete() {
+  const ScanWatchdogGuard scan;
+  einkDisplay.waitRefreshComplete();
+}
 
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
@@ -179,6 +211,7 @@ bool HalDisplay::supportsAsyncGrayscaleBase() const { return grayscaleCapabiliti
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
   }
@@ -205,6 +238,7 @@ void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); 
 bool HalDisplay::displayGrayscaleBase(GrayscaleMode mode, RefreshMode fallback, bool turnOffScreen) {
   ++s_grayScans;
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   if (gpio.deviceIsX3() && fallback == HALF_REFRESH) einkDisplay.requestResync();
   return einkDisplay.displayGrayscaleBase(mode, static_cast<EInkDisplay::RefreshMode>(fallback), turnOffScreen);
 }
@@ -216,6 +250,7 @@ void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* m
 void HalDisplay::displayGrayscaleBase(RefreshMode fallback, bool turnOffScreen, DisplayRefreshContext context) {
   ++s_grayScans;
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   // X3: a HALF fallback means the caller wants a clean base (e.g. the sleep
   // cover, a full-screen swap from arbitrary prior content). Without this, the
   // X3 grayscale base takes its gentle differential happy path and the prior
@@ -245,6 +280,7 @@ void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) {
   ++s_grayScans;
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   einkDisplay.displayGrayBuffer(turnOffScreen);
 }
 
@@ -292,6 +328,7 @@ bool HalDisplay::idlePowerTick(const uint32_t nowMs) {
 
 bool HalDisplay::cleanWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
 #if FREEINK_DEVICE_READPICO
   if (freeink::epdiyLcdCleanArea(getFrameBuffer(), x, y, w, h)) return true;
   ESP_LOGE("HAL", "area clean refused; falling back to a full clean");
@@ -302,6 +339,7 @@ bool HalDisplay::cleanWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 
 void HalDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen) {
   const ScanPowerGuard power;
+  const ScanWatchdogGuard scan;
   einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
 }
 

@@ -115,6 +115,11 @@ void TextSettingsActivity::onEnter() {
   UiTabListActivity::onEnter();
 
   if (sdFontSystem.adoptCompleteChineseNotoSans()) initialFontState_ = InitialFontState::Changed;
+  // This sheet only ever draws a sample line plus UI strings, so let a vector
+  // reader face load with a 128 KB glyph cache instead of 1 MB; onExit() puts the
+  // full budget back. Must happen before ensureLoaded() below, which is what
+  // actually builds the face. See SdCardFontSystem::setPreviewBudget().
+  sdFontSystem.setPreviewBudget(true);
   {
     RenderLock lock(*this);
     sdFontSystem.ensureLoaded(renderer, false);
@@ -188,7 +193,15 @@ void TextSettingsActivity::onEnter() {
 }
 
 void TextSettingsActivity::onExit() {
-  RenderLock lock;
+  // ★ No RenderLock here: ActivityManager::exitActivity() already holds it while it
+  // calls onExit() (the same contract WeReadBrowseActivity documents). Taking it
+  // again on the same task blocks forever on the non-recursive mutex -- the UI froze
+  // with renderHolder=loopTask and no "Exiting activity: TextSettings" line, because
+  // the deadlock happened before Activity::onExit() logged.
+  // Back to the reading budget before anything repaints: the reader (or the
+  // settings page behind this one) calls ensureLoaded() again and must get the
+  // 1 MB reader cache, not the 128 KB preview one.
+  sdFontSystem.setPreviewBudget(false);
   // Release .cpfont preview faces; the vector-font cache has a separate lifetime.
   if (renderer.hasFrameBuffer()) {
     sdFontSystem.releaseLoadedFont(renderer);
@@ -259,6 +272,7 @@ void TextSettingsActivity::rebuildSizeList() {
 
 void TextSettingsActivity::onTabAction(const int index) {
   if (optionPopup_.isActive()) return;
+  if (index < 0) return;
   if (tab_ != static_cast<Tab>(index)) {
     tab_ = static_cast<Tab>(index);
     rebuildRowItems();
@@ -270,6 +284,21 @@ void TextSettingsActivity::onTabAction(const int index) {
   // The switched-to tab repaints as the selected pill; a flash overlay on top
   // of it just repaints the pill in the focused style.
   app.clearTapFlash();
+}
+
+void TextSettingsActivity::onTabBarExtraAction() {
+  if (optionPopup_.isActive()) return;
+  // Tab-bar preview switch: the real reader setting, so the sample above and the
+  // next page turn agree.
+  const bool toSixteen = SETTINGS.fastPageTurn != 0;
+  SETTINGS.fastPageTurn = toSixteen ? 0 : 1;
+  if (toSixteen && SETTINGS.textAntiAliasing == 0) {
+    // 16-level text needs anti-aliasing; without it the reader is 1-bit too and the
+    // "16-bit" preview would be a lie. Turn it on so the sample shows the real thing.
+    SETTINGS.textAntiAliasing = 1;
+  }
+  SETTINGS.saveToFile();
+  requestUpdate();
 }
 
 void TextSettingsActivity::activateIndex(const int index) {
@@ -312,6 +341,16 @@ bool TextSettingsActivity::handleCustomInput() {
     return true;
   }
   return handled;
+}
+
+void TextSettingsActivity::debugConfirm() {
+  // Mirrors handleButtons()'s Confirm arm exactly, so a serial soak exercises the
+  // same path a finger does.
+  if (ringPos() == 0) {
+    switchTab();
+  } else {
+    activateRow(ringPos() - 1);
+  }
 }
 
 bool TextSettingsActivity::handleButtons() {
@@ -360,6 +399,53 @@ void TextSettingsActivity::buildTabBar(UiScreen& screen, const bool boldLabels) 
                        ACTION_TAB, static_cast<int16_t>(i), fui::InputTouch);
     x += textW + 36;
   }
+  // Right-aligned preview switch: toggles the reader's fast (1-bit) page-turn mode
+  // so the sample above shows the two rendering paths. Label is the existing
+  // STR_FAST_PAGE_TURN, cut before its parenthesis when the full name does not fit
+  // beside four tabs (the state itself is shown by the capsule).
+  {
+    char labelBuf[64];
+    const char* full = tr(STR_FAST_PAGE_TURN);
+    size_t n = 0;
+    while (full[n] != '\0' && full[n] != '\xEF' && n + 1 < sizeof(labelBuf)) {  // '\xEF' starts "（"
+      labelBuf[n] = full[n];
+      ++n;
+    }
+    while (n > 0 && (labelBuf[n - 1] == ' ' || labelBuf[n - 1] == '\t')) --n;
+    labelBuf[n] = '\0';
+    const char* label = n > 0 ? labelBuf : full;
+
+    fui::TextStyle style = tokens.smallText;
+    const int16_t labelW = screen.target().measureText(style.font, label, style).width;
+    constexpr int16_t kToggleW = 48;
+    constexpr int16_t kToggleH = 28;
+    constexpr int16_t kGap = 8;
+    const int16_t total = static_cast<int16_t>(labelW + kGap + kToggleW);
+    const int16_t right = static_cast<int16_t>(band.right());
+    const int16_t startX = static_cast<int16_t>(right - total);
+    // `x` still holds the end of the last tab plus one gap; drop that gap before
+    // deciding whether the switch fits on this row.
+    const int16_t tabsEnd = static_cast<int16_t>(x - 36);
+    const bool fitsInBand = startX > tabsEnd + 8;
+    const int16_t rowY = fitsInBand ? band.y : static_cast<int16_t>(afterHeader + previewHeight - 40);
+    // Same rect/height the tabs use, so the target centres this label exactly like
+    // them instead of drifting a few pixels down.
+    screen.target().text(fui::Rect{startX, rowY, labelW, band.height}, label, style);
+
+    const bool on = SETTINGS.fastPageTurn != 0;
+    const int16_t kr = 10;
+    const int16_t kInset = 3;
+    const fui::Rect capsule{static_cast<int16_t>(startX + labelW + kGap),
+                            static_cast<int16_t>(rowY + (band.height - kToggleH) / 2), kToggleW, kToggleH};
+    screen.target().fill(capsule, on ? ink : fui::Paint::solid(fui::Color::White), static_cast<uint8_t>(kToggleH / 2));
+    screen.target().stroke(capsule, ink, 2, static_cast<uint8_t>(kToggleH / 2));
+    const fui::Rect knob{static_cast<int16_t>(capsule.x + (on ? kToggleW - kInset - kr * 2 : kInset)),
+                         static_cast<int16_t>(capsule.y + kInset), static_cast<int16_t>(kr * 2),
+                         static_cast<int16_t>(kr * 2)};
+    screen.target().fill(knob, fui::Paint::solid(on ? fui::Color::White : fui::Color::Black), static_cast<uint8_t>(kr));
+    screen.frame().hit(fui::Rect{static_cast<int16_t>(startX - 8), rowY, static_cast<int16_t>(total + 16), band.height},
+                       ACTION_TAB, kTabBarExtraAction, fui::InputTouch);
+  }
   const int16_t ruleY = static_cast<int16_t>(band.bottom() - 1);
   screen.target().fill(fui::Rect{40, ruleY, static_cast<int16_t>(renderer.getScreenWidth() - 80), 1}, ink);
 }
@@ -389,6 +475,11 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
         break;
       case Tab::Layout:
         rowValues_[i] = layoutValueText(i);
+        break;
+      case Tab::Style:
+        // Boolean rows are overwritten by setCheckboxRow() below (it clears value
+        // and draws the capsule); the picker rows are the ones that need the text.
+        rowValues_[i] = styleValueText(i);
         break;
       default:
         break;
@@ -490,6 +581,13 @@ const char* TextSettingsActivity::confirmLabelText() const {
   }
 }
 
+bool TextSettingsActivity::previewUsesGrayscale() const {
+  // Mirrors the reader: 16-level text exists only when anti-aliasing is on and the
+  // fast (1-bit) page-turn mode is off. The tab-bar switch drives both, so what the
+  // sample shows is what the next page turn will look like.
+  return SETTINGS.fastPageTurn == 0 && SETTINGS.textAntiAliasing != 0;
+}
+
 void TextSettingsActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
 
@@ -516,7 +614,17 @@ void TextSettingsActivity::drawFooter() {
     const int rw = content.width - kCardMargin * 2;
     const int bandH = listBottom_ - listTop_;
     const int used = listCount() * listRowH_;
-    const int drawH = used <= bandH ? used : bandH + 24;
+    // Close the card once the list is scrolled to its end; until then leave the
+    // bottom open so a long list does not look like a finished box. `top` is the
+    // first row the list actually drew (ListNav, updated by screen.list()).
+    const auto& nav = activeNav();
+    const bool atEnd = nav.top + nav.visibleRows >= listCount();
+    const int scrolledPast = nav.top * listRowH_;
+    const int remaining = used - scrolledPast;
+    // -3 keeps the closing stroke inside the clip below: the ring is clipped to the
+    // list band, so a border drawn exactly on the boundary loses its bottom pixels
+    // and the card looks open-ended even at the last row.
+    const int drawH = atEnd ? std::min(remaining, bandH - 3) : bandH + 24;
     const GfxRenderer::ClipScope clip(renderer, content.x, listTop_, content.width, bandH);
     renderer.drawRoundedRect(rx, listTop_, rw, drawH, 2, 20, true);
   }

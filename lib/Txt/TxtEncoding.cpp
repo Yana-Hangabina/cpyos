@@ -315,4 +315,65 @@ size_t gbkSourceLength(const uint8_t* utf8, const size_t utf8Length) {  size_t s
   return sourceLength;
 }
 
+bool encodeGbkFromUtf8(const char* utf8, const size_t utf8Length, uint8_t* output, const size_t outputCapacity,
+                       size_t& outputLength) {
+  outputLength = 0;
+  if (utf8 == nullptr || output == nullptr || outputCapacity == 0) return false;
+#ifndef ENABLE_CHINESE_VERSION
+  (void)utf8Length;
+  return false;
+#else
+  size_t pos = 0;
+  size_t out = 0;
+  while (pos < utf8Length) {
+    const uint8_t lead = static_cast<uint8_t>(utf8[pos]);
+    uint32_t cp = lead;
+    size_t consumed = 1;
+    if (lead >= 0x80) {
+      const size_t sequenceLength = utf8SequenceLength(lead);
+      if (sequenceLength == 0 || pos + sequenceLength > utf8Length) return false;
+      cp = lead & ((1U << (7 - sequenceLength)) - 1);
+      for (size_t i = 1; i < sequenceLength; ++i) {
+        const uint8_t cont = static_cast<uint8_t>(utf8[pos + i]);
+        if ((cont & 0xC0) != 0x80) return false;
+        cp = (cp << 6) | (cont & 0x3F);
+      }
+      const bool overlong = (sequenceLength == 2 && cp < 0x80) || (sequenceLength == 3 && cp < 0x800) ||
+                            (sequenceLength == 4 && cp < 0x10000);
+      if (overlong || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) return false;
+      consumed = sequenceLength;
+    }
+
+    if (cp < 0x80) {
+      if (out + 1 > outputCapacity) return false;
+      output[out++] = static_cast<uint8_t>(cp);
+      pos += consumed;
+      continue;
+    }
+
+    // The table is indexed by GBK code rather than by code point, so this is a
+    // reverse lookup. It runs once per non-ASCII character of a query string (at
+    // most a few dozen), and the table is 23,940 entries wide -- the alternative, a
+    // second ~94 KB sorted index in flash, buys nothing here.
+    bool found = false;
+    if (cp <= 0xFFFF) {
+      constexpr size_t kEntries = sizeof(kGbkToUnicode) / sizeof(kGbkToUnicode[0]);
+      for (size_t i = 0; i < kEntries; ++i) {
+        if (kGbkToUnicode[i] != cp) continue;
+        if (out + 2 > outputCapacity) return false;
+        const uint8_t trailIndex = static_cast<uint8_t>(i % 190);
+        output[out++] = static_cast<uint8_t>(0x81 + i / 190);
+        output[out++] = static_cast<uint8_t>(trailIndex < 0x3F ? trailIndex + 0x40 : trailIndex + 0x41);
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+    pos += consumed;
+  }
+  outputLength = out;
+  return true;
+#endif
+}
+
 }  // namespace txt_encoding

@@ -6,6 +6,7 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
+#include <HalStorage.h>
 #include <Memory.h>
 #include <VectorFontSupport.h>
 
@@ -933,9 +934,38 @@ void ActivityManager::requestUpdateAndWait() {
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 }
 
+void ActivityManager::debugDumpTaskStates() {
+  static const char* kStateNames[] = {"run", "ready", "block", "susp", "del", "invalid"};
+  TaskStatus_t tasks[24];
+  const UBaseType_t count = uxTaskGetSystemState(tasks, 24, nullptr);
+  TaskHandle_t holder = xSemaphoreGetMutexHolder(renderingMutex);
+  logSerial.printf("TASKS count=%u renderHolder=%s waiter=%s storageHolder=%s powerHolder=%s\n", (unsigned)count,
+                   holder ? pcTaskGetName(holder) : "(none)",
+                   waitingTaskHandle ? pcTaskGetName(waitingTaskHandle) : "(none)",
+                   HalStorage::getInstance().debugMutexHolderName(), powerManager.debugModeMutexHolderName());
+  for (UBaseType_t i = 0; i < count; i++) {
+    const char* state = tasks[i].eCurrentState < 6 ? kStateNames[tasks[i].eCurrentState] : "?";
+    logSerial.printf("TASK %-20s st=%s prio=%u stackFree=%u\n", tasks[i].pcTaskName, state,
+                     (unsigned)tasks[i].uxCurrentPriority, (unsigned)tasks[i].usStackHighWaterMark);
+  }
+}
+
 // RenderLock
 
 RenderLock::RenderLock(Mode mode) {
+  // ★ Recursive acquisition by the same task is always a bug -- the mutex is not
+  // recursive, so the take would block forever and freeze the whole UI (no assert
+  // can fire: the take never returns). This happened for real: TextSettingsActivity
+  // took the lock in onExit(), which ActivityManager calls while already holding it.
+  // The task already has exclusive access, so a nested lock is a no-op that logs;
+  // the outer lock still releases on its own scope exit.
+  if (mode == Mode::Blocking &&
+      xSemaphoreGetMutexHolder(activityManager.renderingMutex) == xTaskGetCurrentTaskHandle()) {
+    LOG_ERR("RLCK", "recursive RenderLock on '%s' ignored (the task already holds it)",
+            pcTaskGetName(xTaskGetCurrentTaskHandle()));
+    isLocked = false;
+    return;
+  }
   isLocked = xSemaphoreTake(activityManager.renderingMutex, mode == Mode::Try ? 0 : portMAX_DELAY) == pdTRUE;
   assert((mode == Mode::Try || isLocked) && "Blocking render lock acquisition failed");
 }
