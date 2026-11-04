@@ -1,6 +1,6 @@
 # Apps
 
-The `apps/` directory holds all non-reader sub-applications shipped on CrossMux. They use the Apps launcher (`AppsMenuActivity`) and the conventions below; the main-tab and home navigation expose that launcher.
+The `apps/` directory holds all non-reader sub-applications shipped on CrossMux. They are listed by the My tab tool drawer (`src/AppCatalog.cpp`) and follow the conventions below.
 
 The directory groups app implementations such as games, tools, reading analytics, and WeRead. The launcher also links to core workflows such as file transfer and OPDS; appearing in Apps does not require moving those implementations into this directory.
 
@@ -10,7 +10,6 @@ The directory groups app implementations such as games, tools, reading analytics
 
 ```
 apps/
-├── AppsMenuActivity.{h,cpp}   # dispatcher — see "Adding a new app" below
 ├── GameUi.{h,cpp}             # shared helpers, game-only (centering math, elapsed-time format)
 ├── GameSaveDebouncer.h        # 1.5s save debounce, used by sudoku/gomoku/minesweeper
 ├── airpage/                    # cloud image display app
@@ -72,7 +71,7 @@ failure. Do not construct Activities with `std::make_unique`.
 
 ### 3. Assign an ID and append one row to `kAppEntries`
 
-Append the ID in `src/AppVisibility.h` and the row in `apps/AppsMenuActivity.cpp`; this is an excerpt, not a replacement catalog:
+Append the ID in `src/AppVisibility.h` and the row in `src/AppCatalog.cpp`; this is an excerpt, not a replacement catalog:
 
 ```cpp
 enum class AppId : uint8_t {
@@ -148,7 +147,7 @@ See [Chinese support](../../../docs/engineering/chinese-build.md).
 
 ## UI conventions
 
-- **Launcher layout**: `buildScreen()` uses the shared `UiScreen`/FreeInkUI list, or the existing icon-grid layout selected by `usesIconLayout()`. Reuse the list viewport and `InxGridGeometry` for navigation and touch geometry.
+- **Launcher layout**: the MyActivity tool drawer renders the catalog as a 4-column icon grid.
 - **Pagination**: the list viewport and icon grid manage their own visible slices. Use the shared navigation helpers and theme scrollbar rather than duplicating row counts or screen dimensions.
 - **Header**: each app draws its own header via `GUI.drawHeader(... tr(STR_<APP>_TITLE))`.
 - **Result layouts**: center multi-line status/result blocks from measured font heights with `gameCenteredBlockY`; reserve the title bar and button-hint area instead of relying on fixed Y offsets.
@@ -157,12 +156,14 @@ See [Chinese support](../../../docs/engineering/chinese-build.md).
 ## Navigation flow
 
 ```
-Home  ──Confirm "Apps"──▶  AppsMenu  ──Confirm row──▶  <App>
+Home  ──Tools tab──▶  My (tool drawer)  ──Confirm tile──▶  <App>
   ▲                            │
-  └──────Back──────────────────┘    ◀──Back──  <App>  (returns to AppsMenu, not Home)
+  └──────Back──────────────────┘    ◀──Back──  <App>  (returns to the tool drawer)
 ```
 
-Every sub-app's Back button must call `activityManager.goToApps()`. This mirrors how Sudoku, Gomoku, Ugly Avatar, and AirPage behave.
+Every sub-app's Back button calls `activityManager.goToApps()`, which now opens
+the My tab's tool drawer. The legacy `AppsMenuActivity` page no longer exists;
+`src/AppCatalog.cpp` is the single launcher list.
 
 Electronic Woodfish accepts Confirm and all four logical directions on button
 release. Touch devices add taps on the rendered wooden body; whitespace,

@@ -77,6 +77,9 @@
 #include "JjwxcActivity.h"
 #include "TlsProbe.h"
 #endif
+#if defined(ENABLE_CHINESE_VERSION)
+#include "activities/apps/webbrowser/WebBrowserActivity.h"
+#endif
 #endif
 #if defined(CROSSPOINT_MUPDF)
 #include "activities/reader/PdfReaderActivity.h"
@@ -90,7 +93,6 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "activities/apps/2048/Game2048Activity.h"
-#include "activities/apps/AppsMenuActivity.h"
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "activities/util/FontCompareActivity.h"
 #endif
@@ -1560,7 +1562,62 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
-      } else if (cmd == "FIND") {
+      }
+#if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
+      else if (cmd == "BROWSER" || cmd.startsWith("BROWSER ")) {
+        const int space = cmd.indexOf(' ');
+        String url;
+        if (space > 0) url = cmd.substring(space + 1);
+        WebBrowserActivity::requestOpen(url.c_str());
+        activityManager.goToWebBrowser();
+        LOG_INF("WEB", "serial open %.90s", url.c_str());
+      } else if (cmd == "BNEXT" || cmd == "BPREV") {
+        if (auto* activity = activityManager.currentActivityPtr())
+          activity->debugBrowserPage(cmd == "BNEXT" ? 1 : -1);
+      } else if (cmd == "BLINKS") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserLinks();
+      } else if (cmd == "BBACK") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserBack();
+      } else if (cmd == "BBOOKMARK") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserToggleBookmark();
+      } else if (cmd == "BBOOKMARKS") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserBookmarks();
+      } else if (cmd == "BFIXTURE") {
+        WebBrowserActivity::requestFixture();
+        activityManager.goToWebBrowser();
+        LOG_INF("WEB", "serial open offline fixture");
+      } else if (cmd == "BOPENPLACE" || cmd.startsWith("BOPENPLACE ")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          const String args = space > 0 ? cmd.substring(space + 1) : String();
+          const int gap = args.indexOf(' ');
+          const String which = gap > 0 ? args.substring(0, gap) : args;
+          const int index = gap > 0 ? args.substring(gap + 1).toInt() : 0;
+          activity->debugBrowserOpenPlace(which == "hist" ? 1 : 0, index);
+        }
+      } else if (cmd.startsWith("BOPEN")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          if (space > 0) activity->debugBrowserOpen(cmd.substring(space + 1).c_str());
+        }
+      } else if (cmd.startsWith("BLINK")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          activity->debugBrowserFollow(space > 0 ? cmd.substring(space + 1).toInt() : 0);
+        }
+      } else if (cmd == "BSTATUS") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserStatus();
+      } else if (cmd == "BMENU") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserMenu();
+      } else if (cmd == "BLIST" || cmd.startsWith("BLIST ")) {
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          const int space = cmd.indexOf(' ');
+          const String which = space > 0 ? cmd.substring(space + 1) : String("bm");
+          activity->debugBrowserList(which == "hist" ? 1 : 0);
+        }
+      }
+#endif
+      else if (cmd == "FIND") {
         activityManager.pushActivity(std::make_unique<FindBooksActivity>(renderer, mappedInputManager));
       } else if (cmd == "MY") {
         activityManager.pushActivity(std::make_unique<MyActivity>(renderer, mappedInputManager));
@@ -1761,7 +1818,7 @@ void loop() {
             makeUniqueNoThrow<FontCompareActivity>(renderer, mappedInputManager, pointSize));
 #endif
       } else if (cmd == "APPS") {
-        activityManager.pushActivity(makeUniqueNoThrow<AppsMenuActivity>(renderer, mappedInputManager));
+        activityManager.pushActivity(makeUniqueNoThrow<MyActivity>(renderer, mappedInputManager, 1));
       } else if (cmd == "SOKOBAN") {
         activityManager.pushActivity(makeUniqueNoThrow<SokobanGameActivity>(renderer, mappedInputManager));
       } else if (cmd == "2048") {

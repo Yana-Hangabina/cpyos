@@ -90,8 +90,8 @@ python3 scripts/build_web_pack.py
 python3 scripts/generate_hyphenation_db.py
 python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.whl
 python3 scripts/generate_data_manifest.py
-python3 scripts/build_cpyos_release.py --version 0.2.3
-python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.2.3 --output _site
+python3 scripts/build_cpyos_release.py --version 0.4.0
+python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.4.0 --output _site
 ```
 
 ## 产物
@@ -120,7 +120,7 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.2.3 --output _sit
   "assets": [
     {
       "name": "firmware.bin",
-      "browser_download_url": "https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-0.2.3/readpico-firmware.bin",
+      "browser_download_url": "https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-0.4.0/readpico-firmware.bin",
       "size": 6525840
     }
   ]

@@ -26,7 +26,9 @@ enum class AppId : uint8_t {
   // JJWXC (晋江文学城). Appended, never reordered: these are persisted bit
   // positions in hiddenAppsMask. IDs 18..31 remain available.
   Jjwxc = 17,
-  Count = 18,
+  // Reading browser. Appended for the same reason: bit positions are persisted.
+  WebBrowser = 18,
+  Count = 19,
 };
 
 constexpr uint32_t appBit(const AppId id) { return uint32_t{1} << static_cast<uint8_t>(id); }

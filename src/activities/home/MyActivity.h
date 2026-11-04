@@ -10,12 +10,15 @@ namespace freeink {
 struct Icon;
 }
 
-// Fourth main tab, Pond v5 frames 09/10/11: three tabs (记录 / 工具 / 设置).
+// Fourth main tab, refreshed UI frames 09/10/11: three tabs (记录 / 工具 / 设置).
 // 记录 is the printed reading chart, 工具 is the 4 x 3 icon drawer, and 设置 is
 // the 2 x 2 card dashboard whose rows open the existing category pages.
 class MyActivity final : public Activity {
  public:
-  MyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput) : Activity("My", renderer, mappedInput) {}
+  // `initialTab` lets the app launcher open the tool drawer directly; the
+  // default keeps the historical Settings landing tab for the main tabs.
+  MyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, int initialTab = -1)
+      : Activity("My", renderer, mappedInput), initialTab_(initialTab) {}
 
   void onEnter() override;
   void loop() override;
@@ -34,14 +37,16 @@ class MyActivity final : public Activity {
  private:
   enum class Tab : uint8_t { Records = 0, Tools = 1, Settings = 2 };
   static constexpr int kTabCount = 3;
-  static constexpr int kToolCount = 12;
+  // Two local tools (join network, file browser) + the compiled app catalog +
+  // the plugin-directory tile. The drawer is a 4-column grid.
+  static constexpr int kToolMax = 2 + 32 + 1;
+  static constexpr int kToolColumns = 4;
 
   Rect tabRect(int index) const;
   Rect bodyRect() const;
   Rect cardRect(int index) const;
   Rect cardRowRect(int card, int row) const;
   Rect toolCellRect(int index) const;
-  Rect toolPluginRect() const;
   Rect quickPillRect(int index) const;
   Rect searchRowRect() const;
   Rect aboutRect() const;
@@ -63,10 +68,12 @@ class MyActivity final : public Activity {
   bool handleSettingsTouch(int x, int y);
   void activateTab(Tab tab);
   void openSettingsCategory(int category);
+  int toolCount() const;
   void openTool(int index);
   void openBookList();
 
   Tab tab_ = Tab::Settings;
+  int initialTab_ = -1;
   int toolSelected_ = 0;
   uint64_t storageFreeBytes_ = 0;
   uint64_t storageTotalBytes_ = 0;

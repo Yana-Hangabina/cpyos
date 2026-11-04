@@ -1,0 +1,22 @@
+{
+  "en": [
+    "New reading browser that re-typesets pages",
+    "Links, bookmarks and history in the browser",
+    "GBK and UTF-16 Chinese pages are supported",
+    "Modal scrim now fades the page, not darkens it",
+    "Modal cards share one solid outline",
+    "Apps now live in one tool drawer grid",
+    "The language pack adds browser strings",
+    "Use a full install or reflash the data partition"
+  ],
+  "zh": [
+    "新增网页阅读 App，按阅读字号重排正文",
+    "浏览器支持页面链接、书签与访问历史",
+    "中文网页自动识别 GBK 与 UTF-16",
+    "弹窗遮罩改为褪色，减少闪屏与残影",
+    "弹窗卡片统一为实线边框",
+    "应用统一进入「我的」工具网格",
+    "语言包新增浏览器文案",
+    "建议完整安装或重刷数据分区"
+  ]
+}

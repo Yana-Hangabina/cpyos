@@ -2,7 +2,7 @@
 
 [English](./README.en.md) | **简体中文**
 
-**脆皮鸭 CPYOS** 是面向 **Read Pico（小纸 Pico，RDP-G01-W）** 墨水屏的原生阅读系统。它基于 [CrossMux](https://github.com/0x1abin/crossmux) 上游，把**新版界面 / refreshed UI**、**晋江文学城**、**微信读书**、中文输入、水波纹翻页和设备 OTA 做成一台真正能日常使用的阅读器。
+**脆皮鸭 CPYOS** 是面向 **Read Pico（小纸 Pico，RDP-G01-W）** 墨水屏的原生阅读系统。它基于 [CrossMux](https://github.com/0x1abin/crossmux) 上游，把**新版界面 / refreshed UI**、**晋江文学城**、**微信读书**、**网页阅读**、中文输入、水波纹翻页和设备 OTA 做成一台真正能日常使用的阅读器。
 
 > 官网与网页刷机：[yana-hangabina.github.io/cpyos](https://yana-hangabina.github.io/cpyos/)<br>
 > 发布与完整安装包：[Releases](https://github.com/Yana-Hangabina/cpyos/releases)
@@ -26,6 +26,9 @@
 
 ### 微信读书
 扫码登录、书架浏览、EPUB 下载与离线阅读、阅读进度同步。微信读书、晋江和本地书共用书架，并显示来源徽标。
+
+### 网页阅读
+输入网址即可获取网页并提取正文，按当前阅读字号与 16 级灰度重新排版，而不是缩放整页截图。支持页面内链接、翻页、页面菜单、书签与访问历史（可删除/清空）以及最近访问；中文页面自动识别 GBK / GB18030 / UTF-16，gzip/deflate 压缩容错。HTTPS 与明文 HTTP 都可以打开，明文会在页面上标注不安全；Wi-Fi 静默连接已保存网络，失败时释放射频并给出可返回的错误页。加载卡显示从连接到排版的连续进度，取消后可立即打开其他链接。
 
 ### 中文阅读
 - 统一可缩放中文字体：UI、书名 / 作者、晋江 App 与阅读正文共用一套覆盖 8,105 字 + GB2312 的字族，随固件提供，首次启动释放到 SD 后流式读取。
@@ -55,7 +58,7 @@ EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅
 |---|---|
 | 目标设备 | Read Pico（小纸 Pico，RDP-G01-W），ESP32-S3，684×1216 16 灰阶 |
 | 预编译包 | **只提供 Read Pico**；上游其它目标仍可从源码构建 |
-| 当前版本 | **0.2.3**（CPYOS 独立版本号，从 0.1.0 开始，不接续 CrossMux 1.x） |
+| 当前版本 | **0.4.0**（CPYOS 独立版本号，从 0.1.0 开始，不接续 CrossMux 1.x） |
 | 安装方式 | 浏览器 Web Serial 刷机、完整安装包、设备 OTA、SD 卡固件更新 |
 | 分区 | app0 / app1 各 7.19 MiB，数据分区 1.5 MiB（拼音 / 断词 / 语言包 / Web 资源 / emoji） |
 
@@ -84,7 +87,7 @@ https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/dow
 
 ## 版本与发布
 
-版本号由 `platformio.ini` 的 `[crosspoint] version` 定义；Git tag 是 `cpyos-X.Y.Z`（例如 `cpyos-0.2.3`），产品版本仍是裸 `X.Y.Z`。发布工作流会：
+版本号由 `platformio.ini` 的 `[crosspoint] version` 定义；Git tag 是 `cpyos-X.Y.Z`（例如 `cpyos-0.4.0`），产品版本仍是裸 `X.Y.Z`。发布工作流会：
 
 1. 构建 `readpico` 环境，校验 `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（不是 `arduino-lib-builder`）、板级 tag、芯片、app0 槽大小；
 2. 生成拼音 / 断词 / 语言包 / Web 资源 / emoji 包，并生成 `build/data_manifest.txt`；
@@ -120,10 +123,10 @@ python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.
 python3 scripts/generate_data_manifest.py
 
 # 组装发布包（不发布也能生成）
-python3 scripts/build_cpyos_release.py --version 0.2.3
+python3 scripts/build_cpyos_release.py --version 0.4.0
 ```
 
-产物在 `dist/cpyos/0.2.3/`。构建判据不要只看退出码：日志里要有 `[SUCCESS]`，镜像的 `esp_app_desc.project_name` 必须是 `crossmux` 或 `cpyos`（不能是 `arduino-lib-builder`）。桌面模拟器：
+产物在 `dist/cpyos/0.4.0/`。构建判据不要只看退出码：日志里要有 `[SUCCESS]`，镜像的 `esp_app_desc.project_name` 必须是 `crossmux` 或 `cpyos`（不能是 `arduino-lib-builder`）。桌面模拟器：
 
 ```bash
 pio run -e simulator_readpico -t run_simulator

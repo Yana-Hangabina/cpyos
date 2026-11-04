@@ -74,6 +74,20 @@ class Activity {
   virtual void debugOpenPanel(int) {}
   virtual void debugCloseOverlay() {}
   virtual void debugTypeChar() {}
+  // Serial-only hooks for the reading browser. Kept on the base so main.cpp can
+  // drive the app without knowing its type.
+  virtual void debugBrowserPage(int) {}
+  virtual void debugBrowserLinks() {}
+  virtual void debugBrowserBack() {}
+  virtual void debugBrowserFollow(int) {}
+  virtual void debugBrowserOpen(const char*) {}
+  virtual void debugBrowserFixture() {}
+  virtual void debugBrowserToggleBookmark() {}
+  virtual void debugBrowserBookmarks() {}
+  virtual void debugBrowserStatus() {}
+  virtual void debugBrowserMenu() {}
+  virtual void debugBrowserList(int) {}
+  virtual void debugBrowserOpenPlace(int, int) {}
   // Opt-in band updates (GfxRenderer::setBandUpdates): only for 1-bit screens
   // whose repaint changes a small strip. Asked on every manager loop tick, so a
   // pushed or popped activity sets the mode for whatever is on top.

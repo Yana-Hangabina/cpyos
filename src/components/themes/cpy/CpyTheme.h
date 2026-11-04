@@ -167,6 +167,7 @@ class CpyTheme final : public UpstreamStyleTheme {
   void drawEmptyState(const GfxRenderer& renderer, Rect rect, const char* message) const override;
   void drawModalScrim(const GfxRenderer& renderer) const override;
   void drawCardFrame(const GfxRenderer& renderer, Rect rect, bool focused) const override;
+  void drawModalCardFrame(const GfxRenderer& renderer, Rect rect) const override;
   // Transient messages (loading / saved / failed) used to be a solid-black
   // strip with white text -- the only remaining piece of the pre-CPY visual
   // language, repeated at 30+ call sites. One card with the 25 % ring and

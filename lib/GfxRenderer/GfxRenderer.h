@@ -522,10 +522,13 @@ class GfxRenderer {
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
-  // 12.5 % modal scrim (design §2.5). Lighter than LightGray (25 %): on the
-  // native-gray plane it fills flat level 13/15, on 1-bit it writes one black
-  // pixel per 8-px run with the phase shifted on odd rows. The phase is fixed,
-  // so a full-screen scrim needs no per-pixel rotation.
+  // Modal scrim that FADES the covered area instead of darkening it: one pixel
+  // in four keeps its ink, the rest goes to white (both planes, same 2x2 grid,
+  // in physical space so it needs no per-pixel rotation). Adding black can only
+  // darken -- 12.5 % read as a busy speckle, 25 % as a grey slab -- whereas
+  // erasing pushes the page back to a quarter of its ink, so the modal card
+  // (white, 2 px outline) is what the eye lands on and the panel has less to
+  // ghost, not more.
   void fillRectScrim(int x, int y, int width, int height) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,

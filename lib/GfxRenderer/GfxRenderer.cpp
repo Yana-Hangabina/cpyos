@@ -1871,50 +1871,48 @@ void GfxRenderer::fillRectScrim(const int x, const int y, const int width, const
   const uint8_t tailMask = static_cast<uint8_t>(0xFFu << (7 - (phyX1 & 7)));
   const int32_t stride = static_cast<int32_t>(panelWidthBytes);
 
-  // 12.5 % in PHYSICAL space: ONE black pixel per 8-px run on every row, with
-  // the dot shifted half a run on odd rows, so the result is a single-pixel
-  // diagonal lattice rather than dashed horizontal lines. Density does not
-  // depend on rotation.
-  uint8_t whiteMasks[2] = {static_cast<uint8_t>(0xFFu & ~(1u << 7)), static_cast<uint8_t>(0xFFu & ~(1u << 3))};
+  // FADE, never ink. The modal has to make the page behind it recede, and on
+  // e-ink that means taking ink away, not adding a speckle: adding black can
+  // only darken, never blur, and a uniform wash turns the panel into the grey
+  // slab that reads as dirt. So one pixel in four keeps its ink (odd x on odd
+  // rows) and everything else inside the rectangle goes to white. The covered
+  // area becomes a pale ghost of the page, the modal card (white, 2 px
+  // outline) is the only full-contrast object left, and the panel ends up with
+  // a quarter of the ink it had -- less to ghost than a dark scrim, not more.
+  //
+  // framebuffer bit 1 is white, so OR-ing erases here (the opposite of the
+  // earlier dark-scrim implementation, which AND-ed to add dots).
+  constexpr uint8_t kClearEvenColumns = 0xAA;  // bits 7,5,3,1 -> even x
 
   const bool gray = grayscale16Buffer != nullptr;
   const int grayStride = panelWidth / 2;
-  constexpr uint8_t kGrayLevel = 13;  // 13/15 ≈ 87 % white ≈ 12.5 % black
 
   for (int py = phyY0; py <= phyY1; ++py) {
-    const uint8_t pattern = whiteMasks[py & 1];
-    // Darken, never replace: framebuffer bit 1 is white, so ANDing with the
-    // pattern adds the lattice's black dots and keeps every black pixel the
-    // page already had. (Filling the pattern's white bits would erase 7/8 of
-    // the page -- the "scrim" must dim what is there, not paint over it.)
+    const bool evenRow = (py & 1) == 0;
+    const uint8_t clearMask = evenRow ? static_cast<uint8_t>(0xFF) : kClearEvenColumns;
     uint8_t* row = target + static_cast<int32_t>(py - originY) * stride;
     if (byteStart == byteEnd) {
-      const uint8_t keepMask = static_cast<uint8_t>(pattern | ~(headMask & tailMask));
-      row[byteStart] &= keepMask;
+      row[byteStart] |= static_cast<uint8_t>(clearMask & headMask & tailMask);
     } else {
-      row[byteStart] &= static_cast<uint8_t>(pattern | ~headMask);
-      if (byteEnd > byteStart + 1) {
-        for (int i = byteStart + 1; i < byteEnd; ++i) row[i] &= pattern;
-      }
-      row[byteEnd] &= static_cast<uint8_t>(pattern | ~tailMask);
+      row[byteStart] |= static_cast<uint8_t>(clearMask & headMask);
+      for (int i = byteStart + 1; i < byteEnd; ++i) row[i] |= clearMask;
+      row[byteEnd] |= static_cast<uint8_t>(clearMask & tailMask);
     }
     if (gray) {
+      // Same rule on the 16-level plane: the cleared pixels are raised to
+      // white, the kept ones keep their tone (AA text, images), so the page
+      // stays a faint ghost instead of a flat grey slab.
       uint8_t* grow = grayscale16Buffer + static_cast<size_t>(py) * grayStride;
-      // 16-level front: keep the darker of the two levels, so the page's
-      // mid-tones survive under the scrim instead of being flattened to 221.
-      const auto darken = [](uint8_t& packed, const bool high) {
-        const unsigned shift = high ? 4 : 0;
-        const uint8_t current = static_cast<uint8_t>((packed >> shift) & 0x0F);
-        if (current > kGrayLevel) {
-          packed = static_cast<uint8_t>((packed & ~(0x0Fu << shift)) | (kGrayLevel << shift));
-        }
-      };
       const int firstByte = phyX0 >> 1;
       const int lastByte = phyX1 >> 1;
       for (int i = firstByte; i <= lastByte; ++i) {
-        const int x0 = i * 2;
-        if (x0 >= phyX0 && x0 <= phyX1) darken(grow[i], false);
-        if (x0 + 1 >= phyX0 && x0 + 1 <= phyX1) darken(grow[i], true);
+        const int x0 = i * 2;  // even pixel -> low nibble
+        if (x0 >= phyX0 && x0 <= phyX1) {
+          grow[i] = static_cast<uint8_t>((grow[i] & 0xF0u) | 0x0F);
+        }
+        if (evenRow && x0 + 1 >= phyX0 && x0 + 1 <= phyX1) {
+          grow[i] = static_cast<uint8_t>((grow[i] & 0x0Fu) | 0xF0);
+        }
       }
     }
   }

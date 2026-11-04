@@ -17,7 +17,6 @@
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "apps/2048/Game2048Activity.h"
-#include "apps/AppsMenuActivity.h"
 #include "apps/airpage/AirPageActivity.h"
 #include "apps/avatar/UglyAvatarActivity.h"
 #include "apps/buddy/BuddyActivity.h"
@@ -30,6 +29,7 @@
 #ifdef ENABLE_CHINESE_VERSION
 #ifdef BOARD_HAS_PSRAM
 #include "booksource/BookSource.h"
+#include "apps/webbrowser/WebBrowserActivity.h"
 #endif
 #include "apps/weread/WeReadActivity.h"
 #endif
@@ -749,7 +749,7 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
 }
 void ActivityManager::goToCrashReport() { replaceActivityWith<CrashActivity>(); }
 
-void ActivityManager::goToApps() { replaceActivityWith<AppsMenuActivity>(); }
+void ActivityManager::goToApps() { replaceActivityWith<MyActivity>(1); }
 
 void ActivityManager::goToFindBooks() { replaceActivityWith<FindBooksActivity>(); }
 
@@ -812,6 +812,7 @@ void ActivityManager::goToJjwxc() {
   }
   replaceActivity(std::move(activity));
 }
+void ActivityManager::goToWebBrowser() { replaceActivityWith<WebBrowserActivity>(); }
 #endif
 #endif
 

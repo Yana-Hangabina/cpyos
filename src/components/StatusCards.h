@@ -13,14 +13,19 @@
 
 // The system's two persistent surfaces above a page:
 //
-//   W (wait)  -- 12.5% scrim + a 560x328 card with the theme's duck/wave
-//                progress bar, a title and up to two detail lines, plus an
-//                optional Cancel pill. Used for every blocking "loading /
-//                indexing / syncing / rebuilding" state, so the same object
-//                means "busy" everywhere.
+//   W (wait)  -- a fade scrim (the page keeps a quarter of its ink) + a
+//                560x328 outlined card with the
+//                theme's duck/wave progress bar, a title and up to two detail
+//                lines, plus an optional Cancel pill. Used for every blocking
+//                "loading / indexing / syncing / rebuilding" state, so the same
+//                object means "busy" everywhere.
 //   D (message) -- the same scrim + card shell without the progress bar, for a
 //                message that stays until the user acts (errors that carry
 //                Back/Retry hints rather than a timeout).
+//
+// The scrim fades the page instead of darkening it: on e-ink adding black can
+// only darken (never blur) and costs ghosting, while erasing ink pushes the
+// page back and leaves the card's outline as the focus.
 //
 // Neither is a page: the caller keeps the level it was on. paint() draws into
 // the current framebuffer and never presents -- hosts inside a render pass
@@ -51,7 +56,7 @@ inline Layout paintWait(const GfxRenderer& renderer, const char* title, const ch
   const int cardW = std::min(kCardW, safe.width - 48);
   const int cardX = safe.x + (safe.width - cardW) / 2;
   const int cardY = safe.y + (safe.height - kCardH) / 2;
-  GUI.drawCardFrame(renderer, Rect{cardX, cardY, cardW, kCardH}, false);
+  GUI.drawModalCardFrame(renderer, Rect{cardX, cardY, cardW, kCardH});
 
   // The theme's own wave + duck, the same primitive the reading and download
   // bars use -- not a second progress drawing.
@@ -127,7 +132,7 @@ inline void paintMessage(const GfxRenderer& renderer, const char* title, const c
   const int cardH = contentH + kPad * 2;
   const int cardX = safe.x + (safe.width - cardW) / 2;
   const int cardY = safe.y + (safe.height - cardH) / 2;
-  GUI.drawCardFrame(renderer, Rect{cardX, cardY, cardW, cardH}, false);
+  GUI.drawModalCardFrame(renderer, Rect{cardX, cardY, cardW, cardH});
 
   int y = cardY + kPad;
   const std::string shownTitle =

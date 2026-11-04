@@ -15,7 +15,9 @@
 #include <utility>
 #include <vector>
 
+#include "AppCatalog.h"
 #include "CrossPointSettings.h"
+#include "OpdsServerStore.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/ActivityManager.h"
@@ -49,7 +51,6 @@ constexpr int kCardRow = 80;
 constexpr int kToolW = 139;
 constexpr int kToolH = 120;
 constexpr int kToolGap = 16;
-constexpr int kGroupHeader = 48;
 
 void drawMaskIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const int x, const int y, const int size) {
   renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
@@ -131,63 +132,12 @@ uint32_t ordinalDaysInMonth(const uint32_t firstOrdinal) {
   return static_cast<uint32_t>(days);
 }
 
-enum class ToolAction : uint8_t {
-  ReadingStats,
-  FileTransfer,
-  JoinNetwork,
-  FileBrowser,
-  Woodfish,
-  Game2048,
-  Sudoku,
-  Sokoban,
-  Chess,
-  Minesweeper,
-  Avatar,
-  Standby,
-};
-
-struct ToolEntry {
-  StrId title;
-  UIIcon icon;
-  ToolAction action;
-};
-
-const ToolEntry kReadingTools[] = {
-    {StrId::STR_READING_STATS, UIIcon::ReadingStats, ToolAction::ReadingStats},
-    {StrId::STR_FILE_TRANSFER, UIIcon::Transfer, ToolAction::FileTransfer},
-    {StrId::STR_JOIN_NETWORK, UIIcon::Wifi, ToolAction::JoinNetwork},
-    {StrId::STR_BROWSE_FILES, UIIcon::File, ToolAction::FileBrowser},
-};
-
-const ToolEntry kBreakTools[] = {
-    {StrId::STR_WOODFISH_TITLE, UIIcon::Woodfish, ToolAction::Woodfish},
-    {StrId::STR_2048_TITLE, UIIcon::Game2048, ToolAction::Game2048},
-    {StrId::STR_SUDOKU_TITLE, UIIcon::Sudoku, ToolAction::Sudoku},
-    {StrId::STR_SOKOBAN_TITLE, UIIcon::Sokoban, ToolAction::Sokoban},
-};
-
-const ToolEntry kMoreTools[] = {
-#ifdef ENABLE_CHINESE_VERSION
-    {StrId::STR_CHINESE_CHESS_TITLE, UIIcon::ChineseChess, ToolAction::Chess},
-#else
-    {StrId::STR_MINESWEEPER_TITLE, UIIcon::Minesweeper, ToolAction::Minesweeper},
-#endif
-    {StrId::STR_MINESWEEPER_TITLE, UIIcon::Minesweeper, ToolAction::Minesweeper},
-    {StrId::STR_UGLY_AVATAR, UIIcon::Avatar, ToolAction::Avatar},
-    {StrId::STR_STANDBY_TITLE, UIIcon::Standby, ToolAction::Standby},
-};
-
-const ToolEntry* toolAt(const int index) {
-  if (index < 0) return nullptr;
-  if (index < 4) return &kReadingTools[index];
-  if (index < 8) return &kBreakTools[index - 4];
-  if (index < 12) return &kMoreTools[index - 8];
-  return nullptr;
-}
 }  // namespace
 
 void MyActivity::onEnter() {
   Activity::onEnter();
+  if (initialTab_ >= 0 && initialTab_ < kTabCount) tab_ = static_cast<Tab>(initialTab_);
+  initialTab_ = -1;
   toolSelected_ = 0;
   storageKnown_ = HalStorage::getInstance().getSpace(storageTotalBytes_, storageFreeBytes_);
   requestUpdate();
@@ -238,16 +188,14 @@ Rect MyActivity::aboutRect() const {
 
 Rect MyActivity::toolCellRect(const int index) const {
   const Rect body = bodyRect();
-  const int group = index / 4;
-  const int slot = index % 4;
-  const int top = body.y + 12 + group * (kGroupHeader + kToolH + 22);
-  return Rect{body.x + kMargin + slot * (kToolW + kToolGap), top + kGroupHeader, kToolW, kToolH};
+  const int column = index % kToolColumns;
+  const int row = index / kToolColumns;
+  const int top = body.y + 12 + row * (kToolH + 16);
+  return Rect{body.x + kMargin + column * (kToolW + kToolGap), top, kToolW, kToolH};
 }
 
-Rect MyActivity::toolPluginRect() const {
-  const Rect body = bodyRect();
-  return Rect{body.x + kMargin, body.y + 12 + 3 * (kGroupHeader + kToolH + 22) + 4,
-              body.width - kMargin * 2, 88};
+int MyActivity::toolCount() const {
+  return 2 + app_catalog::visibleCount(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers()) + 1;
 }
 
 void MyActivity::drawTabs() {
@@ -490,45 +438,42 @@ void MyActivity::drawRecords() {
 
 // ------------------------------------------------------------------ Tools --
 void MyActivity::drawTools() {
-  const Rect body = bodyRect();
-  const char* headers[3] = {tr(STR_GROUP_READING), tr(STR_GROUP_BREAK), tr(STR_GROUP_MORE)};
-  for (int group = 0; group < 3; ++group) {
-    const Rect first = toolCellRect(group * 4);
-    const int headerY = first.y - kGroupHeader + 12;
-    renderer.drawText(UI_10_FONT_ID, first.x, headerY, headers[group], true, EpdFontFamily::BOLD);
-    const std::string count = "4";
-    const int cw = renderer.getTextWidth(UI_10_FONT_ID, count.c_str());
-    renderer.drawText(UI_10_FONT_ID, first.x + 4 * (kToolW + kToolGap) - kToolGap - cw, headerY, count.c_str());
-  }
-  for (int i = 0; i < kToolCount; ++i) {
-    const ToolEntry* entry = toolAt(i);
-    if (entry == nullptr) continue;
+  const int visibleApps = app_catalog::visibleCount(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers());
+  const int count = toolCount();
+  if (toolSelected_ >= count) toolSelected_ = count > 0 ? count - 1 : 0;
+  for (int i = 0; i < count; ++i) {
     const Rect cell = toolCellRect(i);
+    StrId title = StrId::STR_NONE_OPT;
+    UIIcon icon = UIIcon::File;
+    const freeink::Icon* maskIcon = nullptr;
+    if (i == 0) {
+      title = StrId::STR_JOIN_NETWORK;
+      icon = UIIcon::Wifi;
+    } else if (i == 1) {
+      title = StrId::STR_BROWSE_FILES;
+      icon = UIIcon::File;
+    } else if (i < 2 + visibleApps) {
+      const int appIndex = app_catalog::visibleToAppIndex(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers(), i - 2);
+      if (appIndex < 0) continue;
+      title = app_catalog::at(appIndex).titleId;
+      icon = app_catalog::at(appIndex).icon;
+    } else {
+      title = StrId::STR_PLUGIN_DIRECTORY;
+      maskIcon = &icon_blocks_48;
+    }
+
     if (i == toolSelected_) {
       renderer.drawRoundedRect(cell.x - 2, cell.y - 2, cell.width + 4, cell.height + 4, 2, 18, true);
     }
-    if (i == 0) {
-      renderer.fillRoundedRect(cell.x, cell.y, cell.width, cell.height, 16, Color::Black);
-      InxAppIcons::draw(renderer, entry->icon, cell.x + (cell.width - 48) / 2, cell.y + 20, 2, false);
-      const int labelW = renderer.getTextWidth(UI_10_FONT_ID, I18N.get(entry->title));
-      renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, cell.y + 84, I18N.get(entry->title),
-                        false);
-      // The icon occupies the black tile; redraw it white on black.
-      InxAppIcons::draw(renderer, entry->icon, cell.x + (cell.width - 48) / 2, cell.y + 20, 2, true);
+    if (maskIcon != nullptr) {
+      drawMaskIcon(renderer, *maskIcon, cell.x + (cell.width - 48) / 2, cell.y + 20, 48);
     } else {
-      InxAppIcons::draw(renderer, entry->icon, cell.x + (cell.width - 48) / 2, cell.y + 20, 2, false);
-      const std::string label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(entry->title), cell.width - 8);
-      const int labelW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
-      renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, cell.y + 84, label.c_str());
+      InxAppIcons::draw(renderer, icon, cell.x + (cell.width - 48) / 2, cell.y + 20, 2, false);
     }
+    const std::string label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(title), cell.width - 8);
+    const int labelW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
+    renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, cell.y + 84, label.c_str());
   }
-
-  const Rect plugin = toolPluginRect();
-  renderer.drawLine(plugin.x, plugin.y, plugin.x + plugin.width, plugin.y, true);
-  drawMaskIcon(renderer, icon_blocks_48, plugin.x, plugin.y + (plugin.height - 24) / 2, 24);
-  renderer.drawText(UI_12_FONT_ID, plugin.x + 36, plugin.y + (plugin.height - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
-                    tr(STR_PLUGIN_DIRECTORY), true, EpdFontFamily::BOLD);
-  drawChevron(renderer, plugin.x + plugin.width - 12, plugin.y + plugin.height / 2 - 6);
 }
 
 // --------------------------------------------------------------- Settings --
@@ -685,26 +630,22 @@ void MyActivity::openSettingsCategory(const int category) {
 }
 
 void MyActivity::openTool(const int index) {
-  const ToolEntry* entry = toolAt(index);
-  if (entry == nullptr) return;
-  switch (entry->action) {
-    case ToolAction::ReadingStats: activityManager.goToReadingStatsMenu(); return;
-    case ToolAction::FileTransfer: activityManager.goToFileTransfer(); return;
-    case ToolAction::JoinNetwork: activityManager.goToJoinNetwork(); return;
-    case ToolAction::FileBrowser: activityManager.goToFileBrowser(); return;
-    case ToolAction::Woodfish: activityManager.goToWoodfish(); return;
-    case ToolAction::Game2048: activityManager.goToGame2048(); return;
-    case ToolAction::Sudoku: activityManager.goToSudoku(); return;
-    case ToolAction::Sokoban: activityManager.goToSokoban(); return;
-    case ToolAction::Chess:
-#ifdef ENABLE_CHINESE_VERSION
-      activityManager.goToChineseChess();
-#endif
-      return;
-    case ToolAction::Minesweeper: activityManager.goToMinesweeper(); return;
-    case ToolAction::Avatar: activityManager.goToUglyAvatar(); return;
-    case ToolAction::Standby: activityManager.goToStandby(); return;
+  if (index < 0 || index >= toolCount()) return;
+  const int visibleApps = app_catalog::visibleCount(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers());
+  if (index == 0) {
+    activityManager.goToJoinNetwork();
+    return;
   }
+  if (index == 1) {
+    activityManager.goToFileBrowser();
+    return;
+  }
+  if (index >= 2 && index < 2 + visibleApps) {
+    const int appIndex = app_catalog::visibleToAppIndex(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers(), index - 2);
+    if (appIndex >= 0 && app_catalog::at(appIndex).open != nullptr) app_catalog::at(appIndex).open();
+    return;
+  }
+  openSettingsCategory(3);
 }
 
 void MyActivity::openBookList() { activityManager.goToReadingStatsMenu(); }
@@ -751,18 +692,14 @@ bool MyActivity::handleRecordTouch(const int x, const int y) {
 }
 
 bool MyActivity::handleToolTouch(const int x, const int y) {
-  for (int i = 0; i < kToolCount; ++i) {
+  const int count = toolCount();
+  for (int i = 0; i < count; ++i) {
     const Rect cell = toolCellRect(i);
     if (x >= cell.x && x < cell.x + cell.width && y >= cell.y && y < cell.y + cell.height) {
       toolSelected_ = i;
       openTool(i);
       return true;
     }
-  }
-  const Rect plugin = toolPluginRect();
-  if (x >= plugin.x && x < plugin.x + plugin.width && y >= plugin.y && y < plugin.y + plugin.height) {
-    openSettingsCategory(3);
-    return true;
   }
   return false;
 }
@@ -815,7 +752,8 @@ void MyActivity::debugMoveRing(const int delta) {
   if (tab_ != Tab::Tools) {
     tab_ = Tab::Tools;
   } else {
-    toolSelected_ = ((toolSelected_ + delta) % kToolCount + kToolCount) % kToolCount;
+    const int count = toolCount();
+    toolSelected_ = ((toolSelected_ + delta) % count + count) % count;
   }
   requestUpdate();
 }
@@ -848,12 +786,12 @@ void MyActivity::loop() {
   }
   if (tab_ == Tab::Tools) {
     if (mappedInput.wasReleased(MappedInputManager::Button::NavNext)) {
-      toolSelected_ = (toolSelected_ + 1) % kToolCount;
+      toolSelected_ = (toolSelected_ + 1) % toolCount();
       requestUpdate();
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::NavPrevious)) {
-      toolSelected_ = (toolSelected_ + kToolCount - 1) % kToolCount;
+      toolSelected_ = (toolSelected_ + toolCount() - 1) % toolCount();
       requestUpdate();
       return;
     }

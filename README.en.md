@@ -12,6 +12,7 @@
 - **Refreshed UI** — home, library, find-books and settings redesigned around what a Read Pico actually shows. Every source (WeRead, JJWXC, local files, OPDS) exposes its own sign-in and shelf on the find-books screen.
 - Free chapters and purchased VIP chapters can be cached, read offline and synced.
 - **WeRead** — QR sign-in, shelf, EPUB download, offline reading and progress sync, sharing one library with JJWXC and local books.
+- **Reading browser** — enter a URL and the page is fetched and re-typeset as text at the current reading size and 16 gray levels. In-page links, paging, a page menu, bookmarks and history (delete/clear), recent pages and an offline error card. Chinese pages are detected as GBK / GB18030 / UTF-16; gzip and deflate are tolerated. Both HTTPS and plain HTTP work, with an explicit insecure marker for HTTP. Wi-Fi connects silently to a saved network, is released on failure, and the loading card shows continuous progress from connect to layout; cancelling lets the next link open immediately.
 - **Chinese reading** — one scalable CJK family covering 8,105 standard characters plus GB2312, shared by the UI, titles, the JJWXC app and body text; UI and reading sizes are separate (reading 10–34pt), and richer SD-card fonts can fill in rarer characters. Offline pinyin search/IME, 11 hyphenation languages, SD-card TTF/OTF/TTC and embedded EPUB fonts.
 - **E-ink display** — 16-level text and UI anti-aliasing (4-bit coverage, 50% B/W threshold), banded/partial refresh with local ghost cleanup, water-ripple page turn, fast DU page turn, asynchronous pushes, a scan watchdog on every full-page push, area-refresh clock, screen repair and kiikoread-derived gamma/TEXTTURN tuning.
 - **Reading and library** — EPUB, TXT, CBZ, FB2, experimental PDF; bookmarks, annotations, dictionary, reading statistics, standby faces and KOReader progress sync.
@@ -58,10 +59,10 @@ python3 scripts/build_web_pack.py
 python3 scripts/generate_hyphenation_db.py
 python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.whl
 python3 scripts/generate_data_manifest.py
-python3 scripts/build_cpyos_release.py --version 0.2.3
+python3 scripts/build_cpyos_release.py --version 0.4.0
 ```
 
-The release bundle is written to `dist/cpyos/0.2.3/`. Check `[SUCCESS]` in the build log and `esp_app_desc.project_name` is `crossmux` or `cpyos` in the image (not `arduino-lib-builder`), not just the process exit code. See [docs/cpyos/release.md](docs/cpyos/release.md) for the maintainer checklist.
+The release bundle is written to `dist/cpyos/0.4.0/`. Check `[SUCCESS]` in the build log and `esp_app_desc.project_name` is `crossmux` or `cpyos` in the image (not `arduino-lib-builder`), not just the process exit code. See [docs/cpyos/release.md](docs/cpyos/release.md) for the maintainer checklist.
 
 ## Upstream sync
 

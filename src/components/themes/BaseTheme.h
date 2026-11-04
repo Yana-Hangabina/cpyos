@@ -180,7 +180,8 @@ enum UIIcon {
   Calculator,
   Woodfish,
   Usb,
-  Blocks
+  Blocks,
+  Browser
 };
 
 // Default theme implementation (Classic Theme)
@@ -379,6 +380,12 @@ class BaseTheme {
     (void)renderer;
     (void)rect;
     (void)focused;
+  }
+  // Card surface for a surface that floats above the page (wait / message /
+  // dialog). Defaults to the grid card frame; CPY adds the crisp outline that
+  // carries the focus once the scrim is too light to do it on its own.
+  virtual void drawModalCardFrame(const GfxRenderer& renderer, Rect rect) const {
+    drawCardFrame(renderer, rect, false);
   }
   virtual void drawSplash(const GfxRenderer& renderer, const char* status, const char* version = nullptr) const;
   // Default sleep screen body (DARK/LIGHT modes); defaults to the splash.

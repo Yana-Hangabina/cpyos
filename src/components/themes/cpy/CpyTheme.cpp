@@ -702,6 +702,16 @@ void CpyTheme::drawCardFrame(const GfxRenderer& renderer, const Rect rect, const
   renderer.fillRoundedRect(rect.x + 2, rect.y + 2, rect.width - 4, rect.height - 4, radius - 2, Color::White);
 }
 
+void CpyTheme::drawModalCardFrame(const GfxRenderer& renderer, const Rect rect) const {
+  // The grid card is a 25 % ring, which the eye reads as "a box that happens to
+  // be there". A surface floating over a scrim has to win the focus on its own,
+  // so the same body gets a solid 2 px outline -- the frame the option popup
+  // already had, now shared by the wait/message cards.
+  drawCardFrame(renderer, rect, false);
+  renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, CpyMetrics::values.popupFrameThickness,
+                           CpyMetrics::values.popupCornerRadius, true);
+}
+
 void CpyTheme::drawDuckStand(const GfxRenderer& renderer, const int x, const int y) {
   cpy_duck::draw(renderer, cpy_duck_stand_36, x, y);
 }
@@ -711,11 +721,13 @@ void CpyTheme::drawDuckSwim(const GfxRenderer& renderer, const int x, const int 
 }
 
 void CpyTheme::drawModalScrim(const GfxRenderer& renderer) const {
-  // Design §2.5: the modal scrim is g1 (12.5 %), not the 25 % LightGray
-  // lattice. A black mask flickers and ghosts far worse on e-ink, and 25 %
-  // read as dirt on this panel; fillRectScrim() also writes the matching flat
-  // gray into the 16-level front, so a dialog over a grayscale page dims the
-  // page instead of erasing it.
+  // Design §2.5 started at a g1 (12.5 %) dither, but device feedback was that
+  // it read as a busy speckle and, on a 16-level page, as a large slab of grey
+  // (25 % was worse, and merely lightening the dither was not perceptibly
+  // different). Ink on e-ink is not alpha: adding black can only darken, never
+  // blur. So the scrim now FADES the page -- it keeps a quarter of the ink and
+  // sends the rest to white -- and the modal card carries the focus with its
+  // own 2 px outline (drawModalCardFrame).
   // Full panel, status band included: a modal owns the whole surface, and a
   // scrim that stopped short of the header would leave a bright strip behind.
   renderer.fillRectScrim(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight());
@@ -738,7 +750,7 @@ Rect CpyTheme::drawPopup(const GfxRenderer& renderer, const char* message) const
   const int h = textHeight + kMarginY * 2;
   const int x = (screenW - w) / 2;
   const int y = (screenH - h) / 2;
-  drawCardFrame(renderer, Rect{x, y, w, h}, false);
+  drawModalCardFrame(renderer, Rect{x, y, w, h});
   renderer.drawText(UI_12_FONT_ID, x + kMarginX, y + kMarginY, shown.c_str(), true, EpdFontFamily::REGULAR);
   // Transient card over a stable page: do not let a run of toasts feed the
   // periodic UI GC16 sweep. The page's next Normal push resumes it.

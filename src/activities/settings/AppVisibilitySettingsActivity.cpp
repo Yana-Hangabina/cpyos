@@ -5,7 +5,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
-#include "activities/apps/AppsMenuActivity.h"
+#include "AppCatalog.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -22,7 +22,7 @@ void AppVisibilitySettingsActivity::onEnter() {
   rowItems.reserve(static_cast<size_t>(listCount()));
   for (int i = 0; i < listCount(); ++i) {
     fui::ListItem item;
-    item.label = I18N.get(AppsMenuActivity::getAppTitleId(i));
+    item.label = I18N.get(app_catalog::titleId(i));
     item.actionValue = static_cast<int16_t>(i);
     rowItems.push_back(item);
   }
@@ -33,7 +33,7 @@ void AppVisibilitySettingsActivity::onExit() {
   Activity::onExit();
 }
 
-int AppVisibilitySettingsActivity::listCount() const { return AppsMenuActivity::getAppCount(); }
+int AppVisibilitySettingsActivity::listCount() const { return app_catalog::count(); }
 
 bool AppVisibilitySettingsActivity::handleCustomInput() {
   if (!waitForConfirmRelease) return false;
@@ -45,8 +45,8 @@ void AppVisibilitySettingsActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) return;
   nav.selected = index;
   app.clearTapFlash();
-  const bool visible = AppsMenuActivity::isAppVisible(index);
-  if (AppsMenuActivity::setAppVisible(index, !visible)) {
+  const bool visible = app_catalog::visible(index);
+  if (app_catalog::setVisible(index, !visible)) {
     dirty = true;
     requestUpdate();
   }
@@ -61,7 +61,7 @@ void AppVisibilitySettingsActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   for (int i = 0; i < listCount(); ++i) {
-    rowItems[static_cast<size_t>(i)].value = AppsMenuActivity::isAppVisible(i) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    rowItems[static_cast<size_t>(i)].value = app_catalog::visible(i) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
   }
 
   fui::ListProps props;

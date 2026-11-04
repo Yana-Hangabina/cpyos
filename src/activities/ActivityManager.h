@@ -158,6 +158,7 @@ class ActivityManager {
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                              std::string detail = {}, bool retryable = false);
   void goToCrashReport();
+  // Opens the tool drawer of the My tab: the only app launcher.
   void goToApps();
   void goToFindBooks();
   void goToSudoku();
@@ -177,6 +178,7 @@ class ActivityManager {
   void goToWeRead();
 #ifdef BOARD_HAS_PSRAM
   void goToJjwxc();
+  void goToWebBrowser();
 #endif
 #endif
   void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE);
