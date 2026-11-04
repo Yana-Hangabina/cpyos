@@ -127,6 +127,23 @@ returns `0` for the public image.
 5. Any new reader hook goes through `booksource::ReaderHost` (or a declaration
    + stub pair) — never by including a private header.
 
+## Concrete wiring (2026-11-04)
+
+- Private repository: **https://github.com/Yana-Hangabina/cpyos-jjwxc** (private,
+  branch `main`). Its tree is exactly the content of this repository's
+  `src/jjwxc/`.
+- The release workflow clones it with a **read-only deploy key** stored as
+  `secrets.JJWXC_DEPLOY_KEY`, then builds `pio run -e readpico_jjwxc`. A missing
+  secret or a failed clone fails the release on purpose.
+- `pio run -e readpico` is the public/no-source target (the CI default), so a
+  plain clone builds with no private checkout.
+- Public history was rewritten on 2026-11-04 to remove `lib/JjwxcApi`,
+  `src/activities/apps/jjwxc`, `src/TlsProbe.*` and
+  `src/JjwxcCacheQueueTest.cpp` from every commit; the 0.1.0–0.2.3 tags and
+  their releases were deleted. Unreachable objects can remain in GitHub's
+  object storage and in the fork network until GitHub GC runs; only GitHub
+  Support can force that purge.
+
 ## Release pipeline note
 
 The public release workflow builds the public target, so its artifacts have no

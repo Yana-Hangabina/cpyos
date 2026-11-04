@@ -117,8 +117,12 @@ Philosophy: Reading comes first. Lightweight apps, analytics, standby customizat
   `booksource::privateSource()`。`JjwxcReaderMethods.cpp` 承载原 `EpubReaderActivity` 的晋江方法与
   三个调试入口；`contentsFilterable`/`rebuildContentsRows`/`contentsTocOfRow` 等**通用**目录工具留在公共。
 - **开关**：dev 树 `[s3_ble_psram]` 定义 `-DCROSSPOINT_BOOKSOURCE_JJWXC=1` 并加
-  `-Isrc/jjwxc/app -Isrc/jjwxc/protocol/src`；public 树**不定义**该宏，并在 `[base]`
-  的 `build_src_filter` 里 `-<jjwxc/>`（目录也在 `.gitignore` 中）。
+  `-Isrc/jjwxc/app -Isrc/jjwxc/protocol/src`；public 树**不定义**该宏，`[base]` 的
+  `build_src_filter` 里 `-<jjwxc/>`，目录在 `.gitignore` 中。
+- **私有仓**：<https://github.com/Yana-Hangabina/cpyos-jjwxc>（private，`main`，内容即 `src/jjwxc/`）。
+  发布流水线用只读 deploy key（`secrets.JJWXC_DEPLOY_KEY`）把它 clone 到 `src/jjwxc`，
+  再 `pio run -e readpico_jjwxc`；缺 secret 或 clone 失败会让发布**故意失败**。
+  普通 `pio run -e readpico` 是公共/无源目标，CI 与普通 clone 都走它。
 - **构建判据**：两种目标都必须 SUCCESS——
   `readpico`（dev，带私有组件）与 `readpico_nosource`（dev，验证公共回退）；
   public 树只有 `readpico`（等于 nosource）。public 镜像里
@@ -129,4 +133,8 @@ Philosophy: Reading comes first. Lightweight apps, analytics, standby customizat
   saybody/client/login/cachequeue）在 `src/jjwxc/protocol` 新路径下全部通过。
 - **同步纪律**：dev 是唯一开发源；public 只提交公共侧，**绝不提交 `src/jjwxc`**。
   跨树改动拆成"公共接口/核心"与"私有实现"两半，公共侧必须能单独构建并通过契约测试。
-  发布带晋江 App 的固件必须在有 `src/jjwxc` 的树上加上述宏构建；public 流水线产物不含该 App。
+  发布带晋江 App 的固件由 public 发布流水线（`readpico_jjwxc`）产出。
+- **历史清理（2026-11-04）**：public 的 `cpyos` 历史已重写，从每个提交中剔除
+  `lib/JjwxcApi`、`src/activities/apps/jjwxc`、`src/TlsProbe.*`、`src/JjwxcCacheQueueTest.cpp`；
+  0.1.0–0.2.3 的 tag 与 release 已删除，旧资产备份在 `artifacts/legacy-releases/`。
+  不可达对象可能仍留在 GitHub 存储与 fork network 中，直到 GitHub GC 或 Support 清理。

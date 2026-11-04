@@ -42,3 +42,7 @@ flake.*
 
 # Local device-image backups (flashing / rollback copies), never source.
 /artifacts
+
+# Private book-source component (not distributed). See
+# docs/engineering/private-book-source.md.
+/src/jjwxc/
