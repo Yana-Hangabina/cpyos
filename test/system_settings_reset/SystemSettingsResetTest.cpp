@@ -20,7 +20,7 @@ constexpr const char* RESET_PATHS[] = {
 
 constexpr const char* PRESERVED_PATHS[] = {
     "/.crosspoint/user-guide.checked",
-    "/脆皮鸭用户手册.epub",
+    "/CrossMux用户手册.epub",
     "/.crosspoint/state.json",
     "/.crosspoint/recent.json",
     "/.crosspoint/reading_stats.json",

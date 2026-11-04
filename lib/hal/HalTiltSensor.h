@@ -58,7 +58,7 @@ class HalTiltSensor {
   CrossPointOrientation::Value _accelOrientation = CrossPointOrientation::PORTRAIT;
   bool _accelReading = false;
 
-  // Shake page-turn gate (kiikoread book_policy.h): independent of the tilt gesture
+  // Shake page-turn gate (rpr book_policy.h): independent of the tilt gesture
   // and fed from the same accelerometer samples.
   ShakePageTurnGate _shakeGate;
 

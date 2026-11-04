@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include "I18n.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -30,9 +31,8 @@ void FullScreenMessageActivity::paint() {
   }
 
   // Design frame 19: a "!" mark over a title, an explanation line and one
-  // action capsule. I18N is not initialised yet on this path (it is loaded
-  // after the card mounts), so both lines are literal English -- the only
-  // honest choice when no translation table can be reached.
+  // action capsule. The SD-failure caller restores the last chosen language
+  // from NVS before mounting this page, so the strings are translated here.
   const int cx = screenW / 2;
   const int markY = screenH * 34 / 100;
   constexpr int kMarkRadius = 46;
@@ -56,7 +56,7 @@ void FullScreenMessageActivity::paint() {
   const int by = screenH - 220;
   renderer.drawRoundedRect(bx, by, kButtonW, kButtonH, 2, kButtonH / 2, true);
   const int labelHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  renderer.drawCenteredText(UI_10_FONT_ID, by + (kButtonH - labelHeight) / 2, "Retry", true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, by + (kButtonH - labelHeight) / 2, tr(STR_RETRY), true, EpdFontFamily::BOLD);
   retryRect_ = Rect{bx, by, kButtonW, kButtonH};
 
   renderer.displayBuffer(HalDisplay::FULL_REFRESH);

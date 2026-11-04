@@ -62,7 +62,7 @@ constexpr int kToolTabs = 4;
 // Contents tail badge/action and current-chapter bar. The placeholder below
 // reserves the slot inside the shared list without touching FreeInkUI's
 // ListItem layout. A row carries a 16 px state glyph + its label, then one
-// 56x56 rounded action button (refreshed UI frame 06).
+// 56x56 rounded action button (Pond v5 frame 06).
 constexpr jjwxc_toc::Density kContentsDensity =
     UiHighDpiProfile::enabled ? jjwxc_toc::Density::High : jjwxc_toc::Density::Low;
 constexpr int16_t kContentsButton = UiHighDpiProfile::enabled ? 56 : 44;
@@ -95,7 +95,7 @@ constexpr int16_t kContentsRowH = UiHighDpiProfile::enabled ? 88 : 56;
 constexpr char kTailPlaceholder[] =
     "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM";  // 32 real-advance glyphs
 constexpr int16_t kPanelTabH = UiHighDpiProfile::enabled ? 64 : 44;
-// Type panel (refreshed UI frame 05): a 546 px card, a 48x4 grabber, four tabs and
+// Type panel (Pond v5 frame 05): a 546 px card, a 48x4 grabber, four tabs and
 // a strict 2x4 grid of 96 px cells. Every control is 56 px high and every step
 // button 56x56, so the two columns line up on one baseline.
 constexpr int16_t kTextSheetH = UiHighDpiProfile::enabled ? 546 : 414;
@@ -103,7 +103,6 @@ constexpr int16_t kTextCellH = UiHighDpiProfile::enabled ? 96 : 72;
 constexpr int16_t kTextControlH = UiHighDpiProfile::enabled ? 56 : 32;
 constexpr int16_t kTextStepW = UiHighDpiProfile::enabled ? 56 : 32;
 constexpr int16_t kTextCellPad = UiHighDpiProfile::enabled ? 16 : 8;
-constexpr int16_t kTextDoneH = UiHighDpiProfile::enabled ? 60 : 44;
 constexpr const char* kContentsBadgeLabels[] = {"FREE", "VIP", "VIP¥", "LOCK"};
 
 // The reader hands the Text rows as "- 12 pt +" / "- 宽松 +" strings (the
@@ -390,7 +389,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   const bool textPanel = model_.activeTool == kTextTool;
   const bool contents = model_.panel && model_.activeTool == 0;
 
-  // refreshed UI frame 05: 20 px top corners, a 48x4 grabber 9 px below the free
+  // Pond v5 frame 05: 20 px top corners, a 48x4 grabber 9 px below the free
   // edge, and 9 px of air before the tab strip (22 px band in total).
   fui::SheetProps sheetProps;
   sheetProps.anchor = fui::SheetEdge::Bottom;
@@ -458,7 +457,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   // (the 604 px content column), tighter on the low-density boards.
   const int16_t chromePad = UiHighDpiProfile::enabled ? 40 : 12;
   if (contents && model_.contentsFilters) {
-    // The filter strip doubles as the state legend (refreshed UI frame 06): plain
+    // The filter strip doubles as the state legend (Pond v5 frame 06): plain
     // words in a row, the active one bold with a 4 px rule under it. The three
     // filters the reader actually implements are the three words.
     const fui::Rect band = screen.takeTop(kBookmarkChipsH, tokens.spaceSm).inset(fui::Insets{0, chromePad, 0, chromePad});
@@ -579,13 +578,15 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   }
 
   if (textPanel) {
-    // refreshed UI frame 05: a strict 2x4 grid. Each cell is a label plus one
+    // Pond v5 frame 05: a strict 2x4 grid. Each cell is a label plus one
     // 56 px control; both columns share one baseline, so nothing staggers.
     const fui::Rect body = screen.body();
     const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
     const fui::Paint paper = fui::Paint::solid(fui::Color::White);
-    const int16_t doneH = kTextDoneH;
-    const int16_t gridH = static_cast<int16_t>(body.height - doneH - 16);
+    // No [Done] pill: every control applies immediately and the sheet's own
+    // grabber / Back close it, so the grid gets the whole band minus a bottom
+    // margin so the last row never touches the panel edge.
+    const int16_t gridH = static_cast<int16_t>(body.height - 16);
     const int16_t cellH = std::max<int16_t>(48, std::min<int16_t>(kTextCellH, static_cast<int16_t>(gridH / 4)));
     const int16_t cellW = static_cast<int16_t>(body.width / 2);
     const uint8_t ctrlRadius = 10;
@@ -701,16 +702,6 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
       }
     }
 
-    // Done: 604 x 60 black pill at the card's foot (design .rp .done).
-    const fui::Rect done{static_cast<int16_t>(body.x + 40), static_cast<int16_t>(sheetTop_ + sheetH - 8 - doneH),
-                         static_cast<int16_t>(body.width - 80), doneH};
-    screen.target().fill(done, ink, static_cast<uint8_t>(doneH / 2));
-    fui::TextStyle doneStyle = tokens.bodyText;
-    doneStyle.align = fui::TextAlign::Center;
-    doneStyle.bold = true;
-    doneStyle.color = fui::Color::White;
-    screen.target().text(done, tr(STR_DONE), doneStyle);
-    screen.frame().hit(done, ACTION_DISMISS, 0, fui::InputTouch);
     return;
   }
 

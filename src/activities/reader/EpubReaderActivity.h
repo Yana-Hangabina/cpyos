@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Epub.h>
+#include "components/Toast.h"
 #include <Epub/AnnotationStore.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/JjwxcCommentSidecar.h>
@@ -23,7 +24,7 @@
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcPsramAllocator.h"
+#include "booksource/PsramAllocator.h"
 #endif
 
 class TtfEpdFont;
@@ -151,7 +152,7 @@ class EpubReaderActivity final : public ReaderActivity {
   enum class Overlay { None, Toolbar, Contents, Text, Bookmarks, More };
   Overlay overlay = Overlay::None;
   // One-shot first-run map of the reader's touch zones. It is a full-screen
-  // page of its own (refreshed UI frame 16), not a wash over the body text; it owns
+  // page of its own (Pond v5 frame 16), not a wash over the body text; it owns
   // input until dismissed once.
   bool gestureHintVisible = false;
   // A tap that opened the book can still be mid-release when the first frame
@@ -164,7 +165,7 @@ class EpubReaderActivity final : public ReaderActivity {
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
   void drawGestureHint();
-  // Reader chrome (refreshed UI frame 04): a two-line header at the top, a wave
+  // Reader chrome (Pond v5 frame 04): a two-line header at the top, a wave
   // progress band and the page numbers at the foot. One geometry helper feeds
   // both the layout reserve in renderBook() and the per-minute clock repaint,
   // so the three cannot drift apart.
@@ -362,6 +363,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // use), for enum rows: font size / line spacing / alignment / orientation /
   // auto page turn. Toggle rows stay one-tap toggles, as in Settings.
   OptionPopup overlayPopup{true};
+  Toast toast_;
   ReaderFontPreview fontPreview;
   enum class FontPromptState { Idle, Asking, Accepted, TooLarge };
   FontPromptState fontPromptState = FontPromptState::Idle;
@@ -516,6 +518,9 @@ class EpubReaderActivity final : public ReaderActivity {
   std::vector<JjwxcCommentSidecar::Count, jjwxc::PsramAllocator<JjwxcCommentSidecar::Count>> commentCounts_;
 
   void resolveJjwxcBook();
+  // Re-resolve the file path after the source repackaged the book (a title
+  // change renames the artefact). No-op when no source component is linked.
+  void resolveSourceBookPathAfterRepackage(std::string& path);
   void loadJjwxcCommentCounts();
   uint16_t commentTotalFor(uint32_t paragraphId) const;
   // Fills `out` with this page's bubbles. Returns the count. `top/right/bottom/
@@ -599,7 +604,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void renderOverlay();
   int currentTocIndex() const;
   std::string currentChapterTitle() const;
-  // Text panel cells (refreshed UI frame 05, strict 2x4 grid): font, size, line
+  // Text panel cells (Pond v5 frame 05, strict 2x4 grid): font, size, line
   // spacing, paragraph spacing, page margin, fast page turn, water ripple,
   // restore defaults. Every value here is backed by an existing setting.
   static constexpr int kTextPanelCells = 8;
@@ -696,6 +701,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool wantsBandUpdates() const override { return overlay != Overlay::None; }
   void debugSetContentsFilter(int filter) override;
   void debugActivateContentsRow(int row) override;
+  // Serial soak hook: press Confirm on the focused panel cell (the Text grid
+  // uses this to open its value pickers without a touch panel).
+  void debugConfirm() override;
   void debugDismissHint() override;
   void debugOpenJjwxcComment() override;
   void debugOpenFakeJjwxcComment() override;

@@ -112,11 +112,6 @@ struct ThemeMetrics {
   bool popupTextBold;
   bool popupTextInverted;
   int popupTextBaselineOffsetY;
-  int popupProgressBarHeight;
-  bool popupProgressDrawOutline;
-  bool popupProgressClampPercent;
-  bool popupProgressFillInverted;
-  bool popupProgressOutlineInverted;
 
   int optionPopupItemSpacing;
   int optionPopupInnerPadding;
@@ -276,11 +271,6 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .popupTextBold = true,
                                  .popupTextInverted = true,
                                  .popupTextBaselineOffsetY = -2,
-                                 .popupProgressBarHeight = 4,
-                                 .popupProgressDrawOutline = false,
-                                 .popupProgressClampPercent = false,
-                                 .popupProgressFillInverted = true,
-                                 .popupProgressOutlineInverted = true,
                                  .optionPopupItemSpacing = 6,
                                  .optionPopupInnerPadding = 16,
                                  .optionPopupSelectionVPadding = 4,
@@ -460,7 +450,6 @@ class BaseTheme {
   // supplied by the caller so the dialog geometry matches the option hit rects.
   virtual void drawOptionPopup(const GfxRenderer& renderer, const char* title, const char* headline, int headlineHeight,
                                const std::vector<std::string>& options, int selectedIndex) const;
-  virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   static void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                             std::string title, const int paddingBottom = 0, const int textYOffset = 0,
                             const bool fillMargin = true, const bool isPageBookmarked = false,

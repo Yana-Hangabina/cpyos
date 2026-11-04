@@ -70,7 +70,7 @@ class InxRecentActivity final : public Activity {
   uint32_t coverLoadingSinceMs_ = 0;
 
 
-  // refreshed UI home (design frame 01): one large continue card, a 140 px reading
+  // Pond v5 home (design frame 01): one large continue card, a 140 px reading
   // strip with the week bars, the three most recent covers, and the update row.
   // Ring slots: 0 continue, 1 today, 2..4 recent books, 5 sync.
   struct DashLayout {

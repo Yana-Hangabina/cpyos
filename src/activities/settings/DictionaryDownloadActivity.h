@@ -1,6 +1,7 @@
 #pragma once
 
 #include <I18n.h>
+#include "components/InlineConfirm.h"
 
 #include <cstdint>
 #include <string>
@@ -28,6 +29,7 @@ class DictionaryDownloadActivity final : public Activity, private UiAppHost {
   }
 
  private:
+  InlineConfirm confirm_;
   enum class State : uint8_t { WifiSelection, Loading, List, Downloading, Complete, Error };
   enum class Operation : uint8_t { None, Single, UpdateAll };
   enum class DownloadResult : uint8_t { Success, Cancelled, Failed };

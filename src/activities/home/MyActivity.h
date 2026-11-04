@@ -10,7 +10,7 @@ namespace freeink {
 struct Icon;
 }
 
-// Fourth main tab, refreshed UI frames 09/10/11: three tabs (记录 / 工具 / 设置).
+// Fourth main tab, Pond v5 frames 09/10/11: three tabs (记录 / 工具 / 设置).
 // 记录 is the printed reading chart, 工具 is the 4 x 3 icon drawer, and 设置 is
 // the 2 x 2 card dashboard whose rows open the existing category pages.
 class MyActivity final : public Activity {

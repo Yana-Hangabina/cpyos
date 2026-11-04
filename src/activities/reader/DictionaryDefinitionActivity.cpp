@@ -1,4 +1,5 @@
 #include "DictionaryDefinitionActivity.h"
+#include "components/StatusCards.h"
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
@@ -571,7 +572,7 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
                             (content.currentPage + 1 < content.totalPages ? ">" : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   if (messageVisible) {
-    GUI.drawPopup(renderer, I18N.get(message));
+    status_card::showMessage(renderer, I18N.get(message), nullptr);
     return;
   }
   renderer.displayBuffer();

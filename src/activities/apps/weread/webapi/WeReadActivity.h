@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include "components/Toast.h"
+#include "components/InlineConfirm.h"
 #include <cstdint>
 #include <vector>
 
@@ -19,6 +21,8 @@ class WeReadActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  InlineConfirm confirm_;
+  Toast toast_;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override;
 

@@ -216,6 +216,14 @@ class GfxRenderer {
   // per-pixel rotation, no per-pixel RMW.
   template <Color color>
   void fillRectImpl(int x, int y, int width, int height) const;
+  // Raw plane access for RoundedClipScope's save/restore. Ground truth is the
+  // stored bit / nibble, so no render-mode or orientation mapping is re-derived
+  // (both come back exactly as they went in). Clip and strip are bypassed; the
+  // scope only calls these with on-screen pixels and a non-strip target.
+  uint8_t readRawBit(int x, int y) const;
+  void writeRawBit(int x, int y, uint8_t bit) const;
+  uint8_t readRawGray(int x, int y) const;  // 0xFF when no 16-level buffer
+  void writeRawGray(int x, int y, uint8_t level) const;
 
  public:
   explicit GfxRenderer(HalDisplay& halDisplay)
@@ -457,6 +465,37 @@ class GfxRenderer {
     ClipScope& operator=(const ClipScope&) = delete;
   };
 
+  // Rounded clip for cards and dialogs. Sets the clip to the rectangle and, on
+  // exit, puts back whatever was underneath in the four corner wedges (the
+  // pixels outside the corner circles). A rectangular clip cannot express a
+  // rounded outline, so square content inside a rounded shell -- a solid
+  // selection row, a scrollbar thumb -- otherwise pokes through the corners.
+  // Only wedge pixels are saved (a few dozen per corner), and the restore runs
+  // after the content, so the shell's own ring/background survives underneath.
+  // Create it AFTER the card/dialog background has been painted: those pixels
+  // are what the corners return to.
+  struct RoundedClipScope {
+    static constexpr int kMaxRadius = 24;
+    static constexpr int kMaxWedge = 4 * 128;
+    RoundedClipScope(const GfxRenderer& r, int x, int y, int width, int height, int radius);
+    ~RoundedClipScope();
+    RoundedClipScope(const RoundedClipScope&) = delete;
+    RoundedClipScope& operator=(const RoundedClipScope&) = delete;
+
+   private:
+    const GfxRenderer& renderer_;
+    std::array<int, 4> previous_;
+    int x_ = 0;
+    int y_ = 0;
+    int width_ = 0;
+    int height_ = 0;
+    int radius_ = 0;
+    int count_ = 0;
+    bool active_ = false;
+    std::array<uint8_t, kMaxWedge> ink_{};
+    std::array<uint8_t, kMaxWedge> gray_{};
+  };
+
   // Drawing
   // UI drawing clip in logical coordinates; independent of panel orientation.
   std::array<int, 4> getClipRect() const {
@@ -483,6 +522,11 @@ class GfxRenderer {
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
+  // 12.5 % modal scrim (design §2.5). Lighter than LightGray (25 %): on the
+  // native-gray plane it fills flat level 13/15, on 1-bit it writes one black
+  // pixel per 8-px run with the phase shifted on odd rows. The phase is fixed,
+  // so a full-screen scrim needs no per-pixel rotation.
+  void fillRectScrim(int x, int y, int width, int height) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, Color color) const;
   void fillRoundedRect(int x, int y, int width, int height, int cornerRadius, bool roundTopLeft, bool roundTopRight,
                        bool roundBottomLeft, bool roundBottomRight, Color color) const;
@@ -800,6 +844,12 @@ class GfxRenderer {
   void requestFullRefreshNext() const;
   void cancelGrayscale16() const;
   bool isGrayscale16Active() const { return grayscale16Buffer != nullptr; }
+  // Present a transient overlay (dialog / wait / toast) painted over the
+  // current frame. Commits the native-gray front when a 16-level pass is still
+  // open, so a dialog over a grayscale page keeps its anti-aliasing and no
+  // GC16 black-flash lands on the page underneath; otherwise a FAST push that
+  // is never promoted to GC16 (see displayBuffer's TransientUi rule).
+  void presentOverlay() const;
   void drawGrayscale16Pixel(int x, int y, uint8_t gray) const;
   bool drawBitmapGrayscale16(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                              float cropY = 0) const;

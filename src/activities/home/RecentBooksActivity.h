@@ -1,5 +1,6 @@
 #pragma once
 #include <I18n.h>
+#include "components/InlineConfirm.h"
 
 #include <string>
 #include <vector>
@@ -14,6 +15,9 @@ class RecentBooksActivity final : public UiListActivity {
   void onExit() override;
 
  private:
+  InlineConfirm confirm_;
+  bool handleCustomInput() override;
+  bool paintOverlayBeforePresent() override;
   int listCount() const override { return static_cast<int>(recentBooks.size()); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;

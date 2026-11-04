@@ -1,4 +1,5 @@
 #include "AirPageActivity.h"
+#include "components/StatusCards.h"
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
@@ -246,6 +247,7 @@ void AirPageActivity::clearConnectionNotice() {
 }
 
 void AirPageActivity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (processImageDisplayResult()) return;
   if (consumeInputReleaseBarrier()) return;
 
@@ -723,19 +725,18 @@ void AirPageActivity::openSelectedHistoryImage() {
 
 void AirPageActivity::openWallpaperConfirmation() {
   if (phase_ != Phase::Idle || selectedImage_.path[0] == '\0') return;
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(
-      renderer, mappedInput, tr(STR_AIRPAGE_SET_WALLPAPER_TITLE), tr(STR_AIRPAGE_SET_WALLPAPER_CONFIRM));
-  if (!confirmation) {
-    LOG_ERR("AIRP", "OOM: ConfirmationActivity (%u bytes)", static_cast<unsigned>(sizeof(ConfirmationActivity)));
-    wallpaperResult_ = WallpaperResult::Failed;
-    imageNeedsDisplay_ = true;
-    requestUpdate();
-    return;
-  }
-
   imageNeedsDisplay_ = true;
-  startActivityForResult(std::move(confirmation),
-                         [this](const ActivityResult& result) { handleWallpaperResult(result); });
+  confirm_.ask(tr(STR_AIRPAGE_SET_WALLPAPER_TITLE), tr(STR_AIRPAGE_SET_WALLPAPER_CONFIRM), tr(STR_CONFIRM),
+               [this] {
+                 ActivityResult ok;
+                 handleWallpaperResult(ok);
+               },
+               [this] {
+                 ActivityResult cancelled;
+                 cancelled.isCancelled = true;
+                 handleWallpaperResult(cancelled);
+               });
+  requestUpdate();
 }
 
 void AirPageActivity::handleWallpaperResult(const ActivityResult& result) {
@@ -885,6 +886,11 @@ Rect AirPageActivity::contentViewport() const {
 }
 
 void AirPageActivity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
+
   const Rect fullScreen{0, 0, renderer.getScreenWidth(), renderer.getScreenHeight()};
 
   if (phase_ == Phase::WallpaperNotice) {
@@ -892,14 +898,14 @@ void AirPageActivity::render(RenderLock&&) {
     renderer.clearScreen();
     const char* message =
         wallpaperResult_ == WallpaperResult::Saved ? tr(STR_AIRPAGE_WALLPAPER_SAVED) : tr(STR_AIRPAGE_WALLPAPER_FAILED);
-    GUI.drawPopup(renderer, message);
+    status_card::paintMessage(renderer, message, nullptr);
     renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     return;
   }
 
   if (screen_ == Screen::Image && (phase_ == Phase::FetchRequested || phase_ == Phase::Fetching)) {
     renderer.setRenderMode(GfxRenderer::BW);
-    GUI.drawPopup(renderer, tr(STR_UPDATING));
+    status_card::showWait(renderer, tr(STR_UPDATING), nullptr, nullptr, -1, false, millis());
     return;
   }
 
@@ -920,7 +926,7 @@ void AirPageActivity::render(RenderLock&&) {
         if (wallpaperResult_ != WallpaperResult::None) {
           const char* message = wallpaperResult_ == WallpaperResult::Saved ? tr(STR_AIRPAGE_WALLPAPER_SAVED)
                                                                            : tr(STR_AIRPAGE_WALLPAPER_FAILED);
-          GUI.drawPopup(renderer, message);
+          status_card::paintMessage(renderer, message, nullptr);
           renderer.displayBuffer(HalDisplay::FAST_REFRESH);
         }
         imageDisplayResult_.store(ImageDisplayResult::Success, std::memory_order_release);
@@ -937,7 +943,7 @@ void AirPageActivity::render(RenderLock&&) {
     if (wallpaperResult_ != WallpaperResult::None) {
       const char* message = wallpaperResult_ == WallpaperResult::Saved ? tr(STR_AIRPAGE_WALLPAPER_SAVED)
                                                                        : tr(STR_AIRPAGE_WALLPAPER_FAILED);
-      GUI.drawPopup(renderer, message);
+      status_card::paintMessage(renderer, message, nullptr);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     }
     if (mappedInput.hasTouch()) renderUi();
@@ -974,13 +980,13 @@ void AirPageActivity::render(RenderLock&&) {
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_AIRPAGE_SETTINGS_ACTION),
                                                 tr(STR_AIRPAGE_IMAGES_ACTION), refreshActionText());
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      if (notice_ == Notice::InvalidImage) GUI.drawPopup(renderer, noticeText());
+      if (notice_ == Notice::InvalidImage) status_card::paintMessage(renderer, noticeText(), nullptr);
       break;
     }
     case Screen::Settings: {
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      if (notice_ == Notice::SettingsSaveFailed) GUI.drawPopup(renderer, noticeText());
+      if (notice_ == Notice::SettingsSaveFailed) status_card::paintMessage(renderer, noticeText(), nullptr);
       break;
     }
     case Screen::History: {
@@ -997,7 +1003,7 @@ void AirPageActivity::render(RenderLock&&) {
   if (mappedInput.hasTouch() || screen_ == Screen::Settings || screen_ == Screen::History) renderUi();
 
   if (screen_ == Screen::History && (notice_ == Notice::ImageOutOfMemory || notice_ == Notice::ImageDisplayFailed)) {
-    GUI.drawPopup(renderer, noticeText());
+    status_card::paintMessage(renderer, noticeText(), nullptr);
   }
   renderer.displayBuffer();
   imageNeedsDisplay_ = true;

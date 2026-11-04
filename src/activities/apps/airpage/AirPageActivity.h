@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include "components/InlineConfirm.h"
 #include <cstdint>
 #include <string>
 
@@ -25,6 +26,7 @@ class AirPageActivity final : public Activity, private UiAppHost {
   bool preventAutoSleep() override;
 
  private:
+  InlineConfirm confirm_;
   enum class Screen : uint8_t { Qr, Settings, History, Image };
   enum class Phase : uint8_t { Idle, FetchRequested, Fetching, WallpaperWriting, WallpaperNotice };
   enum class Notice : uint8_t {

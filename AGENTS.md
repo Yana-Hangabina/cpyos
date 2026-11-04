@@ -101,3 +101,32 @@ python3 scripts/debugging_monitor.py # Enhanced serial monitor
 ---
 
 Philosophy: Reading comes first. Lightweight apps, analytics, standby customization, and on-demand services are part of CrossMux. New features must justify RAM, Flash, power, and maintenance costs; use [SCOPE.md](SCOPE.md) to evaluate them.
+
+## 52. 晋江客户端私有化（Tier 3B）：边界、构建与 dev/public 同步
+
+晋江（JJWXC）的具体实现已从公共源码树移出到 `src/jjwxc/`（私有），核心只保留
+`src/booksource/` 的接口与空桩。完整契约、构建参数与验证命令见
+[`docs/engineering/private-book-source.md`](docs/engineering/private-book-source.md)。
+
+要点：
+
+- **公共侧**：`src/booksource/BookSource.{h,cpp}`（类型 + 注册表）、`RowTail.h`（纯映射，有宿主测试）、
+  `PsramAllocator.h`；阅读器保留源相关方法的**声明**与无组件时的空桩；`JjwxcCommentSidecar.h` 是
+  离线计数格式，仍属公共。i18n 键、图标、AppId 按用户要求保留公开。
+- **私有侧**：`src/jjwxc/{app,protocol,test}`，其中 `JjwxcSource.cpp` 是唯一的注册符号
+  `booksource::privateSource()`。`JjwxcReaderMethods.cpp` 承载原 `EpubReaderActivity` 的晋江方法与
+  三个调试入口；`contentsFilterable`/`rebuildContentsRows`/`contentsTocOfRow` 等**通用**目录工具留在公共。
+- **开关**：dev 树 `[s3_ble_psram]` 定义 `-DCROSSPOINT_BOOKSOURCE_JJWXC=1` 并加
+  `-Isrc/jjwxc/app -Isrc/jjwxc/protocol/src`；public 树**不定义**该宏，并在 `[base]`
+  的 `build_src_filter` 里 `-<jjwxc/>`（目录也在 `.gitignore` 中）。
+- **构建判据**：两种目标都必须 SUCCESS——
+  `readpico`（dev，带私有组件）与 `readpico_nosource`（dev，验证公共回退）；
+  public 树只有 `readpico`（等于 nosource）。public 镜像里
+  `nm firmware.elf | grep -c JjwxcActivity` 必须为 **0**。
+- **回归**：`src/BookSourceContractTest.cpp`（37 项：状态编号、图标枚举编号、无组件时全部
+  helper 惰性、`rowTailFor` 全状态映射）必须绿；15 套协议/存储宿主测试（crypto/protocol/
+  unpurchased/cookies/discover/favorites/progress/purchase/comments/devauth/bookcrypto/
+  saybody/client/login/cachequeue）在 `src/jjwxc/protocol` 新路径下全部通过。
+- **同步纪律**：dev 是唯一开发源；public 只提交公共侧，**绝不提交 `src/jjwxc`**。
+  跨树改动拆成"公共接口/核心"与"私有实现"两半，公共侧必须能单独构建并通过契约测试。
+  发布带晋江 App 的固件必须在有 `src/jjwxc` 的树上加上述宏构建；public 流水线产物不含该 App。

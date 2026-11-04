@@ -1,4 +1,5 @@
 #include "WeReadActivity.h"
+#include "components/StatusCards.h"
 
 #include <Arduino.h>
 #include <Bitmap.h>
@@ -213,17 +214,17 @@ void drawTruncatedProgressTitle(GfxRenderer& renderer, const Rect& content, cons
   snprintf(shown, sizeof(shown), "%s", title ? title : "");
   size_t length = strlen(shown);
   const int maxWidth = std::max(1, content.width);
-  if (renderer.getTextWidth(UI_12_FONT_ID, shown, EpdFontFamily::BOLD) > maxWidth) {
+  if (renderer.getTextWidth(UI_10_FONT_ID, shown, EpdFontFamily::BOLD) > maxWidth) {
     // ponytail: bounded O(title bytes²) over a 191-byte field; replace only if title storage grows.
     while (length > 0) {
       do {
         --length;
       } while (length > 0 && (static_cast<uint8_t>(shown[length]) & 0xC0) == 0x80);
       memcpy(shown + length, kEllipsis, sizeof(kEllipsis));
-      if (renderer.getTextWidth(UI_12_FONT_ID, shown, EpdFontFamily::BOLD) <= maxWidth) break;
+      if (renderer.getTextWidth(UI_10_FONT_ID, shown, EpdFontFamily::BOLD) <= maxWidth) break;
     }
   }
-  UITheme::drawCenteredText(renderer, content, UI_12_FONT_ID, y, shown, true, EpdFontFamily::BOLD);
+  UITheme::drawCenteredText(renderer, content, UI_10_FONT_ID, y, shown, true, EpdFontFamily::BOLD);
 }
 
 void drawProgressStatus(GfxRenderer& renderer, const Rect& content, const char* title, const char* stageText,
@@ -231,7 +232,7 @@ void drawProgressStatus(GfxRenderer& renderer, const Rect& content, const char* 
                         const StrId* extraLines = nullptr, int extraLineCount = 0) {
   if (!extraLines) extraLineCount = 0;
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int titleHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int relatedGap = SubpageLayout::relatedGap(metrics);
   const int sectionGap = SubpageLayout::sectionGap(metrics);
@@ -1467,37 +1468,17 @@ void WeReadActivity::handleDisclaimerInput() {
 }
 
 void WeReadActivity::promptLogout() {
-  // ActivityManager owns the confirmation across frames, so this must be a
-  // fallible heap allocation rather than a stack object.
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_WEREAD_LOGOUT_CONFIRM),
-                                                              tr(STR_WEREAD_LOGOUT_KEEP_DOWNLOADS));
-  if (!confirmation) {
-    LOG_ERR("WR", "OOM: logout confirmation (%zu bytes)", sizeof(ConfirmationActivity));
-    return;
-  }
-  startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
-    if (result.isCancelled) {
-      requestUpdate();
-      return;
-    }
+  confirm_.ask(tr(STR_WEREAD_LOGOUT_CONFIRM), tr(STR_WEREAD_LOGOUT_KEEP_DOWNLOADS), tr(STR_CONFIRM), [this] {
     performLogout();
   });
+  requestUpdate();
 }
 
 void WeReadActivity::promptClearCache() {
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_WEREAD_MENU_CLEAR_CACHE),
-                                                              tr(STR_WEREAD_CLEAR_CACHE_KEEP_BOOKS));
-  if (!confirmation) {
-    LOG_ERR("WR", "OOM: clear cache confirmation (%zu bytes)", sizeof(ConfirmationActivity));
-    return;
-  }
-  startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
-    if (result.isCancelled) {
-      requestUpdate();
-      return;
-    }
+  confirm_.ask(tr(STR_WEREAD_MENU_CLEAR_CACHE), tr(STR_WEREAD_CLEAR_CACHE_KEEP_BOOKS), tr(STR_CONFIRM), [this] {
     performClearCache();
   });
+  requestUpdate();
 }
 
 void WeReadActivity::performClearCache() {
@@ -1875,6 +1856,8 @@ void WeReadActivity::handleLogoutErrorInput() {
 }
 
 void WeReadActivity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+  if (toast_.tick(millis())) requestUpdate();
   if (wifiReleasePending_) {
     const bool held = mappedInput.isPressed(MappedInputManager::Button::Back) ||
                       mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
@@ -2154,7 +2137,7 @@ void WeReadActivity::drawDisclaimer(const Rect& content) {
   }
 
   if (disclaimerSaveFailed_) {
-    GUI.drawPopup(renderer, tr(STR_WEREAD_DISCLAIMER_SAVE_FAILED));
+    status_card::paintMessage(renderer, tr(STR_WEREAD_DISCLAIMER_SAVE_FAILED), nullptr);
   }
 }
 
@@ -2221,7 +2204,7 @@ void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading
 
   const int metaX = cover.x + cover.width + 16;
   const int metaWidth = std::max(1, content.x + content.width - metaX - side);
-  const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int titleLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int detailLineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int smallLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int cacheY = cover.y + cover.height - smallLineHeight;
@@ -2230,9 +2213,9 @@ void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading
   const int maxTitleLines = std::clamp((cacheY - cover.y - requiredDetailHeight) / titleLineHeight, 1, 2);
   int metaY = cover.y;
   const auto titleLines =
-      renderer.wrappedText(UI_12_FONT_ID, detail_.title, metaWidth, maxTitleLines, EpdFontFamily::BOLD);
+      renderer.wrappedText(UI_10_FONT_ID, detail_.title, metaWidth, maxTitleLines, EpdFontFamily::BOLD);
   for (const auto& line : titleLines) {
-    renderer.drawText(UI_12_FONT_ID, metaX, metaY, line.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, metaX, metaY, line.c_str(), true, EpdFontFamily::BOLD);
     metaY += titleLineHeight;
   }
   if (detail_.author[0]) {
@@ -2375,6 +2358,10 @@ void WeReadActivity::drawIntroduction(const Rect& content) {
 }
 
 void WeReadActivity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
   downloadRenderPending_.store(false);
   stageRenderPending_.store(false);
   if (optionPopup_.processRender(renderer, mappedInput)) return;
@@ -2442,7 +2429,7 @@ void WeReadActivity::render(RenderLock&&) {
       switch (mainTab) {
         case MainTab::Shelf:
           if (shelfCount_ == 0) {
-            GUI.drawPopup(renderer, tr(STR_WEREAD_SHELF_EMPTY));
+            status_card::paintMessage(renderer, tr(STR_WEREAD_SHELF_EMPTY), nullptr);
           } else {
             drawShelfGrid(content, shelfSelection, incrementalShelfFrame ? shelfFrameSelection : kNoShelfSelection,
                           mainFocus == MainFocus::Content);
@@ -2463,14 +2450,14 @@ void WeReadActivity::render(RenderLock&&) {
       break;
     case State::DetailLoading:
       drawBookDetail(content);
-      GUI.drawPopup(renderer, tr(STR_WEREAD_FETCHING_DETAIL));
+      status_card::paintWait(renderer, tr(STR_WEREAD_FETCHING_DETAIL), nullptr, nullptr, -1, false, millis());
       break;
     case State::Introduction:
       drawIntroduction(content);
       break;
     case State::Qr: {
       if (!qrUrl_[0]) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+        status_card::paintWait(renderer, tr(STR_WEREAD_LOADING), nullptr, nullptr, -1, false, millis());
         break;
       }
       const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
@@ -2511,14 +2498,14 @@ void WeReadActivity::render(RenderLock&&) {
         if (completed > 0) {
           char status[96];
           snprintf(status, sizeof(status), tr(STR_WEREAD_SHELF_RECEIVED), static_cast<unsigned>(completed));
-          GUI.drawPopup(renderer, status);
+          status_card::paintWait(renderer, status, nullptr, nullptr, -1, false, millis());
         } else {
-          GUI.drawPopup(renderer, tr(STR_WEREAD_SYNCING_SHELF));
+          status_card::paintWait(renderer, tr(STR_WEREAD_SYNCING_SHELF), nullptr, nullptr, -1, false, millis());
         }
         break;
       }
       if (total == 0) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+        status_card::paintWait(renderer, tr(STR_WEREAD_LOADING), nullptr, nullptr, -1, false, millis());
         break;
       }
       const char* label = nullptr;
@@ -2583,7 +2570,7 @@ void WeReadActivity::render(RenderLock&&) {
     }
     case State::Error: {
       if (error_ != WeReadClient::Error::SdCard && error_ != WeReadClient::Error::OutOfMemory) {
-        GUI.drawPopup(renderer, errorMessage());
+        status_card::paintMessage(renderer, errorMessage(), nullptr);
         break;
       }
       // Fixed translated lines keep the low-memory error path free of wrapping allocations.
@@ -2605,34 +2592,34 @@ void WeReadActivity::render(RenderLock&&) {
       break;
     }
     case State::LogoutError:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOGOUT_FAILED));
+      status_card::paintMessage(renderer, tr(STR_WEREAD_LOGOUT_FAILED), nullptr);
       break;
     case State::LogoutCacheWarning:
       drawProgressStatus(renderer, content, tr(STR_WEREAD_LOGGED_OUT), nullptr, tr(STR_WEREAD_LOGOUT_CACHE_WARNING), 0,
                          0);
       break;
     case State::ClearingCache:
-      GUI.drawPopup(renderer, tr(STR_CLEARING_CACHE));
+      status_card::paintWait(renderer, tr(STR_CLEARING_CACHE), nullptr, nullptr, -1, false, millis());
       break;
     case State::CacheCleared:
-      GUI.drawPopup(renderer, tr(STR_CACHE_CLEARED));
+      toast_.show(tr(STR_CACHE_CLEARED), millis());
       break;
     case State::CacheClearError:
-      GUI.drawPopup(renderer, tr(STR_CLEAR_CACHE_FAILED));
+      status_card::paintMessage(renderer, tr(STR_CLEAR_CACHE_FAILED), nullptr);
       break;
     case State::LoginConfirmed:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOGIN_CONFIRMED));
+      toast_.show(tr(STR_WEREAD_LOGIN_CONFIRMED), millis());
       break;
     case State::Connecting:
       if (retryJob_ == Job::Sync) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_SYNCING_SHELF));
+        status_card::paintWait(renderer, tr(STR_WEREAD_SYNCING_SHELF), nullptr, nullptr, -1, false, millis());
       } else {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+        status_card::paintWait(renderer, tr(STR_WEREAD_LOADING), nullptr, nullptr, -1, false, millis());
       }
       break;
     case State::Cancelling:
     case State::OpenBook:
-      GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
+      status_card::paintWait(renderer, tr(STR_WEREAD_LOADING), nullptr, nullptr, -1, false, millis());
       break;
   }
 
@@ -2742,6 +2729,7 @@ void WeReadActivity::render(RenderLock&&) {
     requestUpdate(true);
     return;
   }
+  toast_.paint(renderer, SMALL_FONT_ID, 32);
   renderer.displayBuffer();
 }
 

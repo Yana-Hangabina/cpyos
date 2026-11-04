@@ -1,6 +1,7 @@
 #pragma once
 
 #include <LibraryIndexFile.h>
+#include "components/InlineConfirm.h"
 
 #include <cstdint>
 #include <memory>
@@ -81,6 +82,9 @@ class LibraryListActivity final : public UiTabListActivity {
   // OptionPopup is a self-contained modal: it owns rendering (and the button
   // hints) whenever it is up.
   void render(RenderLock&& lock) override;
+  bool paintOverlayBeforePresent() override;
+  void debugShowConfirmDemo() override;
+  void debugRebuildLibrary() override;
 
  private:
   bool debugEmpty_ = false;
@@ -162,7 +166,7 @@ class LibraryListActivity final : public UiTabListActivity {
   int bookRowCount() const;
   int rowFor(int entry) const;
 
-  // --- CPY cover grid (refreshed UI frame 02), the default shelf style -----------
+  // --- CPY cover grid (Pond v5 frame 02), the default shelf style -----------
   // Reads SETTINGS.inxLibraryLayout (the settings menu's 书架显示 selector):
   // Icons -> cover grid, List -> the text rows. Covers are prewarmed one per
   // frame: EPUB parsing is far too slow to do several in one pass.
@@ -220,7 +224,7 @@ class LibraryListActivity final : public UiTabListActivity {
   // Paints the invitation pill inside `band` and records emptySourceRect_.
   void drawEmptySourceAction(const Rect& band);
 
-  // --- refreshed UI frame 02 shelf chrome -----------------------------------------
+  // --- Pond v5 frame 02 shelf chrome -----------------------------------------
   // Headline row (serif page title, shelf count, quiet search/sync actions)
   // and the source tab strip with real counts under it. Both are drawn and
   // hit-tested here because the fui header no longer owns the CPY action row.
@@ -240,7 +244,7 @@ class LibraryListActivity final : public UiTabListActivity {
   uint32_t indexStamp = 1;
   void ensureShelfCounts();
 
-  // --- refreshed UI frame 15 empty shelf ------------------------------------------
+  // --- Pond v5 frame 15 empty shelf ------------------------------------------
   // Three concrete ways to put a first book on the card, each a real
   // destination. Drawn after the frame (like the invitation pill), so the hit
   // rects live here and are tested in handleCustomInput().
@@ -341,4 +345,9 @@ class LibraryListActivity final : public UiTabListActivity {
   // Row options modal (Recent long-press menu); owned here so it outlives the
   // touch event that opened it.
   OptionPopup optionPopup;
+  InlineConfirm confirm_;
+  // The manual rebuild presents a busy card inside the page's own grayscale
+  // pass (see promptRebuildIndex); a separate 1-bit card dropped the grid's
+  // covers back to 1-bit for the whole walk.
+  bool rebuildCard_ = false;
 };

@@ -7,6 +7,8 @@
 #include <utility>
 #include <variant>
 
+#include "booksource/BookSource.h"
+
 struct WifiResult {
   bool connected = false;
   std::string ssid;
@@ -83,22 +85,13 @@ struct DictionarySelectionResult {
   std::string word;
 };
 
-// Returned by the JJWXC app when it was opened from the reader's maintenance
-// menu and finished on its own. The reader uses it to decide whether to
-// reopen its own chapter list.
-struct JjwxcReaderResult {
-  enum class Action : uint8_t { None, CurrentChapter, ChapterList, ChapterCached, ChapterPurchased };
-  Action action = Action::None;
-  bool completed = false;
-  uint32_t chapterId = 0;
-  bool readable = false;
-  bool openChapter = false;
-};
+// A book source's app returns booksource::AppResult when it finished a
+// maintenance action on its own (see booksource/BookSource.h).
 
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
                                    IntervalResult, ChapterRangeResult, PageResult, TxtOffsetResult,
                                    ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
-                                   DictionarySelectionResult, JjwxcReaderResult>;
+                                   DictionarySelectionResult, booksource::AppResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

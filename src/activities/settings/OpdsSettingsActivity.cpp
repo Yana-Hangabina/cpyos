@@ -1,4 +1,5 @@
 #include "OpdsSettingsActivity.h"
+#include "components/StatusCards.h"
 
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -204,6 +205,6 @@ const char* OpdsSettingsActivity::headerTitle() const {
 void OpdsSettingsActivity::drawFooter() {
   UiListActivity::drawFooter();
   if (showSaveError) {
-    GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
+    status_card::paintMessage(renderer, tr(STR_ERROR_GENERAL_FAILURE), nullptr);
   }
 }

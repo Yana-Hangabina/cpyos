@@ -1,4 +1,5 @@
 #include "SettingsActivity.h"
+#include "components/StatusCards.h"
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
@@ -730,7 +731,30 @@ void SettingsActivity::onExit() {
 }
 
 
+void SettingsActivity::debugShowPopupDemo() {
+  static constexpr const char* kOptions[] = {
+      "Option 1",  "Option 2",  "Option 3",  "Option 4",  "Option 5",  "Option 6",
+      "Option 7",  "Option 8",  "Option 9",  "Option 10", "Option 11", "Option 12",
+  };
+  constexpr int kLast = static_cast<int>(std::size(kOptions)) - 1;
+  optionPopup.show("Long picker", kOptions, kLast + 1, kLast, [](int) {});
+  requestUpdate();
+}
+
+bool SettingsActivity::paintOverlayBeforePresent() {
+  if (confirm_.active()) {
+    confirm_.paint(renderer);
+    return true;
+  }
+  if (optionPopup.isActive()) {
+    optionPopup.render(renderer);
+    return true;
+  }
+  return false;
+}
+
 bool SettingsActivity::handleCustomInput() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }
 
@@ -1102,29 +1126,21 @@ void SettingsActivity::toggleCurrentSetting() {
 }
 
 void SettingsActivity::confirmRestoreSystemSettings() {
-  const bool started = startActivityForResultWith<ConfirmationActivity>(
-      [this](const ActivityResult& firstResult) {
-        if (firstResult.isCancelled) return;
-
-        const bool finalStarted = startActivityForResultWith<ConfirmationActivity>(
-            [this](const ActivityResult& finalResult) {
-              if (finalResult.isCancelled) return;
-              if (systemSettingsReset::clearPersistedSettings()) {
-                silentRestart();
-                return;
-              }
-              optionPopup.show(StrId::STR_RESTORE_SYSTEM_SETTINGS_FAILED, OK_OPTION,
-                               static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
-              requestUpdate();
-            },
-            tr(STR_RESTORE_SYSTEM_SETTINGS), tr(STR_RESTORE_SYSTEM_SETTINGS_FINAL_WARNING));
-        if (finalStarted) return;
-        optionPopup.show(StrId::STR_MEMORY_ERROR, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
-        requestUpdate();
-      },
-      tr(STR_RESTORE_SYSTEM_SETTINGS), tr(STR_RESTORE_SYSTEM_SETTINGS_WARNING));
-  if (started) return;
-  optionPopup.show(StrId::STR_MEMORY_ERROR, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
+  // Dangerous action: two inline asks, not a full-page prompt. The first warning
+  // states the consequence, the second is the last chance.
+  confirm_.ask(tr(STR_RESTORE_SYSTEM_SETTINGS), tr(STR_RESTORE_SYSTEM_SETTINGS_WARNING), tr(STR_CONFIRM), [this] {
+    confirm_.ask(tr(STR_RESTORE_SYSTEM_SETTINGS), tr(STR_RESTORE_SYSTEM_SETTINGS_FINAL_WARNING), tr(STR_CONFIRM),
+                 [this] {
+                   if (systemSettingsReset::clearPersistedSettings()) {
+                     silentRestart();
+                     return;
+                   }
+                   optionPopup.show(StrId::STR_RESTORE_SYSTEM_SETTINGS_FAILED, OK_OPTION,
+                                    static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
+                   requestUpdate();
+                 });
+    requestUpdate();
+  });
   requestUpdate();
 }
 
@@ -1245,7 +1261,7 @@ void SettingsActivity::openReadingBackgroundPicker() {
           return;
         }
 
-        GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+        status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
         if (readingBackground::createCacheFromPng(renderer, selected->path.c_str())) {
           SETTINGS.readingBackgroundEnabled = 1;
           SETTINGS.saveToFile();
@@ -1272,7 +1288,7 @@ void SettingsActivity::openSleepImagePicker(const char* destPath, uint8_t CrossP
           return;
         }
 
-        GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+        status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
         Storage.ensureDirectoryExists("/.crosspoint");
         // Store a 1-bit BMP next to the reader's other derived images. The
         // renderer's Bitmap path streams it row by row; no full-frame buffer.

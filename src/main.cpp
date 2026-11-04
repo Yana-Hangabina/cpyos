@@ -46,7 +46,9 @@
 #include "OpdsServerStore.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
-#include "TlsProbe.h"
+#include "booksource/BookSource.h"
+#include "components/StatusCards.h"
+#include "util/BootLanguage.h"
 #include "EmojiFont.h"
 #include "SdCardFontSystem.h"
 #include "UiCjkFallbacks.h"
@@ -71,8 +73,10 @@
 #include "activities/reader/ReaderRefresh.h"
 #include <LibraryBuilder.h>
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcActivity.h"
-#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcActivity.h"
+#include "TlsProbe.h"
+#endif
 #endif
 #if defined(CROSSPOINT_MUPDF)
 #include "activities/reader/PdfReaderActivity.h"
@@ -521,7 +525,7 @@ void silentRestart() {
   silentRebootFontPointSize = 0;
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   ESP.restart();
 }
@@ -537,7 +541,7 @@ void silentRestartToReader(const bool suppressChineseFontPrompt) {
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader%s)", suppressChineseFontPrompt ? ", suppress-font-prompt" : "");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   ESP.restart();
 }
@@ -549,7 +553,7 @@ void silentRestartToReaderAndPreloadChineseFont(const uint8_t pointSize) {
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader-preload-font, size=%u)", static_cast<unsigned>(pointSize));
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   ESP.restart();
 }
@@ -560,7 +564,7 @@ void silentRestartToSettings() {
   silentRebootFontPointSize = 0;
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   ESP.restart();
 }
@@ -578,7 +582,7 @@ void silentRestartToJoinNetwork() {
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=join-network)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   ESP.restart();
 }
@@ -590,7 +594,7 @@ void restartToHomeAfterStorageHandoff() {
   silentRebootPayload = Frontlight.isOn() ? SILENT_REBOOT_LIGHT_ON : 0;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Restart after storage handoff (target=home)");
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   delay(50);
   handoffUsbOtgToSerialJtag();
   ESP.restart();
@@ -699,7 +703,7 @@ static void deliverSleepPluginEvents() {
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
   if (!cred) return;
 
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
   WiFi.mode(WIFI_STA);
   WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
   const unsigned long joinDeadline = millis() + 10000;
@@ -974,14 +978,13 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
   SETTINGS.sdFontFlashPreload = 0;
   if (!SETTINGS.saveToFile()) LOG_ERR("FONT", "Failed to persist disabled font preload after OOM");
 
-  auto notice = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInputManager, "", tr(STR_FONT_PRELOAD_FAILED),
-                                                        ConfirmationActivity::BodyPlacement::PopupTitle);
-  if (!notice) {
-    LOG_ERR("FONT", "OOM allocating font preload failure notice (%zu bytes)", sizeof(ConfirmationActivity));
-    return;
-  }
-  activityManager.pushActivity(std::move(notice));
-  activityManager.loop();
+  // Inline notice over the reader we just opened. Pushing a page here would
+  // hide the book the user asked for behind an allocation-failure dialog, and
+  // this path already runs after an OOM -- so draw the shared message card, let
+  // it sit for a moment, then repaint the book.
+  status_card::showMessage(renderer, tr(STR_FONT_PRELOAD_FAILED), nullptr);
+  delay(2500);
+  activityManager.requestUpdate();
 }
 #endif
 
@@ -1141,8 +1144,16 @@ void setup() {
     // serial console; returning here without it lost the panic from the log.
     HalSystem::checkPanic();
     const bool fontsReady = setupDisplayAndFonts(isSilentReboot);
-    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD,
-                                         "Card missing or unreadable. Reinsert it, then retry.", true);
+    // Settings -- and therefore the chosen language -- live on the card we just
+    // failed to mount. Recover the last choice from NVS and initialise i18n so
+    // this page is not stuck in English on a Chinese device.
+    const uint8_t cachedLanguage = bootlang::recall();
+    if (cachedLanguage != 0xFF) {
+      I18N.setLanguage(static_cast<Language>(cachedLanguage));
+      I18N.init();
+    }
+    activityManager.goToFullScreenMessage(tr(STR_SD_CARD_ERROR), EpdFontFamily::BOLD,
+                                         tr(STR_SD_CARD_ERROR_DETAIL), true);
     activityManager.requestUpdateAndWait();
     if (otaPendingAtBoot && fontsReady) {
       if (HalOtaSlot::confirmRunningImage()) {
@@ -1159,7 +1170,7 @@ void setup() {
   // state from the card; start it only once storage is mounted. C3 has no
   // PSRAM and no JJWXC App, so the service is compiled out there.
 #ifdef BOARD_HAS_PSRAM
-  jjwxc_cache_service::begin();
+  booksource::start();
 #endif
 
   const bool settingsLoaded = SETTINGS.loadFromFile();
@@ -1186,6 +1197,8 @@ void setup() {
   // PSRAM targets rebuild the per-language offset tables here, before any UI
   // calls tr(). No-op on targets that keep the tables in flash.
   I18N.init();
+  // Mirror the choice into NVS for the SD-failure page (see BootLanguage.h).
+  bootlang::remember(static_cast<uint8_t>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
@@ -1890,7 +1903,7 @@ void loop() {
         activityManager.goToJjwxc();
 #endif
       } else if (cmd.startsWith("DETAIL")) {
-#ifdef BOARD_HAS_PSRAM
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
         const int space = cmd.indexOf(' ');
         const String id = space > 0 ? cmd.substring(space + 1) : String();
         if (id.isEmpty()) {
@@ -1901,7 +1914,7 @@ void loop() {
         }
 #endif
       } else if (cmd == "JJSEARCH") {
-#ifdef BOARD_HAS_PSRAM
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
         JjwxcActivity::requestSearchDeepLink("\xE6\x88\x91");
         activityManager.goToJjwxc();
 #endif
@@ -1909,6 +1922,7 @@ void loop() {
         // Radio state probe for the power experiments (mode, status, CPU, USB).
         logSerial.printf("NET mode=%d status=%d cpu=%u\n", static_cast<int>(WiFi.getMode()),
                          static_cast<int>(WiFi.status()), static_cast<unsigned>(getCpuFrequencyMhz()));
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
       } else if (cmd.startsWith("TLSPROBE")) {
         // Diagnostic-only: handshake probe, plus an optional HTTP/1.1 exchange.
         String rest = cmd.substring(8);
@@ -1947,6 +1961,7 @@ void loop() {
           const int ballastKb = rest.length() > 0 ? rest.toInt() : 0;
           runTlsProbe(host, ballastKb);
         }
+#endif
       } else if (cmd == "WIFI") {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
       } else if (cmd == "SLEEP") {
@@ -2032,6 +2047,7 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugLikeJjwxcComment();
       } else if (cmd == "COMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcComment();
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
       } else if (cmd == "JJCACHEUI") {
 #ifdef BOARD_HAS_PSRAM
         JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::OpenCacheQueue);
@@ -2052,6 +2068,7 @@ void loop() {
         novelId.trim();
         JjwxcActivity::requestDeepLink(novelId.c_str(), JjwxcActivity::DeepLinkAction::EnqueueComments);
         activityManager.pushActivity(std::make_unique<JjwxcActivity>(renderer, mappedInputManager));
+#endif
 #endif
       } else if (cmd == "WIFIOFF") {
         // Diagnostic: simulate losing the AP mid-queue. The queue must stop on
@@ -2342,9 +2359,9 @@ void loop() {
   batteryLogService();
 
 #ifdef BOARD_HAS_PSRAM
-  jjwxc_cache_service::poll();
+  booksource::poll();
   static uint32_t lastCacheBadgeVersion = 0;
-  const uint32_t cacheBadgeVersion = jjwxc_cache_service::badgeVersion();
+  const uint32_t cacheBadgeVersion = booksource::jobRevision();
   if (cacheBadgeVersion != lastCacheBadgeVersion) {
     lastCacheBadgeVersion = cacheBadgeVersion;
     if (!activityManager.isStandbyActivity()) activityManager.requestUpdate();

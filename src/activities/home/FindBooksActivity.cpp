@@ -12,8 +12,7 @@
 #include "components/icons/inx_apps.h"
 #include "fontIds.h"
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcActivity.h"
-#include "activities/apps/jjwxc/JjwxcUpdates.h"
+#include "booksource/BookSource.h"
 #endif
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/apps/weread/WeReadActivity.h"
@@ -125,7 +124,7 @@ void FindBooksActivity::refreshSourceState() {
   jjwxcSession_ = false;
   wereadSession_ = false;
 #ifdef BOARD_HAS_PSRAM
-  jjwxcSession_ = jjwxcUpdates::sessionPresent();
+  jjwxcSession_ = booksource::sessionPresent();
 #endif
 #ifdef ENABLE_CHINESE_VERSION
   // Local evidence only: a readable session file. Whether the server still
@@ -170,14 +169,17 @@ StrId FindBooksActivity::labelFor(const Action action) const {
 void FindBooksActivity::openJjwxc(const Action action) {
 #ifdef ENABLE_CHINESE_VERSION
 #ifdef BOARD_HAS_PSRAM
-  JjwxcActivity::MenuShortcut shortcut = JjwxcActivity::MenuShortcut::Shelf;
-  if (action == Action::JjwxcDiscover) shortcut = JjwxcActivity::MenuShortcut::Discover;
-  if (action == Action::JjwxcSearch) shortcut = JjwxcActivity::MenuShortcut::Search;
-  if (action == Action::JjwxcAccount) shortcut = JjwxcActivity::MenuShortcut::Account;
-  JjwxcActivity::requestMenuShortcut(shortcut);
-  auto activity = makeUniqueNoThrow<JjwxcActivity>(renderer, mappedInput);
+  booksource::ISource* source = booksource::active();
+  if (source == nullptr) return;
+  // 0 shelf, 1 discover, 2 search, 3 account; 0xFF clears a pending shortcut.
+  uint8_t shortcut = 0;
+  if (action == Action::JjwxcDiscover) shortcut = 1;
+  if (action == Action::JjwxcSearch) shortcut = 2;
+  if (action == Action::JjwxcAccount) shortcut = 3;
+  source->requestShortcut(shortcut);
+  auto activity = source->newAppActivity(renderer, mappedInput);
   if (!activity) {
-    JjwxcActivity::requestMenuShortcut(JjwxcActivity::MenuShortcut::None);
+    source->requestShortcut(0xFF);
     return;
   }
   // Push, not replace: Back in the app must return to Find (the source card

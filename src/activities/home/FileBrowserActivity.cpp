@@ -566,20 +566,22 @@ void FileBrowserActivity::finishEdit(const std::string& returnPath, const int fa
 
 void FileBrowserActivity::promptDelete(const std::string& fullPath, const std::string& entry) {
   const int returnIndex = nav.selected;
-  auto handler = [this, fullPath, returnIndex](const ActivityResult& result) {
-    if (result.isCancelled) return;
+  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  confirm_.ask(heading.c_str(), cleanEntryName(entry).c_str(), tr(STR_DELETE), [this, fullPath, returnIndex] {
     if (removeDirFile(fullPath)) {
       finishEdit(basepath, returnIndex);
       return;
     }
     LOG_ERR("FileBrowser", "Failed to delete: %s", fullPath.c_str());
     showNotice(StrId::STR_FILE_OPERATION_FAILED);
-  };
+  });
+  requestUpdate();
+}
 
-  const std::string heading = tr(STR_DELETE) + std::string("? ");
-  if (!startActivityForResultWith<ConfirmationActivity>(std::move(handler), heading, cleanEntryName(entry))) {
-    showNotice(StrId::STR_FILE_OPERATION_FAILED);
-  }
+bool FileBrowserActivity::paintOverlayBeforePresent() {
+  if (!confirm_.active()) return false;
+  confirm_.paint(renderer);
+  return true;
 }
 
 void FileBrowserActivity::activateIndex(const int index) {
@@ -646,6 +648,7 @@ void FileBrowserActivity::activateSelected() {
 }
 
 bool FileBrowserActivity::handleCustomInput() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   if (editPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
 
   if (usesIconLayout()) {

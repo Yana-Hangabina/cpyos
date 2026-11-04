@@ -511,14 +511,18 @@ bool DictionaryDownloadActivity::showUpdateAllRow() const {
 void DictionaryDownloadActivity::promptDeleteSelected() {
   const int index = itemIndexFromList(selectedIndex_);
   if (index < 0 || index >= static_cast<int>(items_.size())) return;
-  auto confirmation =
-      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE), items_[index].name);
-  if (!confirmation) {
-    LOG_ERR("DICTDL", "OOM allocating ConfirmationActivity (%zu bytes)", sizeof(ConfirmationActivity));
-    return;
-  }
-  startActivityForResult(std::move(confirmation),
-                         [this](const ActivityResult& result) { onDeleteConfirmationResult(result); });
+  const std::string name = items_[index].name;
+  confirm_.ask(tr(STR_DELETE), name.c_str(), tr(STR_DELETE),
+               [this] {
+                 ActivityResult ok;
+                 onDeleteConfirmationResult(ok);
+               },
+               [this] {
+                 ActivityResult cancelled;
+                 cancelled.isCancelled = true;
+                 onDeleteConfirmationResult(cancelled);
+               });
+  requestUpdate();
 }
 
 void DictionaryDownloadActivity::onDeleteConfirmationResult(const ActivityResult& result) {
@@ -547,6 +551,7 @@ void DictionaryDownloadActivity::onDeleteConfirmationResult(const ActivityResult
 }
 
 void DictionaryDownloadActivity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (waitForBackRelease_) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Back)) waitForBackRelease_ = false;
     return;
@@ -727,6 +732,11 @@ std::string DictionaryDownloadActivity::formatSize(const size_t bytes) {
 }
 
 void DictionaryDownloadActivity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
+
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   const Rect content = SubpageLayout::contentRect(safeArea, metrics);

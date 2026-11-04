@@ -1099,34 +1099,6 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) cons
   return Rect{x, y, w, h};
 }
 
-void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int barHeight = metrics.popupProgressBarHeight;
-  const int barWidth =
-      std::max(0, layout.width - metrics.popupMarginX * 2);  // twice the margin in drawPopup to match text width
-  const int barX = layout.x + (layout.width - barWidth) / 2;
-  const int barY = layout.y + layout.height - metrics.popupMarginY / 2 - barHeight / 2 - 1;
-  if (barWidth <= 0 || barHeight <= 0) {
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
-    return;
-  }
-
-  const int scaledProgress = metrics.popupProgressClampPercent ? std::clamp(progress, 0, 100) : progress;
-  const int fillWidth = barWidth * scaledProgress / 100;
-
-  if (metrics.popupProgressDrawOutline) {
-    renderer.drawRect(barX, barY, barWidth, barHeight, 1, metrics.popupProgressOutlineInverted);
-  }
-  if (fillWidth > 0) {
-    renderer.fillRect(barX, barY, fillWidth, barHeight, metrics.popupProgressFillInverted);
-  }
-
-  // TransientUi: a loading bar stepping 20% -> 50% -> done is a short-lived
-  // overlay; its pushes must not feed the periodic GC16 sweep (the screen the
-  // load finishes into sweeps right after).
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
-}
-
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
                               const bool fillMargin, const bool isPageBookmarked, const bool pageCountEstimated) {

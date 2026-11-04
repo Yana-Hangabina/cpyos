@@ -1,5 +1,5 @@
 #include "CpyTheme.h"
-#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#include "booksource/BookSource.h"
 
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -485,77 +485,98 @@ void CpyTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
   const int selected = std::clamp(selectedIndex, 0, optionCount - 1);
   drawModalScrim(renderer);
   const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  const auto layout =
-      InxOptionGeometry::layout(screen, optionCount, selected, headlineHeight);
+  const auto layout = InxOptionGeometry::layout(screen, optionCount, selected, headlineHeight);
   const int visibleRows = layout.rows;
   const int start = layout.first;
   const Rect panel = layout.panel;
   const bool selectionVisible = UITheme::getInstance().showSelectionCursor();
 
-  renderer.fillRoundedRect(panel.x, panel.y, panel.width, panel.height, CpyMetrics::values.popupCornerRadius,
-                           Color::White);
+  const int panelRadius = CpyMetrics::values.popupCornerRadius;
+  renderer.fillRoundedRect(panel.x, panel.y, panel.width, panel.height, panelRadius, Color::White);
+
+  // Everything inside the panel goes through the rounded clip. A solid option
+  // row and the scrollbar thumb are rectangular by construction; at the last
+  // row their corners would otherwise cross the panel's rounded bottom-right
+  // outline and print on the scrim outside it. The outline is drawn after the
+  // scope so the corner restore cannot eat the frame.
+  {
+    const GfxRenderer::RoundedClipScope roundedPanel(renderer, panel.x, panel.y, panel.width, panel.height,
+                                                     panelRadius);
+
+    constexpr int innerPad = 28;
+    const std::string shownTitle =
+        renderer.truncatedText(UI_10_FONT_ID, title, panel.width - innerPad * 2, EpdFontFamily::BOLD);
+    const int titleY = panel.y + (InxOptionGeometry::headerHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+    renderer.drawText(UI_10_FONT_ID, panel.x + innerPad, titleY, shownTitle.c_str(), true, EpdFontFamily::BOLD);
+
+    // Optional wrapped body (a confirmation's subject) under the title. Its band
+    // height was measured by the caller with this exact font / width / line cap, so
+    // the lines land where the option hit rects (layout.optionRect) expect them and
+    // the body can never overlap the first option.
+    if (headline != nullptr && headline[0] != '\0' && headlineHeight > 0) {
+      const int bodyWidth = panel.width - InxOptionGeometry::headlineInnerPad * 2;
+      const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+      const auto lines =
+          renderer.wrappedText(UI_10_FONT_ID, headline, bodyWidth, InxOptionGeometry::headlineMaxLines,
+                               EpdFontFamily::REGULAR);
+      int bodyY = panel.y + InxOptionGeometry::headerHeight +
+                  std::max(0, (headlineHeight - static_cast<int>(lines.size()) * lineH) / 2);
+      for (const auto& line : lines) {
+        renderer.drawText(UI_10_FONT_ID, panel.x + InxOptionGeometry::headlineInnerPad, bodyY, line.c_str(), true,
+                          EpdFontFamily::REGULAR);
+        bodyY += lineH;
+      }
+    }
+
+    for (int slot = 0; slot < visibleRows; ++slot) {
+      const int optionIndex = start + slot;
+      const Rect row{panel.x + 12,
+                     panel.y + InxOptionGeometry::headerHeight + headlineHeight + slot * InxOptionGeometry::rowHeight + 4,
+                     panel.width - 24, InxOptionGeometry::rowHeight - 8};
+      const bool isCurrent = optionIndex == selected;
+      const bool isSelected = selectionVisible && isCurrent;
+      if (isSelected) {
+        renderer.fillRoundedRect(row.x, row.y, row.width, row.height, CpyMetrics::values.optionPopupSelectionRadius,
+                                 Color::Black);
+      } else if (isCurrent) {
+        // Touch boards hide the hardware cursor, but a picker still has to say
+        // which value is in force: a plain outline marks "current" without
+        // inverting the label and without pretending to be the focused row.
+        renderer.drawRoundedRect(row.x, row.y, row.width, row.height, CpyMetrics::values.popupFrameThickness,
+                                 CpyMetrics::values.optionPopupSelectionRadius, true);
+      }
+      const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), row.width - 40);
+      const int textX = row.x + 20;
+      const int textY = row.y + (row.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+      renderer.drawText(UI_10_FONT_ID, textX, textY, option.c_str(), !isSelected,
+                        isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    }
+
+    if (optionCount > visibleRows) {
+      // Stop the run above the bottom arc instead of at the panel's last pixel:
+      // the thumb columns sit 7..12 px from the right edge, where the rounded
+      // outline leaves the shape up to ~5 px above the bottom edge.
+      const int trackX = panel.x + panel.width - 10;
+      const int trackTop = panel.y + InxOptionGeometry::headerHeight + headlineHeight + 4;
+      const int trackBottom = panel.y + panel.height - (panelRadius / 2 + 2);
+      const int trackHeight = std::max(1, trackBottom - trackTop);
+      const int thumbHeight = std::clamp(trackHeight * visibleRows / optionCount, 8, trackHeight);
+      const int maxStart = optionCount - visibleRows;
+      const int thumbY = trackTop + (maxStart > 0 ? start * (trackHeight - thumbHeight) / maxStart : 0);
+      renderer.fillRect(trackX, trackTop, 2, trackHeight, true);
+      renderer.fillRoundedRect(trackX - 2, thumbY, 6, thumbHeight, 3, Color::Black);
+    }
+  }
+
   renderer.drawRoundedRect(panel.x, panel.y, panel.width, panel.height, CpyMetrics::values.popupFrameThickness,
-                           CpyMetrics::values.popupCornerRadius, true);
-
-  constexpr int innerPad = 28;
-  const std::string shownTitle =
-      renderer.truncatedText(UI_10_FONT_ID, title, panel.width - innerPad * 2, EpdFontFamily::BOLD);
-  const int titleY = panel.y + (InxOptionGeometry::headerHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
-  renderer.drawText(UI_10_FONT_ID, panel.x + innerPad, titleY, shownTitle.c_str(), true, EpdFontFamily::BOLD);
-
-  // Optional wrapped body (a confirmation's subject) under the title. Its band
-  // height was measured by the caller with this exact font / width / line cap, so
-  // the lines land where the option hit rects (layout.optionRect) expect them and
-  // the body can never overlap the first option.
-  if (headline != nullptr && headline[0] != '\0' && headlineHeight > 0) {
-    const int bodyWidth = panel.width - InxOptionGeometry::headlineInnerPad * 2;
-    const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
-    const auto lines =
-        renderer.wrappedText(UI_10_FONT_ID, headline, bodyWidth, InxOptionGeometry::headlineMaxLines,
-                             EpdFontFamily::REGULAR);
-    int bodyY = panel.y + InxOptionGeometry::headerHeight +
-                std::max(0, (headlineHeight - static_cast<int>(lines.size()) * lineH) / 2);
-    for (const auto& line : lines) {
-      renderer.drawText(UI_10_FONT_ID, panel.x + InxOptionGeometry::headlineInnerPad, bodyY, line.c_str(), true,
-                        EpdFontFamily::REGULAR);
-      bodyY += lineH;
-    }
-  }
-
-  for (int slot = 0; slot < visibleRows; ++slot) {
-    const int optionIndex = start + slot;
-    const Rect row{panel.x + 12,
-                   panel.y + InxOptionGeometry::headerHeight + headlineHeight + slot * InxOptionGeometry::rowHeight + 4,
-                   panel.width - 24, InxOptionGeometry::rowHeight - 8};
-    const bool isSelected = selectionVisible && optionIndex == selected;
-    if (isSelected) {
-      renderer.fillRoundedRect(row.x, row.y, row.width, row.height, CpyMetrics::values.optionPopupSelectionRadius,
-                               Color::Black);
-    }
-    const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), row.width - 40);
-    const int textX = row.x + 20;
-    const int textY = row.y + (row.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
-    renderer.drawText(UI_10_FONT_ID, textX, textY, option.c_str(), !isSelected,
-                      isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
-  }
-
-  if (optionCount > visibleRows) {
-    const int trackX = panel.x + panel.width - 10;
-    const int trackY = panel.y + InxOptionGeometry::headerHeight + headlineHeight;
-    const int trackHeight = visibleRows * InxOptionGeometry::rowHeight;
-    const int thumbHeight = std::max(8, trackHeight * visibleRows / optionCount);
-    const int maxStart = optionCount - visibleRows;
-    const int thumbY = trackY + (maxStart > 0 ? start * (trackHeight - thumbHeight) / maxStart : 0);
-    renderer.fillRect(trackX, trackY, 2, trackHeight, true);
-    renderer.fillRect(trackX - 2, thumbY, 6, thumbHeight, true);
-  }
+                           panelRadius, true);
 }
 
 void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, const MainTab selected) const {
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
-  // wave baseline: a shallow wave instead of a straight hairline. The active
+  // Pond baseline: a shallow wave instead of a straight hairline. The active
   // item gets three ripple arcs behind its icon and a small duck on the top
   // edge; the bar itself stays 88 px so it stops eating the page.
   constexpr float kTwoPi = 6.2831853f;
@@ -690,10 +711,14 @@ void CpyTheme::drawDuckSwim(const GfxRenderer& renderer, const int x, const int 
 }
 
 void CpyTheme::drawModalScrim(const GfxRenderer& renderer) const {
-  // A light dither reads as a soft grey; modal open/close already pays a full
-  // refresh, where a black mask flickers and ghosts far worse on e-ink.
-  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  renderer.fillRectDither(screen.x, screen.y, screen.width, screen.height, Color::LightGray);
+  // Design §2.5: the modal scrim is g1 (12.5 %), not the 25 % LightGray
+  // lattice. A black mask flickers and ghosts far worse on e-ink, and 25 %
+  // read as dirt on this panel; fillRectScrim() also writes the matching flat
+  // gray into the 16-level front, so a dialog over a grayscale page dims the
+  // page instead of erasing it.
+  // Full panel, status band included: a modal owns the whole surface, and a
+  // scrim that stopped short of the header would leave a bright strip behind.
+  renderer.fillRectScrim(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight());
 }
 
 Rect CpyTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
@@ -782,7 +807,7 @@ void CpyTheme::drawEmptyState(const GfxRenderer& renderer, const Rect rect, cons
 
 void CpyTheme::drawSleepScreen(const GfxRenderer& renderer, const char* status, const char* bookTitle,
                                const int readPercent) const {
-  // refreshed UI frame 12: a night scene only. No current book, no reading stats
+  // Pond v5 frame 12: a night scene only. No current book, no reading stats
   // and no Wi-Fi line -- standby must not claim anything the device cannot
   // know while asleep (ALIGNMENT-AUDIT.md).
   (void)bookTitle;
@@ -930,7 +955,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   {
-  // refreshed UI mast (design frame 01): one quiet row. Page label on the left,
+  // Pond v5 mast (design frame 01): one quiet row. Page label on the left,
   // date + clock + battery capsule on the right. No large serif page title:
   // the designed pages put their own display type in the content area.
   (void)masthead;
@@ -974,25 +999,25 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
 
   // Background paragraph-comment cache state, left of the date. It only exists
   // while there is work or an unacknowledged completed item.
-  const auto cacheBadge = jjwxc_cache_service::badge();
+  const auto cacheBadge = booksource::jobBadge();
   int cacheLeft = metaLeft;
-  if (cacheBadge != jjwxc_cache_service::Badge::None) {
+  if (cacheBadge != booksource::JobBadge::None) {
     constexpr int size = 22;
     const int x = metaLeft - 12 - size;
     const int y = centerY - size / 2;
     cacheLeft = x;
     switch (cacheBadge) {
-      case jjwxc_cache_service::Badge::Running:
+      case booksource::JobBadge::Working:
         renderer.fillRect(x + 9, y + 2, 4, 10, true);
         renderer.drawLine(x + 4, y + 11, x + 11, y + 18, 3, true);
         renderer.drawLine(x + 11, y + 18, x + 18, y + 11, 3, true);
         renderer.drawLine(x + 3, y + 21, x + 19, y + 21, 2, true);
         break;
-      case jjwxc_cache_service::Badge::Paused:
+      case booksource::JobBadge::Paused:
         renderer.fillRect(x + 6, y + 3, 4, 16, true);
         renderer.fillRect(x + 14, y + 3, 4, 16, true);
         break;
-      case jjwxc_cache_service::Badge::Done:
+      case booksource::JobBadge::Done:
         renderer.drawLine(x + 3, y + 12, x + 9, y + 18, 3, true);
         renderer.drawLine(x + 9, y + 18, x + 19, y + 4, 3, true);
         break;
@@ -1090,8 +1115,8 @@ void CpyTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect
   // Background paragraph-comment cache state. It sits just left of the date (or
   // the battery when the clock is not set) and only exists while there is work
   // or an unacknowledged completed item.
-  const auto cacheBadge = jjwxc_cache_service::badge();
-  if (cacheBadge != jjwxc_cache_service::Badge::None) {
+  const auto cacheBadge = booksource::jobBadge();
+  if (cacheBadge != booksource::JobBadge::None) {
     const int size = 22;
     int iconRight = right - CpyMetrics::values.batteryWidth - 10;
     if (now > 1700000000) {
@@ -1104,18 +1129,18 @@ void CpyTheme::drawMainTabStatusBar(const GfxRenderer& renderer, const Rect rect
     const int x = iconRight - size;
     const int y = rect.y + (rect.height - size) / 2;
     switch (cacheBadge) {
-      case jjwxc_cache_service::Badge::Running:
+      case booksource::JobBadge::Working:
         // Down-arrow into a tray: "downloading".
         renderer.fillRect(x + 9, y + 2, 4, 10, true);
         renderer.drawLine(x + 4, y + 11, x + 11, y + 18, 3, true);
         renderer.drawLine(x + 11, y + 18, x + 18, y + 11, 3, true);
         renderer.drawLine(x + 3, y + 21, x + 19, y + 21, 2, true);
         break;
-      case jjwxc_cache_service::Badge::Paused:
+      case booksource::JobBadge::Paused:
         renderer.fillRect(x + 6, y + 3, 4, 16, true);
         renderer.fillRect(x + 14, y + 3, 4, 16, true);
         break;
-      case jjwxc_cache_service::Badge::Done:
+      case booksource::JobBadge::Done:
         renderer.drawLine(x + 3, y + 12, x + 9, y + 18, 3, true);
         renderer.drawLine(x + 9, y + 18, x + 19, y + 4, 3, true);
         break;

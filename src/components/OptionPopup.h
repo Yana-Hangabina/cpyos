@@ -28,7 +28,11 @@
 // publication so a release cannot be dropped during a highlight repaint.
 class OptionPopup {
  public:
-  explicit OptionPopup(bool upstreamStyle = false) : upstreamStyle(upstreamStyle) {}
+  // The `upstreamStyle` argument is kept only so existing call sites compile:
+  // INX is retired, so every dialog is painted by the theme's own dialog
+  // (CpyTheme::drawOptionPopup) — same 608 px panel, same black selection,
+  // same scrim — whether it opens over a list page or over the reader.
+  explicit OptionPopup(bool /*upstreamStyle*/ = false) {}
 
   void show(StrId titleId, const StrId* optionIds, int optionCount, int currentIndex,
             std::function<void(int)> onSelect) {
@@ -80,7 +84,7 @@ class OptionPopup {
     if (!active) return false;
 
     const int total = static_cast<int>(ownedStrings.size());
-    const int count = !upstreamStyle && UITheme::getInstance().hasMainTabs() ? total : std::min(total, MAX_OPTIONS);
+    const int count = total;
     const freeink::ui::InputSnapshot snap = touchSnapshotFrom(input);
     if (ignoreInitialTouchContact) {
       if (snap.touchPressed || snap.touchHeld || snap.touchReleased) {
@@ -92,7 +96,7 @@ class OptionPopup {
       }
       ignoreInitialTouchContact = false;
     }
-    if (!upstreamStyle && UITheme::getInstance().hasMainTabs()) {
+    {
       const auto swipe = input.wasSwipe();
       if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
         freeink::ui::InputSnapshot release{};
@@ -130,7 +134,7 @@ class OptionPopup {
           requestUpdate();
           return true;
         }
-        if (snap.touchPressed && (upstreamStyle || !UITheme::getInstance().hasMainTabs())) {
+        if (snap.touchPressed) {
           // Touch-down on an option moves the highlight (route() latched the
           // hit as the active interaction; read it back, no re-hit-testing).
           const int16_t idx = interactions.activeIndex();
@@ -193,7 +197,10 @@ class OptionPopup {
     // A popup is a transient overlay over a stable page: keep it out of the
     // periodic UI GC16 sweep. The underlying screen's next Normal push resumes
     // the sweep and clears any faint GL16 residue.
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
+    // presentOverlay() commits the open 16-level front (so a dialog over a
+    // grayscale page keeps its AA and no GC16 flashes underneath) or does a
+    // TransientUi 1-bit push that is never promoted to GC16.
+    renderer.presentOverlay();
     return true;
   }
 
@@ -205,8 +212,7 @@ class OptionPopup {
     // three font ids, so rebuilding it here is trivially cheap and always
     // tracks the live orientation and uiScale fonts; a target held across
     // show() would stale-bind both after a rotation or scale change.
-    fui::GfxRendererTarget target = makeUiTarget(renderer, upstreamStyle);
-    const fui::ThemeTokens& theme = refreshSharedUiThemeTokens(target, upstreamStyle);
+    fui::GfxRendererTarget target = makeUiTarget(renderer);
     // Frame stores a const DeviceContext&; keep it in a local that outlives
     // the frame (a deviceContext() temporary would dangle).
     const fui::DeviceContext device = target.deviceContext();
@@ -221,7 +227,7 @@ class OptionPopup {
     interactions.beginPublishCycle();
     fui::Frame<INTERACTION_CAPACITY> frame(target, device, noInput, interactions);
 
-    if (!upstreamStyle && UITheme::getInstance().hasMainTabs()) {
+    {
       const int optionCount = static_cast<int>(ownedStrings.size());
       const Rect bounds = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
       // Measure the wrapped body band once, with the same font / width / line cap
@@ -266,80 +272,6 @@ class OptionPopup {
       return;
     }
 
-    const auto& metrics = uiThemeMetrics(upstreamStyle);
-    const int totalOptions = static_cast<int>(ownedStrings.size());
-    const uint8_t count = static_cast<uint8_t>(totalOptions > MAX_OPTIONS ? MAX_OPTIONS : totalOptions);
-
-    fui::DialogOption options[MAX_OPTIONS];
-    for (uint8_t i = 0; i < count; ++i) {
-      options[i].label = ownedStrings[i].c_str();
-      options[i].action = ACTION_OPTION;
-      options[i].value = static_cast<int16_t>(i);
-      options[i].state = (i == selectedIndex) ? fui::StateFocused : fui::StateNormal;
-    }
-
-    fui::OptionDialogProps props;
-    props.title = title.empty() ? nullptr : title.c_str();
-    props.headline = headline.empty() ? nullptr : headline.c_str();
-    if (!message.empty()) {
-      props.message = message.c_str();
-      props.messageText.font = fui::GfxRendererTarget::FONT_BODY;
-      props.messageText.align = fui::TextAlign::Center;
-      props.messageText.maxLines = 6;
-    }
-    props.options = options;
-    props.optionCount = count;
-    props.verticalOptions = true;
-    // Touch only: physical buttons stay on the legacy wrap/confirm path above,
-    // so the buffer never competes with it for focus/confirm dispatch.
-    props.inputMask = fui::InputTouch;
-    props.titleText.font = fui::GfxRendererTarget::FONT_BODY;
-    props.titleText.bold = true;
-    props.titleText.align = fui::TextAlign::Center;
-    // Captions like "Remove from Recent Books?" overflow the narrow portrait
-    // dialog in one line; let them wrap and the panel grow.
-    props.titleText.maxLines = 2;
-    props.headlineText.font = fui::GfxRendererTarget::FONT_BODY;
-    props.headlineText.align = fui::TextAlign::Center;
-    props.headlineText.maxLines = 3;
-    props.buttonText.font = fui::GfxRendererTarget::FONT_BODY;
-    const int16_t innerPadding = static_cast<int16_t>(metrics.optionPopupInnerPadding);
-    props.padding = fui::Insets{innerPadding, innerPadding, innerPadding, innerPadding};
-    props.gap = static_cast<int16_t>(metrics.optionPopupItemSpacing);
-    // Rounded invert-fill themes use a black pill, not the default gray focus cursor.
-    if (theme.listSelectionStyle == fui::SelectionStyle::InvertFill && theme.listRowRadius > 0) {
-      props.buttonStyles = fui::defaultButtonStyles();
-      props.buttonStyles.focused = props.buttonStyles.selected;
-      fui::setStyleRadius(props.buttonStyles, theme.listRowRadius);
-    }
-    // defaultPopupStyles() has no border, so opt in using the per-theme frame metrics.
-    props.styles = fui::defaultPopupStyles();
-    props.styles.normal.border = fui::Paint::solid(fui::Color::Black);
-    props.styles.normal.borderWidth = static_cast<uint8_t>(metrics.popupFrameThickness);
-    props.styles.normal.radius = static_cast<uint8_t>(metrics.popupCornerRadius);
-    props.styles.selected = props.styles.normal;
-    props.styles.focused = props.styles.normal;
-    props.styles.active = props.styles.normal;
-    props.styles.disabled = props.styles.normal;
-    props.buttonHeight =
-        fui::clampI16(target.lineHeight(fui::GfxRendererTarget::FONT_BODY) + metrics.optionPopupSelectionVPadding * 2);
-
-    // Fixed fraction of the screen, clamped by the theme's side margins; the
-    // old max-text-width sizing is gone, long labels wrap inside the buttons.
-    const fui::Rect screen = device.screen();
-    const int16_t width =
-        fui::clampI16(std::min<int>(screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2));
-    const int16_t height = fui::clampI16(fui::optionDialogHeight(target, props, width), 0, screen.height);
-    const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{width, height});
-
-    // Chrome guard first, options after: route() scans newest-first, so the
-    // option buttons win inside the dialog and the guard absorbs the rest.
-    frame.hit(dialogRect, ACTION_CHROME, 0, fui::InputTouch);
-    fui::optionDialog(frame, dialogRect, props);
-    // Atomically make this generation the one handleInput() reads, now that
-    // every hit() call for this frame is done.
-    interactions.publish();
-    uiReady = true;
   }
 
   bool isActive() const { return active; }
@@ -352,7 +284,6 @@ class OptionPopup {
   }
 
  private:
-  const bool upstreamStyle;
   void finishShow(const int currentIndex, std::function<void(int)> onSelect) {
     message.clear();
     const int count = static_cast<int>(ownedStrings.size());

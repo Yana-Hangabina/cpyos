@@ -1,5 +1,7 @@
 #include "EpubReaderActivity.h"
-#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#include "booksource/BookSource.h"
+#include "booksource/RowTail.h"
+#include "components/StatusCards.h"
 
 #include "NetworkStartup.h"
 
@@ -99,18 +101,14 @@ extern void disarmScanWatchdog();
 #include "util/TimeUtils.h"
 
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcActivity.h"
-#include "activities/apps/jjwxc/JjwxcUpdates.h"
-#include "activities/apps/jjwxc/JjwxcCommentActivity.h"
-#include "activities/apps/jjwxc/JjwxcStore.h"
+// Implemented by the linked book-source component (see
+// JjwxcApp/src/app/JjwxcReaderMethods.cpp). The reader needs only the
+// ownership test to drop its derived caches when a sourced book closes; when
+// no component is linked the build provides a false-returning stub.
+bool parseJjwxcNovelIdFromPath(const std::string& path, char* out, size_t cap);
 #endif
 
 namespace {
-#ifdef BOARD_HAS_PSRAM
-// Defined next to the JJWXC comment code lower in this file; onExit() runs
-// before it and needs the same /JJWXC/<title>-<id>.epub test.
-bool parseJjwxcNovelIdFromPath(const std::string& path, char* out, size_t cap);
-#endif
 constexpr uint8_t MAX_PAGE_TURN_RATE = 30;
 // The X4 Pro and X4 Classic carry the X4's panel but sit outside isXteinkDevice()
 // (that helper also gates power management). Overlay refresh choices are per-panel:
@@ -126,7 +124,7 @@ bool xteinkClassPanel() {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 
-// refreshed UI reader chrome (frame 04). The header uses the reader's status face
+// Pond v5 reader chrome (frame 04). The header uses the reader's status face
 // (a vector face on Read Pico, the small UI face elsewhere); the numeric face
 // is the same tabular one the old status bar used for clock and page counts.
 #if FREEINK_DEVICE_READPICO
@@ -541,7 +539,7 @@ bool EpubReaderActivity::loadBook() {
     // FB2 is converted once into a store-only EPUB under /.crosspoint; the
     // reader then uses the normal EPUB path, while progress/bookmarks/recents
     // stay keyed to the .fb2 the user sees on the card.
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
     Fb2 converter(bookPath, "/.crosspoint");
     if (!converter.ensureEpub()) {
       LOG_ERR("ERS", "Failed to convert FB2: %s", bookPath.c_str());
@@ -562,7 +560,7 @@ bool EpubReaderActivity::loadBook() {
     bleinput::stop();
 #endif
     disableFastInitialRefresh();
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
   }
 
   bool loaded;
@@ -820,7 +818,7 @@ bool EpubReaderActivity::buildTickHeapGate() {
 
 void EpubReaderActivity::showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh) {
   if (!buildPopupPending || !renderer.hasFrameBuffer()) return;
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
+  status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
   pagesUntilFullRefresh = 1;
   buildPopupPending = false;
 }
@@ -1467,7 +1465,8 @@ void EpubReaderActivity::beginSelection(const int x, const int y) {
   }
   auto page = loadPageForSelection();
   if (!page) {
-    GUI.drawPopup(renderer, "selection: no page");
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    toast_.paint(renderer, SMALL_FONT_ID, 24);
     return;
   }
   int unusedTop = 0;
@@ -1481,7 +1480,8 @@ void EpubReaderActivity::beginSelection(const int x, const int y) {
   const auto words = layoutPageWords(*page, fontId, ml, mt);
   if (words.empty()) {
     LOG_DBG("ERS", "selection: page has no words");
-    GUI.drawPopup(renderer, "selection: no text");
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    toast_.paint(renderer, SMALL_FONT_ID, 24);
     return;
   }
   // A word under the finger is the natural anchor; a press on the gap between
@@ -1503,7 +1503,8 @@ void EpubReaderActivity::beginSelection(const int x, const int y) {
   }
   if (best < 0) {
     LOG_DBG("ERS", "selection: no word near %d,%d", x, y);
-    GUI.drawPopup(renderer, "selection: no word");
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    toast_.paint(renderer, SMALL_FONT_ID, 24);
     return;
   }
   const auto& w = words[static_cast<size_t>(best)];
@@ -2075,14 +2076,16 @@ void EpubReaderActivity::exportAnnotations() {
   HalFile file;
   if (!Storage.openFileForWrite("ERS", path, file)) {
     LOG_ERR("ERS", "annotations: cannot open %s for export", path.c_str());
-    GUI.drawPopup(renderer, tr(STR_NOT_AVAILABLE));
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    requestUpdate();
     return;
   }
   const size_t written = file.write(body.data(), body.size());
   file.close();
   LOG_DBG("ERS", "annotations exported: %u/%u bytes -> %s", static_cast<unsigned>(written),
           static_cast<unsigned>(body.size()), path.c_str());
-  GUI.drawPopup(renderer, path.c_str());
+  toast_.show(path.c_str(), millis());
+  requestUpdate();
 }
 
 void EpubReaderActivity::openFootnoteCard(const char* href) {
@@ -2273,6 +2276,7 @@ void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
 }
 
 void EpubReaderActivity::loop() {
+  if (toast_.tick(millis())) requestUpdate();
   if (loadFailurePopup.isActive()) {
     loadFailurePopup.handleInput(mappedInput, [this] { requestUpdate(); });
     return;
@@ -3445,7 +3449,7 @@ void EpubReaderActivity::beginLoanTimeSync() {
       finish();
       return;
     }
-    GUI.drawPopup(renderer, tr(STR_SYNCING_TIME));
+    status_card::showWait(renderer, tr(STR_SYNCING_TIME), nullptr, nullptr, -1, false, millis());
     const bool synced = trustedtime::syncNow(5000);
     // The sync is the only reason this screen started the radio; hand it back on
     // both outcomes (a failed sync offers a retry that opens the picker again).
@@ -3533,10 +3537,10 @@ void EpubReaderActivity::renderBook() {
   const auto showPendingSyncSaveError = [this]() {
     if (pendingSyncSaveError) {
       pendingSyncSaveError = false;
-      GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
+      status_card::paintMessage(renderer, tr(STR_SAVE_PROGRESS_FAILED), nullptr);
     } else if (pendingSyncLaunchError) {
       pendingSyncLaunchError = false;
-      GUI.drawPopup(renderer, tr(STR_SYNC_FAILED_MSG));
+      status_card::paintMessage(renderer, tr(STR_SYNC_FAILED_MSG), nullptr);
     }
   };
 
@@ -3544,7 +3548,7 @@ void EpubReaderActivity::renderBook() {
     renderer.clearScreen();
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
+    status_card::showMessage(renderer, tr(STR_INDEX_FAILED), nullptr);
   };
 
   if (failedBuildSpine_ == currentSpineIndex) {
@@ -3576,7 +3580,7 @@ void EpubReaderActivity::renderBook() {
   orientedMarginLeft += SETTINGS.screenMargin;
   orientedMarginRight += SETTINGS.screenMargin;
 
-  // refreshed UI chrome (frame 04): the header sits above the body and the wave +
+  // Pond v5 chrome (frame 04): the header sits above the body and the wave +
   // page numbers below it, so the body reserves both bands instead of the old
   // bottom status strip.
   const ReaderChromeMetrics chrome = readerChromeMetrics();
@@ -3641,10 +3645,10 @@ void EpubReaderActivity::renderBook() {
       const bool needsFullBuild = pendingPercentJump;
       if (needsFullBuild) {
         prepareChapterBuild();
-        GUI.drawPopup(renderer, tr(STR_INDEXING));
+        status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
         pagesUntilFullRefresh = 1;
         const auto popupFn = [this]() {
-          if (renderer.hasFrameBuffer()) GUI.drawPopup(renderer, tr(STR_INDEXING));
+          if (renderer.hasFrameBuffer()) status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
         };
         GfxRenderer::FrameBufferLoan loan(renderer);
         if (!section->createSectionFile(renderSpec, popupFn)) {
@@ -3676,7 +3680,7 @@ void EpubReaderActivity::renderBook() {
                                              target > BUILD_POPUP_PAGE_THRESHOLD);
           }
           if (showPopup) {
-            GUI.drawPopup(renderer, tr(STR_INDEXING));
+            status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
             pagesUntilFullRefresh = 1;
           }
           buildPopupPending = !showPopup;
@@ -3773,7 +3777,7 @@ void EpubReaderActivity::renderBook() {
   }
 
   if (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    status_card::showWait(renderer, tr(STR_INDEXING), nullptr, nullptr, -1, false, millis());
     pagesUntilFullRefresh = 1;
   }
   while (section->isPartial() && section->currentPage >= static_cast<int>(section->pageCount)) {
@@ -3907,12 +3911,16 @@ void EpubReaderActivity::renderBook() {
   }
 
   if (showBookmarkMessage) {
-    GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
+    // Acknowledgement, not a dialog: a bottom capsule instead of a blocking
+    // card in the middle of the page the reader just turned to.
+    toast_.show(bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED), millis());
   }
-
   if (showDictionaryMessage) {
-    GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
+    toast_.show(tr(STR_DICT_NO_DICT_SET), millis());
   }
+  // Every acknowledgement raised by this pass (or by a handler just before it)
+  // leaves through the one capsule.
+  if (!toast_.text().empty()) toast_.paint(renderer, SMALL_FONT_ID, 24);
 
   // Toolbar menu: overlay the toolbar / panel on top of the freshly rendered page.
   if (overlay != Overlay::None && usesToolbarMenu()) {
@@ -3935,10 +3943,10 @@ void EpubReaderActivity::onEndOfBookRendered() {
   automaticPageTurnActive = false;
   if (pendingSyncSaveError) {
     pendingSyncSaveError = false;
-    GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
+    status_card::showMessage(renderer, tr(STR_SAVE_PROGRESS_FAILED), nullptr);
   } else if (pendingSyncLaunchError) {
     pendingSyncLaunchError = false;
-    GUI.drawPopup(renderer, tr(STR_SYNC_FAILED_MSG));
+    status_card::showMessage(renderer, tr(STR_SYNC_FAILED_MSG), nullptr);
   }
 }
 
@@ -4341,616 +4349,6 @@ int EpubReaderActivity::contentsRowForToc(const int toc) const {
 }
 #endif
 
-#ifdef BOARD_HAS_PSRAM
-namespace {
-
-// "/JJWXC/<title>-<novelId>.epub". The id is taken from after the LAST '-'
-// because a title may contain dashes, and it must be all digits: any other
-// book in that folder was not written by this app.
-bool parseJjwxcNovelIdFromPath(const std::string& path, char* out, const size_t cap) {
-  constexpr const char* kPrefix = "/JJWXC/";
-  constexpr size_t kPrefixLen = 7;
-  constexpr const char* kSuffix = ".epub";
-  constexpr size_t kSuffixLen = 5;
-  if (out == nullptr || cap == 0) return false;
-  out[0] = '\0';
-  if (path.size() <= kPrefixLen + kSuffixLen) return false;
-  if (path.compare(0, kPrefixLen, kPrefix) != 0) return false;
-  if (path.compare(path.size() - kSuffixLen, kSuffixLen, kSuffix) != 0) return false;
-  const std::string name = path.substr(kPrefixLen, path.size() - kPrefixLen - kSuffixLen);
-  const size_t dash = name.rfind('-');
-  if (dash == std::string::npos || dash + 1 >= name.size()) return false;
-  const std::string id = name.substr(dash + 1);
-  if (id.empty() || id.size() + 1 > cap) return false;
-  for (const char c : id) {
-    if (c < '0' || c > '9') return false;
-  }
-  memcpy(out, id.data(), id.size());
-  out[id.size()] = '\0';
-  return true;
-}
-
-}  // namespace
-
-void EpubReaderActivity::resolveJjwxcBook() {
-  if (jjwxcBookResolved_) return;
-  jjwxcBookResolved_ = true;
-  jjwxcNovelId_[0] = '\0';
-  jjwxcBook_ = epub && parseJjwxcNovelIdFromPath(epub->getSourcePath(), jjwxcNovelId_, sizeof(jjwxcNovelId_));
-  if (jjwxcBook_) {
-    LOG_DBG("ERS", "JJWXC book: novelId=%s", jjwxcNovelId_);
-    // The user has now seen this cached book: clear the "done" badge for it on
-    // the status bar (the queue page keeps other items untouched).
-    jjwxc_cache_service::acknowledgeBook(jjwxcNovelId_);
-  }
-}
-
-void EpubReaderActivity::loadJjwxcTocMeta() {
-  jjwxcTocMeta_.clear();
-  if (!jjwxcBook_ || !epub) return;
-  JjwxcStore::TocReader toc;
-  if (!toc.open(jjwxcNovelId_)) return;
-  // A legacy EPUB packaged before placeholders were added can omit chapters
-  // from its nav; toc order and nav order would then diverge and a chip would
-  // describe the wrong chapter. Disable chips until "update chapter list"
-  // repackages the full catalogue (which is a safe, visible no-op state).
-  if (toc.count() != static_cast<uint32_t>(epub->getTocItemsCount())) {
-    LOG_INF("ERS", "JJWXC toc nav mismatch (%u vs %d); chips disabled until repackage", (unsigned)toc.count(),
-            epub->getTocItemsCount());
-    toc.close();
-    return;
-  }
-  // The app's in-memory catalogue is capped at 1500 chapters; states beyond
-  // that cannot be acted on from the chip, and walking a 20k-record toc while
-  // holding the render lock would stall the panel.
-  constexpr uint32_t kMaxMeta = 1500;
-  const uint32_t cap =
-      std::min<uint32_t>({toc.count(), static_cast<uint32_t>(epub->getTocItemsCount()), kMaxMeta});
-  if (cap == 0) {
-    toc.close();
-    return;
-  }
-  const size_t bytes = static_cast<size_t>(cap) * sizeof(JjwxcTocMeta);
-  if (jjwxcTocMeta_.capacity() < cap) {
-    if (!memory::psramHasHeadroom(bytes, bytes, 32 * 1024)) {
-      LOG_ERR("ERS", "JJWXC toc meta: no PSRAM for %u chapters", (unsigned)cap);
-      toc.close();
-      return;
-    }
-    jjwxcTocMeta_.reserve(cap);
-  }
-  jjwxcTocMeta_.resize(cap);
-  uint32_t loaded = 0;
-  JjwxcStore::TocRecord rec;
-  for (uint32_t i = 0; i < cap; ++i) {
-    if (!toc.read(i, rec)) break;
-    jjwxcTocMeta_[i] = JjwxcTocMeta{rec.chapterId, rec.state, rec.isVip};
-    ++loaded;
-  }
-  toc.close();
-  if (loaded < cap) jjwxcTocMeta_.resize(loaded);
-  rebuildContentsRows();
-  LOG_DBG("ERS", "JJWXC toc meta: %u/%u chapters", (unsigned)loaded, (unsigned)cap);
-}
-
-bool EpubReaderActivity::contentsFilterable() const {
-#ifdef BOARD_HAS_PSRAM
-  return jjwxcBook_ && epub != nullptr && !jjwxcTocMeta_.empty() &&
-         static_cast<size_t>(epub->getTocItemsCount()) <= jjwxcTocMeta_.size();
-#else
-  return false;
-#endif
-}
-
-void EpubReaderActivity::rebuildContentsRows() {
-  contentsRows_.clear();
-  if (!epub) return;
-  const int n = epub->getTocItemsCount();
-  if (n <= 0) return;
-  bool filter = false;
-#ifdef BOARD_HAS_PSRAM
-  filter = contentsFilterable() && contentsFilter_ != 0;
-#endif
-  contentsRows_.reserve(static_cast<size_t>(n));
-  for (int i = 0; i < n && i < 32000; ++i) {
-#ifdef BOARD_HAS_PSRAM
-    if (filter) {
-      const bool cached =
-          jjwxcTocMeta_[static_cast<size_t>(i)].state == static_cast<uint8_t>(JjwxcStore::ChapterState::Cached);
-      if ((contentsFilter_ == 1 && !cached) || (contentsFilter_ == 2 && cached)) continue;
-    }
-#endif
-    contentsRows_.push_back(static_cast<int16_t>(i));
-  }
-}
-
-int EpubReaderActivity::contentsTocForRow(const int row) const {
-  if (row < 0 || static_cast<size_t>(row) >= contentsRows_.size()) return -1;
-  return contentsRows_[static_cast<size_t>(row)];
-}
-
-int EpubReaderActivity::contentsRowForToc(const int toc) const {
-  for (size_t i = 0; i < contentsRows_.size(); ++i) {
-    if (contentsRows_[i] == toc) return static_cast<int>(i);
-  }
-  return -1;
-}
-
-void EpubReaderActivity::drawJjwxcPlaceholderAction(const int fontId, const int bottomMargin) {
-  (void)fontId;
-  jjwxcActionActive_ = false;
-  jjwxcMoreActive_ = false;
-  if (!jjwxcBook_ || !epub || jjwxcTocMeta_.empty()) return;
-  const int tocIndex = currentTocIndex();
-  if (tocIndex < 0 || static_cast<size_t>(tocIndex) >= jjwxcTocMeta_.size()) return;
-  const auto& meta = jjwxcTocMeta_[static_cast<size_t>(tocIndex)];
-  const auto state = static_cast<JjwxcStore::ChapterState>(meta.state);
-  if (state == JjwxcStore::ChapterState::Cached || state == JjwxcStore::ChapterState::Locked ||
-      state == JjwxcStore::ChapterState::AppOnly || meta.chapterId == 0) {
-    return;
-  }
-  // VIP ownership is unknown here: the app's price page decides between caching
-  // an owned chapter and asking for a purchase. The label names the intent, not
-  // an assumption about the account.
-  const bool purchase = meta.isVip != 0;
-  const char* label = purchase ? tr(STR_JJWXC_BUY_CHAPTER) : tr(STR_JJWXC_CHAPTER_CACHE);
-  const int screenW = renderer.getScreenWidth();
-  const int screenH = renderer.getScreenHeight();
-  const int side = 32;
-  const int width = std::min(360, std::max(0, screenW - 2 * side));
-  constexpr int kHeight = 64;
-  const int x = (screenW - width) / 2;
-  const int y = screenH - bottomMargin - kHeight - 12;
-  if (width < 80 || y < 0) return;
-  renderer.fillRoundedRect(x, y, width, kHeight, 16, Color::White);
-  renderer.drawRoundedRect(x, y, width, kHeight, 2, 16, true);
-  const int labelW = renderer.getTextWidth(UI_12_FONT_ID, label, EpdFontFamily::BOLD);
-  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
-  renderer.drawText(UI_12_FONT_ID, x + (width - labelW) / 2, y + (kHeight - lineH) / 2, label, true,
-                    EpdFontFamily::BOLD);
-  jjwxcActionRect_ = Rect{x, y, width, kHeight};
-  jjwxcActionChapterId_ = meta.chapterId;
-  jjwxcActionOrdinal_ = tocIndex;
-  jjwxcActionPurchase_ = purchase;
-  jjwxcActionActive_ = true;
-}
-
-void EpubReaderActivity::drawJjwxcMoreChapters(const int bottomMargin) {
-  jjwxcMoreActive_ = false;
-  jjwxcMoreChapters_ = 0;
-  if (!jjwxcBook_ || !epub || !section || jjwxcActionActive_) return;
-  // Only the end of the book the reader can actually reach: the last packaged
-  // chapter's last page. Anywhere else "more chapters" would compete with the
-  // normal page turn for the same tap.
-  if (epub->getSpineItemsCount() <= 0 || currentSpineIndex != epub->getSpineItemsCount() - 1) return;
-  if (section->pageCount == 0 || section->currentPage != static_cast<int>(section->pageCount) - 1) return;
-  const auto gap = jjwxcUpdates::gapForPath(epub->getSourcePath().c_str());
-  if (!gap.known || gap.newChapters == 0) return;
-
-  char label[96];
-  snprintf(label, sizeof(label), I18N.get(StrId::STR_JJWXC_MORE_CHAPTERS_FMT),
-           static_cast<unsigned>(std::min<uint32_t>(gap.newChapters, 9999)));
-  const int screenW = renderer.getScreenWidth();
-  const int screenH = renderer.getScreenHeight();
-  const int side = 32;
-  const int width = std::min(420, std::max(0, screenW - 2 * side));
-  constexpr int kHeight = 64;
-  const int x = (screenW - width) / 2;
-  const int y = screenH - bottomMargin - kHeight - 12;
-  if (width < 80 || y < 0) return;
-  renderer.fillRoundedRect(x, y, width, kHeight, 16, Color::Black);
-  const int labelW = renderer.getTextWidth(UI_12_FONT_ID, label, EpdFontFamily::BOLD);
-  const int lineH = renderer.getLineHeight(UI_12_FONT_ID);
-  renderer.drawText(UI_12_FONT_ID, x + (width - labelW) / 2, y + (kHeight - lineH) / 2, label, false,
-                    EpdFontFamily::BOLD);
-  jjwxcMoreRect_ = Rect{x, y, width, kHeight};
-  jjwxcMoreChapters_ = gap.newChapters;
-  jjwxcMoreActive_ = true;
-}
-
-void EpubReaderActivity::loadJjwxcCommentCounts() {
-  commentCounts_.clear();
-  commentBubbleCount_ = 0;
-  jjwxcChapterId_ = 0;
-  jjwxcCommentSpine_ = currentSpineIndex;
-  // Even a failed load must invalidate page-cache slots built from the previous
-  // chapter's bubbles.
-  ++commentGeneration_;
-  if (!jjwxcBook_ || !epub) return;
-  if (currentSpineIndex < 0 || currentSpineIndex >= epub->getSpineItemsCount()) return;
-
-  JjwxcStore::SpineEntry entry;
-  if (!JjwxcStore::readSpineEntry(jjwxcNovelId_, static_cast<uint32_t>(currentSpineIndex), entry) ||
-      entry.chapterId == 0) {
-    LOG_DBG("ERS", "JJWXC comments: no spine map entry for spine %d", currentSpineIndex);
-    return;
-  }
-  jjwxcChapterId_ = entry.chapterId;
-
-  // Sized before load: a throwing growth under -fno-exceptions aborts, and PSRAM
-  // pressure is the one condition we can check cheaply.
-  constexpr size_t kBytes = JjwxcCommentSidecar::kMaxEntries * sizeof(JjwxcCommentSidecar::Count);
-  if (!commentCounts_.capacity()) {
-    if (!memory::psramHasHeadroom(kBytes, kBytes, 32 * 1024)) {
-      LOG_ERR("ERS", "JJWXC comments: no PSRAM for %u entries", (unsigned)JjwxcCommentSidecar::kMaxEntries);
-      return;
-    }
-    commentCounts_.reserve(JjwxcCommentSidecar::kMaxEntries);
-  }
-  commentCounts_.resize(JjwxcCommentSidecar::kMaxEntries);
-  size_t count = 0;
-  if (!JjwxcStore::loadCommentCounts(jjwxcNovelId_, jjwxcChapterId_, commentCounts_.data(), commentCounts_.size(),
-                                     count)) {
-    commentCounts_.clear();
-    return;
-  }
-  if (count > commentCounts_.size()) count = commentCounts_.size();
-  commentCounts_.resize(count);
-  LOG_DBG("ERS", "JJWXC comments: chapter=%lu %u paragraphs with counts", (unsigned long)jjwxcChapterId_,
-          (unsigned)commentCounts_.size());
-}
-
-uint16_t EpubReaderActivity::commentTotalFor(const uint32_t paragraphId) const {
-  // Linear is right at this size: a page asks about ~30 paragraphs and the table
-  // is bounded at 512 entries, so a scan is cheaper than keeping it sorted (and
-  // the sidecar's order is the server's, which nothing guarantees).
-  for (const auto& entry : commentCounts_) {
-    if (entry.paragraphId == paragraphId) return entry.total;
-  }
-  return 0;
-}
-
-int EpubReaderActivity::layoutCommentBubbles(const Page& page, const int fontId, const int top, const int right,
-                                             const int bottom, const int left, CommentBubble* out,
-                                             const int maxOut) const {
-  if (out == nullptr || maxOut <= 0 || commentCounts_.empty()) return 0;
-
-  const int screenWidth = renderer.getScreenWidth();
-  const int screenHeight = renderer.getScreenHeight();
-  const int contentRight = screenWidth - right;
-  const int contentBottom = screenHeight - bottom;
-  const int baseLineHeight = renderer.getLineHeight(fontId, SETTINGS.getReaderLineCompression());
-  const int ascender = renderer.getFontAscenderSize(fontId);
-  const int numberHeight = renderer.getLineHeight(SMALL_FONT_ID);
-
-  int count = 0;
-#ifdef BOARD_HAS_PSRAM
-  // Strict invariant: a badge may never sit inside a text line's box. This is the
-  // one property the reader can check without knowing the glyph ink, so a
-  // regression shows up in the log instead of only on the glass.
-  const auto overlapsText = [&](const int bx, const int by, const int bw, const int bh) -> int {
-    for (size_t k = 0; k < page.elements.size(); ++k) {
-      const auto& e = page.elements[k];
-      if (e->getTag() != TAG_PageLine) continue;
-      const auto& ln = static_cast<const PageLine&>(*e);
-      const TextBlock& b = *ln.getBlock();
-      if (b.wordCount() == 0) continue;
-      const uint16_t lastWord = static_cast<uint16_t>(b.wordCount() - 1);
-      const int lx0 = left + ln.xPos;
-      const int lx1 = lx0 + b.wordXpos(lastWord) +
-                      renderer.getTextWidth(fontId, b.wordText(lastWord), b.wordStyle(lastWord));
-      const int ly0 = top + ln.yPos;
-      const int ly1 = ly0 + baseLineHeight + b.getRubyShift(ascender);
-      if (bx < lx1 && bx + bw > lx0 && by < ly1 && by + bh > ly0) return static_cast<int>(k);
-    }
-    return -1;
-  };
-#endif
-  for (size_t i = 0; i < page.elements.size() && count < maxOut; ++i) {
-    const auto& element = page.elements[i];
-    if (element->getTag() != TAG_PageLine) continue;
-    const auto& line = static_cast<const PageLine&>(*element);
-    const TextBlock& block = *line.getBlock();
-    const uint16_t paragraphIndex = block.getParagraphIndex();
-    if (paragraphIndex == 0xFFFF) continue;
-
-    // Only the line carrying the paragraph's final word gets a bubble. The old
-    // "last line with this paragraphIndex on this page" test also matched the
-    // line before a page break, so a paragraph split across pages showed a
-    // bubble at the bottom of BOTH pages. paragraphFinal is stored with the line,
-    // so cached pages answer this without the next page being built.
-    if (!block.isParagraphFinal()) continue;
-
-    const uint16_t total = commentTotalFor(paragraphIndex);
-    if (total == 0) continue;
-
-    char label[12];
-    snprintf(label, sizeof(label), "%u", static_cast<unsigned>(total));
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
-    const int lineHeight = baseLineHeight + block.getRubyShift(ascender);
-
-    const int lineTop = top + line.yPos;
-
-    int lineEnd = left + line.xPos;
-    if (block.wordCount() > 0) {
-      const uint16_t lastWord = block.wordCount() - 1;
-      lineEnd += block.wordXpos(lastWord) +
-                 renderer.getTextWidth(fontId, block.wordText(lastWord), block.wordStyle(lastWord));
-    }
-
-    // Placement rule: the badge always starts AFTER the last glyph of the final
-    // line and stays inside that line's own vertical band. That makes overlap with
-    // text structurally impossible -- the old code instead demanded the badge fit
-    // inside the content column, and when it did not (a 38 px pill against a 30 px
-    // margin) it moved the badge into the gap below the line, which is exactly
-    // where the next paragraph starts.
-    //
-    // Only the screen edge can still block it, so the badge degrades in place:
-    // full pill -> count without the pill -> small marker. All three are anchored
-    // at the same x/y, so none of them can drift onto the text.
-    const int screenEdge = screenWidth - 2;
-    int bubbleX = lineEnd + 3;
-    int bubbleW = std::max(numberHeight + 4, textWidth + 8);
-    int bubbleH = std::min(numberHeight + 4, std::max(1, lineHeight - 2));
-    uint8_t style = 0;
-    const char* placement = "pill";
-    if (bubbleX + bubbleW > screenEdge) {
-      const int digitsW = textWidth + 2;
-      if (bubbleH >= numberHeight && bubbleX + digitsW <= screenEdge) {
-        bubbleW = digitsW;
-        style = 1;
-        placement = "digits";
-      } else {
-        // A full line with a wide count leaves no room for the number at all.
-        // A small marker still fits (14 px needs only lineEnd <= 665), and the
-        // exact count stays visible in the panel's header.
-        bubbleW = std::min(kCommentMarkerSize, screenEdge - bubbleX);
-        bubbleH = std::min(kCommentMarkerSize, std::max(1, lineHeight - 2));
-        style = 2;
-        placement = "marker";
-      }
-    }
-    int bubbleY = lineTop + (lineHeight - bubbleH) / 2;
-    if (bubbleY + bubbleH > contentBottom) bubbleY = contentBottom - bubbleH;
-    if (bubbleY < top) bubbleY = top;
-    if (bubbleY + bubbleH > contentBottom || bubbleY < 0) continue;
-    if (style != 0) {
-      LOG_INF("ERS", "comment bubble placement=%s para=%u lineEnd=%d contentR=%d count=%u %dx%d at %d,%d", placement,
-              static_cast<unsigned>(paragraphIndex), lineEnd, contentRight, static_cast<unsigned>(total), bubbleW,
-              bubbleH, bubbleX, bubbleY);
-    }
-#ifdef BOARD_HAS_PSRAM
-    if (overlapsText(bubbleX, bubbleY, bubbleW, bubbleH) >= 0) {
-      LOG_ERR("ERS", "comment bubble OVERLAPS text: para=%u placement=%s lineEnd=%d bubble=%d,%d %dx%d",
-              static_cast<unsigned>(paragraphIndex), placement, lineEnd, bubbleX, bubbleY, bubbleW, bubbleH);
-    }
-#endif
-    if (bubbleX < left || bubbleX + bubbleW > screenWidth || bubbleY + bubbleH > contentBottom) continue;
-
-    CommentBubble bubble{};
-    bubble.x = static_cast<int16_t>(bubbleX);
-    bubble.y = static_cast<int16_t>(bubbleY);
-    bubble.w = static_cast<int16_t>(bubbleW);
-    bubble.h = static_cast<int16_t>(bubbleH);
-    bubble.paragraphIndex = paragraphIndex;
-    bubble.total = total;
-    bubble.paragraphId = static_cast<uint32_t>(paragraphIndex);
-    bubble.style = style;
-    out[count++] = bubble;
-  }
-  return count;
-}
-
-void EpubReaderActivity::drawCommentBubbleList(const CommentBubble* bubbles, const int count) const {
-  if (bubbles == nullptr || count <= 0) return;
-  // Fills first, then labels: a fill must never land on a number already drawn.
-  for (int i = 0; i < count; ++i) {
-    const auto& bubble = bubbles[i];
-    if (bubble.style == 2) {
-      // Marker: a small disc in the trailing whitespace. It has no digit, so it
-      // cannot be clipped; the panel header carries the count.
-      renderer.fillRoundedRect(bubble.x, bubble.y, bubble.w, bubble.h, bubble.h / 2, Color::Black);
-      continue;
-    }
-    if (bubble.style == 0) {
-      renderer.fillRoundedRect(bubble.x, bubble.y, bubble.w, bubble.h, bubble.h / 2, Color::Black);
-    }
-  }
-  const int numberHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  for (int i = 0; i < count; ++i) {
-    const auto& bubble = bubbles[i];
-    if (bubble.total == 0 || bubble.style == 2) continue;
-    char label[12];
-    snprintf(label, sizeof(label), "%u", static_cast<unsigned>(bubble.total));
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label);
-    renderer.drawText(SMALL_FONT_ID, bubble.x + (bubble.w - textWidth) / 2,
-                      bubble.y + (bubble.h - numberHeight) / 2, label, /*black=*/bubble.style != 0);
-  }
-}
-
-void EpubReaderActivity::drawCommentBubbles() const { drawCommentBubbleList(commentBubbles_, commentBubbleCount_); }
-
-void EpubReaderActivity::openCommentBubble(const CommentBubble& bubble) {
-  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0' || jjwxcChapterId_ == 0) return;
-  // Opening a comment panel is an interruption, not a page turn: stop auto-turn
-  // and drop any queued turn so coming back does not flip the page underneath
-  // the paragraph the user was reading.
-  automaticPageTurnActive = false;
-  clearPendingTurns();
-  // The panel can bring up Wi-Fi for Refresh even when its first page is
-  // cached. Always give the child the reader's internal-RAM headroom: measured
-  // on the device, a cached open skipped this and the Wi-Fi association failed
-  // at 15.8 KB free / 7.1 KB largest, while the app (opened from a higher-heap
-  // context) connected fine. The cost is one section rebuild on return; the
-  // position is restored via cachedVisibleTextOffset/nextPageNumber.
-  prepareForJjwxcChild();
-  const bool started = startActivityForResultWith<JjwxcCommentActivity>(
-      [this](const ActivityResult&) {
-        {
-          RenderLock lock;
-          // The comment activity brings up Wi-Fi for its first fetch, and
-          // NetworkStartup::prepare() unloads the SD-card font when internal RAM
-          // is tight. Nothing re-enters the reader on resume (ActivityManager
-          // only calls onEnter for a newly pushed activity), so without this the
-          // page would render with the built-in font while the section still
-          // carries SD-font metrics -- "the reader lost my layout until I reopen
-          // the book".
-          sdFontSystem.ensureLoaded(renderer);
-        }
-        requestUpdate();
-      },
-      std::string(jjwxcNovelId_), jjwxcChapterId_, bubble.paragraphId, bubble.paragraphIndex);
-  if (!started) {
-    LOG_ERR("ERS", "OOM: comment activity");
-  }
-}
-
-void EpubReaderActivity::prepareForJjwxcChild() {
-  {
-    // Free the section's internal-RAM word blocks and the page cache before the
-    // app starts Wi-Fi/TLS: the app is a network-bound child and this is the
-    // difference between a handshake that fits and one that stalls. The position
-    // is carried through cachedVisibleTextOffset/nextPageNumber.
-    RenderLock lock;
-    if (section) {
-      rememberCurrentContentOffset();
-      cachedSpineIndex = currentSpineIndex;
-      cachedChapterTotalPageCount = section->pageCount;
-      nextPageNumber = section->currentPage;
-      section.reset();
-    }
-    discardOverlayPage();
-    freePageCache();
-  }
-  // A chip/top-row action starts from the Contents sheet; close it so the child
-  // activity does not open behind a stale sheet snapshot.
-  if (overlay != Overlay::None) closeOverlayToPage();
-}
-
-void EpubReaderActivity::openJjwxcUpdate(const bool currentChapter, const bool returnToContents) {
-  resolveJjwxcBook();
-  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0') return;
-
-  prepareForJjwxcChild();
-  JjwxcActivity::requestDeepLink(jjwxcNovelId_, currentChapter ? JjwxcActivity::DeepLinkAction::UpdateCurrentChapter
-                                                               : JjwxcActivity::DeepLinkAction::UpdateChapterList);
-  const bool started = startActivityForResultWith<JjwxcActivity>([this, returnToContents](const ActivityResult& result) {
-    const auto* jjwxcResult = std::get_if<JjwxcReaderResult>(&result.data);
-    const bool openChapterList =
-        jjwxcResult != nullptr && jjwxcResult->completed &&
-        jjwxcResult->action == JjwxcReaderResult::Action::ChapterList;
-    bool reopened = false;
-    {
-      RenderLock lock;
-      // The app forces Portrait on entry and the reader's SETTINGS did not change,
-      // so its loop would not notice; put the requested orientation back before the
-      // next layout.
-      applyInitialOrientation();
-      appliedOrientation = SETTINGS.orientation;
-      // Same reason as the comment panel: NetworkStartup::prepare() may have
-      // unloaded the SD font while the app was up.
-      sdFontSystem.ensureLoaded(renderer);
-      reopened = reopenBookAfterExternalChange();
-    }
-    if (!reopened) {
-      LOG_ERR("ERS", "Cannot reopen the book after the JJWXC update");
-      if (!handleLoadFailure()) finish();
-      return;
-    }
-    requestUpdate();
-    if (usesToolbarMenu() && (returnToContents || openChapterList)) {
-      // The toolbar's Contents panel is the surface the user came from; the
-      // classic full-screen TOC is a different screen and was the old bug.
-      openContentsPanel(-1);
-    } else if (openChapterList) {
-      onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER);
-    }
-  });
-  if (!started) {
-    LOG_ERR("ERS", "OOM: JJWXC update activity");
-    // Do not let a failed launch run the update on the next ordinary app entry.
-    JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::None);
-  }
-}
-
-void EpubReaderActivity::openJjwxcBookDetail() {
-  resolveJjwxcBook();
-  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0') return;
-
-  prepareForJjwxcChild();
-  JjwxcActivity::requestDeepLink(jjwxcNovelId_, JjwxcActivity::DeepLinkAction::OpenBookDetail);
-  const bool started = startActivityForResultWith<JjwxcActivity>([this](const ActivityResult&) {
-    bool reopened = false;
-    {
-      RenderLock lock;
-      applyInitialOrientation();
-      appliedOrientation = SETTINGS.orientation;
-      sdFontSystem.ensureLoaded(renderer);
-      reopened = reopenBookAfterExternalChange();
-    }
-    if (!reopened) {
-      LOG_ERR("ERS", "Cannot reopen the book after the JJWXC detail page");
-      if (!handleLoadFailure()) finish();
-      return;
-    }
-    requestUpdate();
-  });
-  if (!started) {
-    LOG_ERR("ERS", "OOM: JJWXC book-detail activity");
-    JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::None);
-  }
-}
-
-void EpubReaderActivity::activateJjwxcChapterChip(const int tocIndex) {
-  if (!jjwxcBook_ || tocIndex < 0 || tocIndex >= epub->getTocItemsCount()) return;
-  const auto item = epub->getTocItem(tocIndex);
-  uint32_t ordinal = static_cast<uint32_t>(tocIndex);
-  if (item.spineIndex >= 0) {
-    JjwxcStore::SpineEntry entry;
-    if (JjwxcStore::readSpineEntry(jjwxcNovelId_, static_cast<uint32_t>(item.spineIndex), entry)) {
-      ordinal = entry.ordinal;
-    }
-  }
-  JjwxcStore::TocReader toc;
-  if (!toc.open(jjwxcNovelId_)) return;
-  JjwxcStore::TocRecord rec;
-  const bool ok = toc.read(ordinal, rec);
-  toc.close();
-  if (!ok || rec.chapterId == 0) return;
-  if (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Locked) ||
-      rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::AppOnly))
-    return;
-  const bool purchase = rec.isVip != 0 &&
-                        (rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Unpurchased) ||
-                         rec.state == static_cast<uint8_t>(JjwxcStore::ChapterState::Missing));
-  openJjwxcChapterAction(rec.chapterId, purchase, tocIndex);
-}
-
-void EpubReaderActivity::openJjwxcChapterAction(const uint32_t chapterId, const bool purchase, const int tocIndex) {
-  resolveJjwxcBook();
-  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0' || chapterId == 0) return;
-
-  prepareForJjwxcChild();
-  JjwxcActivity::requestDeepLink(
-      jjwxcNovelId_, purchase ? JjwxcActivity::DeepLinkAction::PurchaseChapter : JjwxcActivity::DeepLinkAction::CacheChapter,
-      chapterId, /*openChapter=*/false);
-  const bool started =
-      startActivityForResultWith<JjwxcActivity>([this, chapterId, tocIndex](const ActivityResult& result) {
-        (void)result;  // a cancelled child still reopens the book and the panel
-        bool reopened = false;
-        {
-          RenderLock lock;
-          applyInitialOrientation();
-          appliedOrientation = SETTINGS.orientation;
-          sdFontSystem.ensureLoaded(renderer);
-          reopened = reopenBookAfterExternalChange();
-        }
-        if (!reopened) {
-          LOG_ERR("ERS", "Cannot reopen the book after the JJWXC chapter action");
-          if (!handleLoadFailure()) finish();
-          return;
-        }
-        int focus = tocIndex;
-        uint32_t ordinal = 0;
-        if (JjwxcStore::findOrdinalForChapter(jjwxcNovelId_, chapterId, ordinal)) focus = static_cast<int>(ordinal);
-        requestUpdate();
-        if (usesToolbarMenu()) openContentsPanel(focus);
-      });
-  if (!started) {
-    LOG_ERR("ERS", "OOM: JJWXC chapter action activity");
-    JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::None);
-  }
-}
 
 bool EpubReaderActivity::reopenBookAfterExternalChange() {
   if (!epub) return false;
@@ -4981,17 +4379,10 @@ bool EpubReaderActivity::reopenBookAfterExternalChange() {
   }
   releaseEmbeddedFont();
 
-  // A title change at the site moves the JJWXC artefact to a new
-  // <title>-<id>.epub path. Re-resolve it from novel.bin before reopening;
-  // otherwise the reader keeps trying the old path (and a cache repackage may
-  // already have removed it).
-  if (jjwxcBook_ && jjwxcNovelId_[0] != '\0') {
-    JjwxcStore::NovelRecord latest;
-    if (JjwxcStore::loadNovel(jjwxcNovelId_, latest)) {
-      const std::string path = JjwxcStore::finalBookPath(latest);
-      if (!path.empty() && Storage.exists(path.c_str())) bookPath = path;
-    }
-  }
+  // A repackage can move the artefact (a title change renames the file). The
+  // source resolves its own path from its own store; with no component linked
+  // this is a no-op and the current path is kept.
+  resolveSourceBookPathAfterRepackage(bookPath);
 
   // A fresh Epub is required: the old object's `decryptor` was opened when the
   // file was still plaintext, so it would keep reading ciphertext as HTML.
@@ -5028,13 +4419,55 @@ bool EpubReaderActivity::reopenBookAfterExternalChange() {
   return true;
 }
 
+bool EpubReaderActivity::contentsFilterable() const {
+#ifdef BOARD_HAS_PSRAM
+  return jjwxcBook_ && epub != nullptr && !jjwxcTocMeta_.empty() &&
+         static_cast<size_t>(epub->getTocItemsCount()) <= jjwxcTocMeta_.size();
+#else
+  return false;
+#endif
+}
+
+void EpubReaderActivity::rebuildContentsRows() {
+  contentsRows_.clear();
+  if (!epub) return;
+  const int n = epub->getTocItemsCount();
+  if (n <= 0) return;
+  bool filter = false;
+#ifdef BOARD_HAS_PSRAM
+  filter = contentsFilterable() && contentsFilter_ != 0;
+#endif
+  contentsRows_.reserve(static_cast<size_t>(n));
+  for (int i = 0; i < n && i < 32000; ++i) {
+#ifdef BOARD_HAS_PSRAM
+    if (filter) {
+      const bool cached =
+          jjwxcTocMeta_[static_cast<size_t>(i)].state == static_cast<uint8_t>(booksource::TocState::Cached);
+      if ((contentsFilter_ == 1 && !cached) || (contentsFilter_ == 2 && cached)) continue;
+    }
+#endif
+    contentsRows_.push_back(static_cast<int16_t>(i));
+  }
+}
+
+int EpubReaderActivity::contentsTocForRow(const int row) const {
+  if (row < 0 || static_cast<size_t>(row) >= contentsRows_.size()) return -1;
+  return contentsRows_[static_cast<size_t>(row)];
+}
+
+int EpubReaderActivity::contentsRowForToc(const int toc) const {
+  for (size_t i = 0; i < contentsRows_.size(); ++i) {
+    if (contentsRows_[i] == toc) return static_cast<int>(i);
+  }
+  return -1;
+}
+
 void EpubReaderActivity::openContentsPanel(const int focusTocIndex) {
   pendingContentsFocus_ = focusTocIndex;
   openOverlay(Overlay::Contents);
 }
-#endif  // BOARD_HAS_PSRAM
 
-// First-run page (refreshed UI frame 16): "body text lives in three zones, the
+// First-run page (Pond v5 frame 16): "body text lives in three zones, the
 // device only has three keys". It is a real page of its own -- white paper,
 // no wash over the body -- and still appears exactly once. Every label comes
 // from an existing StrId; the design's heading and its "no confirm key" line
@@ -5218,7 +4651,7 @@ void EpubReaderActivity::drawGestureHint() {
   // Start button: the same black pill the reader uses for primary actions.
   const int buttonY = h - margin - noteH - 6 - buttonH;
   gestureHintStartRect_ = Rect{margin, buttonY, contentW, buttonH};
-  renderer.fillRoundedRect(margin, buttonY, contentW, buttonH, 12, Color::Black);
+  renderer.fillRoundedRect(margin, buttonY, contentW, buttonH, buttonH / 2, Color::Black);
   {
     const std::string label = renderer.truncatedText(UI_12_FONT_ID, tr(STR_START_READING), contentW - 24);
     const int tw = renderer.getTextWidth(UI_12_FONT_ID, label.c_str(), EpdFontFamily::BOLD);
@@ -6171,7 +5604,7 @@ void EpubReaderActivity::refreshStatusBarClockIfDue() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// refreshed UI frame 05: the type panel is a strict 2x4 grid. Every cell maps to a
+// Pond v5 frame 05: the type panel is a strict 2x4 grid. Every cell maps to a
 // setting that already exists; "paragraph spacing" is the reader's extra
 // paragraph spacing, and "page margin" is screenMargin.
 constexpr StrId kTextRowNames[] = {StrId::STR_FONT,          StrId::STR_FONT_SIZE,      StrId::STR_LINE_SPACING,
@@ -6519,22 +5952,6 @@ void EpubReaderActivity::debugOpenPanel(const int tool) {
   openOverlay(tool == 1 ? Overlay::Contents : tool == 2 ? Overlay::Text : Overlay::More);
 }
 
-void EpubReaderActivity::debugOpenStressComment() {
-#if defined(BOARD_HAS_PSRAM)
-  // Serial-only teardown probe. The stress worker never touches the network or the
-  // novel store, so a placeholder id is fine and lets this run from any book.
-  const std::string novelId = jjwxcNovelId_[0] != '\0' ? std::string(jjwxcNovelId_) : std::string("0");
-  const uint32_t chapterId = jjwxcChapterId_ != 0 ? jjwxcChapterId_ : 1;
-  auto activity = makeUniqueNoThrow<JjwxcCommentActivity>(renderer, mappedInput, novelId, chapterId, 0xFFFFFFFEu,
-                                                          0xFFFF, /*debugFake=*/true, /*debugStress=*/true);
-  if (!activity) return;
-  startActivityForResult(std::move(activity), [this](const ActivityResult&) {
-    RenderLock lock;
-    sdFontSystem.ensureLoaded(renderer);
-    requestUpdate();
-  });
-#endif
-}
 
 void EpubReaderActivity::debugPageTurn(const bool forward) {
   if (!section) return;
@@ -6585,38 +6002,6 @@ void EpubReaderActivity::debugDumpPage() {
 #endif
 }
 
-void EpubReaderActivity::debugOpenFakeJjwxcComment() {
-#if defined(BOARD_HAS_PSRAM)
-  if (!jjwxcBook_ || jjwxcNovelId_[0] == '\0') return;
-  auto activity = makeUniqueNoThrow<JjwxcCommentActivity>(
-      renderer, mappedInput, std::string(jjwxcNovelId_), jjwxcChapterId_ != 0 ? jjwxcChapterId_ : 1, 0xFFFFFFFEu,
-      0xFFFF, /*debugFake=*/true);
-  if (!activity) return;
-  startActivityForResult(std::move(activity), [this](const ActivityResult&) {
-    RenderLock lock;
-    sdFontSystem.ensureLoaded(renderer);
-    requestUpdate();
-  });
-#endif
-}
-
-void EpubReaderActivity::debugOpenJjwxcComment() {
-#if defined(BOARD_HAS_PSRAM)
-  if (!jjwxcBook_) return;
-  if (commentCounts_.empty()) loadJjwxcCommentCounts();
-  for (const auto& entry : commentCounts_) {
-    if (entry.total == 0) continue;
-    CommentBubble bubble{};
-    bubble.paragraphId = entry.paragraphId;
-    bubble.paragraphIndex = static_cast<uint16_t>(entry.paragraphId);
-    bubble.total = entry.total;
-    openCommentBubble(bubble);
-    return;
-  }
-  LOG_INF("ERS", "debug comment: no paragraph with comments on this chapter");
-#endif
-}
-
 void EpubReaderActivity::debugDismissHint() {
   if (!gestureHintVisible) return;
   gestureHintVisible = false;
@@ -6656,6 +6041,15 @@ void EpubReaderActivity::debugActivateContentsRow(const int row) {
   overlay = Overlay::None;
   discardOverlayPage();
   requestUpdate();
+}
+
+void EpubReaderActivity::debugConfirm() {
+  // Text grid: cells 1..4 open their value picker on Confirm, which is the
+  // same path the device takes; nothing else is reproducible from serial.
+  if (overlay == Overlay::Text && panelIndex >= 1 && panelIndex <= 4) {
+    showTextRowPopup(panelIndex);
+    requestUpdate();
+  }
 }
 
 void EpubReaderActivity::openOverlay(Overlay target) {
@@ -6876,24 +6270,14 @@ void EpubReaderActivity::renderOverlay() {
         const int tocIndex = contentsTocForRow(row);
         if (tocIndex < 0 || static_cast<size_t>(tocIndex) >= jjwxcTocMeta_.size()) return {};
         const auto& meta = jjwxcTocMeta_[static_cast<size_t>(tocIndex)];
-        using State = JjwxcStore::ChapterState;
-        switch (static_cast<State>(meta.state)) {
-          case State::Cached:
-            return {meta.isVip ? ReaderToolbarUi::TailBadge::Vip : ReaderToolbarUi::TailBadge::Free,
-                    ReaderToolbarUi::TailAction::Refresh};
-          case State::Missing:
-            // VIP + download means "not cached; acquire". Ownership is unknown
-            // here: the app's price page decides cache-vs-purchase. Known
-            // unpurchased rows become VIP¥ (the app records that state).
-            return {meta.isVip ? ReaderToolbarUi::TailBadge::Vip : ReaderToolbarUi::TailBadge::Free,
-                    ReaderToolbarUi::TailAction::Download};
-          case State::Unpurchased:
-            return {ReaderToolbarUi::TailBadge::VipYen, ReaderToolbarUi::TailAction::None};
-          case State::Locked:
-          case State::AppOnly:
-            return {ReaderToolbarUi::TailBadge::Lock, ReaderToolbarUi::TailAction::None};
-        }
-        return {};
+        static constexpr ReaderToolbarUi::TailBadge kBadge[] = {
+            ReaderToolbarUi::TailBadge::None, ReaderToolbarUi::TailBadge::Free, ReaderToolbarUi::TailBadge::Vip,
+            ReaderToolbarUi::TailBadge::VipYen, ReaderToolbarUi::TailBadge::Lock};
+        static constexpr ReaderToolbarUi::TailAction kAction[] = {
+            ReaderToolbarUi::TailAction::None, ReaderToolbarUi::TailAction::Download,
+            ReaderToolbarUi::TailAction::Refresh, ReaderToolbarUi::TailAction::None};
+        const booksource::RowTail tail = booksource::rowTailFor(meta.state, meta.isVip != 0);
+        return {kBadge[static_cast<size_t>(tail.badge)], kAction[static_cast<size_t>(tail.action)]};
       };
     }
 #endif
@@ -7468,7 +6852,10 @@ void EpubReaderActivity::paintOverlayPopup() {
   RenderLock lock;
   settleOverlayRefresh();
   overlayPopup.render(renderer);
-  pushOverlayRefresh();
+  // Dialog-only presentation: if a 16-level text pass is still open it commits
+  // that front (no GC16 under the dialog, no full-refresh flash); otherwise a
+  // TransientUi push that never inherits a pending GC16 promotion.
+  renderer.presentOverlay();
 }
 
 void EpubReaderActivity::applyReaderTextSettings() {
@@ -8078,3 +7465,39 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
   }
   return localPos;
 }
+
+#if defined(BOARD_HAS_PSRAM) && !defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+// No book-source component is linked. The reader keeps its source hooks as
+// declarations (they are part of its own state machine), but every one of them
+// is inert: no book is recognised, no chrome is drawn and no child activity is
+// started. Behaviour is the same as a firmware built without the feature.
+bool parseJjwxcNovelIdFromPath(const std::string&, char*, size_t) { return false; }
+
+void EpubReaderActivity::resolveJjwxcBook() { jjwxcBookResolved_ = true; }
+void EpubReaderActivity::resolveSourceBookPathAfterRepackage(std::string&) {}
+void EpubReaderActivity::loadJjwxcTocMeta() {}
+void EpubReaderActivity::loadJjwxcCommentCounts() {
+  jjwxcCommentSpine_ = currentSpineIndex;
+  ++commentGeneration_;
+}
+uint16_t EpubReaderActivity::commentTotalFor(uint32_t) const { return 0; }
+int EpubReaderActivity::layoutCommentBubbles(const Page&, int, int, int, int, int, CommentBubble*, int) const {
+  return 0;
+}
+void EpubReaderActivity::drawCommentBubbles() const {}
+void EpubReaderActivity::drawCommentBubbleList(const CommentBubble*, int) const {}
+void EpubReaderActivity::openCommentBubble(const CommentBubble&) {}
+void EpubReaderActivity::drawJjwxcPlaceholderAction(int, int) {
+  jjwxcActionActive_ = false;
+  jjwxcMoreActive_ = false;
+}
+void EpubReaderActivity::drawJjwxcMoreChapters(int) { jjwxcMoreActive_ = false; }
+void EpubReaderActivity::openJjwxcUpdate(bool, bool) {}
+void EpubReaderActivity::openJjwxcBookDetail() {}
+void EpubReaderActivity::activateJjwxcChapterChip(int) {}
+void EpubReaderActivity::openJjwxcChapterAction(uint32_t, bool, int) {}
+void EpubReaderActivity::prepareForJjwxcChild() {}
+void EpubReaderActivity::debugOpenFakeJjwxcComment() {}
+void EpubReaderActivity::debugOpenJjwxcComment() {}
+void EpubReaderActivity::debugOpenStressComment() {}
+#endif

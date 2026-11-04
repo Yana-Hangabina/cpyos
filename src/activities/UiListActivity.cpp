@@ -279,6 +279,7 @@ void UiListActivity::render(RenderLock&&) {
   }
   drawFooter();
   beforeDisplayHook();
+  paintOverlayBeforePresent();
   // Skip a frame whose screen is already on its way out (see InxRecentActivity:
   // the scan, not the draw, is what makes a rapid switch feel stuck).
   if (activityManager.isSwitchPending()) {

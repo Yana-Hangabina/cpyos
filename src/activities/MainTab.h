@@ -21,7 +21,7 @@ struct MainTabLayout {
 
 namespace MainTabs {
 inline constexpr int controlGap = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap : 6;
-// refreshed UI: the status row and the page title are one 80 px mast. The classic
+// Pond v5: the status row and the page title are one 80 px mast. The classic
 // status strip is retired on high-DPI builds; the mast draws the page title on
 // the left and clock/date/battery on the right. Low-DPI themes keep the strip.
 inline constexpr int statusBarHeight = UiHighDpiProfile::enabled ? 0 : 28;

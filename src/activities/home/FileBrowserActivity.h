@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include "components/InlineConfirm.h"
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ class FileBrowserActivity final : public UiListActivity {
   Mode mode = Mode::Books;
   BrowserState browserState = BrowserState::Browsing;
   OptionPopup editPopup;
+  InlineConfirm confirm_;
 
   std::string moveSourcePath;
   std::string moveSourceEntry;
@@ -92,6 +94,7 @@ class FileBrowserActivity final : public UiListActivity {
   // Long-press BACK goes to root; short Back goes up a directory (home/cancel at
   // root), and Confirm activates on RELEASE (a hold is "delete").
   bool handleCustomInput() override;
+  bool paintOverlayBeforePresent() override;
   bool handleButtons() override;
   // Header shows the current folder name (battery indicator via GUI.drawHeader);
   // footer labels depend on path depth and picker mode.

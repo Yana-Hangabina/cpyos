@@ -95,6 +95,11 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Called after the UI canvas is complete and before displayBuffer(); debug
   // snapshot hooks use it to copy what is about to be shown.
   virtual void beforeDisplayHook() {}
+  // Called after the page (and footer) are painted, before the single
+  // presentation step. A host that owns a modal paints it here so a 16-level
+  // page keeps its mid-tones under the scrim -- presenting the dialog in its
+  // own 1-bit push would flatten the whole page for as long as it is open.
+  virtual bool paintOverlayBeforePresent() { return false; }
 
   // --- helpers ---------------------------------------------------------------
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the

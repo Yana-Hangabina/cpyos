@@ -1,4 +1,5 @@
 #include "LanguageSelectActivity.h"
+#include "util/BootLanguage.h"
 
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -112,6 +113,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
     RenderLock lock(*this);
     I18N.setLanguage(language);
   }
+  bootlang::remember(static_cast<uint8_t>(SETTINGS.language));
 
 #ifndef SIMULATOR
   halClock.setUseChinaServers(SETTINGS.contentProfile == CrossPointSettings::ContentProfile::China);

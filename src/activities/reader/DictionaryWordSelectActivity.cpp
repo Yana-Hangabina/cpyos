@@ -1,4 +1,5 @@
 #include "DictionaryWordSelectActivity.h"
+#include "components/StatusCards.h"
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -413,7 +414,7 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     snapshotIdx = -1;
     // drawPopup overlays the framebuffer and refreshes the display itself.
     // I18N.get directly: tr() only accepts literal key names.
-    GUI.drawPopup(renderer, I18N.get(popupMsg));
+    status_card::showMessage(renderer, I18N.get(popupMsg), nullptr);
     return;
   }
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);

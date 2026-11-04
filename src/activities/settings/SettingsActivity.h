@@ -1,5 +1,6 @@
 #pragma once
 #include <I18n.h>
+#include "components/InlineConfirm.h"
 
 #include <array>
 #include <functional>
@@ -214,7 +215,12 @@ class SettingsActivity final : public UiTabListActivity {
   // The settings tabs render as shelf-style capsules (design frame 06).
   bool cpyCapsuleTabs() const override { return true; }
 
+  // Serial screenshot hook: a picker longer than its five-row window, opened at
+  // the last entry so the scrollbar thumb touches the bottom of its track.
+  void debugShowPopupDemo() override;
+
  private:
+  InlineConfirm confirm_;
   int selectedCategoryIndex = 0;  // Currently selected category
   int initialCategory_ = 0;       // Entry tab: the My card opens a category directly
   bool subpage_ = false;          // Opened from My/Search: back header + pop, no root tab
@@ -274,6 +280,7 @@ class SettingsActivity final : public UiTabListActivity {
   void stepTab(int direction) override;
   bool handleButtons() override;
   bool handleCustomInput() override;
+  bool paintOverlayBeforePresent() override;
 
   static std::string settingValueText(const SettingInfo& setting);
   void selectCategory(int categoryIndex);

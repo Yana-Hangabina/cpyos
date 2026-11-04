@@ -1,4 +1,5 @@
 #include "GfxRenderer.h"
+#include "RoundedClip.h"
 
 #include <BidiUtils.h>
 #include <BoardConfig.h>
@@ -1000,7 +1001,48 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
   }
 }
 
+uint8_t GfxRenderer::readRawBit(const int x, const int y) const {
+  int px = 0;
+  int py = 0;
+  rotateCoordinates(orientation, x, y, &px, &py, panelWidth, panelHeight);
+  if (px < 0 || py < 0 || px >= panelWidth || py >= panelHeight) return 0;
+  const uint8_t byte = frameBuffer[static_cast<size_t>(py) * panelWidthBytes + (px >> 3)];
+  return static_cast<uint8_t>((byte >> (7 - (px & 7))) & 1);
+}
+
+void GfxRenderer::writeRawBit(const int x, const int y, const uint8_t bit) const {
+  int px = 0;
+  int py = 0;
+  rotateCoordinates(orientation, x, y, &px, &py, panelWidth, panelHeight);
+  if (px < 0 || py < 0 || px >= panelWidth || py >= panelHeight) return;
+  uint8_t* byte = &frameBuffer[static_cast<size_t>(py) * panelWidthBytes + (px >> 3)];
+  const uint8_t mask = static_cast<uint8_t>(1u << (7 - (px & 7)));
+  *byte = static_cast<uint8_t>((*byte & ~mask) | (bit != 0 ? mask : 0));
+}
+
+uint8_t GfxRenderer::readRawGray(const int x, const int y) const {
+  if (grayscale16Buffer == nullptr) return 0xFF;
+  int px = 0;
+  int py = 0;
+  rotateCoordinates(orientation, x, y, &px, &py, panelWidth, panelHeight);
+  if (px < 0 || py < 0 || px >= panelWidth || py >= panelHeight) return 0xFF;
+  const uint8_t byte = grayscale16Buffer[static_cast<size_t>(py) * (panelWidth / 2) + (px / 2)];
+  return static_cast<uint8_t>((byte >> ((px & 1) * 4)) & 0x0F);
+}
+
+void GfxRenderer::writeRawGray(const int x, const int y, const uint8_t level) const {
+  if (grayscale16Buffer == nullptr) return;
+  int px = 0;
+  int py = 0;
+  rotateCoordinates(orientation, x, y, &px, &py, panelWidth, panelHeight);
+  if (px < 0 || py < 0 || px >= panelWidth || py >= panelHeight) return;
+  uint8_t* byte = &grayscale16Buffer[static_cast<size_t>(py) * (panelWidth / 2) + (px / 2)];
+  const unsigned shift = (px & 1) * 4;
+  *byte = static_cast<uint8_t>((*byte & ~(0x0Fu << shift)) | ((level & 0x0F) << shift));
+}
+
 namespace {
+
 
 bool isEmojiBaseCp(const uint32_t cp) {
   return (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF) ||
@@ -1796,6 +1838,88 @@ void GfxRenderer::fillRectDither(const int x, const int y, const int width, cons
   }
 }
 
+void GfxRenderer::fillRectScrim(const int x, const int y, const int width, const int height) const {
+  if (width <= 0 || height <= 0) return;
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
+
+  const int screenW = getScreenWidth();
+  const int screenH = getScreenHeight();
+  const int lx0 = std::max({0, x, clipLeft_});
+  const int ly0 = std::max({0, y, clipTop_});
+  const int lx1 = std::min({screenW, x + width, clipRight_});
+  const int ly1 = std::min({screenH, y + height, clipBottom_});
+  if (lx0 >= lx1 || ly0 >= ly1) return;
+
+  int paX, paY, pbX, pbY;
+  rotateCoordinates(orientation, lx0, ly0, &paX, &paY, panelWidth, panelHeight);
+  rotateCoordinates(orientation, lx1 - 1, ly1 - 1, &pbX, &pbY, panelWidth, panelHeight);
+  const int phyX0 = std::min(paX, pbX);
+  const int phyX1 = std::max(paX, pbX);
+  int phyY0 = std::min(paY, pbY);
+  int phyY1 = std::max(paY, pbY);
+
+  uint8_t* target = getWriteTarget();
+  const int originY = getWriteOriginY();
+  const int writeRows = getWriteRows();
+  phyY0 = std::max(phyY0, originY);
+  phyY1 = std::min(phyY1, originY + writeRows - 1);
+  if (phyY0 > phyY1) return;
+
+  const int byteStart = phyX0 >> 3;
+  const int byteEnd = phyX1 >> 3;
+  const uint8_t headMask = static_cast<uint8_t>(0xFFu >> (phyX0 & 7));
+  const uint8_t tailMask = static_cast<uint8_t>(0xFFu << (7 - (phyX1 & 7)));
+  const int32_t stride = static_cast<int32_t>(panelWidthBytes);
+
+  // 12.5 % in PHYSICAL space: ONE black pixel per 8-px run on every row, with
+  // the dot shifted half a run on odd rows, so the result is a single-pixel
+  // diagonal lattice rather than dashed horizontal lines. Density does not
+  // depend on rotation.
+  uint8_t whiteMasks[2] = {static_cast<uint8_t>(0xFFu & ~(1u << 7)), static_cast<uint8_t>(0xFFu & ~(1u << 3))};
+
+  const bool gray = grayscale16Buffer != nullptr;
+  const int grayStride = panelWidth / 2;
+  constexpr uint8_t kGrayLevel = 13;  // 13/15 ≈ 87 % white ≈ 12.5 % black
+
+  for (int py = phyY0; py <= phyY1; ++py) {
+    const uint8_t pattern = whiteMasks[py & 1];
+    // Darken, never replace: framebuffer bit 1 is white, so ANDing with the
+    // pattern adds the lattice's black dots and keeps every black pixel the
+    // page already had. (Filling the pattern's white bits would erase 7/8 of
+    // the page -- the "scrim" must dim what is there, not paint over it.)
+    uint8_t* row = target + static_cast<int32_t>(py - originY) * stride;
+    if (byteStart == byteEnd) {
+      const uint8_t keepMask = static_cast<uint8_t>(pattern | ~(headMask & tailMask));
+      row[byteStart] &= keepMask;
+    } else {
+      row[byteStart] &= static_cast<uint8_t>(pattern | ~headMask);
+      if (byteEnd > byteStart + 1) {
+        for (int i = byteStart + 1; i < byteEnd; ++i) row[i] &= pattern;
+      }
+      row[byteEnd] &= static_cast<uint8_t>(pattern | ~tailMask);
+    }
+    if (gray) {
+      uint8_t* grow = grayscale16Buffer + static_cast<size_t>(py) * grayStride;
+      // 16-level front: keep the darker of the two levels, so the page's
+      // mid-tones survive under the scrim instead of being flattened to 221.
+      const auto darken = [](uint8_t& packed, const bool high) {
+        const unsigned shift = high ? 4 : 0;
+        const uint8_t current = static_cast<uint8_t>((packed >> shift) & 0x0F);
+        if (current > kGrayLevel) {
+          packed = static_cast<uint8_t>((packed & ~(0x0Fu << shift)) | (kGrayLevel << shift));
+        }
+      };
+      const int firstByte = phyX0 >> 1;
+      const int lastByte = phyX1 >> 1;
+      for (int i = firstByte; i <= lastByte; ++i) {
+        const int x0 = i * 2;
+        if (x0 >= phyX0 && x0 <= phyX1) darken(grow[i], false);
+        if (x0 + 1 >= phyX0 && x0 + 1 <= phyX1) darken(grow[i], true);
+      }
+    }
+  }
+}
+
 template <Color C>
 void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const int height) const {
   if constexpr (C == Color::Clear) return;
@@ -2107,6 +2231,79 @@ void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const 
       }
     }
   }
+}
+
+GfxRenderer::RoundedClipScope::RoundedClipScope(const GfxRenderer& r, const int x, const int y, const int width,
+                                                const int height, const int radius)
+    : renderer_(r), previous_(r.getClipRect()), x_(x), y_(y), width_(width), height_(height), radius_(radius) {
+  const int x0 = std::max(x, previous_[0]);
+  const int y0 = std::max(y, previous_[1]);
+  const int x1 = std::min(x + width, previous_[0] + previous_[2]);
+  const int y1 = std::min(y + height, previous_[1] + previous_[3]);
+
+  // Degenerate shapes and radii beyond the wedge budget still get the plain
+  // rectangular clip: content is bounded, it just is not corner-masked.
+  if (radius < 1 || width < radius * 2 || height < radius * 2 || radius > kMaxRadius || r._stripActive) {
+    renderer_.setClipRect(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
+    return;
+  }
+
+  renderer_.setClipRect(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
+
+  const int screenW = renderer_.getScreenWidth();
+  const int screenH = renderer_.getScreenHeight();
+  int n = 0;
+  bool overflow = false;
+  for (int corner = 0; corner < 4; ++corner) {
+    for (int dy = 0; dy < radius; ++dy) {
+      for (int dx = 0; dx < radius; ++dx) {
+        if (!rounded_clip::wedgePixel(dx, dy, radius)) continue;
+        int px = 0;
+        int py = 0;
+        rounded_clip::cornerPixel(corner, dx, dy, x, y, width, height, &px, &py);
+        if (px < 0 || py < 0 || px >= screenW || py >= screenH) continue;
+        if (n >= kMaxWedge) {
+          overflow = true;
+          break;
+        }
+        ink_[n] = renderer_.readRawBit(px, py);
+        gray_[n] = renderer_.readRawGray(px, py);
+        ++n;
+      }
+      if (overflow) break;
+    }
+    if (overflow) break;
+  }
+  count_ = n;
+  // A short buffer would restore only part of the corners, which looks worse
+  // than the plain rectangular clip. Keep the clip, skip the restore.
+  active_ = !overflow;
+}
+
+GfxRenderer::RoundedClipScope::~RoundedClipScope() {
+  if (active_ && count_ > 0) {
+    // Restore through a full-screen clip: the saved pixels may sit outside the
+    // intersection this scope installed, and they must land exactly as saved.
+    renderer_.setClipRect(0, 0, 32767, 32767);
+    const int screenW = renderer_.getScreenWidth();
+    const int screenH = renderer_.getScreenHeight();
+    int n = 0;
+    for (int corner = 0; corner < 4 && n < count_; ++corner) {
+      for (int dy = 0; dy < radius_ && n < count_; ++dy) {
+        for (int dx = 0; dx < radius_ && n < count_; ++dx) {
+          if (!rounded_clip::wedgePixel(dx, dy, radius_)) continue;
+          int px = 0;
+          int py = 0;
+          rounded_clip::cornerPixel(corner, dx, dy, x_, y_, width_, height_, &px, &py);
+          if (px < 0 || py < 0 || px >= screenW || py >= screenH) continue;
+          renderer_.writeRawBit(px, py, ink_[n]);
+          if (gray_[n] != 0xFF) renderer_.writeRawGray(px, py, gray_[n]);
+          ++n;
+        }
+      }
+    }
+  }
+  renderer_.setClipRect(previous_[0], previous_[1], previous_[2], previous_[3]);
 }
 
 template <Color color>
@@ -2526,6 +2723,17 @@ bool GfxRenderer::commitGrayscale16(bool clean) const {
     nextRefreshOverrideFromGray = true;
   }
   return committed;
+}
+
+void GfxRenderer::presentOverlay() const {
+  // A 16-level pass is still open: the page and the overlay are both in the
+  // 4bpp front, so one gray commit presents them together. No GC16, no flash,
+  // and the page keeps its anti-aliasing while the dialog is up.
+  if (grayscale16Buffer != nullptr) {
+    commitGrayscale16(false);
+    return;
+  }
+  displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
 void GfxRenderer::cancelGrayscale16() const {
@@ -3122,6 +3330,14 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
   // Source of a GC16, for CMD:PUSHSTATS (see RenderStats).
   enum : uint8_t { kFullCaller, kFullOverride, kFullCadence, kFullLocalFallback } fullSource = kFullCaller;
   if (refreshMode != HalDisplay::FULL_REFRESH) fullSource = kFullCadence;
+  // An overlay push (dialog / wait / toast) covers a page that is still on the
+  // glass. Promoting it to the GC16 the previous 16-level commit left behind
+  // would flash the whole page black underneath the dialog; that page's own
+  // next Normal push still performs the sweep. A caller-requested sweep
+  // (screen repair) is not fromGray and is honoured as before.
+  if (context == DisplayRefreshContext::TransientUi && nextRefreshOverridePending && nextRefreshOverrideFromGray) {
+    nextRefreshOverridePending = false;
+  }
   if (nextRefreshOverridePending) {
     effectiveRefreshMode = nextRefreshOverride;
     nextRefreshOverridePending = false;
@@ -3326,6 +3542,11 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
 
 void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, DisplayRefreshContext context) const {
   HalDisplay::RefreshMode effectiveRefreshMode = refreshMode;
+  // Same rule as displayBuffer(): an overlay push never inherits a 16-level
+  // page's GC16 promotion (it would flash the page under the dialog).
+  if (context == DisplayRefreshContext::TransientUi && nextRefreshOverridePending && nextRefreshOverrideFromGray) {
+    nextRefreshOverridePending = false;
+  }
   if (nextRefreshOverridePending) {
     effectiveRefreshMode = nextRefreshOverride;
     nextRefreshOverridePending = false;

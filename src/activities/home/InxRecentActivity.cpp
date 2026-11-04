@@ -24,9 +24,7 @@
 #include "util/BookCoverLoader.h"
 #include "util/ReadingStatsAnalytics.h"
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcActivity.h"
-#include "activities/apps/jjwxc/JjwxcStore.h"
-#include "activities/apps/jjwxc/JjwxcUpdates.h"
+#include "booksource/BookSource.h"
 #endif
 
 namespace {
@@ -37,7 +35,8 @@ void drawMaskIcon(const GfxRenderer& renderer, const freeink::Icon& icon, const 
   renderer.drawMaskAA(icon.bits, icon.w, icon.h, x, y, size, size, true, true);
 }
 
-const char* sourceLabelForPath(const std::string& path) {  if (path.rfind("/JJWXC/", 0) == 0) return I18N.get(StrId::STR_SOURCE_JJWXC);
+const char* sourceLabelForPath(const std::string& path) {
+  if (booksource::badgeForPath(path.c_str()) != nullptr) return I18N.get(StrId::STR_SOURCE_JJWXC);
   if (path.rfind("/WeRead/", 0) == 0 || path.rfind("/WEREAD/", 0) == 0) return I18N.get(StrId::STR_SOURCE_WEREAD);
   return I18N.get(StrId::STR_SOURCE_LOCAL);
 }
@@ -54,7 +53,7 @@ std::string relativeDayLabel(const uint32_t timestamp) {
   return buf;
 }
 
-// wave progress: a thin sine baseline, a solid 10 px band over the read
+// Pond wave progress: a thin sine baseline, a solid 10 px band over the read
 // portion, and a short marker at the boundary. Drawing it per pixel keeps the
 // wave crisp on the 1-bit panel; the line is only ~600 px wide.
 void drawWaveProgress(const GfxRenderer& renderer, const Rect rect, const int percent) {
@@ -146,13 +145,9 @@ void InxRecentActivity::onExit() {
 InxRecentActivity::CachedChapterInfo InxRecentActivity::readChapterInfo(const RecentBook& book) const {
   CachedChapterInfo info;
 #ifdef BOARD_HAS_PSRAM
-  char novelId[32] = {};
-  if (!jjwxcUpdates::novelIdFromPath(book.path.c_str(), novelId, sizeof(novelId))) return info;
-  JjwxcStore::TocSummary summary;
-  uint32_t highest = 0;
-  if (!JjwxcStore::readTocSummary(novelId, summary, highest)) return info;
-  info.cached = summary.readable;
-  info.total = summary.count;
+  bool readable = false;
+  if (!booksource::cachedChapterSummary(book.path.c_str(), info.total, readable)) return info;
+  info.cached = readable ? 1u : 0u;
 #endif
   return info;
 }
@@ -411,7 +406,7 @@ InxRecentActivity::DashLayout InxRecentActivity::dashboardLayout(const Rect& con
 
 bool InxRecentActivity::syncRowVisible() const {
 #ifdef BOARD_HAS_PSRAM
-  return jjwxcUpdates::sessionPresent();
+  return booksource::sessionPresent();
 #else
   return false;
 #endif
@@ -506,25 +501,32 @@ void InxRecentActivity::dashboardActivate(const int index) {
 
 void InxRecentActivity::checkJjwxcUpdates() {
 #ifdef BOARD_HAS_PSRAM
-  if (syncInFlight_ || !jjwxcUpdates::sessionPresent()) return;
+  if (syncInFlight_ || !booksource::sessionPresent()) return;
   // Same constraint as the shelf's sync button: the online shelf walk may only
   // run in the app's PSRAM-stacked worker (a failed handshake on this task can
   // freeze it for ~60 s), so the app is started as a child and returns here.
   syncInFlight_ = true;
-  JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::RefreshUpdates);
-  const bool started = startActivityForResultWith<JjwxcActivity>([this](const ActivityResult& result) {
+  booksource::ISource* source = booksource::active();
+  if (source == nullptr) {
     syncInFlight_ = false;
-    jjwxcUpdates::invalidate();
-    const auto* jjwxcResult = std::get_if<JjwxcReaderResult>(&result.data);
-    const bool completed = jjwxcResult != nullptr && jjwxcResult->completed;
-    LOG_INF("HOME", "JJWXC update check %s", completed ? "ok" : "failed");
+    return;
+  }
+  source->requestAppLink({booksource::AppAction::RefreshUpdates});
+  std::unique_ptr<Activity> app = source->newAppActivity(renderer, mappedInput);
+  if (!app) {
+    syncInFlight_ = false;
+    source->requestAppLink({booksource::AppAction::None});
+    LOG_ERR("HOME", "OOM: source update check activity");
+    return;
+  }
+  startActivityForResult(std::move(app), [this](const ActivityResult& result) {
+    syncInFlight_ = false;
+    booksource::invalidateUpdates();
+    const auto* sourceResult = std::get_if<booksource::AppResult>(&result.data);
+    const bool completed = sourceResult != nullptr && sourceResult->completed;
+    LOG_INF("HOME", "source update check %s", completed ? "ok" : "failed");
     requestUpdate(true);
   });
-  if (!started) {
-    syncInFlight_ = false;
-    JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::None);
-    LOG_ERR("HOME", "OOM: JJWXC update check activity");
-  }
 #endif
 }
 
@@ -626,7 +628,7 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
       drawPill(tr(STR_NOT_FINISHED));
     }
 #ifdef BOARD_HAS_PSRAM
-    const auto updateGap = jjwxcUpdates::gapForPath(book.path.c_str());
+    const auto updateGap = booksource::updateGapForPath(book.path.c_str());
     if (updateGap.known && updateGap.newChapters > 0) {
       char tail[40];
       std::snprintf(tail, sizeof(tail), I18N.get(StrId::STR_JJWXC_HAS_NEW_FMT),
@@ -643,7 +645,8 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     const int barX = textX;
     const int barW = std::max(1, cardRight - textX);
     const int actionY = rects.firstCard.y + 214;
-    renderer.fillRoundedRect(barX, actionY, barW, kActionH, 12, Color::Black);
+    // Primary action shape is a capsule everywhere (h/2), not a 12 px rounded bar.
+    renderer.fillRoundedRect(barX, actionY, barW, kActionH, kActionH / 2, Color::Black);
     const int resumeY = actionY + (kActionH - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     const char* resumeLabel = tr(STR_CONTINUE_READING);
     renderer.drawText(UI_10_FONT_ID, barX + 24, resumeY, resumeLabel, false, EpdFontFamily::BOLD);

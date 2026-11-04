@@ -300,6 +300,7 @@ void ReadingStatsActivity::onExit() {
 }
 
 void ReadingStatsActivity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   const int bookCount = static_cast<int>(READING_STATS.getBooks().size());
   const int selectableCount = bookCount + 1;
   const int pageItems = BOOKS_PER_PAGE;
@@ -439,17 +440,16 @@ void ReadingStatsActivity::confirmRemoveSelectedBook() {
 
   const ReadingBookStats selectedBook = books[bookIndex];
   const int currentSelection = selectedIndex;
-  startActivityForResultWith<ConfirmationActivity>(
-      [this, selectedBook, currentSelection](const ActivityResult& result) {
-        if (!result.isCancelled && READING_STATS.removeBook(selectedBook.path)) {
-          const int bookCount = static_cast<int>(READING_STATS.getBooks().size());
-          selectedIndex = InxStatisticsGeometry::clampView(currentSelection, bookCount);
-        }
-
-        guardBackReturn();
-        requestUpdate(true);
-      },
-      tr(STR_DELETE_STATS_ENTRY), getBookTitle(selectedBook));
+  confirm_.ask(tr(STR_DELETE_STATS_ENTRY), getBookTitle(selectedBook).c_str(), tr(STR_DELETE),
+               [this, selectedBook, currentSelection] {
+                 if (READING_STATS.removeBook(selectedBook.path)) {
+                   const int bookCount = static_cast<int>(READING_STATS.getBooks().size());
+                   selectedIndex = InxStatisticsGeometry::clampView(currentSelection, bookCount);
+                 }
+                 guardBackReturn();
+                 requestUpdate(true);
+               });
+  requestUpdate();
 }
 
 void ReadingStatsActivity::guardBackReturn() {
@@ -475,6 +475,10 @@ void ReadingStatsActivity::prepareVisibleCover() {
 bool ReadingStatsActivity::usesInxLayout() const { return UITheme::getInstance().hasMainTabs(); }
 
 void ReadingStatsActivity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
   if (waitingForCoverRender) {
     const auto& books = READING_STATS.getBooks();
     const int bookIndex = selectedIndex == 0 ? 0 : selectedIndex - 1;

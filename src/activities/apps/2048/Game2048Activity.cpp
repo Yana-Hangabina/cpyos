@@ -73,6 +73,7 @@ void Game2048Activity::onExit() {
 }
 
 void Game2048Activity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (saveDebouncer_.consumeIfDue(millis())) {
     persistNow();
   }
@@ -161,17 +162,12 @@ void Game2048Activity::handleSlide(Game2048Board::Direction d) {
 }
 
 void Game2048Activity::promptNewGameConfirm() {
-  startActivityForResultWith<ConfirmationActivity>(
-      [this](const ActivityResult& result) {
-        if (result.isCancelled) {
-          requestUpdate();
-          return;
-        }
-        newGame();
-        persistNow();
-        requestUpdate();
-      },
-      tr(STR_2048_CONFIRM_NEW), tr(STR_2048_CONFIRM_BODY));
+  confirm_.ask(tr(STR_2048_CONFIRM_NEW), tr(STR_2048_CONFIRM_BODY), tr(STR_CONFIRM), [this] {
+    newGame();
+    persistNow();
+    requestUpdate();
+  });
+  requestUpdate();
 }
 
 void Game2048Activity::persistNow() {
@@ -187,6 +183,10 @@ void Game2048Activity::persistNow() {
 }
 
 void Game2048Activity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
   renderer.clearScreen();
   drawTitleBar();

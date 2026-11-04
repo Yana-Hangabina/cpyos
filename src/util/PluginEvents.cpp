@@ -1,5 +1,7 @@
 #include "PluginEvents.h"
+#include "components/Toast.h"
 
+#include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -13,6 +15,7 @@
 
 #include "PluginHttp.h"
 #include "PluginLocations.h"
+#include "fontIds.h"
 #include "components/UITheme.h"
 #include "network/ProtectedPaths.h"
 
@@ -391,7 +394,13 @@ bool deliverLine(const DrainManifest& mf, const std::string& lineText, std::stri
   if (status < 200 || status >= 300) return false;
 
   if (renderer && !handler->toast.empty()) {
-    GUI.drawPopup(*renderer, drainSubstituted(handler->toast, token, config, meta, vars, ts, id).c_str());
+    const std::string text = drainSubstituted(handler->toast, token, config, meta, vars, ts, id);
+    // Acknowledgement, not a page: the capsule stays on the panel until the
+    // next repaint. Do not block the event drain for its timeout.
+    Toast toast;
+    toast.show(text.c_str(), millis(), ToastQueue::kDefaultMs * 2);
+    toast.paint(*renderer, SMALL_FONT_ID, 24);
+    renderer->presentOverlay();
   }
   return true;
 }

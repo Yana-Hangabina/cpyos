@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "components/InlineConfirm.h"
 
 #include "activities/Activity.h"
 
@@ -38,6 +39,7 @@ class SdFirmwareUpdateActivity : public Activity {
   bool skipLoopDelay() override { return state == State::UPDATING; }
 
  private:
+  InlineConfirm confirm_;
   State state = State::PICKING;
   bool recoveryMode = false;
 

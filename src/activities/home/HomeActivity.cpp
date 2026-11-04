@@ -1,4 +1,5 @@
 #include "HomeActivity.h"
+#include "components/StatusCards.h"
 
 #include <Bitmap.h>
 #include <Epub.h>
@@ -125,8 +126,6 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
-  bool showingLoading = false;
-  Rect popupRect;
   const bool useFullCover =
       false /* carousel removed with the Lyra themes */;
 
@@ -193,11 +192,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       }
     }
 
-    if (!showingLoading) {
-      showingLoading = true;
-      popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-    }
-    GUI.fillPopupProgress(renderer, popupRect, 10 + currentProgress * (90 / recentBooks.size()));
+    status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr,
+                          10 * (10 + currentProgress * (90 / recentBooks.size())), false, millis());
     std::string generatedPath;
     if (isEpub) {
       {
@@ -208,8 +204,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // Inflate used the old framebuffer bytes. Rebuild a complete, known
       // loading frame before the next progress refresh can reach the panel.
       renderer.clearScreen();
-      popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-      GUI.fillPopupProgress(renderer, popupRect, 10 + currentProgress * (90 / recentBooks.size()));
+      status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr,
+                            10 * (10 + currentProgress * (90 / recentBooks.size())), false, millis());
     } else {
       generatedPath = useFullCover ? BookCoverLoader::ensureFullCover(book.path)
                                    : BookCoverLoader::ensureThumbnail(book.path, coverHeight);

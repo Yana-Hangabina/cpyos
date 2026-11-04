@@ -1,7 +1,6 @@
 .pio
 /.platformio
 /dist
-/_site
 .idea
 .DS_Store
 .vscode
@@ -40,3 +39,6 @@ weread_apikey*.bin
 sdkconfig.sticky
 sdkconfig.x4pro
 flake.*
+
+# Local device-image backups (flashing / rollback copies), never source.
+/artifacts

@@ -1,5 +1,5 @@
 #include "ReaderActivity.h"
-#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#include "booksource/BookSource.h"
 
 #include "EmojiFont.h"
 
@@ -76,7 +76,7 @@ void ReaderActivity::onEnter() {
   // Reading has priority: the background paragraph-comment queue yields at its
   // next request and releases the radio/heap. The reader's own comment panel
   // prefetch is a separate, foreground path.
-  jjwxc_cache_service::setReaderForeground(true);
+  booksource::setReaderForeground(true);
   // The reader is where emoji matter; follow the persisted reader point size.
   // Reloading is a no-op unless the size changed since the last book.
   emoji_font::setPointSize(renderer, SETTINGS.fontPointSize);
@@ -134,7 +134,7 @@ void ReaderActivity::onExit() {
   Activity::onExit();
   // Resume only after the reader has released its fonts/page cache: the service
   // must not compete with the teardown for PSRAM or the radio.
-  jjwxc_cache_service::setReaderForeground(false);
+  booksource::setReaderForeground(false);
 
   // Keep rebuildable font buffers from pinning the heap between reading sessions.
   if (auto* fontCache = renderer.getFontCacheManager()) {

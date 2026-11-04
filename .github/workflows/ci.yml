@@ -132,7 +132,7 @@ jobs:
         # invalidate and remove the default firmware before artifact upload.
         run: |
           set -euo pipefail
-          pio run -e default -e x4pro | tee pio.log
+          pio run -e default -e x4pro -e readpico | tee pio.log
 
       - name: Extract firmware stats
         run: |

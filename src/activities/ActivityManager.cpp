@@ -29,7 +29,7 @@
 #endif
 #ifdef ENABLE_CHINESE_VERSION
 #ifdef BOARD_HAS_PSRAM
-#include "apps/jjwxc/JjwxcActivity.h"
+#include "booksource/BookSource.h"
 #endif
 #include "apps/weread/WeReadActivity.h"
 #endif
@@ -802,7 +802,16 @@ void ActivityManager::goToChineseChess() { replaceActivityWith<ChineseChessMenuA
 #ifdef ENABLE_CHINESE_VERSION
 void ActivityManager::goToWeRead() { replaceActivityWith<WeReadActivity>(); }
 #ifdef BOARD_HAS_PSRAM
-void ActivityManager::goToJjwxc() { replaceActivityWith<JjwxcActivity>(); }
+void ActivityManager::goToJjwxc() {
+  booksource::ISource* source = booksource::active();
+  if (source == nullptr) return;
+  std::unique_ptr<Activity> activity = source->newAppActivity(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: book source activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
 #endif
 #endif
 

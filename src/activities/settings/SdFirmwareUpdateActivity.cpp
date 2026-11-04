@@ -127,14 +127,22 @@ void SdFirmwareUpdateActivity::promptConfirmation() {
     state = State::CONFIRMING;
   }
   // Show "Update firmware?" with the file path as the body line.
-  std::string heading = tr(STR_FIRMWARE_UPDATE_PROMPT);
+  const std::string heading = tr(STR_FIRMWARE_UPDATE_PROMPT);
   // Use the basename only to keep the body short.
   std::string body = firmwarePath;
   const auto pos = body.find_last_of('/');
   if (pos != std::string::npos) body = body.substr(pos + 1);
-
-  startActivityForResultWith<ConfirmationActivity>(
-      [this](const ActivityResult& result) { onConfirmationResult(result); }, heading, body);
+  confirm_.ask(heading.c_str(), body.c_str(), tr(STR_CONFIRM),
+               [this] {
+                 ActivityResult ok;
+                 onConfirmationResult(ok);
+               },
+               [this] {
+                 ActivityResult cancelled;
+                 cancelled.isCancelled = true;
+                 onConfirmationResult(cancelled);
+               });
+  requestUpdate();
 }
 
 void SdFirmwareUpdateActivity::onConfirmationResult(const ActivityResult& result) {
@@ -212,6 +220,7 @@ void SdFirmwareUpdateActivity::performUpdate() {
 }
 
 void SdFirmwareUpdateActivity::loop() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (state == State::FAILED) {
     int x = 0;
     int y = 0;
@@ -229,6 +238,11 @@ void SdFirmwareUpdateActivity::loop() {
 }
 
 void SdFirmwareUpdateActivity::render(RenderLock&&) {
+  if (confirm_.active()) {
+    confirm_.processRender(renderer, mappedInput);
+    return;
+  }
+
   if (!UITheme::getInstance().hasMainTabs()) {
     const auto& metrics = UITheme::getInstance().getMetrics();
     const auto pageWidth = renderer.getScreenWidth();

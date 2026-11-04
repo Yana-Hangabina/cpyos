@@ -1,4 +1,5 @@
 #include "PixelSwitchActivity.h"
+#include "components/StatusCards.h"
 
 #include <Arduino.h>
 #include <I18n.h>
@@ -677,7 +678,7 @@ void PixelSwitchActivity::drawCooldown() const {
   char message[48];
   const uint32_t seconds = (s_rateLimiter.retryAfterMs(millis(), pending_.size()) + 999u) / 1000u;
   snprintf(message, sizeof(message), tr(STR_PIXEL_SWITCH_RATE_LIMIT_FMT), static_cast<unsigned long>(seconds));
-  GUI.drawPopup(renderer, message);
+  status_card::showMessage(renderer, message, nullptr);
 }
 
 void PixelSwitchActivity::render(RenderLock&&) {
@@ -690,13 +691,13 @@ void PixelSwitchActivity::render(RenderLock&&) {
         const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONFIRM), "", "");
         GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       }
-      if (wifiSelectionFailed_) GUI.drawPopup(renderer, tr(STR_WIFI_CONN_FAILED));
+      if (wifiSelectionFailed_) status_card::paintMessage(renderer, tr(STR_WIFI_CONN_FAILED), nullptr);
       break;
     case View::Canvas:
       if (wifiRetryPaused_ || wifiSelectionFailed_) {
         const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_RETRY), "", "");
         GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-        GUI.drawPopup(renderer, tr(STR_WIFI_CONN_FAILED));
+        status_card::paintMessage(renderer, tr(STR_WIFI_CONN_FAILED), nullptr);
       }
       break;
     case View::Palette:

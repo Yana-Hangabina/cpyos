@@ -100,8 +100,24 @@ jobs:
           # tree is still rejected by verify_release_artifacts.py.
           git update-index --assume-unchanged freeink-sdk
 
-      - name: Build Read Pico
-        run: pio run -e readpico
+      - name: Check out the private JJWXC component
+        env:
+          JJWXC_DEPLOY_KEY: ${{ secrets.JJWXC_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$JJWXC_DEPLOY_KEY" ]; then
+            echo "::error::secrets.JJWXC_DEPLOY_KEY is not set; the release must contain the JJWXC app"
+            exit 1
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$JJWXC_DEPLOY_KEY" > "$HOME/.ssh/jjwxc"
+          chmod 600 "$HOME/.ssh/jjwxc"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/jjwxc -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc
+          test -f src/jjwxc/app/JjwxcActivity.cpp
+
+      - name: Build Read Pico (with the private book source)
+        run: pio run -e readpico_jjwxc
 
       - name: Generate data packs
         run: |
@@ -114,13 +130,16 @@ jobs:
           python3 scripts/generate_data_manifest.py
 
       - name: Verify the image and data manifest
-        run: python3 scripts/verify_release_artifacts.py --release
+        run: |
+          python3 scripts/verify_release_artifacts.py --release \
+            --firmware .pio/build/readpico_jjwxc/firmware.bin
 
       - name: Assemble the release bundle
         run: |
           set -euo pipefail
           python3 scripts/build_cpyos_release.py \
             --version "$VERSION" \
+            --build-dir .pio/build/readpico_jjwxc \
             --notes-json "docs/releases/$VERSION.ota.json"
 
       - uses: actions/upload-artifact@v4

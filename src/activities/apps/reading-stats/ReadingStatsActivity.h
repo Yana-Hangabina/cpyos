@@ -1,6 +1,7 @@
 #pragma once
 
 #include "activities/Activity.h"
+#include "components/InlineConfirm.h"
 #include "util/ButtonNavigator.h"
 
 struct ReadingBookStats;
@@ -28,6 +29,7 @@ class ReadingStatsActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  InlineConfirm confirm_;
   void render(RenderLock&&) override;
   void selectMainTabContentEdge(MainTabContentEdge edge) override;
 };

@@ -128,28 +128,33 @@ bool RecentBooksActivity::handleButtons() {
 }
 
 void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
-  auto handler = [this, path](const ActivityResult& res) {
-    if (res.isCancelled) {
-      LOG_DBG("RBA", "Remove from recents cancelled");
-      return;
+  // Inline: the list keeps running; no Activity push and no pause of the shelf.
+  confirm_.ask(tr(STR_REMOVE_FROM_RECENTS), title.c_str(), tr(STR_CONFIRM), [this, path] {
+    if (!RECENT_BOOKS.removeByPath(path)) return;
+    LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
+    // The interaction table still indexes the pre-removal rows; stop routing
+    // touches against it until the next render republishes.
+    closeRouting();
+    loadRecentBooks();
+    if (recentBooks.empty()) {
+      nav.selected = 0;
+    } else if (nav.selected >= listCount()) {
+      nav.selected = listCount() - 1;
     }
-    if (RECENT_BOOKS.removeByPath(path)) {
-      LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
-      // The interaction table still indexes the pre-removal rows; stop routing
-      // touches against it until the next render republishes.
-      closeRouting();
-      loadRecentBooks();
-      if (recentBooks.empty()) {
-        nav.selected = 0;
-      } else if (nav.selected >= listCount()) {
-        nav.selected = listCount() - 1;
-      }
-      nav.follow(listCount());
-      requestUpdate(true);
-    }
-  };
+    nav.follow(listCount());
+    requestUpdate(true);
+  });
+  requestUpdate();
+}
 
-  startActivityForResultWith<ConfirmationActivity>(std::move(handler), tr(STR_REMOVE_FROM_RECENTS), title);
+bool RecentBooksActivity::handleCustomInput() {
+  return confirm_.handleInput(mappedInput, [this] { requestUpdate(); });
+}
+
+bool RecentBooksActivity::paintOverlayBeforePresent() {
+  if (!confirm_.active()) return false;
+  confirm_.paint(renderer);
+  return true;
 }
 
 void RecentBooksActivity::buildScreen(UiScreen& screen) {

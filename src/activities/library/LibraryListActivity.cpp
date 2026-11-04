@@ -1,4 +1,5 @@
 #include "LibraryListActivity.h"
+#include "components/StatusCards.h"
 
 #include <Bitmap.h>
 #include <FreeInkUIIcon.h>
@@ -32,8 +33,7 @@
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
 #ifdef BOARD_HAS_PSRAM
-#include "activities/apps/jjwxc/JjwxcActivity.h"
-#include "activities/apps/jjwxc/JjwxcUpdates.h"
+#include "booksource/BookSource.h"
 #endif
 #include "util/BookCoverLoader.h"
 
@@ -42,7 +42,7 @@ namespace fui = freeink::ui;
 namespace {
 constexpr int SIDE_PADDING = 12;
 constexpr unsigned long LONG_PRESS_MS = 1000;
-// CPY (refreshed UI frame 02): under the shared mast sit a 92px headline row (48px
+// CPY (Pond v5 frame 02): under the shared mast sit a 92px headline row (48px
 // serif page title on the left, shelf count + quiet search/sync actions on the
 // right) and an 80px source tab strip with real counts and a 4px underline
 // under the active tab, closed by the design's 2px rule.
@@ -56,7 +56,7 @@ constexpr int16_t kCpyTouchTarget = 64;  // quiet header actions keep a 64px hit
 // Empty-shelf path rows (frame 15): 112px each, hairline separated.
 constexpr int16_t kCpyEmptyPathHeight = UiHighDpiProfile::enabled ? 112 : 84;
 
-// CPY cover grid (refreshed UI frame 02): 32px side padding, four columns, the
+// CPY cover grid (Pond v5 frame 02): 32px side padding, four columns, the
 // covers at the mockup's 188:250 ratio, a single-line title under each cover
 // and 22px of air before the next row.
 constexpr int16_t kGridSidePad = 32;
@@ -68,7 +68,7 @@ constexpr int16_t kGridTitleGapTop = 8;
 constexpr int16_t kGridRowGapBottom = 22;
 
 // CJK-aware greedy wrap for the coverless placeholder. GfxRenderer's
-// wrappedText only breaks on spaces, and a title like "脆皮鸭用户手册" is a
+// wrappedText only breaks on spaces, and a title like "CrossMux用户手册" is a
 // single word to it — it truncated to "CrossM…" in the grid (sim review,
 // 2026-10-16). Breaks per grapheme, trimming trailing spaces; when the line
 // budget runs out the remainder gets the usual ellipsis.
@@ -513,12 +513,19 @@ void LibraryListActivity::swipeDelete(const int entry) {
 // wants the card to itself, and the render task must not read the index (or
 // the filter) around it.
 void LibraryListActivity::promptRebuildIndex() {
-  RenderLock lock(*this);
-  GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
-  index.close();
-  rebuildIndex();
-  if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot open library index");
-  resetAfterRebuild();
+  // Show the busy card inside the page's own 16-level pass, wait for it to
+  // reach the panel, then rebuild under the render lock while it stays there.
+  // A separate 1-bit card dropped the grid's grayscale covers for the walk.
+  rebuildCard_ = true;
+  activityManager.requestUpdateAndWait();
+  {
+    RenderLock lock(*this);
+    index.close();
+    rebuildIndex();
+    if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot open library index");
+    resetAfterRebuild();
+  }
+  rebuildCard_ = false;
   requestUpdate(true);
 }
 
@@ -527,33 +534,40 @@ void LibraryListActivity::syncShelfAndUpdates() {
   // is what makes a freshly copied book appear. Only then ask the online side.
   promptRebuildIndex();
 #ifdef BOARD_HAS_PSRAM
-  if (!jjwxcUpdates::sessionPresent()) return;
+  if (!booksource::sessionPresent()) return;
   // The app's shelf walk is the only code that may hold a TLS session: it runs
   // on the PSRAM-stacked worker task and gives the heap back before returning
   // (JjwxcActivity::RefreshUpdates). Doing it here would put a handshake on the
   // render task, which is how a 60-second freeze happens when the AP is gone.
   const bool reopenIndex = index.isOpen();
   index.close();
-  JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::RefreshUpdates);
-  const bool started = startActivityForResultWith<JjwxcActivity>([this, reopenIndex](const ActivityResult& result) {
+  booksource::ISource* source = booksource::active();
+  if (source == nullptr) {
+    if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
+    return;
+  }
+  source->requestAppLink({booksource::AppAction::RefreshUpdates});
+  std::unique_ptr<Activity> app = source->newAppActivity(renderer, mappedInput);
+  if (!app) {
+    LOG_ERR("LIB", "OOM: source update check activity");
+    source->requestAppLink({booksource::AppAction::None});
+    if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
+    return;
+  }
+  startActivityForResult(std::move(app), [this, reopenIndex](const ActivityResult& result) {
     swallowHeldReleases();
     if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
     // The snapshot changed underneath us; the badges must re-read the card.
-    jjwxcUpdates::invalidate();
-    const auto* jjwxcResult = std::get_if<JjwxcReaderResult>(&result.data);
-    const bool completed = jjwxcResult != nullptr && jjwxcResult->completed;
-    LOG_INF("LIB", "JJWXC update check %s", completed ? "ok" : "failed");
+    booksource::invalidateUpdates();
+    const auto* sourceResult = std::get_if<booksource::AppResult>(&result.data);
+    const bool completed = sourceResult != nullptr && sourceResult->completed;
+    LOG_INF("LIB", "source update check %s", completed ? "ok" : "failed");
     const char* options[] = {tr(STR_OK_BUTTON)};
     optionPopup.showMessage(tr(STR_LIBRARY),
                             completed ? tr(STR_JJWXC_UPDATES_CHECKED) : tr(STR_JJWXC_UPDATES_FAILED), options, 1, 0,
                             [this](int) { swallowHeldReleases(); });
     requestUpdate(true);
   });
-  if (!started) {
-    LOG_ERR("LIB", "OOM: JJWXC update check activity");
-    JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::None);
-    if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
-  }
 #endif
 }
 
@@ -573,20 +587,11 @@ void LibraryListActivity::resetAfterRebuild() {
 }
 
 void LibraryListActivity::promptRemoveRecentBook(const std::string& path, const std::string& title) {
-  const bool reopenIndex = index.isOpen();
-  index.close();
-  auto confirmation =
-      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_REMOVE_FROM_RECENTS), title);
-  if (!confirmation) {
-    LOG_ERR("LIB", "OOM: recent removal confirmation");
-    if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
-    return;
-  }
-
-  startActivityForResult(std::move(confirmation), [this, path, reopenIndex](const ActivityResult& result) {
+  // Inline: the shelf keeps running and the index stays open, so there is no
+  // close/reopen round-trip and no Activity push.
+  confirm_.ask(tr(STR_REMOVE_FROM_RECENTS), title.c_str(), tr(STR_CONFIRM), [this, path] {
     swallowHeldReleases();
-    if (reopenIndex && !index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
-    if (!result.isCancelled && RECENT_BOOKS.removeByPath(path)) {
+    if (RECENT_BOOKS.removeByPath(path)) {
       resolvePinned();
       closeRouting();
       auto& nav = activeNav();
@@ -598,7 +603,9 @@ void LibraryListActivity::promptRemoveRecentBook(const std::string& path, const 
       }
       nav.followOnBuild = true;
     }
+    requestUpdate(true);
   });
+  requestUpdate();
 }
 
 void LibraryListActivity::promptDeleteBook(const int entry) {
@@ -619,41 +626,28 @@ void LibraryListActivity::promptDeleteBook(const int entry) {
 }
 
 void LibraryListActivity::promptDeleteBookByPath(const std::string& path, const std::string& title) {
-  // The dialog and the delete both want the card; reopen when we resume.
-  index.close();
-  auto confirmation =
-      makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE) + std::string("? "), title);
-  if (!confirmation) {
-    LOG_ERR("LIB", "OOM: delete confirmation");
-    if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
-    return;
-  }
-
-  startActivityForResult(std::move(confirmation), [this, path](const ActivityResult& result) {
+  confirm_.ask((tr(STR_DELETE) + std::string("? ")).c_str(), title.c_str(), tr(STR_DELETE), [this, path] {
     swallowHeldReleases();
+    // Same busy pass as promptRebuildIndex: the card rides the grid's own
+    // grayscale frame instead of pushing a 1-bit card over it.
+    rebuildCard_ = true;
+    activityManager.requestUpdateAndWait();
     {
-      // Same lock rationale as onEnter: the walk wants the card to itself, and
-      // the render task must not read the index (or the filter) around the
-      // rebuild.
+      // The walk wants the card to itself, and the render task must not read
+      // the index (or the filter) around the rebuild.
       RenderLock lock(*this);
-      if (!result.isCancelled) {
-        LOG_DBG("LIB", "deleting %s", path.c_str());
-        clearBookCache(path);
-        if (!Storage.remove(path.c_str())) LOG_ERR("LIB", "cannot delete %s", path.c_str());
-        if (RECENT_BOOKS.removeByPath(path)) RECENT_BOOKS.saveToFile();
-        GUI.drawPopup(renderer, tr(STR_LIBRARY_REBUILDING));
-        rebuildIndex();
-      }
-      if (!index.open(library::libraryIndexPath())) LOG_ERR("LIB", "cannot reopen library index");
-      if (!result.isCancelled) {
-        resetAfterRebuild();
-      }
+      LOG_DBG("LIB", "deleting %s", path.c_str());
+      clearBookCache(path);
+      if (!Storage.remove(path.c_str())) LOG_ERR("LIB", "cannot delete %s", path.c_str());
+      if (RECENT_BOOKS.removeByPath(path)) RECENT_BOOKS.saveToFile();
+      rebuildIndex();
+      resetAfterRebuild();
     }
-    if (!result.isCancelled) {
-      closeRouting();
-      requestUpdate(true);
-    }
+    rebuildCard_ = false;
+    closeRouting();
+    requestUpdate(true);
   });
+  requestUpdate();
 }
 
 void LibraryListActivity::jjwxcSearchTrampoline(void* ctx, const char* query) {
@@ -662,8 +656,10 @@ void LibraryListActivity::jjwxcSearchTrampoline(void* ctx, const char* query) {
 
 void LibraryListActivity::openJjwxcSearch(const char* query) {
 #ifdef BOARD_HAS_PSRAM
-  JjwxcActivity::requestSearchDeepLink(query);
-  activityManager.goToJjwxc();
+  if (booksource::ISource* source = booksource::active()) {
+    source->requestSearch(query);
+    activityManager.goToJjwxc();
+  }
 #endif
 }
 
@@ -937,7 +933,7 @@ void LibraryListActivity::applyFilter() {
       // downloaded to the card) and 本地 (everything else the index picked up).
       path.clear();
       if (!index.readPath(record, path)) continue;
-      const bool isJjwxc = path.rfind("/JJWXC/", 0) == 0;
+      const bool isJjwxc = booksource::badgeForPath(path.c_str()) != nullptr;
       const bool isWeRead = path.rfind("/WeRead/", 0) == 0;
       switch (chipFilter) {
         case SourceChip::Jjwxc:
@@ -1083,7 +1079,7 @@ void LibraryListActivity::appendSourceSuffix(const int entry, std::string& autho
   // a claim this device has no evidence for.
   uint32_t newChapters = 0;
 #ifdef BOARD_HAS_PSRAM
-  if (path.rfind("/JJWXC/", 0) == 0) newChapters = jjwxcUpdates::gapForPath(path.c_str()).newChapters;
+  if (path.rfind("/JJWXC/", 0) == 0) newChapters = booksource::updateGapForPath(path.c_str()).newChapters;
 #endif
   if (newChapters > 0) {
     char tail[48];
@@ -1124,6 +1120,7 @@ bool LibraryListActivity::rowTextFor(const int entry, std::string& title, std::s
 }
 
 bool LibraryListActivity::handleCustomInput() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   if (optionPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
 
   if (lockNextConfirmRelease && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -1433,7 +1430,7 @@ void LibraryListActivity::buildHeader(UiScreen& screen) {
   const auto& theme = screen.theme();
   const bool cpyChrome = UITheme::getInstance().usesCpyLayout();
   if (cpyChrome) {
-    // refreshed UI frame 02: the shared mast (drawn by drawChrome) carries the page
+    // Pond v5 frame 02: the shared mast (drawn by drawChrome) carries the page
     // label, duck, clock and battery. Below it this screen owns a headline row
     // (48px serif title, shelf count, quiet search/sync) and the source tab
     // strip. The fui header is not drawn at all: its bordered action buttons
@@ -1920,7 +1917,7 @@ void LibraryListActivity::buildCoverGrid(UiScreen& screen) {
             } else if (badgePath.rfind("/JJWXC/", 0) == 0) {
               gridSlotSource[slot] = 3;
 #ifdef BOARD_HAS_PSRAM
-              const auto gap = jjwxcUpdates::gapForPath(badgePath.c_str());
+              const auto gap = booksource::updateGapForPath(badgePath.c_str());
               gridSlotNew[slot] = static_cast<uint16_t>(std::min<uint32_t>(gap.newChapters, 999));
 #endif
             } else {
@@ -2434,13 +2431,36 @@ void LibraryListActivity::openEmptyPath(const int index) {
   }
 }
 
+void LibraryListActivity::debugShowConfirmDemo() {
+  confirm_.ask((tr(STR_DELETE) + std::string("? ")).c_str(), "\u957f\u591c\u5c06\u660e.epub", tr(STR_DELETE), [] {});
+  requestUpdate();
+}
+
+void LibraryListActivity::debugRebuildLibrary() { promptRebuildIndex(); }
+
+bool LibraryListActivity::paintOverlayBeforePresent() {
+  if (rebuildCard_) {
+    status_card::paintWait(renderer, tr(STR_LIBRARY_REBUILDING), nullptr, nullptr, -1, false, millis());
+    return true;
+  }
+  if (confirm_.active()) {
+    confirm_.paint(renderer);
+    return true;
+  }
+  if (!optionPopup.isActive()) return false;
+  // Same pass as the page: the grid's 16-level covers stay grey under the
+  // scrim instead of dropping to 1-bit while the row menu is open.
+  optionPopup.render(renderer);
+  return true;
+}
+
 void LibraryListActivity::render(RenderLock&& lock) {
-  if (optionPopup.processRender(renderer, mappedInput)) return;
   // Hit rects belong to one frame: a stale row must never take a tap after the
   // shelf or the empty state changed underneath it.
   emptyPathCount_ = 0;
   emptySourceRect_ = Rect{};
   UiTabListActivity::render(std::move(lock));
+  if (optionPopup.isActive() || confirm_.active()) return;  // painted inside the same pass
   // Grid covers prewarm one per frame, after the frame is already on screen.
   if (bookRowCount() > 0 && usesCoverGrid() && prepareNextGridCover()) return;
   // Empty state: the fui frame drew the chrome and left the content band

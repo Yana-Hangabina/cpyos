@@ -6,7 +6,7 @@
 #include "I18n.h"
 #include "activities/Activity.h"
 
-// refreshed UI frame 10's "搜索设置": a global, read-only search over the setting
+// Pond v5 frame 10's "搜索设置": a global, read-only search over the setting
 // labels and category names. A hit opens that category; the search itself
 // never changes a setting.
 class SettingsSearchActivity final : public Activity {

@@ -1,0 +1,20 @@
+{
+  "en": [
+    "JJWXC support ships as a private component; behaviour is unchanged",
+    "One shared wait / message / toast surface with inline confirms",
+    "Scalable CJK font covers 8105 standard characters",
+    "16-level text and anti-aliased UI icons and lines",
+    "Text settings no longer freeze and gain a 1-bit/16-level preview",
+    "Band refresh and local ghost cleanup across the UI",
+    "This release needs a full install: the language pack changed"
+  ],
+  "zh": [
+    "晋江支持改为私有组件，功能与 0.2.3 一致",
+    "统一等待 / 消息 / Toast 表面，确认框全部内联",
+    "可缩放中文字体覆盖 8105 个通用规范汉字",
+    "正文 16 级灰度，UI 图标与线条抗锯齿",
+    "文字设置不再卡死，新增 1 位 / 16 级预览",
+    "全界面列带刷新与局部残影清理",
+    "语言包有变化，本次需要完整安装"
+  ]
+}

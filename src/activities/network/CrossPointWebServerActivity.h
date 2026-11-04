@@ -11,7 +11,7 @@
 
 // Web server activity states
 enum class WebServerActivityState {
-  TRANSFER_PAGE,     // refreshed UI frame 14: current network + web transfer + rows
+  TRANSFER_PAGE,     // Pond v5 frame 14: current network + web transfer + rows
   MODE_SELECTION,    // Showing NetworkModeSelectionActivity (Join / Calibre / Hotspot)
   WIFI_SELECTION,    // WifiSelectionActivity is active
   AP_STARTING,       // Starting Access Point mode

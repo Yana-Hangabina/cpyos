@@ -683,7 +683,7 @@ void CrossPointWebServerActivity::renderStartingHotspot() const {
   }
 }
 
-// refreshed UI frame 14 (network & transfer). Everything on this page is live:
+// Pond v5 frame 14 (network & transfer). Everything on this page is live:
 // the network card only exists while a link is actually up, and the web card
 // only publishes a URL/QR while the server is running on this page. There is
 // no U-disk row, no 5 GHz claim and no per-source sync timestamp because the

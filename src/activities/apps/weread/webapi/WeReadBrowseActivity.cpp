@@ -1,4 +1,5 @@
 #include "WeReadBrowseActivity.h"
+#include "components/StatusCards.h"
 
 #include <FontCacheManager.h>
 #include <I18n.h>
@@ -470,7 +471,7 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
     bodyReady = drawBody();
   }
   if (!bodyReady) {
-    GUI.drawPopup(renderer, tr(STR_WEREAD_DETAIL_UNAVAILABLE));
+    status_card::paintMessage(renderer, tr(STR_WEREAD_DETAIL_UNAVAILABLE), nullptr);
     return;
   }
 
@@ -685,12 +686,12 @@ void WeReadBrowseActivity::render(RenderLock&&) {
                             operation_.qrUrl());
         renderer.drawCenteredText(UI_10_FONT_ID, qrY + qrSide, tr(STR_WEREAD_SCAN_LOGIN));
       } else {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_CACHING));
+        status_card::paintWait(renderer, tr(STR_WEREAD_CACHING), nullptr, nullptr, -1, false, millis());
       }
       break;
     case State::List: {
       if (pageHeader_.count == 0 && pageItemCount() == 0) {
-        GUI.drawPopup(renderer, tr(STR_WEREAD_BROWSE_EMPTY));
+        status_card::paintMessage(renderer, tr(STR_WEREAD_BROWSE_EMPTY), nullptr);
       } else {
         GUI.drawList(
             renderer, content, pageItemCount(), listSelected_, [this](const int index) { return rowTitle(index); },
@@ -710,7 +711,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       drawDetail(content);
       break;
     case State::Error:
-      GUI.drawPopup(renderer, errorMessage());
+      status_card::paintMessage(renderer, errorMessage(), nullptr);
       break;
   }
 

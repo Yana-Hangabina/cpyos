@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "components/InlineConfirm.h"
 #include <vector>
 
 #include "FontInstaller.h"
@@ -42,6 +43,7 @@ class FontDownloadActivity final : public UiListActivity {
   bool skipLoopDelay() override { return true; }
 
  private:
+  InlineConfirm confirm_;
   enum State {
     WIFI_SELECTION,
     LOADING_MANIFEST,
@@ -138,6 +140,7 @@ class FontDownloadActivity final : public UiListActivity {
   // Non-list states (loading, downloading, complete, error) consume the loop
   // pass here; the group and family lists use the base list protocol.
   bool handleCustomInput() override;
+  bool paintOverlayBeforePresent() override;
 
   void activateSelected();
 

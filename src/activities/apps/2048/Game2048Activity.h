@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "components/InlineConfirm.h"
 
 #include "Game2048Board.h"
 #include "activities/Activity.h"
@@ -18,6 +19,7 @@ class Game2048Activity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  InlineConfirm confirm_;
   void render(RenderLock&&) override;
   void debugGameMove(int direction) override;
   // A slide changes the 4x4 grid only; the title, score and footer bands stay.

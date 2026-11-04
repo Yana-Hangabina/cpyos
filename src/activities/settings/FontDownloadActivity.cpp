@@ -163,35 +163,20 @@ void FontDownloadActivity::onEnter() {
     return;
   }
   if (purpose_ != Purpose::Manage) {
-    auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, tr(STR_CHINESE_FONT_INCOMPLETE),
-                                                                tr(STR_DOWNLOAD_FULL_CHINESE_FONT),
-                                                                ConfirmationActivity::BodyPlacement::PopupTitle);
-    if (!confirmation) {
-      LOG_ERR("FONT", "OOM allocating ConfirmationActivity (%zu bytes)", sizeof(ConfirmationActivity));
-#ifdef ENABLE_CHINESE_VERSION
-      chineseFontPromptShownThisBoot.store(true, std::memory_order_relaxed);
-#endif
-      if (purpose_ == Purpose::ReaderAutoInstall) {
-        finishAutomaticFlow(ExitRoute::ReaderSuppressPrompt);
-      } else {
-        finish();
-      }
-      return;
-    }
 #ifdef ENABLE_CHINESE_VERSION
     chineseFontPromptShownThisBoot.store(true, std::memory_order_relaxed);
 #endif
-    startActivityForResult(std::move(confirmation), [this](const ActivityResult& result) {
-      if (result.isCancelled) {
-        if (purpose_ == Purpose::ReaderAutoInstall) {
-          finishAutomaticFlow(ExitRoute::ReaderSuppressPrompt);
-        } else {
-          finish();
-        }
-      } else {
-        startWifiSelection();
-      }
-    });
+    // Inline two-option ask; the flow continues (or exits) in the callbacks.
+    confirm_.ask(tr(STR_CHINESE_FONT_INCOMPLETE), tr(STR_DOWNLOAD_FULL_CHINESE_FONT), tr(STR_CONFIRM),
+                 [this] { startWifiSelection(); },
+                 [this] {
+                   if (purpose_ == Purpose::ReaderAutoInstall) {
+                     finishAutomaticFlow(ExitRoute::ReaderSuppressPrompt);
+                   } else {
+                     finish();
+                   }
+                 });
+    requestUpdate();
     return;
   }
   startWifiSelection();
@@ -1007,11 +992,19 @@ void FontDownloadActivity::promptDeleteSelectedFamily() {
     return;
   }
 
-  std::string heading = tr(STR_DELETE);
+  const std::string heading = tr(STR_DELETE);
   const auto& family = families_[pendingDeleteFamilyIndex];
-  std::string body = family.name;
-  startActivityForResultWith<ConfirmationActivity>(
-      [this](const ActivityResult& result) { onDeleteConfirmationResult(result); }, heading, body);
+  confirm_.ask(heading.c_str(), family.name.c_str(), tr(STR_DELETE),
+               [this] {
+                 ActivityResult ok;
+                 onDeleteConfirmationResult(ok);
+               },
+               [this] {
+                 ActivityResult cancelled;
+                 cancelled.isCancelled = true;
+                 onDeleteConfirmationResult(cancelled);
+               });
+  requestUpdate();
 }
 
 void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& result) {
@@ -1253,7 +1246,14 @@ void FontDownloadActivity::rebuildFamilyRowItems() {
 
 // --- Input handling ---
 
+bool FontDownloadActivity::paintOverlayBeforePresent() {
+  if (!confirm_.active()) return false;
+  confirm_.paint(renderer);
+  return true;
+}
+
 bool FontDownloadActivity::handleCustomInput() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   if (state_ == GROUP_LIST || state_ == FAMILY_LIST) {
     // The base list protocol (Back/Confirm, touch routing, swipe scroll,
     // button navigation) handles both list states.

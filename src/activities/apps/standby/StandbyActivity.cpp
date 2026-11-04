@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <cstdio>
 
-#include "activities/apps/jjwxc/JjwxcCacheService.h"
+#include "booksource/BookSource.h"
 #include "BackgroundWork.h"
 #include "CrossPointSettings.h"
 #include "NetworkStartup.h"
@@ -136,7 +136,7 @@ void StandbyActivity::onEnter() {
   // saved network and keeps the device awake (BackgroundWork) until the queue
   // finishes or the link fails. From the reader the reader flag is still set,
   // so this is a no-op.
-  jjwxc_cache_service::onStandbyEntered();
+  booksource::onStandby();
   logStandbyWake("enter");
   LOG_DBG("STANDBY", "onEnter free heap=%u", static_cast<unsigned>(ESP.getFreeHeap()));
   phase_ = Phase::Standby;

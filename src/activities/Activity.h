@@ -112,6 +112,18 @@ class Activity {
   virtual void debugForceEmpty() {}
   virtual void debugSetContentsFilter(int) {}
   virtual void debugActivateContentsRow(int) {}
+  // Serial screenshot hook: show the app's waiting surface for a few seconds.
+  virtual void debugShowWaitDemo() {}
+  // Serial screenshot hook: open the activity's inline confirmation.
+  virtual void debugShowConfirmDemo() {}
+  // Serial screenshot hook: show the app's short-error surface.
+  virtual void debugShowMessageDemo() {}
+  // Serial screenshot hook: open a scrollable option picker already scrolled to
+  // its last entry, so the scrollbar's bottom end can be inspected on screen.
+  virtual void debugShowPopupDemo() {}
+  // Serial screenshot hook: run the library's manual rebuild (busy card inside
+  // the page's own grayscale pass).
+  virtual void debugRebuildLibrary() {}
   virtual void debugAreaTest(int) {}
 
   // Start a new activity without destroying the current one

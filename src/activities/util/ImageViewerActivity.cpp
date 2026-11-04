@@ -1,4 +1,5 @@
 #include "ImageViewerActivity.h"
+#include "components/StatusCards.h"
 
 #include <Bitmap.h>
 #include <FsHelpers.h>
@@ -129,8 +130,7 @@ void ImageViewerActivity::onEnter() {
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, 200, false, millis());
   const bool needsPreview = isPng() || isJpeg();
   const bool prepared = !needsPreview || preparePreview();
   const char* bitmapPath = needsPreview ? IMAGE_PREVIEW_PATH : filePath.c_str();
@@ -178,7 +178,7 @@ void ImageViewerActivity::onEnter() {
       const auto labels =
           mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
 
-      GUI.fillPopupProgress(renderer, popupRect, 50);
+      status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, 500, false, millis());
 
       renderer.clearScreen();
       if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0)) {
@@ -319,7 +319,7 @@ void ImageViewerActivity::onExit() {
 
 void ImageViewerActivity::doSetSleepCover(const char* sourcePath, const bool transparent) {
   if (!imageReady) return;
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
 
   const char* preparedPath = sourcePath;
   bool success = true;
@@ -357,7 +357,7 @@ void ImageViewerActivity::doSetSleepCover(const char* sourcePath, const bool tra
 
 void ImageViewerActivity::doSetJpegSleepCover() {
   if (!imageReady) return;
-  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
 
   Storage.remove(SLEEP_IMAGE_PART_PATH);
   bool prepared = false;
@@ -410,7 +410,7 @@ void ImageViewerActivity::commitSleepImage(const bool prepared, const bool trans
 
   Storage.remove(SLEEP_IMAGE_PART_PATH);
   if (success) Storage.remove(SLEEP_IMAGE_BACKUP_PATH);
-  GUI.drawPopup(renderer, success ? tr(STR_DONE) : tr(STR_FAILED_LOWER));
+  status_card::showMessage(renderer, success ? tr(STR_DONE) : tr(STR_FAILED_LOWER), nullptr);
   delay(1000);
 }
 

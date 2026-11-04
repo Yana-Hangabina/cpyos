@@ -27,7 +27,7 @@ constexpr int BUTTON_KEY_HEIGHT = 42;
 constexpr int BUTTON_KEYBOARD_HINT_GAP = 4;
 
 // Candidate strip under the input field. Only the last 128 bytes of committed
-// text ever reach the engine (it looks at most 24 back), matching kiikoread's cap.
+// text ever reach the engine (it looks at most 24 back), matching rpr's cap.
 constexpr size_t PRECEDING_MAX = 128;
 constexpr int STRIP_CELL_PADDING = 16;
 // Was 44: at 297 ppi that is ~3.8 mm, the smallest touch target in the UI
@@ -672,7 +672,7 @@ bool KeyboardEntryActivity::activateValue(const int16_t value, const bool longPr
       if (!out) out = fui::keyboardOutputFor(layer, value);
       if (!out) return false;
       if (chineseMode) {
-        // Space commits the leading candidate, exactly like kiikoread's 选择 key;
+        // Space commits the leading candidate, exactly like rpr's 选择 key;
         // with nothing composing it stays an ordinary space.
         if (value == fui::QWERTY_KEY_SPACE) {
           if (!composition.empty()) return commitCandidateAt(0);
@@ -1382,7 +1382,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   layoutStrip(strip);
   if (!strip.strip.empty()) drawStrip(strip);
 
-  // refreshed UI frame 07: a live result preview above the QWERTY keys. The preview
+  // Pond v5 frame 07: a live result preview above the QWERTY keys. The preview
   // is local-only (the JJWXC search runs in its own app); the row at the bottom
   // says so instead of pretending to merge two result sets.
   if (liveResultsFn_ != nullptr && !chineseMode && !text.empty()) {

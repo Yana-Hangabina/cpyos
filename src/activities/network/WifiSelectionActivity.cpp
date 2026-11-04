@@ -33,7 +33,7 @@ constexpr fui::ActionId ACTION_PROMPT = 3;
 constexpr fui::ActionId ACTION_CANCEL = 4;
 constexpr fui::ActionId ACTION_RETURN = 5;
 
-// --- refreshed UI Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
+// --- Pond v5 Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
 // Units are device px on the 684-wide UI frame: 20 top radius, 2 px border,
 // 48x4 grabber, 54 header, 88 rows, 90 footer. The heights are state
 // properties, not animations: each change is one FULL paint.
@@ -1590,12 +1590,12 @@ void WifiSelectionActivity::renderSheet() {
   } else {
     renderer.clearScreen();
   }
-  // White panel with only the top corners rounded, so the page shows through
-  // the two corner notches; 2 px black border on the top and sides.
+  // Same sheet chrome as the reader panels and the purchase drawer: white body,
+  // only the free (top) corners rounded, one 2 px rule along that free edge and
+  // a grabber. The old side borders made this panel read as a floating card.
   renderer.fillRoundedRect(g.sheet.x, g.sheet.y, g.sheet.width, g.sheet.height, kSheetRadius, true, true, false,
                            false, Color::White);
-  renderer.drawRoundedRect(g.sheet.x, g.sheet.y, g.sheet.width, g.sheet.height, 2, kSheetRadius, true, true, false,
-                           false, true);
+  renderer.fillRect(g.sheet.x, g.sheet.y, g.sheet.width, 2, true);
   renderer.fillRoundedRect(g.sheet.x + g.sheet.width / 2 - kSheetGrabberW / 2, g.sheet.y + kSheetGrabberTop,
                            kSheetGrabberW, kSheetGrabberH, 2, Color::Black);
 
