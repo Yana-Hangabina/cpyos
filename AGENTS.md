@@ -138,3 +138,41 @@ Philosophy: Reading comes first. Lightweight apps, analytics, standby customizat
   `lib/JjwxcApi`、`src/activities/apps/jjwxc`、`src/TlsProbe.*`、`src/JjwxcCacheQueueTest.cpp`；
   0.1.0–0.2.3 的 tag 与 release 已删除，旧资产备份在 `artifacts/legacy-releases/`。
   不可达对象可能仍留在 GitHub 存储与 fork network 中，直到 GitHub GC 或 Support 清理。
+
+## 53. 0.4.0：网页阅读、单一工具抽屉与褪色遮罩
+
+本地 dev 树（`feat/jjwxc`，`cacdf678`）在 0.3.0 之后新增了浏览器合并提交与两次弹窗表面修正。
+本次把它们同步进 public 并发布 **0.4.0**（tag `cpyos-0.4.0`，commit `43f519b4`）。
+
+### 同步范围
+
+- **网页阅读 App**：新增 `lib/WebBrowser/`（URL、HTML 扫描、正文提取、分页、编码、书签/历史）、
+  `src/activities/apps/webbrowser/`、`src/AppCatalog.{h,cpp}`、`test/webbrowser/`（176 项宿主检查 +
+  2 个变异步骤）、`docs/engineering/web-browser.md` 与产品设计文档。
+- **单一工具抽屉**：删除 `AppsMenuActivity`，`MyActivity` 改为 4 列应用网格，入口统一到
+  `AppCatalog`；`AppVisibility` 追加 `WebBrowser = 18`（持久化位不复用），
+  `AppVisibilitySettingsActivity` 改读目录。
+- **弹窗表面**：`GfxRenderer::fillRectScrim` 由加黑点改为**褪色**（保留四分之一墨迹），
+  `BaseTheme::drawModalCardFrame` + `CpyTheme` 的 2 px 实线描边；等待卡/消息卡/选项弹窗共用。
+- **`src/main.cpp` 手工合并**：加入浏览器串口钩子与 `APPS → MyActivity(...,1)`；
+  保留 public 独有的 `OTAPROBE`/`OTAINSTALL`、`STANDBY → goToReaderStandby`、`/BOOKS/test.*` 路径。
+- **i18n**：新增浏览器文案，pack **1672 键 / 334,397 B**；数据分区布局不变
+  （pinyin `0xe70000` / web `0xec6000` / hyphen `0xf00000` / i18n `0xf70000` / emoji `0xfd0000`）。
+  非中英界面必须完整安装或重刷数据分区。
+
+### 构建与发布
+
+- 本地 `readpico`：RAM **91,072 B (27.8%)**、Flash **7,051,026 / 7,536,640 (93.6%)**。
+- 本地 `readpico_jjwxc`：RAM **94,632 B (28.9%)**、Flash **7,342,778 / 7,536,640 (97.4%)**；
+  本地镜像的 `app_desc` 版本仍是共享 `libesp_app_format.a` 的旧串，以 CI 为准。
+- CI Release `41833061263` 成功：`app_desc project=crossmux version=cpyos-0.4.0`（无 `-dirty`），
+  `readpico-firmware.bin` = `readpico-app1.bin` = **7,348,416 B**，
+  sha256 `c4b920f2a8cacd9989320c39429dea0558c18f08539aa93fbf5fe8e97a666acb`，
+  app0 余量 188,224 B；18 个资产。
+- `manifest-upgrade.json` / `manifest-app.json` 同时写 app0 `0x10000` 与 app1 `0x740000`，
+  并写五个数据包；`manifest-install.json` 仍是完整安装语义（bootloader/partition/boot_app0/app0）。
+- **Pages 同 commit 去重**再次出现：release 的 deploy 与 branch Pages 都指向 `43f519b4`，
+  live `latest.json` 停在 0.3.0。按既有做法推送 site-only `a484c042`
+  （静态版本占位改为 0.4.0），Pages run `41838208992` 成功后 live `latest.json` /
+  `ota/readpico.json` 均为 0.4.0，下载清单与站点功能卡同步。
+- 用户明确要求**推送后不再做本地/真机验证**，因此本轮没有刷机；设备仍停留在用户手上的版本。
