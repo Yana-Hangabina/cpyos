@@ -176,3 +176,39 @@ Philosophy: Reading comes first. Lightweight apps, analytics, standby customizat
   （静态版本占位改为 0.4.0），Pages run `41838208992` 成功后 live `latest.json` /
   `ota/readpico.json` 均为 0.4.0，下载清单与站点功能卡同步。
 - 用户明确要求**推送后不再做本地/真机验证**，因此本轮没有刷机；设备仍停留在用户手上的版本。
+
+## 54. 0.5.0：章评、单行阅读器标题栏与界面细节
+
+### 同步范围（dev → public）
+
+- **私有组件**：`src/jjwxc` 已更新并推到 `Yana-Hangabina/cpyos-jjwxc`（commit `aef2b17`，
+  章评与购买抽屉细节）。发布流水线从该仓 clone；公开树仍不包含 `src/jjwxc`。
+- **章评**：阅读器 More / 经典菜单 →「章评」；`paragraphId == 0` 复用 `JjwxcCommentActivity`
+  与 JJD1，缓存 `comments/<chapterId>-0.bin`，不提供写章评。
+- **阅读器**：单行标题栏，进度百分比移到页脚波浪条右端。
+- **工具抽屉**：三列，5 个汉字的「晋江文学城」不再截断。
+- **休眠**：超时休眠即使选了 Quick Resume 也显示正常睡眠画面；`goToSleep()` 会等待 Sleep
+  Activity 真正成为当前页，并在失败时直接画默认睡眠面，避免把旧页面留在屏上。
+- **其他界面**：Wi-Fi 信号格/锁图标在右边距内对齐；等待卡按内容收缩；emoji 子集扩到 250 个
+  码位且字号切换失败时保留旧面；设置选择器箭头、弹窗文字轴与底部留白、购买抽屉禁用按钮和
+  摘要字号修正。
+- **字体资源**：系统 TTF/def 增加 U+2039/U+203A 等箭头别名；emoji TTF 126,512 B；
+  `scripts/build_emoji_subset.py` 与 `scripts/tests/test_emoji_pack.py` 随仓库提交。
+- **README / 官网重写**：只说相对 CrossMux 上游的新增与改进，去掉许可证与设计理念段落；
+  官网只保留功能、界面、设备、刷机与致谢。
+- **i18n**：pack **1675 键 / 334,398 B**，数据分区尾部剩 4,528 B，布局不变；
+  非中英界面必须完整安装或重刷数据分区。
+
+### 构建与发布
+
+- 本地 `readpico`：RAM **91,072 B (27.8%)**、Flash **7,053,898 / 7,536,640**；
+  `readpico_jjwxc`：RAM **94,632 B (28.9%)**、Flash **7,347,550 / 7,536,640**。
+- CI Release `41975232407` 成功，18 个资产；`app_desc project=crossmux version=cpyos-0.5.0`
+  （无 `-dirty`），`readpico-firmware.bin` = `readpico-app1.bin` = **7,353,200 B**，
+  sha256 `d2aa38a5120bdc6e33978d810f21b3fa962653c328a9b70d0c8c0a1fb757eaef`，
+  app0 余 **183,440 B**。
+- `manifest-upgrade.json` / `manifest-app.json` 同时写 app0 `0x10000` 与 app1 `0x740000`，
+  并写五个数据包；`manifest-install.json` 仍是完整安装语义。
+- 分支 Pages 在同一 commit 先部署了 0.4.0，release 的 deploy 被去重；推送 site-only 提交
+  触发 Pages 后，live `latest.json` / `ota/readpico.json` 更新为 0.5.0。
+- 按既有要求，推送后不做本地/真机验证。
