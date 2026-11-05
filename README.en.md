@@ -15,8 +15,6 @@ CPYOS targets the Read Pico only. It keeps what CrossMux already does and rebuil
 - display work tuned for this panel: partial refresh, anti-aliasing and page-turn effects;
 - device OTA and a browser flasher.
 
-> This repository does **not** contain the JJWXC client implementation (`src/jjwxc/`). The public source builds a `readpico` image without JJWXC; release images with JJWXC are built by the release workflow from a private component. Everything else is in this repository.
-
 ## What CPYOS adds over upstream CrossMux
 
 ### UI and interaction
@@ -105,7 +103,7 @@ python3 scripts/generate_data_manifest.py
 
 A build is good when the log contains `[SUCCESS]` and the image's `esp_app_desc.project_name` is `crossmux` or `cpyos` (never `arduino-lib-builder`).
 
-The release target (`readpico_jjwxc`) needs the private component checked out at `src/jjwxc/`; the release workflow does this. Desktop simulator:
+Desktop simulator:
 
 ```bash
 pio run -e simulator_readpico -t run_simulator
@@ -115,7 +113,7 @@ pio run -e simulator_readpico -t run_simulator
 
 - The default branch is `cpyos`; `main` only mirrors upstream.
 - Branch from `cpyos`, build, then merge.
-- Never commit `src/jjwxc/`, accounts, cookies, captured page bodies or device screenshots.
+- Never commit accounts, cookies, captured page bodies or device screenshots.
 - Bug reports: include the device model, CPYOS version, reproduction steps and a redacted serial log.
 
 Upstream sync:

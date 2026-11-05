@@ -81,18 +81,9 @@
         <div class="waterline"></div>
         <svg class="ripple"><use href="#ripple"/></svg>
         <div class="device">
-          <div class="mock-screen mock-hero-screen">
-            <div class="mock-status"><span class="mock-logo">脆皮鸭</span><span>10/26</span></div>
-            <div class="mock-hero">
-              <span class="mock-kicker">上次读到</span>
-              <b>继续阅读</b>
-              <span class="mock-sub">已缓存 · 42%</span>
-              <span class="mock-bar"><i style="width:42%"></i></span>
-            </div>
-            <div class="mock-grid"><span></span><span></span><span></span></div>
-            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
-          </div>
-          <div class="cap"><span>CPYOS / HOME</span><span>684 × 1216</span></div>
+          <img class="device-shot" src="./assets/shots/find.png" width="512" height="910"
+               alt="Read Pico 上的找书页：网页传书、晋江、微信读书、本地与 OPDS">
+          <div class="cap"><span>CPYOS / FIND BOOKS</span><span>684 × 1216</span></div>
         </div>
       </div>
     </div>
@@ -179,41 +170,47 @@
         <div class="no mono">02 / INTERFACE</div>
         <h2 id="screens-title">主要界面。<span>LAYOUT MOCKUPS</span></h2>
       </div>
-      <p class="muted" style="margin:-18px 0 28px;max-width:760px;font-size:13px">以下为排版示意，不含设备上的书籍、账号或网络信息。</p>
+      <p class="muted" style="margin:-18px 0 28px;max-width:760px;font-size:13px">以下为真机截图。Wi-Fi 名称与网页样例使用合成数据，不含设备上的书籍、账号或网络信息。</p>
       <div class="gallery">
         <figure class="shot reveal">
-          <div class="frame"><div class="mock-screen">
-            <div class="mock-status"><span class="mock-logo">脆皮鸭</span><span>10/26</span></div>
-            <div class="mock-hero"><span class="mock-kicker">上次读到</span><b>继续阅读</b><span class="mock-bar"><i style="width:42%"></i></span></div>
-            <div class="mock-grid"><span></span><span></span><span></span></div>
-            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
-          </div></div>
-          <figcaption><b>首页</b>续读、统计与最近阅读。</figcaption>
+          <div class="frame"><img src="./assets/shots/web.png" width="512" height="910" loading="lazy"
+               alt="网页阅读：离线样例的正文按阅读字号重新排版"></div>
+          <figcaption><b>网页阅读</b>正文重排，自动识别中文网页编码。</figcaption>
         </figure>
         <figure class="shot reveal">
-          <div class="frame"><div class="mock-screen">
-            <div class="mock-status"><span class="mock-logo">书架</span><span>全部</span></div>
-            <div class="mock-tabs"><b>全部</b><span>本地</span><span>微信读书</span><span>晋江</span></div>
-            <div class="mock-covers"><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
-          </div></div>
-          <figcaption><b>书架</b>来源、进度与追更共用一套网格。</figcaption>
+          <div class="frame"><img src="./assets/shots/tools.png" width="512" height="910" loading="lazy"
+               alt="我的工具页：三列应用与工具网格"></div>
+          <figcaption><b>工具</b>应用与工具集中在「我的 → 工具」。</figcaption>
         </figure>
         <figure class="shot reveal">
-          <div class="frame"><div class="mock-screen">
-            <div class="mock-status"><span class="mock-logo">阅读</span><span>42%</span></div>
-            <div class="mock-lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="mock-nav"><span>上一页</span><span>菜单</span><span>下一页</span></div>
-          </div></div>
-          <figcaption><b>阅读</b>单行标题栏、正文和页脚波浪。</figcaption>
+          <div class="frame"><img src="./assets/shots/settings.png" width="512" height="910" loading="lazy"
+               alt="设置页：显示分类下的休眠、屏幕与布局选项"></div>
+          <figcaption><b>设置</b>按分类子页组织，修改即时生效。</figcaption>
         </figure>
         <figure class="shot reveal">
-          <div class="frame"><div class="mock-screen">
-            <div class="mock-status"><span class="mock-logo">网页阅读</span><span>3 / 12</span></div>
-            <div class="mock-lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="mock-nav"><span>菜单</span><span>3 / 12</span><span></span></div>
-          </div></div>
-          <figcaption><b>网页阅读</b>正文按阅读字号重新排版。</figcaption>
+          <div class="frame"><img src="./assets/shots/jjwxc.png" width="512" height="910" loading="lazy"
+               alt="晋江文学城主菜单：在线书架、发现、搜索、收藏夹、已下载与缓存队列"></div>
+          <figcaption><b>晋江</b>书架、发现、搜索、收藏夹与账号。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><img src="./assets/shots/browser-menu.png" width="512" height="910" loading="lazy"
+               alt="网页阅读的页面菜单：地址、刷新、书签与访问历史"></div>
+          <figcaption><b>网页阅读</b>正文重排，页面菜单、书签与历史。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><img src="./assets/shots/wifi.png" width="512" height="910" loading="lazy"
+               alt="Wi-Fi 面板：扫描、连接与取消；名称为合成数据"></div>
+          <figcaption><b>Wi-Fi</b>扫描、连接与取消在同一面板；名称为合成数据。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><img src="./assets/shots/wait.png" width="512" height="910" loading="lazy"
+               alt="加载卡：鸭子波浪进度条与取消按钮"></div>
+          <figcaption><b>等待卡</b>加载与缓存共用同一张鸭子进度卡。</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <div class="frame"><img src="./assets/shots/sleep.png" width="512" height="910" loading="lazy"
+               alt="睡眠画面：时钟、月夜与趴在书上的鸭子"></div>
+          <figcaption><b>睡眠</b>待机与深睡画面，自动休眠也会显示。</figcaption>
         </figure>
       </div>
     </div>

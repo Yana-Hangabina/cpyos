@@ -170,47 +170,15 @@ button, input { font: inherit; }
   background: var(--card); box-shadow: var(--shadow);
   transform: rotate(-1.2deg);
 }
-.device img { border-radius: 11px; }
+.device img { width: 100%; height: auto; display: block; border-radius: 11px; }
 .device .cap {
   display: flex; justify-content: space-between; gap: 8px;
   padding: 9px 4px 1px; font-family: var(--mono); font-size: 9px; letter-spacing: .12em; color: var(--muted);
 }
 
-/* Interface structure mockups. These are CSS drawings, never device captures:
-   no book titles, no Wi-Fi SSIDs and no screenshots are shipped. */
-.mock-screen {
-  aspect-ratio: 684 / 1216; display: flex; flex-direction: column; gap: 8px;
-  padding: 11px; overflow: hidden; background: var(--paper); color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: 8px;
-}
-.device .mock-screen { border-radius: 11px; }
-.mock-status {
-  display: flex; justify-content: space-between; align-items: baseline;
-  padding-bottom: 5px; border-bottom: 1px solid var(--line);
-  font-family: var(--mono); font-size: 6px; letter-spacing: .04em; color: var(--muted);
-}
-.mock-logo { font-family: var(--serif); font-size: 11px; font-weight: 600; color: var(--ink); }
-.mock-hero { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
-.mock-kicker { font-family: var(--mono); font-size: 5px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
-.mock-hero b { font-family: var(--serif); font-size: 13px; }
-.mock-sub { font-size: 6px; color: var(--muted); }
-.mock-bar { display: block; height: 4px; overflow: hidden; background: var(--paper-2); border-radius: 2px; }
-.mock-bar i { display: block; height: 100%; background: var(--ink); }
-.mock-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; flex: 1; }
-.mock-grid span, .mock-covers i { display: block; border: 1px solid var(--line); border-radius: 3px; background: var(--card); }
-.mock-covers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; flex: 1; }
-.mock-tabs { display: flex; gap: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--line); font-size: 5.5px; color: var(--muted); }
-.mock-tabs b { color: var(--ink); border-bottom: 1px solid var(--ink); }
-.mock-list { display: flex; flex-direction: column; gap: 4px; flex: 1; }
-.mock-list span { padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 6.5px; }
-.mock-lines { display: flex; flex-direction: column; gap: 5px; flex: 1; padding-top: 4px; }
-.mock-lines i { height: 3px; background: var(--line); border-radius: 2px; }
-.mock-lines i:nth-child(3n) { width: 70%; }
-.mock-nav {
-  display: flex; justify-content: space-between; padding-top: 5px;
-  border-top: 1px solid var(--line); font-family: var(--mono);
-  font-size: 5px; letter-spacing: .02em; color: var(--muted);
-}
+/* Interface gallery. These are real device captures, downscaled; the Wi-Fi
+   list uses synthetic SSIDs and the web page is an offline fixture, so no book
+   titles, account data or real network names are shipped. */
 @media (max-width: 900px) {
   .hero .wrap { grid-template-columns: 1fr; gap: 26px; }
   .device-stage { min-height: 400px; }
@@ -261,7 +229,7 @@ section { padding: 82px 0; border-bottom: 1px solid var(--line); }
 .gallery { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 26px; align-items: start; }
 .shot { margin: 0; }
 .shot .frame { padding: 8px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); }
-.shot img { border-radius: 6px; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 6px; }
 .shot figcaption { margin-top: 13px; font-size: 12px; line-height: 1.65; color: var(--muted); }
 .shot figcaption b { display: block; color: var(--ink); font-weight: 600; font-size: 13px; margin-bottom: 3px; }
 @media (max-width: 980px) { .gallery { grid-template-columns: repeat(3, 1fr); } }

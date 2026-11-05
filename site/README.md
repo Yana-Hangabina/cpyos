@@ -5,8 +5,10 @@ Static GitHub Pages site for 脆皮鸭 CPYOS. It has no build step: `index.html`
 `latest.json`, `ota/readpico.json` and `downloads/<version>/` from the release
 bundle before uploading `_site/`.
 
-The interface section uses CSS-drawn layout mockups. The site ships **no device
-screenshots** and contains no book titles, Wi-Fi SSIDs or account data.
+The interface section uses downscaled device captures. The site ships no
+private data: the Wi-Fi list uses synthetic SSIDs, the web page is the offline
+fixture, and the screens were chosen so no book titles or account information
+appear.
 
 ## Preview
 

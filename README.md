@@ -17,8 +17,6 @@ CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地�
 - 针对这块面板做局部刷新、抗锯齿和翻页效果；
 - 提供设备内 OTA 与网页刷机。
 
-> 本仓库不包含晋江客户端的实现（`src/jjwxc/`）。公开源码可以构建**不含晋江**的 `readpico`；带晋江的发布固件由发布流水线使用私有组件构建。其它功能都在本仓库内。
-
 ## 相对 CrossMux 上游的新增与改进
 
 ### 界面与交互
@@ -95,7 +93,7 @@ bash patches/freeink-sdk/apply.sh
 bash patches/freeink-sdk-cff/apply.sh
 python3 scripts/patch_pioarduino_cache.py --prepare-platform
 
-# 不含晋江的公开构建
+# 构建 Read Pico
 pio run -e readpico
 
 # 生成数据分区内容
@@ -108,7 +106,7 @@ python3 scripts/generate_data_manifest.py
 
 构建成功的判据是日志里出现 `[SUCCESS]`，并且镜像的 `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（不是 `arduino-lib-builder`）。
 
-带晋江的发布构建（`readpico_jjwxc`）需要把私有组件检出到 `src/jjwxc/`，由发布流水线完成。桌面模拟器：
+桌面模拟器：
 
 ```bash
 pio run -e simulator_readpico -t run_simulator
@@ -118,7 +116,7 @@ pio run -e simulator_readpico -t run_simulator
 
 - 默认分支是 `cpyos`；`main` 只镜像上游，不放 CPYOS 提交。
 - 功能改动请从 `cpyos` 切分支，构建通过后再合并。
-- 不要提交 `src/jjwxc/`、账号 / Cookie / 抓包正文或设备截图。
+- 不要提交账号 / Cookie / 抓包正文或设备截图。
 - 问题反馈请附设备型号、CPYOS 版本、复现步骤和脱敏后的串口日志。
 
 同步上游：
