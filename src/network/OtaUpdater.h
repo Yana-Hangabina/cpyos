@@ -44,6 +44,9 @@ class OtaUpdater {
   Channel channel = Channel::Stable;
   std::string latestVersion;
   std::string otaUrl;
+  // URL that actually answered the release JSON, so readpico-packs.txt is
+  // fetched from the same host/route.
+  std::string manifestUrl;
   size_t otaSize = 0;
   size_t processedSize = 0;
   size_t totalSize = 0;

@@ -91,18 +91,19 @@ bool HttpDownloader::hasMemoryForTls() {
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
-                              const std::string& password) {
+                              const std::string& password, const int timeoutMs) {
   return fetchUrl(
       url, [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; }, username,
-      password);
+      password, timeoutMs);
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
-                              const std::string& password) {
+                              const std::string& password, const int timeoutMs) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   freeink::FetchSink sink;
   sink.write = onData;
-  return runGetSecure(url, username, password, {}, sink) == OK;
+  return runGetSecure(url, username, password, {}, sink, nullptr, nullptr, false,
+                      timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS) == OK;
 }
 
 HttpDownloader::ProbeResult HttpDownloader::probeUrl(const std::string& url, const size_t maxBytes,

@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Fixed update checks hanging on a dead mirror",
+    "Probe mirror routes before fetching the manifest",
+    "Fall back to GitHub Pages when mirrors fail",
+    "Manifest requests time out after 12 seconds",
+    "Pack manifest uses the same working route",
+    "Data packs unchanged from 0.6.0"
+  ],
+  "zh": [
+    "修复检查更新卡住或失败",
+    "依次尝试可用线路",
+    "镜像失败时回退 GitHub Pages",
+    "清单请求 12 秒超时",
+    "数据包清单走同一条线路",
+    "数据包与 0.6.0 相同"
+  ]
+}

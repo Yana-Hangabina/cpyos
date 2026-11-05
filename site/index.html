@@ -68,7 +68,7 @@
   <section class="hero" aria-labelledby="hero-title">
     <div class="wrap">
       <div>
-        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.6.0</span></span><span class="dot"></span><span>非官方固件</span></div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.6.1</span></span><span class="dot"></span><span>非官方固件</span></div>
         <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
         <p class="lede">让 Read Pico 能读晋江、微信读书、本地书和网页。</p>
         <p class="en-lede">A reading system for the MindReset Read Pico: JJWXC, WeRead, a text-mode web browser, Chinese typography, partial refresh and device OTA — built on CrossMux.</p>
@@ -229,7 +229,7 @@
           <tr><th>SoC</th><td>ESP32-S3 · 双核 240 MHz · 8 MB PSRAM · Wi-Fi / BT5</td></tr>
           <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
           <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
-          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.6.0</span></b> · 预编译包只面向 Read Pico</td></tr>
+          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.6.1</span></b> · 预编译包只面向 Read Pico</td></tr>
         </table>
       </div>
     </div>
@@ -243,18 +243,18 @@
       </div>
       <div class="panel reveal" style="margin-bottom:26px;border-color:#b08a2e">
         <h3>0.2.1 及更早版本：请用网页刷机升级</h3>
-        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.6.0 已于 2026-11-05 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.6.0 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
+        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.6.1 已于 2026-11-05 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.6.1 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
         <p class="muted">Devices on 0.2.1 or older: use the web flasher on this page. Their OTA manifest is hosted on GitHub Pages, which some networks cannot reach.</p>
       </div>
       <div class="install-grid">
         <div class="panel reveal">
           <div class="status">
-            <span class="v" id="release-version">0.6.0</span>
+            <span class="v" id="release-version">0.6.1</span>
             <span class="date" id="release-date">READ PICO · 2026.11.05</span>
           </div>
           <h3>这次更新</h3>
           <ul class="notes" id="release-notes">
-            <li>设备 OTA 同时更新固件与数据包</li>
+            <li>检查更新卡住或失败的问题已修复</li>
             <li>语言包新增文案不再要求完整安装</li>
             <li>旧语言包自动兼容，新键回退英文</li>
             <li>数据包更新失败后首页提示重试</li>
@@ -275,12 +275,12 @@
           <h3>选择安装方式</h3>
           <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留设置和数据分区。</p>
           <div class="install-actions">
-            <esp-web-install-button id="install-button" manifest="./downloads/0.6.0/manifest-install.json">
+            <esp-web-install-button id="install-button" manifest="./downloads/0.6.1/manifest-install.json">
               <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">这个浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 https 打开；本地预览请用 http://localhost。</span>
             </esp-web-install-button>
-            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.6.0/manifest-upgrade.json">
+            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.6.1/manifest-upgrade.json">
               <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
             </esp-web-install-button>
           </div>

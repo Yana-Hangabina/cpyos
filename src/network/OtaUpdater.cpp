@@ -85,7 +85,7 @@ bool isGithubHosted(const std::string& url) {
 // The release manifest advertises a mirror-prefixed URL so firmware that
 // predates this probe (0.1.1 and earlier) also gets a fast download. Strip the
 // prefix to recover the canonical GitHub asset, then measure every route.
-std::string selectFastestDownloadUrl(const std::string& advertised) {
+std::string selectFastestDownloadUrl(const std::string& advertised, const int probeTimeoutMs = 6000) {
   std::string origin = advertised;
   for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
     const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
@@ -122,7 +122,7 @@ std::string selectFastestDownloadUrl(const std::string& advertised) {
   uint32_t bestBps = 0;
   uint32_t bestFirstByte = UINT32_MAX;
   for (size_t i = 0; i < candidates.size(); ++i) {
-    const auto probe = HttpDownloader::probeUrl(candidates[i].url, 32768, 6000);
+    const auto probe = HttpDownloader::probeUrl(candidates[i].url, 32768, probeTimeoutMs);
     if (!probe.ok) {
       LOG_INF("OTA", "probe %s: failed after %u ms", candidates[i].label, static_cast<unsigned>(probe.elapsedMs));
       continue;
@@ -328,6 +328,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   packCount = 0;
   packUpdates = false;
   phase = Phase::Firmware;
+  manifestUrl.clear();
 #ifndef CPYOS_OTA_MANIFEST_URL
   const char* channelQuery = channel == Channel::Nightly ? "&channel=nightly" : "";
   const char* const primaryHost = CrossMuxEndpoints::host();
@@ -357,16 +358,42 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   // One static manifest, served by the project's GitHub Pages site. Both the
   // stable and nightly selectors point at the same CPYOS release; isUpdateNewer
   // compares its semver tag rather than treating it as a nightly SHA.
-  char releaseUrl[releaseUrlCapacity];
-  const int releaseUrlLength = snprintf(releaseUrl, sizeof(releaseUrl), "%s", CrossMuxEndpoints::CPYOS_OTA_URL);
-  if (releaseUrlLength < 0 || static_cast<size_t>(releaseUrlLength) >= sizeof(releaseUrl)) {
-    LOG_ERR("OTA", "Release URL exceeds %zu bytes", sizeof(releaseUrl));
-    return INTERNAL_UPDATE_ERROR;
+  //
+  // The mirror-prefixed release URL is the primary route, but a hung mirror
+  // used to block the whole check until the 45 s socket timeout (0.6.0). Try a
+  // bounded size/timeout list instead: release URL, Pages copy, direct GitHub.
+  // A dead route must not cost seven full TLS probes. Try a short, ordered
+  // list with a hard per-request timeout; Pages is first because it is a single
+  // host and is what the earliest CPYOS releases used successfully.
+  constexpr char kGithubManifest[] =
+      "https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json";
+  constexpr char kGhfastManifest[] =
+      "https://ghfast.top/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json";
+  const char* manifestCandidates[] = {
+      CrossMuxEndpoints::CPYOS_OTA_PAGES_URL,
+      kGhfastManifest,
+      CrossMuxEndpoints::CPYOS_OTA_URL,
+      kGithubManifest,
+  };
+  for (const char* candidate : manifestCandidates) {
+    if (candidate == nullptr || candidate[0] == '\0') continue;
+    if (std::strlen(candidate) >= releaseUrlCapacity) {
+      LOG_ERR("OTA", "Release URL exceeds %zu bytes", static_cast<size_t>(releaseUrlCapacity));
+      continue;
+    }
+    releaseParser->reset();
+    for (auto& note : releaseNotes) note.fill('\0');
+    ok = HttpDownloader::fetchUrl(candidate, [&releaseParser](const uint8_t* data, size_t len) {
+      releaseParser->feed(reinterpret_cast<const char*>(data), len);
+      return true;
+    }, "", "", /*timeoutMs=*/12000);
+    if (ok && releaseParser->foundTag() && releaseParser->foundFirmware()) {
+      manifestUrl = candidate;
+      LOG_INF("OTA", "Release manifest: %s", candidate);
+      break;
+    }
+    LOG_ERR("OTA", "Release manifest failed via %s", candidate);
   }
-  ok = HttpDownloader::fetchUrl(releaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
-    releaseParser->feed(reinterpret_cast<const char*>(data), len);
-    return true;
-  });
 #else
   for (size_t attempt = 0; attempt < 2 && !ok; attempt++) {
     const char* const host = attempt == 0 ? primaryHost : CrossMuxEndpoints::alternateHost();
@@ -505,25 +532,33 @@ OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
     LOG_ERR("OTA", "pack manifest: no release URL yet");
     return HTTP_ERROR;
   }
-  const std::string packsUrl = siblingAssetUrl(otaUrl, "readpico-packs.txt");
-  if (packsUrl.empty()) {
-    LOG_ERR("OTA", "pack manifest: cannot derive a sibling URL");
-    return HTTP_ERROR;
-  }
+  const std::string primaryPacks = siblingAssetUrl(manifestUrl.empty() ? otaUrl : manifestUrl, "readpico-packs.txt");
+  const std::string pagesPacks = siblingAssetUrl(CrossMuxEndpoints::CPYOS_OTA_PAGES_URL, "readpico-packs.txt");
+  const std::string ghfastPacks =
+      "https://ghfast.top/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-packs.txt";
+  const std::string proxyPacks = siblingAssetUrl(CrossMuxEndpoints::CPYOS_OTA_URL, "readpico-packs.txt");
+  const std::string packCandidates[] = {primaryPacks, pagesPacks, ghfastPacks, proxyPacks};
 
   auto body = makeUniqueNoThrow<char[]>(kPackManifestBytes);
   if (!body) return OOM_ERROR;
   size_t bodyLen = 0;
-  const bool fetchOk = HttpDownloader::fetchUrl(packsUrl, [&](const uint8_t* data, size_t len) {
-    if (bodyLen + len >= kPackManifestBytes) return false;
-    std::memcpy(body.get() + bodyLen, data, len);
-    bodyLen += len;
-    return true;
-  });
-  if (!fetchOk) {
-    LOG_ERR("OTA", "pack manifest fetch failed: %s", packsUrl.c_str());
-    return HTTP_ERROR;
+  bool fetchOk = false;
+  for (const std::string& packsUrl : packCandidates) {
+    if (packsUrl.empty()) continue;
+    bodyLen = 0;
+    fetchOk = HttpDownloader::fetchUrl(packsUrl, [&](const uint8_t* data, size_t len) {
+      if (bodyLen + len >= kPackManifestBytes) return false;
+      std::memcpy(body.get() + bodyLen, data, len);
+      bodyLen += len;
+      return true;
+    }, "", "", /*timeoutMs=*/12000);
+    if (fetchOk) {
+      LOG_INF("OTA", "pack manifest: %s", packsUrl.c_str());
+      break;
+    }
+    LOG_ERR("OTA", "pack manifest failed via %s", packsUrl.c_str());
   }
+  if (!fetchOk) return HTTP_ERROR;
   body[bodyLen] = '\0';
 
   const esp_partition_t* partition = dataPartition();

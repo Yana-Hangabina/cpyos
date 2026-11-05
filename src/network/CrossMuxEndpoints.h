@@ -14,6 +14,10 @@ inline constexpr char OTA_MANIFEST_FORMAT[] = "https://%s/api/ota/manifest?varia
 // (platformio.ini); other upstream targets keep the CrossMux endpoints.
 #ifdef CPYOS_OTA_MANIFEST_URL
 inline constexpr char CPYOS_OTA_URL[] = CPYOS_OTA_MANIFEST_URL;
+// Same release manifest served by GitHub Pages. Used as a bounded fallback when
+// the mirror-prefixed release URL is unreachable (the 0.6.0 failure mode was a
+// hung gh-proxy connection that blocked the OTA check past its socket timeout).
+inline constexpr char CPYOS_OTA_PAGES_URL[] = "https://yana-hangabina.github.io/cpyos/ota/readpico.json";
 // Mainland-China GitHub mirrors. The release manifest points at a mirror-prefixed
 // release asset so older firmware (which cannot probe) also gets a fast path;
 // 0.1.2+ strips the prefix and measures every candidate before downloading.
