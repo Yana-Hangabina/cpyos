@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Update checks try GitHub first",
+    "Only three download routes are probed",
+    "Mirror fallback only when GitHub fails",
+    "Pack manifest reuses the working route",
+    "Per-route timing in the device log",
+    "Data packs unchanged from 0.6.1"
+  ],
+  "zh": [
+    "检查更新优先直连 GitHub",
+    "下载线路探测从七条减到三条",
+    "GitHub 失败后才走镜像",
+    "数据包清单复用可用线路",
+    "串口日志打印各线路耗时",
+    "数据包与 0.6.1 相同"
+  ]
+}

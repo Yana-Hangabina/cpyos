@@ -91,6 +91,15 @@ replacing the last path segment with `readpico-packs.txt`, so it uses the same
 mirror that served the app image. If the pack manifest is missing (a release
 from before this change), app OTA proceeds without touching the data partition.
 
+Route preference (0.6.2): the release manifest tries GitHub direct first, then
+gh-proxy, Pages and ghfast, each with its own 6–8 s timeout. Firmware download
+probes only GitHub direct, the mirror that served the manifest, and the
+advertised URL (three probes, 4 s each); the seven-mirror sweep remains only in
+the `OTAPROBE` diagnostic. The pack manifest starts on the manifest's route and
+falls back to Pages/ghfast/gh-proxy only if that request fails. Routine "already
+up to date" checks therefore spend seconds, not a minute, on a network where
+most mirrors are blocked.
+
 Concrete release-side changes (in the public tree, at release time):
 
 ```python

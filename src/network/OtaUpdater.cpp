@@ -5,6 +5,7 @@
 // ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort
 // the local header last and break the build.
 #include "HttpDownloader.h"
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
 #include <Logging.h>
@@ -84,8 +85,17 @@ bool isGithubHosted(const std::string& url) {
 
 // The release manifest advertises a mirror-prefixed URL so firmware that
 // predates this probe (0.1.1 and earlier) also gets a fast download. Strip the
-// prefix to recover the canonical GitHub asset, then measure every route.
-std::string selectFastestDownloadUrl(const std::string& advertised, const int probeTimeoutMs = 6000) {
+// prefix to recover the canonical GitHub asset, then measure a short list of
+// routes.
+//
+// Probing all seven mirrors made an update check on a blocked network crawl:
+// every dead route cost a full timeout before a working one was tried (0.6.1).
+// Now only the canonical GitHub route and the route that actually served the
+// manifest are measured, plus the advertised URL. `includeAllMirrors` remains
+// for the OTAPROBE diagnostic.
+std::string selectFastestDownloadUrl(const std::string& advertised, const int probeTimeoutMs = 6000,
+                                     const std::string& preferredMirror = {},
+                                     const bool includeAllMirrors = false) {
   std::string origin = advertised;
   for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
     const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
@@ -102,15 +112,17 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
     }
     candidates.push_back({label, url});
   };
-  add("direct", origin);
+  add("github", origin);
   if (isGithubHosted(origin)) {
+    if (!preferredMirror.empty()) add("manifest mirror", preferredMirror + origin);
     // Keep these in the same order as CPYOS_DOWNLOAD_MIRRORS.
     static constexpr const char* kMirrorLabels[] = {"gh-proxy.org", "git.yylx.win", "ghfast.top",
                                                       "gh-proxy.com", "github.tbap.top", "gh.dpik.top",
                                                       "ghproxy.net"};
     static_assert(sizeof(kMirrorLabels) / sizeof(kMirrorLabels[0]) ==
                   CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT);
-    for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
+    const size_t mirrorCount = includeAllMirrors ? CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT : 0;
+    for (size_t i = 0; i < mirrorCount; ++i) {
       add(kMirrorLabels[i], std::string(CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i]) + origin);
     }
   }
@@ -144,6 +156,17 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
   LOG_INF("OTA", "download route: %s (%u KB/s)", candidates[best].label,
           static_cast<unsigned>(bestBps / 1024));
   return candidates[best].url;
+}
+
+// Which mirror (if any) served the release manifest. The firmware and pack
+// blobs should be fetched through the same route: it is known to work on this
+// network, while another mirror may be blocked.
+std::string mirrorPrefixForUrl(const std::string& url) {
+  for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
+    const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
+    if (startsWith(url, prefix)) return prefix;
+  }
+  return {};
 }
 #endif
 
@@ -359,42 +382,49 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   // stable and nightly selectors point at the same CPYOS release; isUpdateNewer
   // compares its semver tag rather than treating it as a nightly SHA.
   //
-  // The mirror-prefixed release URL is the primary route, but a hung mirror
-  // used to block the whole check until the 45 s socket timeout (0.6.0). Try a
-  // bounded size/timeout list instead: release URL, Pages copy, direct GitHub.
-  // A dead route must not cost seven full TLS probes. Try a short, ordered
-  // list with a hard per-request timeout; Pages is first because it is a single
-  // host and is what the earliest CPYOS releases used successfully.
+  // Try the canonical GitHub release first: it is the source of truth and the
+  // fastest route wherever GitHub is reachable. Only then use the bounded
+  // mirror/Pages fallbacks. Each attempt has its own short timeout, so a
+  // blocked route costs seconds rather than the 45 s socket timeout that
+  // blocked 0.6.0.
   constexpr char kGithubManifest[] =
       "https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json";
   constexpr char kGhfastManifest[] =
       "https://ghfast.top/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json";
-  const char* manifestCandidates[] = {
-      // gh-proxy.com is the route the 0.2.x line used successfully and the one
-      // that answered on the affected network; Pages and ghfast follow.
-      CrossMuxEndpoints::CPYOS_OTA_URL,
-      kGhfastManifest,
-      CrossMuxEndpoints::CPYOS_OTA_PAGES_URL,
-      kGithubManifest,
+  struct ManifestCandidate {
+    const char* label;
+    const char* url;
+    int timeoutMs;
   };
-  for (const char* candidate : manifestCandidates) {
-    if (candidate == nullptr || candidate[0] == '\0') continue;
-    if (std::strlen(candidate) >= releaseUrlCapacity) {
+  const ManifestCandidate manifestCandidates[] = {
+      {"github", kGithubManifest, 6000},
+      // gh-proxy.com is the route the 0.2.x line used successfully in mainland
+      // China, so it stays the first fallback.
+      {"gh-proxy", CrossMuxEndpoints::CPYOS_OTA_URL, 8000},
+      {"pages", CrossMuxEndpoints::CPYOS_OTA_PAGES_URL, 6000},
+      {"ghfast", kGhfastManifest, 7000},
+  };
+  for (const ManifestCandidate& candidate : manifestCandidates) {
+    if (candidate.url == nullptr || candidate.url[0] == '\0') continue;
+    if (std::strlen(candidate.url) >= releaseUrlCapacity) {
       LOG_ERR("OTA", "Release URL exceeds %zu bytes", static_cast<size_t>(releaseUrlCapacity));
       continue;
     }
     releaseParser->reset();
     for (auto& note : releaseNotes) note.fill('\0');
-    ok = HttpDownloader::fetchUrl(candidate, [&releaseParser](const uint8_t* data, size_t len) {
+    const uint32_t started = millis();
+    ok = HttpDownloader::fetchUrl(candidate.url, [&releaseParser](const uint8_t* data, size_t len) {
       releaseParser->feed(reinterpret_cast<const char*>(data), len);
       return true;
-    }, "", "", /*timeoutMs=*/12000);
+    }, "", "", candidate.timeoutMs);
     if (ok && releaseParser->foundTag() && releaseParser->foundFirmware()) {
-      manifestUrl = candidate;
-      LOG_INF("OTA", "Release manifest: %s", candidate);
+      manifestUrl = candidate.url;
+      LOG_INF("OTA", "Release manifest via %s in %u ms", candidate.label,
+              static_cast<unsigned>(millis() - started));
       break;
     }
-    LOG_ERR("OTA", "Release manifest failed via %s", candidate);
+    LOG_ERR("OTA", "Release manifest failed via %s after %u ms", candidate.label,
+            static_cast<unsigned>(millis() - started));
   }
 #else
   for (size_t attempt = 0; attempt < 2 && !ok; attempt++) {
@@ -519,7 +549,7 @@ void OtaUpdater::debugProbeDownloadMirrors() {
     LOG_ERR("OTA", "probe: no firmware URL; run checkForUpdate first");
     return;
   }
-  selectFastestDownloadUrl(otaUrl);
+  selectFastestDownloadUrl(otaUrl, 6000, mirrorPrefixForUrl(manifestUrl), /*includeAllMirrors=*/true);
 #else
   LOG_INF("OTA", "probe: this build has no CPYOS mirror list");
 #endif
@@ -539,26 +569,40 @@ OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
   const std::string ghfastPacks =
       "https://ghfast.top/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-packs.txt";
   const std::string proxyPacks = siblingAssetUrl(CrossMuxEndpoints::CPYOS_OTA_URL, "readpico-packs.txt");
-  const std::string packCandidates[] = {primaryPacks, pagesPacks, ghfastPacks, proxyPacks};
+  // The first candidate is the sibling of the manifest that just answered, so
+  // it normally succeeds without paying for any fallback.
+  struct PackCandidate {
+    const std::string& url;
+    int timeoutMs;
+  };
+  const PackCandidate packCandidates[] = {
+      {primaryPacks, 8000},
+      {pagesPacks, 6000},
+      {ghfastPacks, 6000},
+      {proxyPacks, 6000},
+  };
 
   auto body = makeUniqueNoThrow<char[]>(kPackManifestBytes);
   if (!body) return OOM_ERROR;
   size_t bodyLen = 0;
   bool fetchOk = false;
-  for (const std::string& packsUrl : packCandidates) {
-    if (packsUrl.empty()) continue;
+  for (const PackCandidate& candidate : packCandidates) {
+    if (candidate.url.empty()) continue;
     bodyLen = 0;
-    fetchOk = HttpDownloader::fetchUrl(packsUrl, [&](const uint8_t* data, size_t len) {
+    const uint32_t started = millis();
+    fetchOk = HttpDownloader::fetchUrl(candidate.url, [&](const uint8_t* data, size_t len) {
       if (bodyLen + len >= kPackManifestBytes) return false;
       std::memcpy(body.get() + bodyLen, data, len);
       bodyLen += len;
       return true;
-    }, "", "", /*timeoutMs=*/12000);
+    }, "", "", candidate.timeoutMs);
     if (fetchOk) {
-      LOG_INF("OTA", "pack manifest: %s", packsUrl.c_str());
+      LOG_INF("OTA", "pack manifest via %s in %u ms", candidate.url.c_str(),
+              static_cast<unsigned>(millis() - started));
       break;
     }
-    LOG_ERR("OTA", "pack manifest failed via %s", packsUrl.c_str());
+    LOG_ERR("OTA", "pack manifest failed via %s after %u ms", candidate.url.c_str(),
+            static_cast<unsigned>(millis() - started));
   }
   if (!fetchOk) return HTTP_ERROR;
   body[bodyLen] = '\0';
@@ -748,7 +792,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   }
 
 #ifdef CPYOS_OTA_MANIFEST_URL
-  otaUrl = selectFastestDownloadUrl(otaUrl);
+  // Reuse the route that served the manifest; only the canonical GitHub and
+  // advertised routes are probed. Probing seven mirrors made an update take
+  // minutes on networks where most of them are blocked.
+  otaUrl = selectFastestDownloadUrl(otaUrl, 4000, mirrorPrefixForUrl(manifestUrl));
 #endif
 
   // esp_https_ota is hardwired to esp-tls/mbedTLS, whose precompiled build on this

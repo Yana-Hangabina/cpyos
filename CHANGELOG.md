@@ -2,6 +2,20 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.6.2 — 2026-11-05
+
+### 改进
+
+- **检查更新优先直连 GitHub**：清单先请求 GitHub Release 的 `readpico-ota.json`，失败后才依次尝试 gh-proxy、GitHub Pages 与 ghfast；每条线路独立计时并打印耗时。
+- **固件线路探测从七条减到三条**：只测 GitHub 直连、刚成功取到清单的镜像线路与清单给出的地址，不再让七条不可用镜像各耗一个超时。
+- **数据包清单复用可用线路**：`readpico-packs.txt` 先走刚成功的线路，失败才回退；单次请求上限缩短。
+- 日常“暂无更新”的检查因此明显更快；网络完全不可达时也会在有限时间内返回失败。
+
+### 升级说明
+
+- 0.6.0 / 0.6.1 可直接设备 OTA；数据包与 0.6.1 相同，不需要完整安装。
+- 0.2.1 及更早版本仍请用官网网页刷机升级一次。
+
 ## 0.6.1 — 2026-11-05
 
 ### 修复
