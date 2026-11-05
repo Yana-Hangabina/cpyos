@@ -13,7 +13,9 @@ are linked into app0, the data partition, or the firmware release.
 `manifest-v1.txt` is the FEXT1 manifest consumed by the firmware. Its pack URLs
 use `raw.githubusercontent.com` on the `cpyos` branch so the device's gh-proxy
 mirror list applies. The manifest itself is at
-`https://yana-hangabina.github.io/cpyos/fonts/manifest-v1.txt`.
+`https://yana-hangabina.github.io/cpyos/fonts/manifest-v1.txt`; the same file is
+also reachable at
+`https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/manifest-v1.txt`.
 
 The assets are generated with `scripts/build_font_extras_assets.py` in the dev
 tree (fontTools instantiates the variable fonts and merges the world-script
