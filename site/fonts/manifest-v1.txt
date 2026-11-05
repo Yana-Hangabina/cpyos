@@ -1,0 +1,4 @@
+FEXT1
+pack	emoji-full	emoji	-	完整 Emoji	NotoEmoji-Full.ttf	844596	327ae866d6685c4c11829ad6df339d401a9ace28d1ebcae916a4e58342f3fb7d	https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/NotoEmoji-Full.ttf
+pack	cjk-full	fallback	CPYOSCJK	中文扩展（含日文假名）	CPYOSCJK.ttf	10418152	797fa2a37d337a8fcd9d34b706d49351309b9f2c18cbcbe5d59f4d1ddd810a34	https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/CPYOSCJK.ttf
+pack	world-scripts	fallback	CPYOSWorld	多语言文字（韩泰阿希梵越）	CPYOSWorldScripts.ttf	6757844	899e7ed859764d35d6cf4ffbede4a1e4c044066f05df82f64b13317ba389926e	https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/CPYOSWorldScripts.ttf
