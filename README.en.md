@@ -72,11 +72,11 @@ Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.git
 - **First install / recovery** when coming from factory firmware or CrossMux 1.6.5 (rebuilds the partition table);
 - **Upgrade from CPYOS** for an existing CPYOS install (keeps settings and the data partition).
 
-Device OTA is under **Settings → System → Check for updates**. It writes only the inactive app slot and leaves the SD card, books and settings alone.
+Device OTA is under **Settings → System → Check for updates**. It writes the inactive app slot and any changed data packs, and leaves the SD card, books and settings alone.
 
 Devices on **0.2.1 or older** should use the web flasher once; their OTA manifest is on GitHub Pages, which some networks cannot reach.
 
-Releases that change the language pack, web assets, emoji, pinyin or hyphenation data require a **full install**, not an app-only OTA; the release notes say so. See `FLASH.md` and `SHA256SUMS` in the release bundle for offsets and checksums.
+Device OTA updates both the app and the data packs; a full install is only needed when the partition table or a pack format changes incompatibly. See `FLASH.md` and `SHA256SUMS` in the release bundle for offsets and checksums.
 
 ## Build from source
 

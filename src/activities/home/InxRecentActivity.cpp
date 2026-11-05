@@ -4,7 +4,9 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <I18nPack.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
+#include "activities/settings/OtaUpdateActivity.h"
 #include "util/TimeUtils.h"
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
@@ -127,10 +130,34 @@ void InxRecentActivity::onEnter() {
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
   clearCoverCaches();
 #endif
+  maybePromptPackUpdate();
   requestUpdate();
 }
 
+void InxRecentActivity::maybePromptPackUpdate() {
+#if defined(CROSSPOINT_I18N_PACK)
+  if (packRetryPrompted_) return;
+  packRetryPrompted_ = true;
+  // English and Chinese are image-resident; only a packed UI language can show
+  // the fallback. Do not interrupt readers who would see no difference.
+  if (!i18n_pack::isPacked(static_cast<Language>(SETTINGS.language))) return;
+  if (!i18n_pack::needsUpdate()) return;
+
+  const char* options[] = {I18N.get(StrId::STR_CANCEL), I18N.get(StrId::STR_UPDATE)};
+  packRetryPopup_.showMessage(I18N.get(StrId::STR_UPDATE_PACKS), I18N.get(StrId::STR_PACKS_RETRY_HINT), options, 2,
+                              0, [this](const int index) {
+                                if (index == 1) {
+                                  auto ota =
+                                      makeUniqueNoThrow<OtaUpdateActivity>(renderer, mappedInput, /*autoCheck=*/true);
+                                  if (ota) activityManager.pushActivity(std::move(ota));
+                                }
+                                requestUpdate();
+                              });
+#endif
+}
+
 void InxRecentActivity::onExit() {
+  packRetryPopup_.dismiss();
   books = nullptr;
   bookStats.fill(nullptr);
   targetCoverStates.fill(CoverCacheState::Unchecked);
@@ -428,6 +455,7 @@ int InxRecentActivity::dashboardIndexFromPoint(const int x, const int y) const {
 }
 
 void InxRecentActivity::loopDashboard() {
+  if (packRetryPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     dashboardActivate(selected);
     return;
@@ -865,6 +893,7 @@ void InxRecentActivity::render(RenderLock&&) {
     if (gray16) renderer.cancelGrayscale16();
     return;
   }
+  if (packRetryPopup_.processRender(renderer, mappedInput)) return;
   // A tap that already queued another screen makes this frame dead on arrival:
   // paying its ~0.4 s panel scan would be pure latency on the way to the one the
   // user asked for (rapid Home <-> Library switching).

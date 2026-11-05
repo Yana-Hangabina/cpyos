@@ -28,6 +28,9 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
   int selectedReadyRow = 0;
   bool waitForConfirmRelease = false;
   bool readingStatsReleased = false;
+  bool packsOnly = false;
+  bool autoCheckPacks = false;
+  bool autoCheckPending = false;
   size_t progressBytes = 0;
   size_t progressTotalBytes = 0;
   unsigned int lastProgressRefreshPercent = 0;
@@ -57,8 +60,8 @@ class OtaUpdateActivity : public Activity, private UiAppHost {
   void buildUpdateScreen(UiScreen& screen);
 
  public:
-  explicit OtaUpdateActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("OtaUpdate", renderer, mappedInput), UiAppHost(renderer), updater() {}
+  explicit OtaUpdateActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoCheck = false)
+      : Activity("OtaUpdate", renderer, mappedInput), UiAppHost(renderer), updater(), autoCheckPacks(autoCheck) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

@@ -8,6 +8,7 @@
 #include "InxRecentLayout.h"
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/OptionPopup.h"
 
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
 #include <cstddef>
@@ -38,6 +39,8 @@ class InxRecentActivity final : public Activity {
 
   const std::vector<RecentBook>* books = nullptr;
   std::array<const ReadingBookStats*, RecentBooksStore::MAX_RECENT_BOOKS> bookStats{};
+  OptionPopup packRetryPopup_;
+  bool packRetryPrompted_ = false;
   std::array<CoverCacheState, RecentBooksStore::MAX_RECENT_BOOKS> targetCoverStates{};
   std::array<CoverCacheState, RecentBooksStore::MAX_RECENT_BOOKS> fallbackCoverStates{};
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
@@ -51,6 +54,7 @@ class InxRecentActivity final : public Activity {
   Rect contentRect() const;
   const ReadingBookStats* statsAt(int index) const;
   void openSelected();
+  void maybePromptPackUpdate();
   void setThumbnailHeight(int displayHeight);
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
   void clearCoverCaches();

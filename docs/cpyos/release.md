@@ -90,8 +90,8 @@ python3 scripts/build_web_pack.py
 python3 scripts/generate_hyphenation_db.py
 python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.whl
 python3 scripts/generate_data_manifest.py
-python3 scripts/build_cpyos_release.py --version 0.5.0
-python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.5.0 --output _site
+python3 scripts/build_cpyos_release.py --version 0.6.0
+python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.6.0 --output _site
 ```
 
 ## 产物
@@ -103,6 +103,7 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.5.0 --output _sit
 | `readpico-app1.bin` | 同一镜像，升级/仅 app 清单写到 app1（避免设备从非活动槽启动旧固件） |
 | `readpico-bootloader.bin` / `readpico-partitions.bin` / `readpico-boot_app0.bin` | 首次安装 |
 | `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` / `emoji.dat` | 数据分区 |
+| `readpico-packs.txt` | 设备 OTA 的数据包清单（偏移、大小、SHA-256、擦除上限） |
 | `manifest-install.json` | 网页刷机：完整安装 / 恢复（擦除） |
 | `manifest-upgrade.json` | 网页刷机：CPYOS 升级（保留 NVS） |
 | `manifest-app.json` | 仅 app |
@@ -120,7 +121,7 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.5.0 --output _sit
   "assets": [
     {
       "name": "firmware.bin",
-      "browser_download_url": "https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-0.5.0/readpico-firmware.bin",
+      "browser_download_url": "https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-0.6.0/readpico-firmware.bin",
       "size": 6525840
     }
   ]
@@ -147,11 +148,12 @@ git update-index --assume-unchanged freeink-sdk
 
 ## 数据包与 OTA
 
-OTA 只写 app0，不写数据分区。语言包、Web 资源包、拼音和断词表都留在设备原来的数据分区里，所以：
+OTA 会写非活动的 app 槽，并在 `readpico-packs.txt` 存在时更新数据分区。发布脚本会自动生成这个清单并打包；设备只下载与当前分区校验和不同的包，先下载到 SD 临时文件并校验 SHA-256，再擦写并回读校验。下载失败时 app 仍可更新，新固件会继续使用旧包并在首页提示重试；写入失败时不切换新 app。
 
-- **0.1.0 是首个公开版本，首次必须用完整安装包**，四个数据包会随安装写入；之后从 0.1.0 做 OTA 是安全的。
-- 以后任何版本只要改了 `i18n_pack.dat` 的键数 / 内容签名、`web_pack.dat`、`hyphen.dat` 或 `pinyin.dat`，**不能只发 OTA**：设备的旧包会被固件拒绝（语言包键数不符时，未内嵌的 33 种语言回退英文；中文/英文在固件内不受影响；网页显示恢复页）。这种版本必须要求完整安装，或者在实现数据分区 OTA 之前不要把它标成可通过设备 OTA 更新。
-- 发布前比较上一版与本次的五个 blob 头（键数、contentSignature、schema）和 `SHA256SUMS`；不同就按“需要完整安装”发布，并在 release notes 里写明。`build/data_manifest.txt` 是本次包的唯一描述，不要手抄数字。
+- **0.1.0 是首个公开版本，首次必须用完整安装包**，数据包会随安装写入。
+- 以后语言包新增键或修改译文不再要求完整安装：新固件接受键集合为当前前缀的旧包，新增键回退英文；`readpico-packs.txt` 会把新包一并更新。
+- 只有分区表、包格式或数据分区布局发生破坏性变化时才要求完整安装。
+- 发布前确认 `readpico-packs.txt` 与五个 blob 的 size/sha256 一致；`build/data_manifest.txt` 是唯一描述，不要手抄数字。
 
 ## Pages 环境与 tag 部署
 

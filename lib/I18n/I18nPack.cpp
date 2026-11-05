@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "I18nKeys.h"
 #include "I18nOffsetBuilder.h"
 #include "I18nStrings.h"
 
@@ -138,7 +139,8 @@ bool init() {
   const uint32_t remaining = static_cast<uint32_t>(partition->size - I18N_PACK_PARTITION_OFFSET);
   Header header;
   const Validity headerValidity =
-      validateHeader(raw, sizeof(raw), remaining, I18N_KEY_COUNT, I18N_KEY_SIGNATURE, I18N_CONTENT_SIGNATURE, header);
+      validateHeader(raw, sizeof(raw), remaining, I18N_KEY_COUNT, I18N_KEY_SIGNATURE, I18N_KEY_PREFIX_SIGNATURES,
+                     header);
   if (headerValidity != Validity::Ok) {
     gStatus = headerValidity;
     gInitialized = true;
@@ -189,9 +191,14 @@ bool init() {
   gEntryCount = header.languageCount;
   gStatus = Validity::Ok;
   gInitialized = true;
-  LOG_INF(kTag, "pack: %u languages, %u keys, %u bytes at partition +0x%06x", static_cast<unsigned>(gEntryCount),
-          static_cast<unsigned>(gHeader.keyCount), static_cast<unsigned>(gHeader.totalSize),
-          static_cast<unsigned>(I18N_PACK_PARTITION_OFFSET));
+  if (header.contentSignature != I18N_CONTENT_SIGNATURE) {
+    LOG_INF(kTag, "pack translations differ from this image (0x%08X vs 0x%08X); using the pack text",
+            static_cast<unsigned>(header.contentSignature), static_cast<unsigned>(I18N_CONTENT_SIGNATURE));
+  }
+  LOG_INF(kTag, "pack: %u languages, %u keys, %u bytes at partition +0x%06x (%u image keys)",
+          static_cast<unsigned>(gEntryCount), static_cast<unsigned>(gHeader.keyCount),
+          static_cast<unsigned>(gHeader.totalSize), static_cast<unsigned>(I18N_PACK_PARTITION_OFFSET),
+          static_cast<unsigned>(I18N_KEY_COUNT));
   return true;
 }
 
@@ -200,6 +207,11 @@ bool ready() { return gStatus == Validity::Ok; }
 Validity status() { return gStatus; }
 
 const char* statusText() { return gStatus == Validity::Ok ? nullptr : validityName(gStatus); }
+
+bool needsUpdate() {
+  if (!init()) return true;
+  return gHeader.keyCount != I18N_KEY_COUNT || gHeader.contentSignature != I18N_CONTENT_SIGNATURE;
+}
 
 bool isPacked(Language lang) {
   const auto index = static_cast<size_t>(lang);
@@ -243,7 +255,8 @@ bool loadLanguage(Language lang) {
   }
 
   const uint32_t keyCount = gHeader.keyCount;
-  const size_t offsetBytes = static_cast<size_t>(keyCount) * sizeof(uint16_t);
+  const uint32_t expectedKeyCount = static_cast<uint32_t>(StrId::_COUNT);
+  const size_t offsetBytes = static_cast<size_t>(expectedKeyCount) * sizeof(uint16_t);
   const size_t bitmapBytes = expectedBitmapBytes(keyCount);
   if (!memory::psramHasHeadroom(entry.blobSize + offsetBytes + bitmapBytes, entry.blobSize, kContiguousReserve)) {
     LOG_ERR(kTag, "no PSRAM headroom for '%s' (%u B blob + %u B offsets)", LANGUAGE_CODES[slot],
@@ -293,6 +306,17 @@ bool loadLanguage(Language lang) {
     gFailed[slot] = true;
     LOG_ERR(kTag, "'%s' rejected: blob and key set disagree", LANGUAGE_CODES[slot]);
     return false;
+  }
+  // Newer image, older pack: every key the pack does not know resolves into
+  // the English table at the same index. The aliasing is safe because the
+  // loader only accepted the pack when its signature matched this image's key
+  // prefix (see validateHeader), so pack index i == image index i for i < N.
+  for (uint32_t i = keyCount; i < expectedKeyCount; ++i) {
+    pending.offsets[i] = static_cast<uint16_t>(OFFSETS_EN[i] | i18n_offsets::kEnglishBit);
+  }
+  if (keyCount < expectedKeyCount) {
+    LOG_INF(kTag, "'%s': %u keys from the pack, %u newer keys use English", LANGUAGE_CODES[slot],
+            static_cast<unsigned>(keyCount), static_cast<unsigned>(expectedKeyCount - keyCount));
   }
 
   // Success: the blob and its offsets live for the rest of the session, because

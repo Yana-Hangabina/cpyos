@@ -113,6 +113,20 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   }
 
   if (!updater.isUpdateNewer()) {
+    // The app is current, but the data partition can lag behind (for example
+    // after an app-only OTA from a firmware that predates pack updates). The
+    // pack loader tolerates that; this screen is the one-tap repair path.
+    if (updater.checkPackUpdates()) {
+      LOG_INF("OTA", "data packs differ from the current release");
+      packsOnly = true;
+      {
+        RenderLock lock(*this);
+        releaseNotePage = 0;
+        state = State::UpdateAvailable;
+      }
+      requestUpdate();
+      return;
+    }
     LOG_DBG("OTA", "No new update available");
     {
       RenderLock lock(*this);
@@ -121,6 +135,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     requestUpdate();
     return;
   }
+  packsOnly = false;
 #endif
 
   {
@@ -136,6 +151,8 @@ void OtaUpdateActivity::onEnter() {
 
   resetUi();
   failedDetail = nullptr;
+  packsOnly = false;
+  autoCheckPending = autoCheckPacks;
   app.on(ACTION_RELEASE_PAGE, &OtaUpdateActivity::onReleasePage, this);
   app.on(ACTION_INSTALL_UPDATE, &OtaUpdateActivity::onInstallUpdate, this);
   app.setScreen(&OtaUpdateActivity::updateScreen, this);
@@ -294,7 +311,7 @@ void OtaUpdateActivity::renderUpdateAvailable(const Rect& safeArea) {
                       tr(STR_CURRENT_VERSION), CROSSPOINT_VERSION);
     GUI.drawSubHeader(renderer,
                       Rect{safeArea.x, versionTop + metrics.tabBarHeight, safeArea.width, metrics.tabBarHeight},
-                      tr(STR_NEW_VERSION), latestVersionLabel(updater));
+                      tr(STR_NEW_VERSION), packsOnly ? tr(STR_UPDATE_PACKS) : latestVersionLabel(updater));
   }
 
   const Rect body = releaseNotesBody(safeArea, metrics, releaseNotePage == 0, bottomInset);
@@ -401,7 +418,9 @@ void OtaUpdateActivity::render(RenderLock&&) {
 
       if (updateConfirmation.processRender(renderer, mappedInput)) return;
     } else if (state == State::UpdateInProgress) {
-      renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATING));
+      const char* title = (packsOnly || updater.getPhase() == OtaUpdater::Phase::Packs) ? tr(STR_UPDATING_PACKS)
+                                                                                       : tr(STR_UPDATING);
+      renderer.drawCenteredText(UI_10_FONT_ID, top, title);
 
       int y = top + height + metrics.verticalSpacing;
       GUI.drawProgressBar(
@@ -503,7 +522,9 @@ void OtaUpdateActivity::render(RenderLock&&) {
       const int blockHeight = titleHeight + sectionGap +
                               GUI.measureProgressBarHeight(renderer, metrics.progressBarHeight) + relatedGap + height;
       int y = SubpageLayout::centeredTop(content, blockHeight);
-      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, y, tr(STR_UPDATING), true, EpdFontFamily::BOLD);
+      const char* title = (packsOnly || updater.getPhase() == OtaUpdater::Phase::Packs) ? tr(STR_UPDATING_PACKS)
+                                                                                       : tr(STR_UPDATING);
+      UITheme::drawCenteredText(renderer, textBounds, UI_12_FONT_ID, y, title, true, EpdFontFamily::BOLD);
       y += titleHeight + sectionGap;
       y = GUI.drawProgressBar(renderer, Rect{textBounds.x, y, textBounds.width, metrics.progressBarHeight},
                               std::min(progressBytes, progressTotalBytes), std::max<size_t>(progressTotalBytes, 1)) +
@@ -572,7 +593,7 @@ void OtaUpdateActivity::runUpdateInstall() {
   {
     RenderLock lock(*this);
     progressBytes = 0;
-    progressTotalBytes = updater.getTotalSize();
+    progressTotalBytes = packsOnly ? updater.getPackTotalSize() : updater.getTotalSize();
     lastProgressRefreshPercent = 0;
     state = State::UpdateInProgress;
   }
@@ -580,34 +601,41 @@ void OtaUpdateActivity::runUpdateInstall() {
   // The progress screen is another font-loading boundary before a separate TLS connection.
   NetworkStartup::prepare(renderer);
 #ifndef SIMULATOR
-  LOG_INF("OTA", "TLS preflight (firmware): free=%u, maxAlloc=%u", static_cast<unsigned>(ESP.getFreeHeap()),
-          static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  LOG_INF("OTA", "TLS preflight (%s): free=%u, maxAlloc=%u", packsOnly ? "packs" : "firmware",
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 #endif
-  const auto res = updater.installUpdate(
-      [](void* ctx) {
-        auto* self = static_cast<OtaUpdateActivity*>(ctx);
-        bool refresh = false;
-        {
-          RenderLock lock(*self);
-          self->progressBytes = self->updater.getProcessedSize();
-          self->progressTotalBytes = self->updater.getTotalSize();
-          const unsigned int percent =
-              self->progressTotalBytes > 0
-                  ? static_cast<unsigned int>(
-                        static_cast<uint64_t>(std::min(self->progressBytes, self->progressTotalBytes)) * 100 /
-                        self->progressTotalBytes)
-                  : 0;
-          if (percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
-              (percent == 100 && self->lastProgressRefreshPercent != 100)) {
-            self->lastProgressRefreshPercent = percent;
-            refresh = true;
-          }
-        }
-        // Flash writes suspend Read Pico's display feeder tasks; finish the frame before resuming the writer.
-        if (refresh) self->requestUpdateAndWait();
-      },
-      this);
+  const OtaUpdater::ProgressCallback progress = [](void* ctx) {
+    auto* self = static_cast<OtaUpdateActivity*>(ctx);
+    bool refresh = false;
+    {
+      RenderLock lock(*self);
+      self->progressBytes = self->updater.getProcessedSize();
+      self->progressTotalBytes = self->updater.getTotalSize();
+      const unsigned int percent =
+          self->progressTotalBytes > 0
+              ? static_cast<unsigned int>(
+                    static_cast<uint64_t>(std::min(self->progressBytes, self->progressTotalBytes)) * 100 /
+                    self->progressTotalBytes)
+              : 0;
+      if (percent >= self->lastProgressRefreshPercent + PROGRESS_REFRESH_STEP_PERCENT ||
+          (percent == 100 && self->lastProgressRefreshPercent != 100)) {
+        self->lastProgressRefreshPercent = percent;
+        refresh = true;
+      }
+    }
+    // Flash writes suspend Read Pico's display feeder tasks; finish the frame before resuming the writer.
+    if (refresh) self->requestUpdateAndWait();
+  };
+  const auto res = packsOnly ? updater.installDataPacksOnly(progress, this) : updater.installUpdate(progress, this);
 
+  if (res == OtaUpdater::NO_UPDATE) {
+    {
+      RenderLock lock(*this);
+      state = State::NoUpdate;
+    }
+    requestUpdate();
+    return;
+  }
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update failed: %d", res);
     {
@@ -634,6 +662,11 @@ void OtaUpdateActivity::runUpdateInstall() {
 }
 
 void OtaUpdateActivity::loop() {
+  if (autoCheckPending) {
+    autoCheckPending = false;
+    beginWifiSelection();
+    return;
+  }
   switch (state) {
     case State::Ready: {
       if (waitForConfirmRelease) {

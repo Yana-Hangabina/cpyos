@@ -5,18 +5,23 @@
 // ip4_addr.h unless seen first. Pin this order; clang-format would otherwise sort
 // the local header last and break the build.
 #include "HttpDownloader.h"
+#include <HalStorage.h>
 #include <HalSystem.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_wifi.h>
+#include <mbedtls/sha256.h>
 // clang-format on
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -141,10 +146,188 @@ std::string selectFastestDownloadUrl(const std::string& advertised) {
   return candidates[best].url;
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// Data-pack update support
+// ---------------------------------------------------------------------------
+// Packs are written through the partition API from a file on SD. The file is
+// downloaded and hashed completely before the first erase, so a network failure
+// never leaves a half-written language pack; a power loss during the write does,
+// and the pack loader rejects it (English fallback) until the user retries.
+constexpr uint32_t kPackSectorBytes = 4096;
+constexpr uint32_t kPackEraseBlockBytes = 16 * 1024;
+constexpr size_t kPackIoBytes = 4096;
+constexpr size_t kPackManifestBytes = 4096;
+// The spiffs partition has 12 factory bytes at +0x80000 that no code reads, but
+// every tool deliberately leaves untouched. No pack may cover them.
+constexpr uint32_t kReservedPackOffset = 0x80000;
+constexpr uint32_t kReservedPackBytes = 12;
+
+const esp_partition_t* dataPartition() {
+  return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+}
+
+std::string siblingAssetUrl(const std::string& url, const char* asset) {
+  const size_t slash = url.rfind('/');
+  if (slash == std::string::npos || asset == nullptr || asset[0] == '\0') return {};
+  return url.substr(0, slash + 1) + asset;
+}
+
+int hexNibble(const char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool parseSha256(const char* text, uint8_t out[32]) {
+  if (text == nullptr || std::strlen(text) != 64) return false;
+  for (size_t i = 0; i < 32; ++i) {
+    const int hi = hexNibble(text[i * 2]);
+    const int lo = hexNibble(text[i * 2 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return true;
+}
+
+bool validPackAssetName(const char* name) {
+  if (name == nullptr || name[0] == '\0') return false;
+  for (const char* p = name; *p != '\0'; ++p) {
+    const char c = *p;
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+          c == '_' || c == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool hashPartition(const esp_partition_t* partition, const uint32_t offset, const uint32_t size, uint8_t out[32]) {
+  if (partition == nullptr || out == nullptr || offset > partition->size || size > partition->size - offset) {
+    return false;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(kPackIoBytes);
+  if (!buffer) return false;
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  bool ok = true;
+  for (uint32_t at = 0; at < size; at += kPackIoBytes) {
+    const uint32_t want = std::min<uint32_t>(kPackIoBytes, size - at);
+    if (esp_partition_read(partition, offset + at, buffer.get(), want) != ESP_OK) {
+      ok = false;
+      break;
+    }
+    mbedtls_sha256_update(&sha, buffer.get(), want);
+  }
+  if (ok) mbedtls_sha256_finish(&sha, out);
+  mbedtls_sha256_free(&sha);
+  return ok;
+}
+
+bool hashFile(const char* path, const uint32_t expectedSize, uint8_t out[32]) {
+  HalFile file;
+  if (!Storage.openFileForRead("OTA", path, file) || !file) return false;
+  if (file.fileSize() != expectedSize) {
+    file.close();
+    return false;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(kPackIoBytes);
+  if (!buffer) {
+    file.close();
+    return false;
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  bool ok = true;
+  uint32_t remaining = expectedSize;
+  while (remaining > 0) {
+    const uint32_t want = std::min<uint32_t>(kPackIoBytes, remaining);
+    const int got = file.read(buffer.get(), want);
+    if (got <= 0 || static_cast<uint32_t>(got) != want) {
+      ok = false;
+      break;
+    }
+    mbedtls_sha256_update(&sha, buffer.get(), want);
+    remaining -= want;
+  }
+  if (ok) mbedtls_sha256_finish(&sha, out);
+  mbedtls_sha256_free(&sha);
+  file.close();
+  return ok;
+}
+
+bool packRangeValid(const esp_partition_t* partition, const uint32_t offset, const uint32_t size, const uint32_t limit) {
+  if (partition == nullptr || size == 0 || offset > partition->size || size > partition->size - offset) return false;
+  if ((offset & (kPackSectorBytes - 1)) != 0) return false;
+  if (limit > partition->size || limit < offset) return false;
+  const uint32_t eraseEnd = offset + ((size + kPackSectorBytes - 1) & ~(kPackSectorBytes - 1));
+  if (eraseEnd > limit) return false;
+  if (offset < kReservedPackOffset + kReservedPackBytes && eraseEnd > kReservedPackOffset) return false;
+  return true;
+}
+
+bool writePackFromFile(const esp_partition_t* partition, const char* path, const uint32_t offset, const uint32_t size,
+                       const uint32_t limit, const std::function<void(size_t)>& onProgress) {
+  if (!packRangeValid(partition, offset, size, limit)) {
+    LOG_ERR("OTA", "pack range rejected: off=0x%x size=%u limit=0x%x", static_cast<unsigned>(offset),
+            static_cast<unsigned>(size), static_cast<unsigned>(limit));
+    return false;
+  }
+  HalFile file;
+  if (!Storage.openFileForRead("OTA", path, file) || !file) return false;
+  if (file.fileSize() != size) {
+    file.close();
+    return false;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(kPackIoBytes);
+  if (!buffer) {
+    file.close();
+    return false;
+  }
+
+  uint32_t position = 0;
+  uint32_t erasedUpTo = 0;
+  while (position < size) {
+    if (position >= erasedUpTo) {
+      uint32_t eraseLen = std::min<uint32_t>(kPackEraseBlockBytes, size - position);
+      eraseLen = (eraseLen + kPackSectorBytes - 1) & ~(kPackSectorBytes - 1);
+      if (offset + position + eraseLen > limit ||
+          esp_partition_erase_range(partition, offset + position, eraseLen) != ESP_OK) {
+        LOG_ERR("OTA", "pack erase failed at +0x%x (len %u)", static_cast<unsigned>(position),
+                static_cast<unsigned>(eraseLen));
+        file.close();
+        return false;
+      }
+      erasedUpTo = position + eraseLen;
+    }
+    const uint32_t want = std::min<uint32_t>(kPackIoBytes, size - position);
+    const int got = file.read(buffer.get(), want);
+    if (got <= 0 || static_cast<uint32_t>(got) != want) {
+      file.close();
+      return false;
+    }
+    if (esp_partition_write(partition, offset + position, buffer.get(), want) != ESP_OK) {
+      LOG_ERR("OTA", "pack write failed at +0x%x", static_cast<unsigned>(position));
+      file.close();
+      return false;
+    }
+    position += want;
+    if (onProgress) onProgress(position);
+  }
+  file.close();
+  return true;
+}
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
   channel = requestedChannel;
+  packsLoaded = false;
+  packCount = 0;
+  packUpdates = false;
+  phase = Phase::Firmware;
 #ifndef CPYOS_OTA_MANIFEST_URL
   const char* channelQuery = channel == Channel::Nightly ? "&channel=nightly" : "";
   const char* const primaryHost = CrossMuxEndpoints::host();
@@ -313,6 +496,215 @@ void OtaUpdater::debugProbeDownloadMirrors() {
 #endif
 }
 
+OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
+  if (packsLoaded) return OK;
+  packCount = 0;
+  dataTotalSize = 0;
+  packUpdates = false;
+  if (otaUrl.empty()) {
+    LOG_ERR("OTA", "pack manifest: no release URL yet");
+    return HTTP_ERROR;
+  }
+  const std::string packsUrl = siblingAssetUrl(otaUrl, "readpico-packs.txt");
+  if (packsUrl.empty()) {
+    LOG_ERR("OTA", "pack manifest: cannot derive a sibling URL");
+    return HTTP_ERROR;
+  }
+
+  auto body = makeUniqueNoThrow<char[]>(kPackManifestBytes);
+  if (!body) return OOM_ERROR;
+  size_t bodyLen = 0;
+  const bool fetchOk = HttpDownloader::fetchUrl(packsUrl, [&](const uint8_t* data, size_t len) {
+    if (bodyLen + len >= kPackManifestBytes) return false;
+    std::memcpy(body.get() + bodyLen, data, len);
+    bodyLen += len;
+    return true;
+  });
+  if (!fetchOk) {
+    LOG_ERR("OTA", "pack manifest fetch failed: %s", packsUrl.c_str());
+    return HTTP_ERROR;
+  }
+  body[bodyLen] = '\0';
+
+  const esp_partition_t* partition = dataPartition();
+  if (partition == nullptr) {
+    LOG_ERR("OTA", "no spiffs partition for data packs");
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  size_t cursor = 0;
+  while (cursor < bodyLen && packCount < kMaxPacks) {
+    const char* line = body.get() + cursor;
+    const char* newline = std::strchr(line, '\n');
+    const size_t lineLen = newline ? static_cast<size_t>(newline - line) : std::strlen(line);
+    cursor += lineLen + (newline ? 1 : 0);
+    if (lineLen == 0 || line[0] == '#') continue;
+
+    char asset[32] = {};
+    unsigned int offset = 0;
+    unsigned int size = 0;
+    unsigned int limit = 0;
+    char shaText[65] = {};
+    if (std::sscanf(line, "%31s %x %u %64s %x", asset, &offset, &size, shaText, &limit) != 5) {
+      LOG_ERR("OTA", "malformed pack manifest line: %.*s", static_cast<int>(lineLen), line);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    if (!validPackAssetName(asset)) {
+      LOG_ERR("OTA", "pack manifest has an unsafe asset name");
+      return INTERNAL_UPDATE_ERROR;
+    }
+    PackSpec& spec = packs[packCount];
+    std::strncpy(spec.asset, asset, sizeof(spec.asset) - 1);
+    spec.offset = offset;
+    spec.size = size;
+    spec.limit = limit;
+    if (!parseSha256(shaText, spec.sha256)) {
+      LOG_ERR("OTA", "pack %s has an invalid sha256", spec.asset);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    if (!packRangeValid(partition, spec.offset, spec.size, spec.limit)) {
+      LOG_ERR("OTA", "pack %s has an invalid range", spec.asset);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    std::snprintf(spec.tempPath, sizeof(spec.tempPath), "/.crosspoint/ota_%s", spec.asset);
+    uint8_t current[32] = {};
+    if (!hashPartition(partition, spec.offset, spec.size, current)) {
+      LOG_ERR("OTA", "cannot read current %s pack", spec.asset);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    spec.changed = std::memcmp(current, spec.sha256, sizeof(current)) != 0;
+    if (spec.changed) {
+      dataTotalSize += static_cast<size_t>(spec.size) * 2;  // download + write
+      packUpdates = true;
+    }
+    LOG_INF("OTA", "pack %-16s @0x%06x %6u B %s", spec.asset, static_cast<unsigned>(spec.offset),
+            static_cast<unsigned>(spec.size), spec.changed ? "update" : "current");
+    ++packCount;
+  }
+  packsLoaded = true;
+  LOG_INF("OTA", "pack manifest: %u pack(s), %s", static_cast<unsigned>(packCount),
+          packUpdates ? "changes pending" : "all current");
+  return OK;
+}
+
+bool OtaUpdater::checkPackUpdates() {
+  const auto result = loadPackManifest();
+  if (result != OK) {
+    LOG_ERR("OTA", "pack check failed: %d", static_cast<int>(result));
+    return false;
+  }
+  return packUpdates;
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::installDataPacks(ProgressCallback onProgress, void* ctx, const bool required) {
+  if (!packsLoaded) {
+    const auto result = loadPackManifest();
+    if (result != OK) {
+      if (required) return result;
+      // App update remains useful even when a release predates packs (or the
+      // manifest is unreachable). The new app can retry from its update page.
+      LOG_ERR("OTA", "data packs skipped: manifest unavailable");
+      return OK;
+    }
+  }
+  if (packCount == 0 || !packUpdates) return OK;
+
+  phase = Phase::Packs;
+  dataProcessedSize = 0;
+  if (onProgress) onProgress(ctx);
+
+  // Download and verify every changed pack before erasing anything. A failed
+  // network transfer therefore leaves the working packs untouched.
+  size_t downloadDone = 0;
+  for (size_t i = 0; i < packCount; ++i) {
+    PackSpec& spec = packs[i];
+    if (!spec.changed) continue;
+    const std::string url = siblingAssetUrl(otaUrl, spec.asset);
+    if (url.empty()) {
+      LOG_ERR("OTA", "pack %s: cannot derive URL", spec.asset);
+      return HTTP_ERROR;
+    }
+    Storage.remove(spec.tempPath);
+    const size_t base = downloadDone;
+    const auto res = HttpDownloader::downloadToFile(
+        url, spec.tempPath,
+        [this, base, onProgress, ctx](const size_t got, const size_t) {
+          dataProcessedSize = base + got;
+          if (onProgress) onProgress(ctx);
+        });
+    if (res != HttpDownloader::OK) {
+      LOG_ERR("OTA", "pack %s download failed (%d)", spec.asset, static_cast<int>(res));
+      Storage.remove(spec.tempPath);
+      if (!required) {
+        // An app update is still useful without its data packs: the new app
+        // accepts the old pack as a prefix and can retry from Check updates.
+        LOG_ERR("OTA", "data packs skipped for this app update");
+        return OK;
+      }
+      return HTTP_ERROR;
+    }
+    uint8_t actual[32] = {};
+    if (!hashFile(spec.tempPath, spec.size, actual) || std::memcmp(actual, spec.sha256, sizeof(actual)) != 0) {
+      LOG_ERR("OTA", "pack %s failed size/sha256 verification", spec.asset);
+      Storage.remove(spec.tempPath);
+      if (!required) {
+        LOG_ERR("OTA", "data packs skipped for this app update");
+        return OK;
+      }
+      return INTERNAL_UPDATE_ERROR;
+    }
+    downloadDone += spec.size;
+    dataProcessedSize = downloadDone;
+    if (onProgress) onProgress(ctx);
+  }
+
+  const esp_partition_t* partition = dataPartition();
+  if (partition == nullptr) return INTERNAL_UPDATE_ERROR;
+  size_t writeDone = 0;
+  for (size_t i = 0; i < packCount; ++i) {
+    PackSpec& spec = packs[i];
+    if (!spec.changed) continue;
+    const size_t base = downloadDone + writeDone;
+    if (!writePackFromFile(partition, spec.tempPath, spec.offset, spec.size, spec.limit,
+                           [this, base, onProgress, ctx](const size_t wrote) {
+                             dataProcessedSize = base + wrote;
+                             if (onProgress) onProgress(ctx);
+                           })) {
+      LOG_ERR("OTA", "pack %s write failed", spec.asset);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    uint8_t actual[32] = {};
+    if (!hashPartition(partition, spec.offset, spec.size, actual) ||
+        std::memcmp(actual, spec.sha256, sizeof(actual)) != 0) {
+      LOG_ERR("OTA", "pack %s read-back verification failed", spec.asset);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    writeDone += spec.size;
+    dataProcessedSize = downloadDone + writeDone;
+    if (onProgress) onProgress(ctx);
+  }
+
+  for (size_t i = 0; i < packCount; ++i) {
+    if (packs[i].changed) Storage.remove(packs[i].tempPath);
+  }
+  LOG_INF("OTA", "data packs updated: %u blob(s), %u B", static_cast<unsigned>(packCount),
+          static_cast<unsigned>(writeDone));
+  packUpdates = false;
+  packsLoaded = false;
+  phase = Phase::Firmware;
+  return OK;
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::installDataPacksOnly(ProgressCallback onProgress, void* ctx) {
+  const auto result = loadPackManifest();
+  if (result != OK) return result;
+  if (!packUpdates) {
+    phase = Phase::Firmware;
+    return NO_UPDATE;
+  }
+  return installDataPacks(onProgress, ctx, true);
+}
+
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
@@ -421,6 +813,16 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(esp_err));
     return INTERNAL_UPDATE_ERROR;
+  }
+
+  // Data packs are written while the old app is still running, before the new
+  // image is selected. A pack failure therefore leaves the old app bootable;
+  // the new app's tolerant loader would also fall back per key if the write was
+  // interrupted. Pack manifests are optional for releases predating this path.
+  const auto packResult = installDataPacks(onProgress, ctx, /*required=*/false);
+  if (packResult != OK) {
+    LOG_ERR("OTA", "data pack update failed (%d); new app not selected", static_cast<int>(packResult));
+    return packResult;
   }
 
   esp_err = esp_ota_set_boot_partition(updatePartition);

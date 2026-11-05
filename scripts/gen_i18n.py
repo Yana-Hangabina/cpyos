@@ -740,6 +740,18 @@ def generate_keys_header(
     """
     compiled = [c for c in languages if builtin is None or c in builtin]
     embedded_zh = "ZH_CN" in compiled
+    # Prefix fingerprints let a newer image read a pack built before keys were
+    # appended: I18N_KEY_PREFIX_SIGNATURES[n] is fnv1a32(keys[:n]). The loader
+    # accepts an older pack only when its recorded signature equals the prefix,
+    # then treats the missing keys as English. Append-only key order is the
+    # contract that makes this safe; removing or reordering a key still rejects.
+    prefix_signatures: List[int] = [0x811C9DC5]
+    prefix_value = 0x811C9DC5
+    for key in string_keys:
+        for byte in key.encode("ascii") + b"\x00":
+            prefix_value ^= byte
+            prefix_value = (prefix_value * 0x01000193) & 0xFFFFFFFF
+        prefix_signatures.append(prefix_value)
     lines: List[str] = [
         "#pragma once",
         "#include <cstdint>",
@@ -748,17 +760,26 @@ def generate_keys_header(
         CLANG_FORMAT_OFF_COMMENT,
         "",
         "// Number of string keys and an FNV-1a fingerprint of their names in enum",
-        "// order. The data-partition language pack records the same pair; a pack",
-        "// built from a different translation set is rejected wholesale rather than",
-        "// read at the wrong offsets.",
+        "// order. The data-partition language pack records the same pair. A newer",
+        "// image accepts an older pack when its signature matches the prefix below;",
+        "// keys appended since then fall back to English instead of rejecting the",
+        "// whole pack. Removing or reordering keys still requires a fresh pack.",
         f"constexpr uint32_t I18N_KEY_COUNT = {len(string_keys)};",
         f"constexpr uint32_t I18N_KEY_SIGNATURE = 0x{fnv1a32(string_keys):08X}u;",
         "",
+        "// I18N_KEY_PREFIX_SIGNATURES[n] = FNV-1a over the first n key names.",
+        "// Used to accept language packs built before new keys were appended.",
+        "constexpr uint32_t I18N_KEY_PREFIX_SIGNATURES[] = {",
+        *[f"    0x{value:08X}u," for value in prefix_signatures],
+        "};",
+        "static_assert(sizeof(I18N_KEY_PREFIX_SIGNATURES) / sizeof(uint32_t) ==",
+        "                  I18N_KEY_COUNT + 1,",
+        '              "prefix signature table must cover every key count");',
+        "",
         "// FNV-1a over every translation value, key order then language order, each",
-        "// NUL-terminated. The pack records the same number, so a pack rebuilt from",
-        "// edited text with an unchanged key set is rejected instead of quietly",
-        "// serving stale translations. The device cannot recompute this: it holds",
-        "// only the embedded languages.",
+        "// NUL-terminated. A mismatch is logged but no longer rejects the pack:",
+        "// translations are content, not schema. Missing or stale text falls back",
+        "// per key instead of discarding every language.",
         f"constexpr uint32_t I18N_CONTENT_SIGNATURE = 0x{content_signature_value:08X}u;",
         "",
         "// 1 when Chinese is embedded in this build's image. The pack build keeps",
@@ -1432,6 +1453,30 @@ def main(
         languages, language_names, language_bcp47, string_keys, translations, inherited_sets = (
             load_translations(translations_dir, verbose, only_languages)
         )
+        # A released pack is positional. New images accept an older pack only
+        # when its key order is a prefix of the current order, so the order file
+        # freezes every key that has ever shipped (including unused ones) and
+        # new keys are appended. Never remove or reorder an entry here.
+        key_order_path = os.path.join(output_dir, "key_order.txt")
+        ordered_keys: List[str] = []
+        if os.path.isfile(key_order_path):
+            ordered_keys = [
+                line.strip()
+                for line in Path(key_order_path).read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+            missing_ordered = [key for key in ordered_keys if key not in translations]
+            if missing_ordered:
+                print(
+                    "Error: key_order.txt lists keys missing from the translations; "
+                    "restore them or update the order deliberately:",
+                    file=sys.stderr,
+                )
+                for key in missing_ordered[:10]:
+                    print(f"  - {key}", file=sys.stderr)
+                sys.exit(1)
+            ordered_set = set(ordered_keys)
+            string_keys = ordered_keys + [key for key in string_keys if key not in ordered_set]
         builtin = parse_builtin_langs(builtin_langs, languages)
 
         # --- Unused-string detection ---
@@ -1489,12 +1534,23 @@ def main(
             print()
 
         if unused_set and strip_unused:
-            string_keys = [k for k in string_keys if k not in unused_set]
+            # Keep every frozen key even if the current source no longer calls
+            # it: dropping it would shift the positional offsets of a newer
+            # image. Only keys added after the frozen list may be stripped.
+            frozen = set(ordered_keys)
+            removable = {key for key in unused_set if key not in frozen}
+            string_keys = [k for k in string_keys if k not in removable]
             translations = {
-                k: v for k, v in translations.items() if k not in unused_set
+                k: v for k, v in translations.items() if k not in removable
             }
             inherited_sets = [s - unused_set for s in inherited_sets]
-            print(f"  Stripping {len(unused_set)} unused string(s) from output.")
+            print(f"  Stripping {len(removable)} unused string(s) from output.")
+
+        # Freeze the exact order that was just emitted. New keys are appended
+        # here, so the next release sees them as part of the prefix. Keys in the
+        # file are never removed automatically; a deliberate edit is required.
+        if os.path.isfile(key_order_path):
+            Path(key_order_path).write_text("\n".join(string_keys) + "\n", encoding="utf-8")
 
         out = Path(output_dir)
         generate_keys_header(

@@ -60,6 +60,12 @@ Validity status();
 // Human-readable status for logs; nullptr when the pack is ready.
 const char* statusText();
 
+// True when the pack can be used but does not match this image: an older key
+// set (missing keys fall back to English), edited translations, or a missing
+// and corrupt pack. Home uses this to offer a one-tap retry after an OTA whose
+// data-pack phase failed.
+bool needsUpdate();
+
 // True when this language's strings live in the pack rather than the image.
 // English is never packed; Chinese is not packed while this build embeds it
 // (I18N_EMBEDDED_ZH), and is treated as packed when it does not, so a build

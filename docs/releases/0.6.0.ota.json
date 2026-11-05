@@ -1,0 +1,22 @@
+{
+  "en": [
+    "OTA updates the app and data packs",
+    "Language pack changes no longer need a full install",
+    "Older packs load; new keys fall back to English",
+    "Home offers a retry when packs fall back",
+    "Check updates can install packs only",
+    "Chapter comments in the reader",
+    "UI fixes for prompts, icons and sleep",
+    "Run Check updates once after upgrading"
+  ],
+  "zh": [
+    "OTA 同时更新固件与数据包",
+    "语言包键数变化不再要求完整安装",
+    "旧语言包自动兼容，新键回退英文",
+    "数据包失败后首页提示重试",
+    "检查更新可只更新语言与资源包",
+    "阅读器新增章评入口",
+    "提示、图标与睡眠画面修正",
+    "升级后请检查更新一次"
+  ]
+}

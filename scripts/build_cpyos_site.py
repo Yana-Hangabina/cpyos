@@ -94,6 +94,9 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
         copied += 1
     (output / 'ota').mkdir(exist_ok=True)
     shutil.copy2(release_dir / 'ota' / 'readpico.json', output / 'ota' / 'readpico.json')
+    packs = release_dir / 'readpico-packs.txt'
+    if packs.is_file():
+        shutil.copy2(packs, output / 'ota' / 'readpico-packs.txt')
     shutil.copy2(release_dir / 'latest.json', output / 'latest.json')
 
     print(f'Pages artifact -> {output}')

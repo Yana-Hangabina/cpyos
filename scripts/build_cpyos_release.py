@@ -32,6 +32,7 @@ import argparse
 import configparser
 import json
 import shutil
+import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
@@ -262,6 +263,14 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     for row in data_rows:
         copy(row['source'], output / row['name'])
         print(f'  data {row["role"]:<6} 0x{row["offset"]:06x} {row["size"]:>8} B  {row["name"]}')
+
+    # Device OTA reads this next to readpico-ota.json. It lists the same blobs
+    # with partition offsets, SHA-256 and an erase limit; without it an app-only
+    # OTA can only update the app slot.
+    subprocess.run([sys.executable, str(root / 'scripts' / 'generate_pack_manifest.py'), '--repo', str(root)],
+                   check=True)
+    copy(root / 'build' / 'readpico-packs.txt', output / 'readpico-packs.txt')
+    print('  data packs manifest: readpico-packs.txt')
 
     install_parts = parts(app_parts, data_rows)
     update_parts = parts([firmware_asset, app1_part], data_rows)

@@ -10,22 +10,20 @@
 //
 // Why the pack is signed three ways: the blob of a language is nothing but
 // strings concatenated with NULs, and the offset table is rebuilt on the device
-// from a same-as-English bitmap. A pack built from a different translation set
-// would still parse -- and would silently return the wrong string for every
-// key. Magic/version alone cannot catch that, so the header also records how
-// many keys the pack was built for, an FNV-1a fingerprint of their names in
-// StrId order, and an FNV-1a fingerprint of every translation value in key
-// order (then language order). The first two catch a changed key set; the third
-// catches a pack built from the same keys but edited text, which is exactly what
-// an OTA that ships only the data partition produces. A mismatch of any of them
-// rejects the whole pack and the UI falls back to English; it is never
-// partially trusted.
+// from a same-as-English bitmap. A pack built from a different key set would
+// still parse -- and would silently return the wrong string for every key.
+// Magic/version alone cannot catch that, so the header also records how many
+// keys the pack was built for, an FNV-1a fingerprint of their names in StrId
+// order, and an FNV-1a fingerprint of every translation value in key order
+// (then language order).
 //
-// The value fingerprint is compared against I18N_CONTENT_SIGNATURE, a constant
-// the generator bakes into I18nKeys.h from the same YAML that builds the
-// firmware image. The device cannot recompute it from its own tables: it holds
-// only the embedded languages. That is why it is a header field and not a
-// recomputation.
+// Compatibility rule (0.6.0+): a newer image accepts an older pack when the
+// pack's key signature matches the prefix of the current key list. Keys added
+// since then are filled with the English offset at load time, so an OTA that
+// only updates the app does not discard all 33 languages; removing or
+// reordering keys still changes the prefix and is rejected (a full pack update
+// fixes it). The value fingerprint is logged for diagnostics but no longer
+// rejects the pack: edited translations are content, not schema.
 //
 // Layout, little-endian, every blob and bitmap 4-byte aligned:
 //
@@ -202,7 +200,7 @@ inline uint32_t headerCrc(const Header& header) {
 // exactly the case that must not be confused with corruption.
 inline Validity validateHeader(const uint8_t* data, size_t available, uint32_t partitionBytes,
                                uint32_t expectedKeyCount, uint32_t expectedKeySignature,
-                               uint32_t expectedContentSignature, Header& out) {
+                               const uint32_t* keyPrefixSignatures, Header& out) {
   out = Header{};
   if (data == nullptr || available < I18N_PACK_HEADER_SIZE) return Validity::TooSmall;
 
@@ -223,9 +221,20 @@ inline Validity validateHeader(const uint8_t* data, size_t available, uint32_t p
   if (header.totalSize < indexEnd || header.totalSize > I18N_PACK_MAX_TOTAL) return Validity::TotalSize;
   if (header.totalSize > partitionBytes) return Validity::TotalSize;
   if (header.headerCrc32 != headerCrc(header)) return Validity::HeaderCrc;
-  if (header.keyCount != expectedKeyCount) return Validity::KeyCount;
-  if (header.keySignature != expectedKeySignature) return Validity::KeySignature;
-  if (header.contentSignature != expectedContentSignature) return Validity::ContentSignature;
+  // A newer image can read an older pack when its keys are a prefix of the
+  // current key list. Appended keys fall back to English at load time; a pack
+  // with more keys than this image, or with a different/reordered prefix, is
+  // still rejected because positional offsets would read the wrong strings.
+  if (header.keyCount > expectedKeyCount) return Validity::KeyCount;
+  if (header.keyCount == expectedKeyCount) {
+    if (header.keySignature != expectedKeySignature) return Validity::KeySignature;
+  } else {
+    if (keyPrefixSignatures == nullptr || header.keySignature != keyPrefixSignatures[header.keyCount]) {
+      return Validity::KeySignature;
+    }
+  }
+  // contentSignature is intentionally not compared here: translation text is
+  // content, not schema. The loader logs a mismatch and keeps the pack.
 
   out = header;
   return Validity::Ok;
