@@ -732,9 +732,8 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   deliverSleepPluginEvents();
 
-  (void)fromTimeout;  // one deep-sleep style; the timeout is no longer an exception
   const bool isQuickResumeSleep =
-      SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
+      SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME && !fromTimeout;
   // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
   // it visible until the first useful reader or home paint replaces it.
   APP_STATE.showBootScreen = false;
@@ -743,8 +742,35 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
+  LOG_INF("SLP", "deep sleep: timeout=%d style=%u quickResume=%d", static_cast<int>(fromTimeout),
+          static_cast<unsigned>(SETTINGS.deepSleepStyle), static_cast<int>(isQuickResumeSleep));
+  // Persistent counterpart of the serial line: after a wake the serial buffer is
+  // gone, but the mode that produced the screen on the glass is not.
+  {
+    char line[96];
+    const int n = snprintf(line, sizeof(line), "%lu,deep-%s style=%u quick=%d\n",
+                           static_cast<unsigned long>(millis()), fromTimeout ? "timeout" : "manual",
+                           static_cast<unsigned>(SETTINGS.deepSleepStyle), static_cast<int>(isQuickResumeSleep));
+    if (n > 0) {
+      HalFile log = Storage.open("/.crosspoint/wake.log", O_WRONLY | O_CREAT | O_APPEND);
+      if (log) {
+        (void)log.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
+        log.flush();
+        log.close();
+      }
+    }
+  }
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
+  if (!activityManager.isSleepActivity()) {
+    // Last resort: never power off with the previous page on the glass. This
+    // draws the built-in sleep face without allocating an Activity, so even an
+    // OOM sleep-screen allocation cannot leave Home looking frozen.
+    LOG_ERR("SLP", "no sleep activity became current; drawing the default sleep screen directly");
+    renderer.clearScreen();
+    GUI.drawSleepScreen(renderer, tr(STR_SLEEPING));
+    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  }
 
   if (!READING_STATS.saveToFile()) {
     LOG_ERR("RST", "Failed to save reading stats before deep sleep");
@@ -1859,6 +1885,14 @@ void loop() {
         SETTINGS.saveToFile();
         activityManager.requestUpdate();
         logSerial.printf("BOLD=%u\n", (unsigned)SETTINGS.fakeBold);
+      } else if (cmd.startsWith("DARK")) {
+        // Serial-only dark-mode A/B for the scrim/surface audit on the device.
+        const int space = cmd.indexOf(' ');
+        SETTINGS.screenInverted = space > 0 ? (cmd.substring(space + 1).toInt() != 0) : !SETTINGS.screenInverted;
+        display.setInverted(SETTINGS.screenInverted != 0);
+        SETTINGS.saveToFile();
+        activityManager.requestUpdate();
+        logSerial.printf("DARK=%u\n", (unsigned)SETTINGS.screenInverted);
       } else if (cmd == "CONFIRM") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugConfirm();
       } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
@@ -2021,8 +2055,18 @@ void loop() {
 #endif
       } else if (cmd == "WIFI") {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
+      } else if (cmd == "WIFIDEMO") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugWifiDemo();
       } else if (cmd == "SLEEP") {
         activityManager.goToSleep(false);
+      } else if (cmd == "AUTOSLEEPDEMO") {
+        // Exercise the timeout path without waiting for the timer or powering
+        // off: Quick Resume is the style that used to leave Home on the glass.
+        const uint8_t savedStyle = SETTINGS.deepSleepStyle;
+        SETTINGS.deepSleepStyle = CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
+        LOG_INF("SLP", "auto-sleep demo: Quick Resume selected; expecting the night screen");
+        activityManager.goToSleep(true);
+        SETTINGS.deepSleepStyle = savedStyle;
       } else if (cmd == "STANDBY") {
         activityManager.goToReaderStandby();
       } else if (cmd == "WAKE") {
@@ -2104,6 +2148,9 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugLikeJjwxcComment();
       } else if (cmd == "COMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcComment();
+      } else if (cmd == "CHCOMMENT") {
+        // Serial hook for the reader's whole-chapter (章评) panel.
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcChapterComments();
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
       } else if (cmd == "JJCACHEUI") {
 #ifdef BOARD_HAS_PSRAM

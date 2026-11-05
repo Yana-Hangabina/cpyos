@@ -175,7 +175,6 @@ class EpubReaderActivity final : public ReaderActivity {
     int top = 0;
     int lineH = 0;
     int titleY = 0;
-    int metaY = 0;
     int ruleY = 0;
     int headerBottom = 0;
     int waveY = 0;
@@ -530,6 +529,9 @@ class EpubReaderActivity final : public ReaderActivity {
   void drawCommentBubbles() const;
   void drawCommentBubbleList(const CommentBubble* bubbles, int count) const;
   void openCommentBubble(const CommentBubble& bubble);
+  // More/classic menu -> whole-chapter comments (章评). Opens the same comment
+  // panel in chapter scope; Back returns to this page with its position intact.
+  void openJjwxcChapterComments();
   // Opens the JJWXC app as a child, deep-linked to this book and to one of its
   // two maintenance actions, then drops the derived section caches on return.
   void openJjwxcUpdate(bool currentChapter, bool returnToContents = false);
@@ -707,6 +709,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void debugDismissHint() override;
   void debugOpenJjwxcComment() override;
   void debugOpenFakeJjwxcComment() override;
+  void debugOpenJjwxcChapterComments() override;
   void debugPageTurn(bool forward) override;
   void debugDumpPage() override;
   void debugOpenStressComment() override;

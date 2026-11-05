@@ -40,7 +40,10 @@ class MyActivity final : public Activity {
   // Two local tools (join network, file browser) + the compiled app catalog +
   // the plugin-directory tile. The drawer is a 4-column grid.
   static constexpr int kToolMax = 2 + 32 + 1;
-  static constexpr int kToolColumns = 4;
+  // Three columns, not four: a 136 px cell could not show a 5-character app
+  // name ("晋江文学城") at 14 pt, so the drawer truncated it. Three 187 px
+  // columns fit every current app name and still show nine tiles in three rows.
+  static constexpr int kToolColumns = 3;
 
   Rect tabRect(int index) const;
   Rect bodyRect() const;

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>脆皮鸭 CPYOS · Read Pico 中文阅读系统</title>
-<meta name="description" content="脆皮鸭 CPYOS 是面向 Read Pico（小纸 Pico）墨水屏的原生阅读系统：新版界面、晋江文学城、微信读书、中文输入、水波纹翻页与设备 OTA。">
+<title>脆皮鸭 CPYOS · Read Pico 阅读系统</title>
+<meta name="description" content="脆皮鸭 CPYOS 是面向 Read Pico（小纸 Pico）墨水屏的阅读系统：晋江文学城、网页阅读、中文排版、局部刷新与设备 OTA。">
 <meta name="theme-color" content="#f4f1e9" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0f0f0d" media="(prefers-color-scheme: dark)">
 <meta property="og:title" content="脆皮鸭 CPYOS">
-<meta property="og:description" content="把晋江、微信读书和一座纸面书架，装进 4.7 英寸墨水屏。">
+<meta property="og:description" content="面向 Read Pico 的墨水屏阅读系统：晋江、网页阅读、中文排版与设备 OTA。">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://yana-hangabina.github.io/cpyos/">
 <meta property="og:image" content="https://yana-hangabina.github.io/cpyos/assets/og.png">
@@ -22,7 +22,7 @@
 </script>
 <script type="module"
         src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"
-        integrity="sha384-f+fR3K1mnKB2tVps4hdEh+qJvLgH2bKw81Yn+eNE3+gE8YpqocjkxQON4k19I3e/"
+        integrity="sha384-f+R3K1mnKB2tVps4hdEh+qJvLgH2bKw81Yn+eNE3+gE8YpqocjkxQON4k19I3e/"
         crossorigin="anonymous"></script>
 </head>
 <body>
@@ -68,13 +68,13 @@
   <section class="hero" aria-labelledby="hero-title">
     <div class="wrap">
       <div>
-        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.4.0</span></span><span class="dot"></span><span>Open source</span></div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.5.0</span></span><span class="dot"></span><span>非官方固件</span></div>
         <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
-        <p class="lede">把晋江、微信读书、网页和一座<em>纸面书架</em>，装进 4.7 英寸墨水屏。</p>
-        <p class="en-lede">A reading-first e-ink system for the MindReset Read Pico. Native JJWXC and WeRead clients, a reader-mode web browser, Chinese input, a refreshed UI, water-ripple page turns and device OTA — built on CrossMux.</p>
+        <p class="lede">让 Read Pico 能读晋江、微信读书、本地书和网页。</p>
+        <p class="en-lede">A reading system for the MindReset Read Pico: JJWXC, WeRead, a text-mode web browser, Chinese typography, partial refresh and device OTA — built on CrossMux.</p>
         <div class="cta">
           <a class="btn solid" href="#install">网页刷机 <small>FLASH</small></a>
-          <a class="btn" href="#features">看看功能 <small>FEATURES</small></a>
+          <a class="btn" href="#features">功能 <small>FEATURES</small></a>
         </div>
       </div>
       <div class="device-stage" aria-hidden="true">
@@ -102,107 +102,73 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="no mono">01 / FEATURES</div>
-        <h2 id="features-title">不是把手机 App 缩小，<br>而是重新排一遍。<span>WHAT WE ADDED TO CROSSMUX</span></h2>
+        <h2 id="features-title">相对 CrossMux 上游，<br>新增和改进了什么。<span>WHAT CPYOS ADDS</span></h2>
       </div>
       <div class="features">
         <article class="feature reveal">
           <div class="idx">01</div>
           <div>
-            <h3>新版界面 / Refreshed UI</h3>
-            <p>首页只留下真正要看的东西：上次读到、最近阅读、近 7 天阅读和晋江更新。书架、找书、我的共用同一条水线与底部导航。</p>
-            <div class="tags"><span>HOME</span><span>LIBRARY</span><span>FIND</span><span>SETTINGS</span></div>
+            <h3>界面与交互</h3>
+            <p>首页只留上次读到、最近阅读、阅读统计和追更；设置按分类组织；应用收进「我的 → 工具」。阅读器改为单行标题栏，进度移到页脚波浪条，正文多一行。</p>
+            <div class="tags"><span>HOME</span><span>LIBRARY</span><span>READER</span><span>SURFACES</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">02</div>
           <div>
-            <h3>晋江文学城原生客户端</h3>
-            <p>书架、发现、书籍与作者搜索（中文关键词按 GBK 发送）、高级搜索、收藏夹、章节购买、段评点赞与回复、作者有话说、阅读进度同步。免费章节和已购买的 VIP 章节都可以缓存；段评正文可后台排队缓存。</p>
-            <div class="tags"><span>JJWXC</span><span>WAP</span><span>VIP</span><span>COMMENTS</span></div>
+            <h3>晋江文学城</h3>
+            <p>书架、榜单、搜索、收藏夹、章节购买、段评与章评、作者有话说、阅读进度同步。免费章节和已购买的 VIP 章节都可以缓存；段评正文可离线缓存。</p>
+            <div class="tags"><span>JJWXC</span><span>VIP</span><span>COMMENTS</span><span>SYNC</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">03</div>
           <div>
-            <h3>微信读书</h3>
-            <p>扫码登录、书架浏览、EPUB 下载与离线阅读、阅读进度同步；本地书、晋江书和微信读书共用一个书架，并显示来源徽标。</p>
-            <div class="tags"><span>WEREAD</span><span>SYNC</span><span>OFFLINE</span></div>
+            <h3>网页阅读</h3>
+            <p>输入网址，抓取正文并按当前阅读字号重新排版。支持链接、翻页、书签和访问历史；自动识别 GBK / GB18030 / UTF-16；HTTPS 与明文 HTTP 都可打开。不支持 JavaScript、表单和图片。</p>
+            <div class="tags"><span>WEB</span><span>READER MODE</span><span>GBK</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">04</div>
           <div>
-            <h3>为中文阅读准备</h3>
-            <p>一套覆盖 8,105 字 + GB2312 的可缩放中文字体，界面、书名、晋江与正文共用；UI 与阅读字号分开，阅读 10–34pt。另有离线拼音输入与书名搜索、11 种语言断词、SD 卡 TTF / OTF / TTC 与 EPUB 内嵌字体。</p>
-            <div class="tags"><span>PINYIN</span><span>HYPHENATION</span><span>FONTS</span><span>16-LEVEL</span></div>
+            <h3>中文与字体</h3>
+            <p>一套覆盖 8,105 个通用规范汉字 + GB2312 的可缩放字体，界面、书名、晋江和正文共用。界面与阅读字号分开（阅读 10–34pt）；离线拼音输入与书名搜索；常见 emoji 有内置字形。</p>
+            <div class="tags"><span>FONTS</span><span>PINYIN</span><span>EMOJI</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">05</div>
           <div>
             <h3>墨水屏显示</h3>
-            <p>16 级文字与界面抗锯齿、列带局部刷新与局部残影清理、水波纹翻页、DU 快速翻页、整页推屏看门狗、状态栏时钟局部刷新与屏幕修复。为 684×1216 面板调过 gamma、波形和异步推屏，尽量少闪、少残影。</p>
-            <div class="tags"><span>WAVE</span><span>FAST TURN</span><span>16-LEVEL AA</span><span>AREA REFRESH</span></div>
+            <p>16 级文字与界面抗锯齿；列带局部刷新与局部残影清理；水波纹翻页与 DU 快速翻页；异步推屏、扫描看门狗、状态栏时钟局部刷新和屏幕修复。</p>
+            <div class="tags"><span>16-LEVEL AA</span><span>BAND</span><span>WAVE</span><span>FAST TURN</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">06</div>
           <div>
-            <h3>体感翻页</h3>
-            <p>倾斜或左右摇晃设备翻页。阈值来自 kiikoread 的手势策略：慢倾斜、回弹、纵向晃动和普通点按都不会误触。</p>
-            <div class="tags"><span>TILT</span><span>SHAKE</span><span>IMU</span></div>
+            <h3>阅读器与书库</h3>
+            <p>书架显示来源徽标和追更快照；书签角标与书签面板；阅读器目录内可直接更新、缓存或购买晋江章节。成品 EPUB 与章节缓存使用设备绑定密钥加密。</p>
+            <div class="tags"><span>BOOKMARKS</span><span>SOURCES</span><span>ENCRYPTION</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">07</div>
           <div>
-            <h3>本地书库与阅读器</h3>
-            <p>EPUB / TXT / CBZ / FB2，实验性 PDF；书签、批注、词典、阅读统计、待机表盘。成品 EPUB 与章节正文使用设备绑定密钥加密。</p>
-            <div class="tags"><span>EPUB</span><span>CBZ</span><span>FB2</span><span>ANNOTATION</span></div>
+            <h3>体感翻页</h3>
+            <p>倾斜或左右摇晃设备翻页。慢倾斜、回弹、纵向晃动和普通点按都不会误触。</p>
+            <div class="tags"><span>TILT</span><span>SHAKE</span></div>
           </div>
         </article>
         <article class="feature reveal">
           <div class="idx">08</div>
           <div>
             <h3>系统与连接</h3>
-            <p>设备 OTA、SD 卡固件更新、浏览器传书与设置、WebDAV、OPDS、Calibre 无线；33 种 UI 语言按需从数据分区加载。</p>
-            <div class="tags"><span>OTA</span><span>WEB TRANSFER</span><span>OPDS</span><span>i18n</span></div>
+            <p>设备内 OTA（镜像源、双 app 槽升级）与 SD 卡固件更新；数据包按需加载；33 种界面语言；崩溃报告页记录重启原因。浏览器传书、WebDAV、OPDS 与 Calibre 无线沿用 CrossMux。</p>
+            <div class="tags"><span>OTA</span><span>DATA PACKS</span><span>i18n</span></div>
           </div>
         </article>
-        <article class="feature reveal">
-          <div class="idx">09</div>
-          <div>
-            <h3>网页阅读 / Reading browser</h3>
-            <p>输入网址后抓取网页并提取正文，按当前阅读字号与 16 级灰度重新排版，而不是缩放整页。支持页面链接、翻页、页面菜单、书签与访问历史；中文页面自动识别 GBK / GB18030 / UTF-16，HTTPS 与明文 HTTP 都可打开并标注不安全。不支持 JavaScript、表单和图片。</p>
-            <div class="tags"><span>WEB</span><span>READER MODE</span><span>GBK</span><span>BOOKMARKS</span></div>
-          </div>
-        </article>
-      </div>
-    </div>
-  </section>
-
-  <section aria-labelledby="principles-title">
-    <div class="wrap">
-      <div class="sec-head reveal">
-        <div class="no mono">02 / PRINCIPLES</div>
-        <h2 id="principles-title">三条取舍。<span>WHAT WE OPTIMISED FOR</span></h2>
-      </div>
-      <div class="principles reveal">
-        <div class="principle">
-          <div class="n">01</div>
-          <h3>阅读优先</h3>
-          <p>打开设备先看到上次读到的书，而不是功能网格。翻页、字号、字体和进度是主线；游戏和工具可以等。</p>
-        </div>
-        <div class="principle">
-          <div class="n">02</div>
-          <h3>中文优先</h3>
-          <p>拼音输入、断词、字体回退、晋江和微信读书都按中文阅读习惯设计。英文界面仍然完整，但不再是一切的原点。</p>
-        </div>
-        <div class="principle">
-          <div class="n">03</div>
-          <h3>设备优先</h3>
-          <p>每个功能都按 Read Pico 的 4.7 英寸、16 灰阶、无前光和有限内部内存做取舍；不能在这块板上成立的方案就不放进来。</p>
-        </div>
       </div>
     </div>
   </section>
@@ -210,10 +176,10 @@
   <section id="screens" aria-labelledby="screens-title">
     <div class="wrap">
       <div class="sec-head reveal">
-        <div class="no mono">03 / INTERFACE</div>
-        <h2 id="screens-title">界面结构。<span>LAYOUT MOCKUPS, NOT DEVICE CAPTURES</span></h2>
+        <div class="no mono">02 / INTERFACE</div>
+        <h2 id="screens-title">主要界面。<span>LAYOUT MOCKUPS</span></h2>
       </div>
-      <p class="muted" style="margin:-18px 0 28px;max-width:760px;font-size:13px">以下为排版与结构示意，不含任何设备上的书籍、账号或网络信息。真机效果以实际固件为准。</p>
+      <p class="muted" style="margin:-18px 0 28px;max-width:760px;font-size:13px">以下为排版示意，不含设备上的书籍、账号或网络信息。</p>
       <div class="gallery">
         <figure class="shot reveal">
           <div class="frame"><div class="mock-screen">
@@ -222,7 +188,7 @@
             <div class="mock-grid"><span></span><span></span><span></span></div>
             <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
           </div></div>
-          <figcaption><b>首页</b>上次读到、统计与最近阅读同屏。</figcaption>
+          <figcaption><b>首页</b>续读、统计与最近阅读。</figcaption>
         </figure>
         <figure class="shot reveal">
           <div class="frame"><div class="mock-screen">
@@ -231,7 +197,7 @@
             <div class="mock-covers"><i></i><i></i><i></i><i></i><i></i><i></i></div>
             <div class="mock-nav"><span>首页</span><span>书架</span><span>找书</span><span>我的</span></div>
           </div></div>
-          <figcaption><b>书架</b>来源与阅读进度共用一套网格。</figcaption>
+          <figcaption><b>书架</b>来源、进度与追更共用一套网格。</figcaption>
         </figure>
         <figure class="shot reveal">
           <div class="frame"><div class="mock-screen">
@@ -239,15 +205,15 @@
             <div class="mock-lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
             <div class="mock-nav"><span>上一页</span><span>菜单</span><span>下一页</span></div>
           </div></div>
-          <figcaption><b>阅读</b>正文、状态栏与翻页区域分层。</figcaption>
+          <figcaption><b>阅读</b>单行标题栏、正文和页脚波浪。</figcaption>
         </figure>
         <figure class="shot reveal">
           <div class="frame"><div class="mock-screen">
-            <div class="mock-status"><span class="mock-logo">Wi-Fi 网络</span><span>找到 3 个</span></div>
-            <div class="mock-list"><span>网络 A</span><span>网络 B</span><span>网络 C</span></div>
-            <div class="mock-nav"><span>重试</span><span>隐藏网络</span><span>取消</span></div>
+            <div class="mock-status"><span class="mock-logo">网页阅读</span><span>3 / 12</span></div>
+            <div class="mock-lines"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="mock-nav"><span>菜单</span><span>3 / 12</span><span></span></div>
           </div></div>
-          <figcaption><b>Wi-Fi 面板</b>扫描、连接和取消都在一个底部面板。</figcaption>
+          <figcaption><b>网页阅读</b>正文按阅读字号重新排版。</figcaption>
         </figure>
       </div>
     </div>
@@ -256,17 +222,17 @@
   <section aria-labelledby="device-title">
     <div class="wrap">
       <div class="sec-head reveal">
-        <div class="no mono">04 / DEVICE</div>
-        <h2 id="device-title">只为一台设备。<span>READ PICO / 小纸 PICO</span></h2>
+        <div class="no mono">03 / DEVICE</div>
+        <h2 id="device-title">只面向一台设备。<span>READ PICO</span></h2>
       </div>
       <div class="reveal">
         <table class="specs">
           <tr><th>Device</th><td><b>Read Pico（小纸 Pico，RDP-G01-W）</b></td></tr>
-          <tr><th>Panel</th><td>EWW 4.7" · 684 × 1216 · 16 灰阶 · 约 297 PPI · 无前光</td></tr>
+          <tr><th>Panel</th><td>4.7" · 684 × 1216 · 16 灰阶 · 约 297 PPI · 无前光</td></tr>
           <tr><th>SoC</th><td>ESP32-S3 · 双核 240 MHz · 8 MB PSRAM · Wi-Fi / BT5</td></tr>
           <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
           <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
-          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.1.0</span></b> · 预编译包只面向 Read Pico；上游其它目标仍可从源码构建</td></tr>
+          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.5.0</span></b> · 预编译包只面向 Read Pico</td></tr>
         </table>
       </div>
     </div>
@@ -275,26 +241,27 @@
   <section id="install" aria-labelledby="install-title">
     <div class="wrap">
       <div class="sec-head reveal">
-        <div class="no mono">05 / INSTALL</div>
+        <div class="no mono">04 / INSTALL</div>
         <h2 id="install-title">用浏览器刷机。<span>NO TOOLCHAIN REQUIRED</span></h2>
       </div>
       <div class="panel reveal" style="margin-bottom:26px;border-color:#b08a2e">
-        <h3>0.2.1 及更早版本：请用网页刷机升级到最新版本</h3>
-        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问，设备可能一直显示“检查更新失败”，或下载只有几 KB/s。0.4.0 已于 2026-11-04 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.4.0 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
-        <p class="muted">Devices on 0.2.1 or older: use the web flasher on this page. Their OTA manifest is hosted on GitHub Pages, which some networks cannot reach. 0.2.2 and newer use a mirror-hosted manifest and hold full CPU speed during OTA.</p>
+        <h3>0.2.1 及更早版本：请用网页刷机升级</h3>
+        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.5.0 已于 2026-11-05 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.5.0 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
+        <p class="muted">Devices on 0.2.1 or older: use the web flasher on this page. Their OTA manifest is hosted on GitHub Pages, which some networks cannot reach.</p>
       </div>
       <div class="install-grid">
         <div class="panel reveal">
           <div class="status">
-            <span class="v" id="release-version">0.4.0</span>
+            <span class="v" id="release-version">0.5.0</span>
             <span class="date" id="release-date">READ PICO · 2026</span>
           </div>
           <h3>这次更新</h3>
           <ul class="notes" id="release-notes">
-            <li>网页阅读 App：正文按阅读字号重排</li>
-            <li>书签、访问历史与中文网页编码识别</li>
-            <li>弹窗遮罩改为褪色，减少闪屏与残影</li>
-            <li>应用统一进入「我的」工具网格</li>
+            <li>章评：在阅读器里查看整章评论，可点赞、回复</li>
+            <li>阅读器改为单行标题栏，进度移到页脚波浪</li>
+            <li>工具抽屉改为三列，长应用名不再截断</li>
+            <li>超时休眠显示睡眠画面；Wi-Fi 图标与等待卡对齐</li>
+            <li>emoji 覆盖更全，字号切换失败不再丢失 emoji</li>
           </ul>
           <div class="sha">
             SHA-256 <span id="firmware-sha">—</span>
@@ -309,22 +276,22 @@
         </div>
         <div class="panel reveal">
           <h3>选择安装方式</h3>
-          <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留 NVS 和分区表。</p>
+          <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留设置和数据分区。</p>
           <div class="install-actions">
-            <esp-web-install-button id="install-button" manifest="./downloads/0.1.0/manifest-install.json">
+            <esp-web-install-button id="install-button" manifest="./downloads/0.5.0/manifest-install.json">
               <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">这个浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 https 打开；本地预览请用 http://localhost。</span>
             </esp-web-install-button>
-            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.1.0/manifest-upgrade.json">
+            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.5.0/manifest-upgrade.json">
               <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
             </esp-web-install-button>
           </div>
-          <p class="warn">首次安装会按完整安装包重建分区表，并要求浏览器擦除芯片。开始前请确认已备份整片 Flash，SD 卡里的书和设置不会被网页刷机删除。</p>
+          <p class="warn">首次安装会重建分区表并要求浏览器擦除芯片。开始前请确认已备份整片 Flash；SD 卡里的书和设置不会被网页刷机删除。</p>
           <ol style="margin-top:18px">
             <li>用 USB-C 数据线连接设备；它应显示为 <span class="mono">USB JTAG/serial debug unit</span>。</li>
             <li>点按钮，在串口列表里选择设备，等待写入完成并自动重启。</li>
-            <li>串口列表只显示 Read Pico（USB <span class="mono">303A:1001</span>）；看不到设备时先换数据线。</li>
+            <li>看不到设备时先换数据线；串口列表只显示 Read Pico（USB <span class="mono">303A:1001</span>）。</li>
           </ol>
         </div>
       </div>
@@ -332,20 +299,20 @@
       <div class="install-grid" style="margin-top:30px">
         <div class="panel reveal">
           <h3>设备内 OTA</h3>
-          <p>已经安装 CPYOS 后，直接在设备上更新：</p>
+          <p>已经安装 CPYOS 后，可以直接在设备上更新：</p>
           <ol>
             <li>连接 Wi-Fi。</li>
             <li>打开 <b>设置 → 系统 → 检查更新</b>。</li>
             <li>确认升级后不要断电；完成后设备会重启。</li>
           </ol>
-          <p class="warn" style="margin-top:14px">0.2.1 及更早版本请先使用上方网页刷机升级；它们的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。</p>
-          <p class="muted" style="margin-top:14px">OTA 只写 app0，不动 SD 卡、书库和设置。首次从 CrossMux 1.6.5 升级请使用完整安装包，因为两边的分区表不同。</p>
+          <p class="warn" style="margin-top:14px">0.2.1 及更早版本请先用网页刷机升级。</p>
+          <p class="muted" style="margin-top:14px">OTA 只写非活动的 app 槽，不动 SD 卡、书库和设置。语言包、网页资源、emoji、拼音或断词有变化的版本需要完整安装。</p>
         </div>
         <div class="panel reveal">
           <h3>先备份，再刷机</h3>
-          <p>这是非官方固件。第一次安装前请用 esptool 做一次整片 16 MiB 备份，并把备份文件放在另一台机器上。</p>
+          <p>这是非官方固件。第一次安装前请用 esptool 做一次整片 16 MiB 备份，并把备份放在另一台机器上。</p>
           <p class="mono" style="font-size:10.5px;line-height:1.9;word-break:break-all">python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin</p>
-          <p>恢复时把整片备份写回 <span class="mono">0x0</span>。不要只凭本页的偏移量手动刷写；完整包里的 <span class="mono">FLASH.md</span> 和 <span class="mono">SHA256SUMS</span> 才是准绳。</p>
+          <p>恢复时把整片备份写回 <span class="mono">0x0</span>。完整包里的 <span class="mono">FLASH.md</span> 与 <span class="mono">SHA256SUMS</span> 是偏移量和校验和的准绳。</p>
         </div>
       </div>
     </div>
@@ -354,34 +321,27 @@
   <section id="credits" aria-labelledby="credits-title">
     <div class="wrap">
       <div class="sec-head reveal">
-        <div class="no mono">06 / CREDITS</div>
-        <h2 id="credits-title">站在很多人肩上。<span>THANKS</span></h2>
+        <div class="no mono">05 / CREDITS</div>
+        <h2 id="credits-title">致谢。<span>THANKS</span></h2>
       </div>
       <div class="credits reveal">
         <div>
           <h3>上游与朋友</h3>
           <ul>
-            <li><a href="https://github.com/0x1abin/crossmux">CrossMux</a>：本项目的上游固件、构建系统、设备抽象与发布工具。</li>
+            <li><a href="https://github.com/0x1abin/crossmux">CrossMux</a>：本项目的上游固件、构建系统与设备抽象。</li>
             <li><a href="https://github.com/crosspoint-reader/crosspoint-reader">CrossPoint Reader</a>：阅读器与界面原点的社区项目。</li>
             <li><a href="https://github.com/obijuankenobiii/inx">Inx</a>、<a href="https://github.com/franssjz/cpr-vcodex">cpr-vcodex</a>、<a href="https://github.com/atomic14/diy-esp32-epub-reader">diy-esp32-epub-reader</a>：排版、界面与 EPUB 阅读的早期探索。</li>
-            <li><a href="https://github.com/Yana-Hangabina/cpyos">脆皮鸭 CPYOS</a>：新版界面、晋江与微信读书整合、中文输入与本文所列的设备侧改动。</li>
+            <li><a href="https://github.com/wegooo-cell/read-pico-reader">kiikoread</a>：水波纹翻页、TEXTTURN 提前回浅、gamma 覆盖表、离线拼音搜索与输入、摇晃翻页判定。</li>
           </ul>
-          <div class="kiikoread">
-            <b>KIIKOREAD / APACHE-2.0</b>
-            <p><a href="https://github.com/wegooo-cell/read-pico-reader">kiikoread</a> 的水波纹翻页引擎、TEXTTURN 白→中灰提前回浅、gamma 覆盖 LUT、离线拼音搜索与连续拼音输入、摇晃翻页阈值与判定，均在本项目中标注并移植。移植时按 Read Pico 的内部内存与扫描时序做了改动，具体差异见仓库 <span class="mono">patches/</span>。</p>
-          </div>
         </div>
         <div>
           <h3>第三方组件</h3>
           <ul>
-            <li>MuPDF 1.26.3（AGPL-3.0）：实验性 PDF 阅读。默认 Read Pico 发布包不启用 PDF；启用后的组合按 AGPL-3.0 分发。</li>
-            <li>FreeType（FTL / GPLv2）：矢量字体与 CFF / OTF 轮廓。</li>
-            <li>Noto Sans CJK、Source Han Sans（SIL OFL 1.1）：中文回退字体与测试字体。</li>
-            <li>pypinyin 0.55.0（MIT）、hyphenation 词典（各自许可证）、Lucide 图标（ISC）。</li>
+            <li>FreeType：矢量字体与 CFF / OTF 轮廓。</li>
+            <li>Noto Sans CJK、Source Han Sans、Noto Emoji：中文与 emoji 字形。</li>
+            <li>pypinyin、hyphenation 词典、Lucide 图标。</li>
             <li>晋江文学城与微信读书是各自权利人的商标；本项目是非官方客户端，与两家公司及 MindReset 无隶属关系。</li>
           </ul>
-          <h3 style="margin-top:28px">许可证</h3>
-          <p>本项目代码以 MIT 发布；第三方组件保留各自许可证。完整清单见仓库的 <span class="mono">LICENSE</span>、<span class="mono">THIRD_PARTY_NOTICES.md</span> 与 <span class="mono">LICENSES/</span>。</p>
         </div>
       </div>
     </div>

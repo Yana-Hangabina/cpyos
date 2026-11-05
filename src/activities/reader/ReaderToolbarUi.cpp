@@ -62,7 +62,7 @@ constexpr int kToolTabs = 4;
 // Contents tail badge/action and current-chapter bar. The placeholder below
 // reserves the slot inside the shared list without touching FreeInkUI's
 // ListItem layout. A row carries a 16 px state glyph + its label, then one
-// 56x56 rounded action button (Pond v5 frame 06).
+// 56x56 rounded action button (refreshed UI frame 06).
 constexpr jjwxc_toc::Density kContentsDensity =
     UiHighDpiProfile::enabled ? jjwxc_toc::Density::High : jjwxc_toc::Density::Low;
 constexpr int16_t kContentsButton = UiHighDpiProfile::enabled ? 56 : 44;
@@ -95,7 +95,7 @@ constexpr int16_t kContentsRowH = UiHighDpiProfile::enabled ? 88 : 56;
 constexpr char kTailPlaceholder[] =
     "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM";  // 32 real-advance glyphs
 constexpr int16_t kPanelTabH = UiHighDpiProfile::enabled ? 64 : 44;
-// Type panel (Pond v5 frame 05): a 546 px card, a 48x4 grabber, four tabs and
+// Type panel (refreshed UI frame 05): a 546 px card, a 48x4 grabber, four tabs and
 // a strict 2x4 grid of 96 px cells. Every control is 56 px high and every step
 // button 56x56, so the two columns line up on one baseline.
 constexpr int16_t kTextSheetH = UiHighDpiProfile::enabled ? 546 : 414;
@@ -268,10 +268,11 @@ void ReaderToolbarUi::buildToolTabs(UiScreen& screen, const fui::Rect row, const
                   static_cast<int16_t>(textW + 2), tab.height},
         label, style);
     if (active) {
-      const int16_t underlineW = 28;
-      screen.target().fill(fui::Rect{static_cast<int16_t>(tab.x + (tab.width - underlineW) / 2),
-                                     static_cast<int16_t>(tab.bottom() - 4), underlineW, 4},
-                           ink, 2);
+      // Underline under the label, 6 px above the strip rule. The old fixed
+      // 28 px dash sat at tab.bottom() - 4 and overlapped the 2 px rule by 2 px,
+      // so the indicator read as one thick line.
+      const int16_t labelX = static_cast<int16_t>(groupX + iconSize + iconGap);
+      screen.target().fill(fui::Rect{labelX, static_cast<int16_t>(tab.bottom() - 10), textW, 3}, ink, 2);
     }
     screen.frame().hit(tab, ACTION_TOOL, static_cast<int16_t>(i), fui::InputTouch);
   }
@@ -389,7 +390,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   const bool textPanel = model_.activeTool == kTextTool;
   const bool contents = model_.panel && model_.activeTool == 0;
 
-  // Pond v5 frame 05: 20 px top corners, a 48x4 grabber 9 px below the free
+  // refreshed UI frame 05: 20 px top corners, a 48x4 grabber 9 px below the free
   // edge, and 9 px of air before the tab strip (22 px band in total).
   fui::SheetProps sheetProps;
   sheetProps.anchor = fui::SheetEdge::Bottom;
@@ -457,7 +458,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   // (the 604 px content column), tighter on the low-density boards.
   const int16_t chromePad = UiHighDpiProfile::enabled ? 40 : 12;
   if (contents && model_.contentsFilters) {
-    // The filter strip doubles as the state legend (Pond v5 frame 06): plain
+    // The filter strip doubles as the state legend (refreshed UI frame 06): plain
     // words in a row, the active one bold with a 4 px rule under it. The three
     // filters the reader actually implements are the three words.
     const fui::Rect band = screen.takeTop(kBookmarkChipsH, tokens.spaceSm).inset(fui::Insets{0, chromePad, 0, chromePad});
@@ -578,7 +579,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   }
 
   if (textPanel) {
-    // Pond v5 frame 05: a strict 2x4 grid. Each cell is a label plus one
+    // refreshed UI frame 05: a strict 2x4 grid. Each cell is a label plus one
     // 56 px control; both columns share one baseline, so nothing staggers.
     const fui::Rect body = screen.body();
     const fui::Paint ink = fui::Paint::solid(fui::Color::Black);
@@ -658,8 +659,14 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
         screen.target().fill(fui::Rect{static_cast<int16_t>(box.right() - stepW - 1), box.y, 1, box.height}, ink);
         const fui::Rect minus{box.x, box.y, stepW, box.height};
         const fui::Rect plus{static_cast<int16_t>(box.right() - stepW), box.y, stepW, box.height};
-        screen.target().text(minus, "-", valueStyle);
-        screen.target().text(plus, "+", valueStyle);
+        // Drawn 20x2 strokes instead of the "-"/"+" glyphs: the hyphen sat on
+        // the text baseline and the two signs had different optical centres.
+        const int16_t cy = static_cast<int16_t>(box.y + box.height / 2);
+        const int16_t mx = static_cast<int16_t>(minus.x + minus.width / 2);
+        const int16_t px = static_cast<int16_t>(plus.x + plus.width / 2);
+        screen.target().fill(fui::Rect{static_cast<int16_t>(mx - 10), static_cast<int16_t>(cy - 1), 20, 2}, ink);
+        screen.target().fill(fui::Rect{static_cast<int16_t>(px - 10), static_cast<int16_t>(cy - 1), 20, 2}, ink);
+        screen.target().fill(fui::Rect{static_cast<int16_t>(px - 1), static_cast<int16_t>(cy - 10), 2, 20}, ink);
         const std::string shown = stepValueText(value.c_str());
         screen.target().text(
             fui::Rect{static_cast<int16_t>(minus.right()), box.y, static_cast<int16_t>(plus.x - minus.right()),
@@ -728,10 +735,12 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   listProps_.rowHeight = listRowH;
   listProps_.rowGap = listRowGap;
   listProps_.toggleCheckbox = false;
-  listProps_.toggleWidth = UiHighDpiProfile::enabled ? 48 : 28;
-  listProps_.toggleHeight = UiHighDpiProfile::enabled ? 28 : 18;
-  listProps_.toggleRadius = UiHighDpiProfile::enabled ? 14 : 9;
-  listProps_.toggleKnobRadius = UiHighDpiProfile::enabled ? 10 : 6;
+  // Same switch as Settings (56x32 / 16 / 12); the reader panel had its own
+  // smaller 48x28 variant.
+  listProps_.toggleWidth = UiHighDpiProfile::enabled ? 56 : 28;
+  listProps_.toggleHeight = UiHighDpiProfile::enabled ? 32 : 18;
+  listProps_.toggleRadius = UiHighDpiProfile::enabled ? 16 : 9;
+  listProps_.toggleKnobRadius = UiHighDpiProfile::enabled ? 12 : 6;
   listProps_.toggleKnobInset = 3;
   listProps_.toggleBorderWidth = 2;
   listProps_.labelText = tokens.bodyText;

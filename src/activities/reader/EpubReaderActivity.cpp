@@ -124,7 +124,7 @@ bool xteinkClassPanel() {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 
-// Pond v5 reader chrome (frame 04). The header uses the reader's status face
+// refreshed UI reader chrome (frame 04). The header uses the reader's status face
 // (a vector face on Read Pico, the small UI face elsewhere); the numeric face
 // is the same tabular one the old status bar used for clock and page counts.
 #if FREEINK_DEVICE_READPICO
@@ -137,7 +137,10 @@ constexpr int kChromeNumericFont = UI_10_FONT_ID;
 // The 28x72 bookmark ribbon hangs 16 px from the right edge; the header's
 // right cluster stops clear of it instead of running underneath.
 constexpr int kChromeRibbonReserve = 16 + 28 + 12;
-constexpr int kChromeWaveHeight = 18;
+// 28 px band around a 16 px bar: the band is tall enough for the book
+// percentage that now sits at the end of the wave.
+constexpr int kChromeWaveHeight = 28;
+constexpr int kChromeWaveBarH = 16;
 constexpr int kChromeHeaderGap = 8;   // air between the header rule and the body
 constexpr int kChromeFooterGap = 8;   // air between the body and the wave
 constexpr int kChromeWaveToPages = 10;  // air between the wave and its page numbers
@@ -3017,6 +3020,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // growing a second network path inside the reader.
       openJjwxcBookDetail();
       return;
+    case EpubReaderMenuActivity::MenuAction::JJWXC_CHAPTER_COMMENTS:
+      openJjwxcChapterComments();
+      return;
 #endif
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
@@ -3580,7 +3586,7 @@ void EpubReaderActivity::renderBook() {
   orientedMarginLeft += SETTINGS.screenMargin;
   orientedMarginRight += SETTINGS.screenMargin;
 
-  // Pond v5 chrome (frame 04): the header sits above the body and the wave +
+  // refreshed UI chrome (frame 04): the header sits above the body and the wave +
   // page numbers below it, so the body reserves both bands instead of the old
   // bottom status strip.
   const ReaderChromeMetrics chrome = readerChromeMetrics();
@@ -4467,7 +4473,7 @@ void EpubReaderActivity::openContentsPanel(const int focusTocIndex) {
   openOverlay(Overlay::Contents);
 }
 
-// First-run page (Pond v5 frame 16): "body text lives in three zones, the
+// First-run page (refreshed UI frame 16): "body text lives in three zones, the
 // device only has three keys". It is a real page of its own -- white paper,
 // no wash over the body -- and still appears exactly once. Every label comes
 // from an existing StrId; the design's heading and its "no confirm key" line
@@ -5363,8 +5369,10 @@ EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetrics(
   m.top = viewTop + std::max(6, SETTINGS.screenMargin / 2);
   m.lineH = renderer.getLineHeight(kChromeTextFont);
   m.titleY = m.top + 2;
-  m.metaY = m.titleY + m.lineH + 2;
-  m.ruleY = m.metaY + m.lineH + 8;
+  // One header line: the progress percentage moved onto the footer wave and
+  // the font size is no longer status-bar chrome, so the rule sits directly
+  // under the title and the page gains a full text line.
+  m.ruleY = m.titleY + m.lineH + 8;
   m.headerBottom = m.ruleY + 1;
   m.pageH = renderer.getLineHeight(kChromeTextFont);
   m.pageY = screenH - viewBottom - 8 - m.pageH;
@@ -5415,34 +5423,23 @@ void EpubReaderActivity::drawReaderHeader() const {
     }
     const int available = clusterRight - m.left - 12;
     if (available > 0) {
-      const std::string shown = renderer.truncatedText(kChromeTextFont, title.c_str(), available);
+      std::string shown = renderer.truncatedText(kChromeTextFont, title.c_str(), available);
+      // A truncated "book · chapter" used to cut inside the chapter's bracket
+      // ("怪谈鬼村（…"). Prefer a clean book-title truncation when the composed
+      // title does not fit.
+      if (shown != title && sb.titleMode != CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
+        const std::string bookOnly = epub->getTitle();
+        if (!bookOnly.empty()) {
+          shown = renderer.truncatedText(kChromeTextFont, bookOnly.c_str(), available);
+        }
+      }
       renderer.drawText(kChromeTextFont, m.left, m.titleY, shown.c_str(), true);
     }
   }
 
-  // Reading position. The percent is real book progress; the font size is the
-  // live setting, so the line always has something true to say.
-  std::string meta;
-  if (automaticPageTurnActive) {
-    meta = tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / pageTurnDuration);
-  } else {
-    if (sb.showBookProgressPercent && epub && section) {
-      const int pageCount = section->estimatedTotalPages();
-      const float chapterProgress =
-          pageCount > 0 ? static_cast<float>(section->currentPage + 1) / static_cast<float>(pageCount) : 0.0f;
-      const int percent = clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) *
-                                                           100.0f + 0.5f));
-      meta = std::to_string(percent) + "%";
-    }
-    const std::string fontPart = std::string(tr(STR_FONT_SIZE)) + " " + std::to_string(SETTINGS.fontPointSize);
-    meta = meta.empty() ? fontPart : meta + " · " + fontPart;
-  }
-  const int metaAvailable = m.right - m.left;
-  if (metaAvailable > 0) {
-    const std::string shown = renderer.truncatedText(kChromeTextFont, meta.c_str(), metaAvailable);
-    renderer.drawText(kChromeTextFont, m.left, m.metaY, shown.c_str(), true);
-  }
-
+  // No second header line: the book percentage now rides on the footer wave
+  // (drawReaderFooter) and the font size is a setting, not status chrome. This
+  // returns one full text line to the page.
   const int ruleW = m.right - m.left;
   if (ruleW > 0) renderer.fillRect(m.left, m.ruleY, ruleW, 1, true);
 }
@@ -5463,29 +5460,52 @@ void EpubReaderActivity::drawReaderFooter() const {
     percent =
         clampPercent(static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f));
   }
-  const int fillW = width * percent / 100;
+  // The book percentage is the wave's own value, so it belongs on the bar: keep
+  // a small right-hand gap for the label instead of printing it in the header.
+  char pctText[8] = {};
+  int pctW = 0;
+  const bool showPct = sb.showBookProgressPercent && epub && section;
+  if (showPct) {
+    snprintf(pctText, sizeof(pctText), "%d%%", percent);
+    pctW = renderer.getTextWidth(kChromeNumericFont, pctText);
+  }
+  const int waveRight = showPct ? std::max(m.left + 24, m.right - pctW - 10) : m.right;
+  const int fillW = (waveRight - m.left) * percent / 100;
   // Filled read portion first, then the wave rides on top of it so the line
   // stays crisp instead of dissolving into the dither.
+  const int barY = m.waveY + (m.waveH - kChromeWaveBarH) / 2;
+  const int waveCenter = barY + kChromeWaveBarH / 2;
   if (fillW > 0) {
-    renderer.fillRectDither(m.left, m.waveY + 4, fillW, m.waveH - 4, Color::LightGray);
+    renderer.fillRectDither(m.left, barY + 2, fillW, kChromeWaveBarH - 2, Color::LightGray);
   }
   constexpr int kAmplitude = 3;
   constexpr int kPeriod = 28;
   int prevX = m.left;
-  int prevY = m.waveY + kAmplitude;
-  for (int x = m.left + 2; x <= m.right; x += 2) {
+  int prevY = waveCenter;
+  for (int x = m.left + 2; x <= waveRight; x += 2) {
     const double phase = static_cast<double>(x - m.left) * 2.0 * 3.141592653589793 / kPeriod;
-    const int y = m.waveY + kAmplitude + static_cast<int>(std::lround(std::sin(phase) * kAmplitude));
+    const int y = waveCenter + static_cast<int>(std::lround(std::sin(phase) * kAmplitude));
     renderer.drawLine(prevX, prevY, x, y, 2, true);
     prevX = x;
     prevY = y;
   }
   if (fillW > 0) {
     const int knob = 10;
-    const int knobX = std::min(m.right - knob, m.left + fillW - knob / 2);
-    renderer.fillRoundedRect(knobX, m.waveY + kAmplitude - knob / 2, knob, knob, knob / 2, Color::Black);
+    const int knobX = std::min(waveRight - knob, m.left + fillW - knob / 2);
+    renderer.fillRoundedRect(knobX, waveCenter - knob / 2, knob, knob, knob / 2, Color::Black);
+  }
+  if (showPct) {
+    const int pctLineH = renderer.getLineHeight(kChromeNumericFont);
+    renderer.drawText(kChromeNumericFont, m.right - pctW, m.waveY + (m.waveH - pctLineH) / 2, pctText, true);
   }
 
+  // Auto page turn used to live in the removed header line; keep its state
+  // visible on the counter line instead of a second header row.
+  const std::string autoText =
+      automaticPageTurnActive ? tr(STR_AUTO_TURN_ENABLED) + std::to_string(60 * 1000 / pageTurnDuration) : std::string();
+  if (!autoText.empty()) {
+    renderer.drawText(kChromeTextFont, m.left, m.pageY, autoText.c_str(), true);
+  }
   if (!sb.showChapterPageCount) return;
   const int pageCount = section ? section->estimatedTotalPages() : 1;
   const int page = section ? section->currentPage + 1 : 1;
@@ -5495,7 +5515,7 @@ void EpubReaderActivity::drawReaderFooter() const {
   renderer.drawText(kChromeNumericFont, m.right - pageW, m.pageY, pageText, true);
 
   const int tocIndex = currentTocIndex();
-  if (tocIndex >= 0 && epub) {
+  if (autoText.empty() && tocIndex >= 0 && epub) {
     char chapterText[48];
     snprintf(chapterText, sizeof(chapterText), "%s %d/%d", tr(STR_CHAPTER), tocIndex + 1,
              epub->getTocItemsCount());
@@ -5604,7 +5624,7 @@ void EpubReaderActivity::refreshStatusBarClockIfDue() {
 // ---------------------------------------------------------------------------
 
 namespace {
-// Pond v5 frame 05: the type panel is a strict 2x4 grid. Every cell maps to a
+// refreshed UI frame 05: the type panel is a strict 2x4 grid. Every cell maps to a
 // setting that already exists; "paragraph spacing" is the reader's extra
 // paragraph spacing, and "page margin" is screenMargin.
 constexpr StrId kTextRowNames[] = {StrId::STR_FONT,          StrId::STR_FONT_SIZE,      StrId::STR_LINE_SPACING,
@@ -7385,11 +7405,14 @@ void EpubReaderActivity::drawBookmarkCorner(const int top, const int rightMargin
   constexpr int kW = 28;
   constexpr int kH = 72;
   constexpr int kNotch = 12;
-  constexpr int kHitW = 88;
-  constexpr int kHitH = 104;
+  // The old 88x104 target was anchored to the screen edge and covered the
+  // battery capsule (which ends at x ~= screenW - 52), so a tap on the battery
+  // toggled the bookmark. Keep a 44x86 target around the visible flag instead.
+  constexpr int kHitW = kW + 16;
+  constexpr int kHitH = kH + 14;
   const int screenW = renderer.getScreenWidth();
   const int x = screenW - 16 - kW;
-  bookmarkCornerRect_ = Rect{std::max(0, screenW - kHitW), 0, kHitW, kHitH};
+  bookmarkCornerRect_ = Rect{std::max(0, x - 8), 0, kHitW, kHitH};
 
   if (currentPageBookmarked) {
     renderer.fillRect(x, 0, kW, kH - kNotch, true);
@@ -7487,6 +7510,7 @@ int EpubReaderActivity::layoutCommentBubbles(const Page&, int, int, int, int, in
 void EpubReaderActivity::drawCommentBubbles() const {}
 void EpubReaderActivity::drawCommentBubbleList(const CommentBubble*, int) const {}
 void EpubReaderActivity::openCommentBubble(const CommentBubble&) {}
+void EpubReaderActivity::openJjwxcChapterComments() {}
 void EpubReaderActivity::drawJjwxcPlaceholderAction(int, int) {
   jjwxcActionActive_ = false;
   jjwxcMoreActive_ = false;
@@ -7499,5 +7523,6 @@ void EpubReaderActivity::openJjwxcChapterAction(uint32_t, bool, int) {}
 void EpubReaderActivity::prepareForJjwxcChild() {}
 void EpubReaderActivity::debugOpenFakeJjwxcComment() {}
 void EpubReaderActivity::debugOpenJjwxcComment() {}
+void EpubReaderActivity::debugOpenJjwxcChapterComments() {}
 void EpubReaderActivity::debugOpenStressComment() {}
 #endif

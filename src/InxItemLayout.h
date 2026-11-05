@@ -102,6 +102,9 @@ namespace InxOptionGeometry {
 inline constexpr int visibleRowLimit = 5;
 inline constexpr int rowHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::buttonHeight : 62;
 inline constexpr int headerHeight = UiHighDpiProfile::enabled ? UiHighDpiProfile::buttonHeight : 62;
+// A selected row's ring is 8 px shorter than its row, so without this the last
+// ring in a scrolled popup ended 3-4 px above the panel's bottom outline.
+inline constexpr int panelBottomPad = 12;
 
 // Wrapped-headline (dialog body) band metrics. OptionPopup measures the band with
 // these and CpyTheme::drawOptionPopup draws with them, so the option hit rects and
@@ -150,7 +153,7 @@ inline Layout layout(const Rect bounds, const int optionCount, const int selecte
   const int availableRows = std::max(1, (bounds.height - headerHeight - headlineHeight) / rowHeight);
   const int rows = std::min(visibleRows(optionCount), availableRows);
   const int width = panelWidth(bounds);
-  const int height = headerHeight + headlineHeight + rows * rowHeight;
+  const int height = headerHeight + headlineHeight + rows * rowHeight + panelBottomPad;
   const int first = std::clamp(selected - rows / 2, 0, std::max(0, optionCount - rows));
   return {
       Rect{bounds.x + (bounds.width - width) / 2, bounds.y + std::max(0, (bounds.height - height) / 2), width, height},

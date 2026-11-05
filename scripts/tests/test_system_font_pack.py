@@ -77,8 +77,9 @@ class SystemFontPackTest(unittest.TestCase):
             self.skipTest('fontTools not installed')
         cmap = TTFont(FONT).getBestCmap()
         # U+00B7 byline separator plus the navigation glyphs used by STR_BACK/
-        # STR_EXIT/STR_HOME/STR_PREV/STR_NEXT and the date hint's minus sign.
-        for codepoint in (0x00B7, 0x30FB, 0x00AB, 0x00BB, 0x2212):
+        # STR_EXIT/STR_HOME/STR_PREV/STR_NEXT, the date hint's minus sign and
+        # the settings picker's single guillemets (row chevrons).
+        for codepoint in (0x00B7, 0x30FB, 0x00AB, 0x00BB, 0x2039, 0x203A, 0x2212):
             self.assertIn(codepoint, cmap)
 
     def test_generator_round_trips(self):

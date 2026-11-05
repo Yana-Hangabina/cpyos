@@ -32,6 +32,9 @@ class EpubReaderMenuActivity final : public UiListActivity {
     IMAGE_SCALING,  // Legacy action ID; image scaling remains in Settings.
     JJWXC_UPDATE_CURRENT,
     JJWXC_UPDATE_LIST,
+    // Whole-chapter comments (章评). Listed here so both this classic menu and
+    // the toolbar More panel (which is built from the same rows) can offer it.
+    JJWXC_CHAPTER_COMMENTS,
     JJWXC_BOOK_DETAIL,
     // The cloud that exists for a JJWXC book is the site's own reading progress,
     // which the app reads and writes when its detail page opens. The generic
@@ -64,7 +67,9 @@ class EpubReaderMenuActivity final : public UiListActivity {
   // fixed-capacity array avoids any heap allocation for the row list. Labels
   // are set once in the constructor (buildMenuRowItems()); buildScreen()
   // only refreshes rows whose values reflect live state.
-  static constexpr size_t MAX_MENU_ITEMS = 20;
+  // A JJWXC book can show 20 rows (every optional row present plus 章评);
+  // buildMenuRowItems() silently drops anything past the cap, so keep headroom.
+  static constexpr size_t MAX_MENU_ITEMS = 22;
   freeink::ui::ListItem menuRowItems[MAX_MENU_ITEMS]{};
   void buildMenuRowItems();
 

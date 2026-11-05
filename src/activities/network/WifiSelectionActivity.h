@@ -208,6 +208,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  void debugWifiDemo() override;
   bool preventAutoSleep() override { return true; }
   // The connected acknowledgement only changes the badge and two status lines,
   // so push a band instead of repainting (and re-driving) the whole sheet.

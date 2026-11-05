@@ -19,7 +19,7 @@ inline constexpr size_t kHeaderSize = 32;
 // Partition-relative offset. The language pack is the growing artifact and stays
 // before this blob's own growth room; emoji is fixed-size and sits at the end.
 inline constexpr uint32_t kPartitionOffset = 0x160000;
-inline constexpr uint32_t kMaxBytes = 0x20000;  // 128 KiB, the tail of a 1.5 MiB spiffs
+inline constexpr uint32_t kMaxBytes = 0x20000 - kHeaderSize;  // TTF bytes; header shares the 128 KiB slot
 
 struct Header {
   char magic[4];

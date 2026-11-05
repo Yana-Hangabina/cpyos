@@ -439,4 +439,16 @@ inline void draw(const GfxRenderer& renderer, const UIIcon icon, const int x, co
   if (!bitmap || scale <= 0) return;
   renderer.drawMaskAA(bitmap, size, size, x, y, size * scale, size * scale, true, !inverted);
 }
+
+// Draw at an exact pixel box. `draw(..., scale)` multiplies the 32 px source
+// grid (scale 2 = 64 px), which is right for the app grid but wrong wherever
+// the layout reserves a specific box (the My tool tiles reserve 48 px).
+inline void drawSized(const GfxRenderer& renderer, const UIIcon icon, const int x, const int y, const int pixels,
+                      const bool inverted) {
+  if (pixels <= 0) return;
+  if (drawModern(renderer, icon, x, y, pixels, inverted)) return;
+  const uint8_t* bitmap = get(icon);
+  if (!bitmap) return;
+  renderer.drawMaskAA(bitmap, size, size, x, y, pixels, pixels, true, !inverted);
+}
 }  // namespace InxAppIcons

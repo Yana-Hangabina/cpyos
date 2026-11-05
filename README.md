@@ -1,118 +1,101 @@
 # 脆皮鸭 CPYOS
 
-[English](./README.en.md) | **简体中文**
+面向 **Read Pico（小纸 Pico，RDP-G01-W）** 墨水屏的阅读系统，基于 [CrossMux](https://github.com/0x1abin/crossmux) 开发。
 
-**脆皮鸭 CPYOS** 是面向 **Read Pico（小纸 Pico，RDP-G01-W）** 墨水屏的原生阅读系统。它基于 [CrossMux](https://github.com/0x1abin/crossmux) 上游，把**新版界面 / refreshed UI**、**晋江文学城**、**微信读书**、**网页阅读**、中文输入、水波纹翻页和设备 OTA 做成一台真正能日常使用的阅读器。
+官网与网页刷机：<https://yana-hangabina.github.io/cpyos/><br>
+发布、完整安装包与校验和：<https://github.com/Yana-Hangabina/cpyos/releases>
 
-> 官网与网页刷机：[yana-hangabina.github.io/cpyos](https://yana-hangabina.github.io/cpyos/)<br>
-> 发布与完整安装包：[Releases](https://github.com/Yana-Hangabina/cpyos/releases)
+## 这是什么
 
-## 我们新增、主打的功能
+CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地读中文网络小说、本地书和网页。
 
-### 新版界面 / Refreshed UI
-首页只保留上次读到、最近阅读、近 7 天阅读和晋江更新；书架、找书、我的共用一条水线与底部导航。设置从「我的」进入分类子页，返回路径始终回到「我的」，不再跳到旧的设置界面。找书页把微信读书、晋江、本地书、OPDS 的登录与书架入口直接摊开，每个来源有自己的会话。
+它在 CrossMux 的基础上做了这些事：
 
-### 晋江文学城原生客户端
-- 书架翻页、书籍详情、章节列表窗口化与跳章、书籍 / 作者 / 高级搜索（中文关键词按 GBK 发送）、发现与 14 个榜单来源、收藏夹管理。
+- 重做界面，首页、书架、找书、我的和阅读器按墨水屏重新排版；
+- 内置晋江文学城客户端和网页阅读；
+- 统一中文字体、拼音输入、断词和 emoji 回退；
+- 针对这块面板做局部刷新、抗锯齿和翻页效果；
+- 提供设备内 OTA 与网页刷机。
+
+> 本仓库不包含晋江客户端的实现（`src/jjwxc/`）。公开源码可以构建**不含晋江**的 `readpico`；带晋江的发布固件由发布流水线使用私有组件构建。其它功能都在本仓库内。
+
+## 相对 CrossMux 上游的新增与改进
+
+### 界面与交互
+
+- 首页只保留上次读到、最近阅读、近 7 天阅读和晋江更新；书库、找书、我的共用底部导航。
+- 设置按分类子页组织；应用统一收进「我的 → 工具」，不再有单独的旧应用页。
+- 阅读器使用单行标题栏，进度百分比放在页脚波浪条上，正文多出一行高度。
+- 弹窗、等待卡、消息卡、Toast 和底部抽屉统一为同一套表面；弹窗打开时底层页面变淡，而不是压暗。
+- 书籍封面使用 8-bit 灰阶缩略图，主界面之间切换不再整屏闪烁。
+
+### 晋江文学城
+
+- 书架、发现与榜单、书籍 / 作者 / 高级搜索（中文关键词按 GBK 发送）、收藏夹管理。
+- 章节列表窗口化与跳章、章节购买（价格确认 + 6 位支付密码）、未购章占位与重试。
 - 免费章节和已购买的 VIP 章节都可以缓存、离线阅读并同步进度。
-- 章节购买、价格确认、6 位支付密码（可选记住，设备密钥 AES-256-GCM 封装）、未购章占位、重试未购章。
-- 段评计数、正文离线缓存、点赞、回复、发表段评；所有写操作只在用户点按时发生。段评正文可在后台按队列缓存（待机或 Wi-Fi 恢复时继续，队列页可暂停）。
-- 阅读进度双向同步、书架追更快照；读到末页可继续下载新章。
-- 成品 EPUB 与章节正文使用设备绑定密钥加密；阅读器退出时清理明文派生缓存。
-
-#### 为什么用 WAP 登录，而不是 App 登录接口
-
-设备使用晋江手机版 **WAP 登录**（`/login/wapLogin`），不是 App API 登录：WAP 会话与手机浏览器/App 的会话相互独立，设备登录**不会顶掉手机端**，这是我们需要的同时在线形态。App API 登录目前被服务端要求**图形验证码**（申请设备验证码返回 `2021: 异常请求，缺少前置步骤或操作超时`）；墨水屏没有 JS/图形验证码能力，**这个问题尚未解决**，所以 App API 登录不可用。WAP 登录目前没有图形验证码，是当前唯一路径；如果服务端将来也对 WAP 加图形码，需要另找方案，不能靠反复重试。详见 [docs/cpyos/jjwxc-login.md](docs/cpyos/jjwxc-login.md)。
-
-### 微信读书
-扫码登录、书架浏览、EPUB 下载与离线阅读、阅读进度同步。微信读书、晋江和本地书共用书架，并显示来源徽标。
+- 段评与章评：读取、点赞、回复、发表段评；段评正文可离线缓存，并支持前台阅读时后台预取。
+- 「作者有话说」随正文缓存；阅读进度双向同步；书架追更快照；读到末页可继续下载新章。
+- 成品 EPUB 与章节缓存使用设备绑定密钥加密。
 
 ### 网页阅读
-输入网址即可获取网页并提取正文，按当前阅读字号与 16 级灰度重新排版，而不是缩放整页截图。支持页面内链接、翻页、页面菜单、书签与访问历史（可删除/清空）以及最近访问；中文页面自动识别 GBK / GB18030 / UTF-16，gzip/deflate 压缩容错。HTTPS 与明文 HTTP 都可以打开，明文会在页面上标注不安全；Wi-Fi 静默连接已保存网络，失败时释放射频并给出可返回的错误页。加载卡显示从连接到排版的连续进度，取消后可立即打开其他链接。
 
-### 中文阅读
-- 统一可缩放中文字体：UI、书名 / 作者、晋江 App 与阅读正文共用一套覆盖 8,105 字 + GB2312 的字族，随固件提供，首次启动释放到 SD 后流式读取。
-- UI 字号（紧凑 / 标准 / 大 / 特大）与阅读字号（10–34pt）分开设置；生僻字可放 SD 卡完整字体。
-- 离线拼音书名搜索与连续拼音输入（349 KB 数据表，随数据分区刷入）。
-- 11 种语言断词自动机，按需从数据分区加载。
-- SD 卡 TTF / OTF / TTC；EPUB 内嵌字体；带自有字体的书自动使用书内字体。
+输入网址后抓取网页并提取正文，按当前阅读字号重新排版。支持页面内链接、翻页、页面菜单、书签和访问历史；中文页面自动识别 GBK / GB18030 / UTF-16，HTTPS 与明文 HTTP 都可打开。不支持 JavaScript、表单和图片。
+
+### 中文与字体
+
+- 一套覆盖 8,105 个通用规范汉字 + GB2312 的可缩放中文字体，界面、书名、晋江与正文共用。
+- 界面字号与阅读字号分开设置（阅读 10–34pt）；生僻字可放 SD 卡完整字体。
+- 离线拼音书名搜索与连续拼音输入；11 种语言断词按需加载。
+- 内置部分 emoji 字形；Wi-Fi 名称、书名和正文里的常见 emoji 不再显示方框。
 
 ### 墨水屏显示与翻页
-- 16 级文字与界面抗锯齿：4-bit 覆盖度、50% B/W 阈值，斜线、圆角、图标与反色文字都参与灰度合成。
-- 列带（局部）刷新与局部残影清理；四个主界面之间切换不再整屏闪。
-- 水波纹翻页（移植自 kiikoread，按 Read Pico 内部内存改为 8 KiB 热窗）。
-- 黑白快速翻页（DU 波形）、异步推屏、前向预绘；整页推屏有 8 秒扫描看门狗。
-- 状态栏时钟每分钟局部刷新；全刷屏与屏幕修复。
-- gamma 覆盖 LUT、TEXTTURN 白→中灰提前回浅（均移植自 kiikoread）。
-- 倾斜 / 摇晃体感翻页，阈值移植自 kiikoread。
 
-### 阅读器与本地书库
-EPUB、TXT、CBZ、FB2，实验性 PDF；书签、批注 / 笔记、词典、阅读统计与热力图、待机表盘、最近阅读、续读卡。支持 KOReader 进度同步。
+- 16 级文字与界面抗锯齿；列带局部刷新与局部残影清理。
+- 水波纹翻页（移植自 kiikoread，按本机内存调整）与 DU 快速翻页。
+- 异步推屏、前向预绘、整页扫描看门狗、状态栏时钟局部刷新、屏幕修复。
+- 倾斜 / 摇晃体感翻页。
 
 ### 系统与连接
-设备 OTA、SD 卡固件更新、浏览器传书与设置、WebDAV、OPDS、Calibre 无线、可选的 USB 大容量存储；33 种 UI 语言按需加载；崩溃报告页记录重启原因与上次启动阶段。
 
-## 设备与发布
+- 设备内 OTA（镜像源 + 双 app 槽升级清单）、SD 卡固件更新。
+- 数据分区按需加载：拼音、断词、语言包、网页资源、emoji。
+- 33 种界面语言；崩溃报告页记录重启原因与上次启动阶段。
+- 可选 U 盘模式、浏览器传书与设置、WebDAV、OPDS、Calibre 无线（沿用 CrossMux）。
 
-| 项目 | 说明 |
-|---|---|
-| 目标设备 | Read Pico（小纸 Pico，RDP-G01-W），ESP32-S3，684×1216 16 灰阶 |
-| 预编译包 | **只提供 Read Pico**；上游其它目标仍可从源码构建 |
-| 当前版本 | **0.4.0**（CPYOS 独立版本号，从 0.1.0 开始，不接续 CrossMux 1.x） |
-| 安装方式 | 浏览器 Web Serial 刷机、完整安装包、设备 OTA、SD 卡固件更新 |
-| 分区 | app0 / app1 各 7.19 MiB，数据分区 1.5 MiB（拼音 / 断词 / 语言包 / Web 资源 / emoji） |
+## 安装
 
-### 第一次安装
+预编译包**只面向 Read Pico**。第一次安装前先做整片 16 MiB 备份，并把备份放到另一台机器上：
 
-1. **先备份整片 Flash（16 MiB）**，并把备份放到另一台机器上：
-   ```bash
-   python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
-   ```
-2. 用桌面版 Chrome 或 Edge 打开 [官网刷机页](https://yana-hangabina.github.io/cpyos/#install)，点「首次安装 / 恢复」。
-3. 写入完成后设备自动重启。首次安装会重建分区表并擦除芯片；SD 卡里的书和 `/.crosspoint` 设置不会被网页刷机删除。
-
-从已经运行 CPYOS 的设备升级时用「从 CPYOS 升级」，保留 NVS 与分区表。完整包的偏移量、校验和与手动 `esptool` 命令见包内 `FLASH.md` 与 `SHA256SUMS`。
-
-### 设备内 OTA
-
-已安装 CPYOS 0.2.2 或更新版本后：**设置 → 系统 → 检查更新**。OTA 写入非活动的 app 槽（app0 或 app1），不动数据分区、SD 卡、书库和设置。固件从 GitHub Release 的 `latest` 资产读取更新（经镜像前缀）：
-
-```
-https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json
+```bash
+python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 ```
 
-0.2.1 及更早版本的清单仍在 GitHub Pages，部分网络无法访问；请先用官网网页刷写升级一次。数据包有变化的版本不能只做 app-only OTA，发布说明会标注。
+然后用桌面版 Chrome 或 Edge 打开[官网刷机页](https://yana-hangabina.github.io/cpyos/#install)：
 
-首次从 CrossMux 1.6.5 或出厂固件切换请使用完整安装包，因为两边的分区表不同。
+- **首次安装 / 恢复**：从出厂固件或 CrossMux 1.6.5 切换时使用，会重建分区表；
+- **从 CPYOS 升级**：已经在跑 CPYOS 的设备使用，保留设置和数据分区。
 
-## 版本与发布
+设备内 OTA 在 **设置 → 系统 → 检查更新**。OTA 只写非活动的 app 槽，不动 SD 卡、书库和设置。
 
-版本号由 `platformio.ini` 的 `[crosspoint] version` 定义；Git tag 是 `cpyos-X.Y.Z`（例如 `cpyos-0.4.0`），产品版本仍是裸 `X.Y.Z`。发布工作流会：
+**0.2.1 及更早版本**的设备 OTA 清单在 GitHub Pages，部分网络无法访问，请先用官网网页刷机升级一次。
 
-1. 构建 `readpico` 环境，校验 `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（不是 `arduino-lib-builder`）、板级 tag、芯片、app0 槽大小；
-2. 生成拼音 / 断词 / 语言包 / Web 资源 / emoji 包，并生成 `build/data_manifest.txt`；
-3. 产出完整安装包、升级包（同时写 app0 与 app1）、应用固件、Web 刷机 manifest、OTA 清单和 `SHA256SUMS`；
-4. 创建 GitHub Release，并部署 GitHub Pages（官网 + 网页刷机 + OTA 清单）。
-
-维护者步骤见 [docs/cpyos/release.md](docs/cpyos/release.md)，用户更新说明见 [docs/cpyos/install.md](docs/cpyos/install.md)，版本历史见 [CHANGELOG.md](CHANGELOG.md)。
+语言包 / 网页资源 / emoji / 拼音 / 断词有变化的版本必须**完整安装**，不能只做 app-only OTA；发布说明会标注。完整包的偏移量、校验和与手动命令见包内 `FLASH.md` 和 `SHA256SUMS`。
 
 ## 从源码构建
 
-需要 PlatformIO Core（或 `pioarduino`）、Python 3、Git。Read Pico 的显示补丁放在 `patches/`，因为 `freeink-sdk` 是固定提交的 gitlink：
+需要 PlatformIO Core、Python 3 和 Git。`freeink-sdk` 是固定提交的子模块，显示相关补丁放在 `patches/`：
 
 ```bash
 git clone --recursive https://github.com/Yana-Hangabina/cpyos.git
 cd cpyos
 git submodule update --init --recursive
 
-# freeink-sdk 的两个本地补丁（显示 / 水波纹 / 字体 CFF）
 bash patches/freeink-sdk/apply.sh
 bash patches/freeink-sdk-cff/apply.sh
-
-# pioarduino 平台缓存准备
 python3 scripts/patch_pioarduino_cache.py --prepare-platform
 
-# 构建 Read Pico（数据包外置）
+# 不含晋江的公开构建
 pio run -e readpico
 
 # 生成数据分区内容
@@ -121,25 +104,22 @@ python3 scripts/build_web_pack.py
 python3 scripts/generate_hyphenation_db.py
 python3 scripts/generate_pinyin_db.py /path/to/pypinyin-0.55.0-py2.py3-none-any.whl
 python3 scripts/generate_data_manifest.py
-
-# 组装发布包（不发布也能生成）
-python3 scripts/build_cpyos_release.py --version 0.4.0
 ```
 
-产物在 `dist/cpyos/0.4.0/`。构建判据不要只看退出码：日志里要有 `[SUCCESS]`，镜像的 `esp_app_desc.project_name` 必须是 `crossmux` 或 `cpyos`（不能是 `arduino-lib-builder`）。桌面模拟器：
+构建成功的判据是日志里出现 `[SUCCESS]`，并且镜像的 `esp_app_desc.project_name` 是 `crossmux` 或 `cpyos`（不是 `arduino-lib-builder`）。
+
+带晋江的发布构建（`readpico_jjwxc`）需要把私有组件检出到 `src/jjwxc/`，由发布流水线完成。桌面模拟器：
 
 ```bash
 pio run -e simulator_readpico -t run_simulator
 ```
 
-## 与 CrossMux 上游同步
+## 参与开发
 
-本仓库是 [`0x1abin/crossmux`](https://github.com/0x1abin/crossmux) 的 fork。
-
-| 分支 | 用途 |
-|---|---|
-| `main` | 上游镜像，不做 CPYOS 改动 |
-| `cpyos` | **默认分支**，CPYOS 发布分支 |
+- 默认分支是 `cpyos`；`main` 只镜像上游，不放 CPYOS 提交。
+- 功能改动请从 `cpyos` 切分支，构建通过后再合并。
+- 不要提交 `src/jjwxc/`、账号 / Cookie / 抓包正文或设备截图。
+- 问题反馈请附设备型号、CPYOS 版本、复现步骤和脱敏后的串口日志。
 
 同步上游：
 
@@ -152,28 +132,12 @@ git switch cpyos
 git merge main
 ```
 
-也可以在 GitHub 上对 `main` 使用「Sync fork」，再把 `main` 合进 `cpyos`。发布始终从 `cpyos` 打 tag。
-
 ## 致谢
 
 - **CrossMux**、**CrossPoint Reader**、**Inx**、**cpr-vcodex**、**diy-esp32-epub-reader**：上游固件、界面与 EPUB 阅读的早期探索。
-- **[kiikoread / read-pico-reader](https://github.com/wegooo-cell/read-pico-reader)（kiikoread，Apache-2.0）**：水波纹翻页引擎、TEXTTURN 白→中灰提前回浅、gamma 覆盖 LUT、离线拼音搜索与连续拼音输入、摇晃翻页阈值与判定。移植差异记录在 `patches/freeink-sdk/` 与相关源码注释中。
-- **MuPDF**（AGPL-3.0，实验性 PDF）、**FreeType**、**Noto Sans CJK / Source Han Sans**（OFL）、**pypinyin**（MIT）、**Lucide**（ISC）与断词词典作者。
-- refreshed UI 的设计语言与本文档站点的排版。
+- **kiikoread（read-pico-reader）**：水波纹翻页、TEXTTURN 提前回浅、gamma 覆盖表、离线拼音搜索与输入、摇晃翻页判定。
+- Noto Sans CJK / Source Han Sans、FreeType、pypinyin、Lucide 与断词词典作者。
 
-完整第三方清单见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+## 免责声明
 
-## 安全与免责声明
-
-- 本项目是**非官方固件**，与 MindReset、晋江文学城、微信读书均无隶属关系。
-- 晋江与微信读书使用的是非公开接口，可能随时变化。设备侧流量经过 TLS，但客户端不验证服务器证书与主机名；请只在可信网络中使用。
-- 仓库不包含任何账号、密码、token、Cookie 或抓包正文。登录凭据只保存在设备上，并使用设备密钥加密或混淆。
-- 刷机有风险。第一次安装前必须完成整片备份；不要根据本文档手抄偏移量，使用发布包里的 `FLASH.md` 与 `manifest-*.json`。
-
-## 参与贡献
-
-见 [CONTRIBUTING.md](./CONTRIBUTING.md)。问题反馈请附设备型号、CPYOS 版本、复现步骤与脱敏后的串口日志；不要把账号、Cookie 或未脱敏日志贴到 Issue。
-
-## 许可证
-
-本项目代码以 [MIT](./LICENSE) 发布。第三方组件保留各自许可证；MuPDF 相关实验构建按 AGPL-3.0 分发。见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+这是**非官方固件**，与 MindReset、晋江文学城、微信读书均无隶属关系。晋江与微信读书使用的是非公开接口，可能随时变化。设备流量经过 TLS，但客户端不校验服务器证书与主机名，请只在可信网络中使用。刷机有风险，第一次安装前务必保留整片备份。

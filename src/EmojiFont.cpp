@@ -91,15 +91,18 @@ bool loadPack() {
 bool install(GfxRenderer& renderer, const uint8_t pointSize) {
   if (!ttfBytes_ && !loadPack()) return false;
   if (pointSize == 0 || pointSize == pointSize_) return fontId_ != 0;
-  unregister(renderer);
+  // Build the replacement face before touching the live one. A reader font-size
+  // change must never be able to strip emoji from the whole UI just because the
+  // new size did not fit: on failure the old face stays installed.
   if (!memory::psramHasHeadroom(kGlyphCacheBytes + 128 * 1024, kGlyphCacheBytes, 32 * 1024)) {
-    LOG_ERR(kTag, "no PSRAM headroom for the emoji glyph cache");
-    return false;
+    LOG_ERR(kTag, "no PSRAM headroom for the emoji glyph cache (keeping %upt)",
+            static_cast<unsigned>(pointSize_));
+    return fontId_ != 0;
   }
   auto face = makeUniqueNoThrow<TtfEpdFont>();
   if (!face) {
-    LOG_ERR(kTag, "emoji face allocation failed");
-    return false;
+    LOG_ERR(kTag, "emoji face allocation failed (keeping %upt)", static_cast<unsigned>(pointSize_));
+    return fontId_ != 0;
   }
   face->addResidentSource(TtfEpdFont::Regular, ttfBytes_.get(), static_cast<uint32_t>(ttfSize_));
   // Match the reader's grayscale depth: the 16-level path reads 4-bit coverage,
@@ -107,9 +110,11 @@ bool install(GfxRenderer& renderer, const uint8_t pointSize) {
   // EPUB font does.
   const bool fourBit = renderer.getGrayscaleLevels() == 16;
   if (!face->load(pointSize, /*twoBit=*/true, kGlyphCacheBytes, /*maxGlyphs=*/512, fourBit)) {
-    LOG_ERR(kTag, "emoji face failed to load at %upt", static_cast<unsigned>(pointSize));
-    return false;
+    LOG_ERR(kTag, "emoji face failed to load at %upt (keeping %upt)", static_cast<unsigned>(pointSize),
+            static_cast<unsigned>(pointSize_));
+    return fontId_ != 0;
   }
+  unregister(renderer);
   renderer.insertFont(kEmojiFontId, face->family());
   renderer.registerTtfFont(kEmojiFontId, face.get());
   renderer.setEmojiFont(kEmojiFontId);

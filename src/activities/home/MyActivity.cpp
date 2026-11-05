@@ -158,8 +158,12 @@ Rect MyActivity::cardRect(const int index) const {
   // Quick pills (14), search row (52), then 18 px of air before the cards.
   // The old top left only 4 px between the search field and the cards.
   const int top = body.y + kQuickH + 20 + 52 + 18;
-  return Rect{body.x + kMargin + (index % 2) * (kCardW + kCardGapX),
-              top + (index / 2) * (kCardH + kCardGapY), kCardW, kCardH};
+  // Two cards fill the content axis exactly. The fixed 292 pair was 604 wide
+  // inside a 594 content band, so the grid ended 9-10 px past the right margin
+  // (left 45 / right 36 on a 684 px screen).
+  const int w = (body.width - kMargin * 2 - kCardGapX) / 2;
+  return Rect{body.x + kMargin + (index % 2) * (w + kCardGapX),
+              top + (index / 2) * (kCardH + kCardGapY), w, kCardH};
 }
 
 Rect MyActivity::cardRowRect(const int card, const int row) const {
@@ -169,10 +173,16 @@ Rect MyActivity::cardRowRect(const int card, const int row) const {
 
 Rect MyActivity::quickPillRect(const int index) const {
   const Rect body = bodyRect();
-  constexpr int widths[3] = {220, 120, 220};
+  // Fill the card axis: the old fixed 220/120/220 row stopped 24 px short of
+  // the card grid's right edge. The middle pill keeps a fixed width (it only
+  // holds "Bluetooth"); the two status pills share the remainder.
+  constexpr int kGap = 10;
+  constexpr int kMidW = 120;
+  const int available = body.width - kMargin * 2;
+  const int sideW = std::max(80, (available - kGap * 2 - kMidW) / 2);
   int x = body.x + kMargin;
-  for (int i = 0; i < index; ++i) x += widths[i] + 10;
-  return Rect{x, body.y + 14, widths[index], 44};
+  for (int i = 0; i < index; ++i) x += (i == 1 ? kMidW : sideW) + kGap;
+  return Rect{x, body.y + 14, index == 1 ? kMidW : sideW, 44};
 }
 
 Rect MyActivity::searchRowRect() const {
@@ -191,7 +201,10 @@ Rect MyActivity::toolCellRect(const int index) const {
   const int column = index % kToolColumns;
   const int row = index / kToolColumns;
   const int top = body.y + 12 + row * (kToolH + 16);
-  return Rect{body.x + kMargin + column * (kToolW + kToolGap), top, kToolW, kToolH};
+  // Fill the content axis: 4 * 139 + 3 * 16 = 604 was 10 px wider than the
+  // 594 px band, so the last column ran under the right margin.
+  const int w = (body.width - kMargin * 2 - (kToolColumns - 1) * kToolGap) / kToolColumns;
+  return Rect{body.x + kMargin + column * (w + kToolGap), top, w, kToolH};
 }
 
 int MyActivity::toolCount() const {
@@ -211,10 +224,12 @@ void MyActivity::drawTabs() {
                       on ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
     if (on) {
       const int w = renderer.getTextWidth(UI_12_FONT_ID, labels[i], EpdFontFamily::BOLD);
-      // Air under the glyphs and above the strip rule: drawing the bar at
-      // kTabH - 5 made it merge with the rule into one thick line (device
-      // feedback 2026-10-26).
-      renderer.fillRoundedRect(r.x, r.y + kTabH - 18, w, 4, 2, Color::Black);
+      // Derive the bar from the glyph bottom. The fixed `kTabH - 18` was drawn
+      // for the 12 pt font; the UI_12 role is 16 pt now and the bar covered the
+      // bottom 5 px of the characters (device feedback 2026-11-04).
+      const int textY = r.y + 26;
+      const int underlineY = textY + renderer.getFontAscenderSize(UI_12_FONT_ID) + 6;
+      renderer.fillRoundedRect(r.x, underlineY, w, 3, 1, Color::Black);
     }
   }
 }
@@ -463,16 +478,26 @@ void MyActivity::drawTools() {
     }
 
     if (i == toolSelected_) {
-      renderer.drawRoundedRect(cell.x - 2, cell.y - 2, cell.width + 4, cell.height + 4, 2, 18, true);
+      renderer.drawRoundedRect(cell.x - 2, cell.y - 2, cell.width + 4, cell.height + 4, 2, 16, true);
     }
+    // The tile reserves 48 px (the layout was drawn around that box); draw at
+    // exactly 48. InxAppIcons::draw(scale=2) renders 64 px and pushed the label
+    // out of the tile.
+    constexpr int kIconPx = 48;
+    const int ascender = renderer.getFontAscenderSize(UI_10_FONT_ID);
+    // Bottom padding is measured from the glyph bottom, not from a fixed y: the
+    // UI font is scalable (Compact..XL), so only an ink-relative anchor keeps
+    // the label inside the tile.
+    const int labelY = cell.y + cell.height - 14 - ascender;
+    const int iconY = cell.y + std::max(4, (labelY - cell.y - kIconPx) / 2);
     if (maskIcon != nullptr) {
-      drawMaskIcon(renderer, *maskIcon, cell.x + (cell.width - 48) / 2, cell.y + 20, 48);
+      drawMaskIcon(renderer, *maskIcon, cell.x + (cell.width - kIconPx) / 2, iconY, kIconPx);
     } else {
-      InxAppIcons::draw(renderer, icon, cell.x + (cell.width - 48) / 2, cell.y + 20, 2, false);
+      InxAppIcons::drawSized(renderer, icon, cell.x + (cell.width - kIconPx) / 2, iconY, kIconPx, false);
     }
     const std::string label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(title), cell.width - 8);
     const int labelW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
-    renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, cell.y + 84, label.c_str());
+    renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, labelY, label.c_str());
   }
 }
 
@@ -501,7 +526,7 @@ void MyActivity::drawSearchRow() {
   drawMaskIcon(renderer, icon_search_32, r.x + 16, r.y + (r.height - 20) / 2, 20);
   renderer.drawText(UI_10_FONT_ID, r.x + 48, r.y + (r.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
                     tr(STR_SEARCH_SETTINGS));
-  drawChevron(renderer, r.x + r.width - 22, r.y + r.height / 2 - 6);
+  drawChevron(renderer, r.x + r.width - 18, r.y + r.height / 2 - 6);
 }
 
 void MyActivity::drawSettingsCard(const int index) {
@@ -518,9 +543,11 @@ void MyActivity::drawSettingsCard(const int index) {
     case 3: headerIcon = &icon_sliders_horizontal_48; title = StrId::STR_CAT_SYSTEM; break;
   }
   drawMaskIcon(renderer, *headerIcon, card.x + 18, card.y + (kCardHeader - 28) / 2, 28);
-  renderer.drawText(UI_12_FONT_ID, card.x + 58, card.y + (kCardHeader - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
+  // Same label and chevron axis as the three rows below (52 / width - 18);
+  // the old 58 / width - 26 put the header 6 px off the row column.
+  renderer.drawText(UI_12_FONT_ID, card.x + 52, card.y + (kCardHeader - renderer.getLineHeight(UI_12_FONT_ID)) / 2,
                     I18N.get(title), true, EpdFontFamily::BOLD);
-  drawChevron(renderer, card.x + card.width - 26, card.y + kCardHeader / 2 - 6);
+  drawChevron(renderer, card.x + card.width - 18, card.y + kCardHeader / 2 - 6);
 
   const char* labels[3] = {};
   std::string values[3];
@@ -600,9 +627,9 @@ void MyActivity::drawAboutRow() {
   const size_t dash = version.find('-');
   if (dash != std::string::npos) version.resize(dash);
   const int vw = renderer.getTextWidth(UI_10_FONT_ID, version.c_str());
-  renderer.drawText(UI_10_FONT_ID, r.x + r.width - 14 - vw, r.y + (r.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
-                    version.c_str());
-  drawChevron(renderer, r.x + r.width - 8, r.y + r.height / 2 - 6);
+  renderer.drawText(UI_10_FONT_ID, r.x + r.width - 26 - vw,
+                    r.y + (r.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2, version.c_str());
+  drawChevron(renderer, r.x + r.width - 18, r.y + r.height / 2 - 6);
 
   const int noteY = r.y + r.height + 8;
   if (noteY + 24 < body.y + body.height) {

@@ -129,8 +129,8 @@
     const upgrade = el('upgrade-button');
     if (upgrade) upgrade.setAttribute('manifest', `${base}/manifest-upgrade.json`);
 
-    const releaseUrl = `https://github.com/Yana-Hangabina/cpyos/releases/tag/${encodeURIComponent(version)}`;
-    const zipUrl = `https://github.com/Yana-Hangabina/cpyos/releases/download/${encodeURIComponent(version)}/cpyos-readpico-${encodeURIComponent(version)}-full.zip`;
+    const releaseUrl = `https://github.com/Yana-Hangabina/cpyos/releases/tag/cpyos-${encodeURIComponent(version)}`;
+    const zipUrl = `https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-${encodeURIComponent(version)}/cpyos-readpico-${encodeURIComponent(version)}-full.zip`;
     setLink('download-app', `${base}/readpico-firmware.bin`);
     setLink('download-sums', `${base}/SHA256SUMS`);
     setLink('download-zip', zipUrl);

@@ -205,6 +205,7 @@ class ActivityManager {
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
   bool isStandbyActivity() const;
+  bool isSleepActivity() const;
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
   bool handleForcedRefresh();

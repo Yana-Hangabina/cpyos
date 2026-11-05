@@ -34,6 +34,10 @@ not committed because it is a deterministic wrapper.
   existing `<`/`>`/`-` glyphs. The Chinese/English navigation strings already
   use `« 返回`, `下一页 »` and `− / +`; without these aliases those whole
   labels fall back to 8pt as well.
+* U+2039/U+203A SINGLE GUILLEMETS are the settings picker's row chevrons
+  (`SettingsActivity` appends `›` to every non-toggle value). They are cmap
+  aliases to `<`/`>`, like the double guillemets; without them every picker
+  row ended in a tofu square that read as an empty checkbox.
 
 ## Regeneration
 

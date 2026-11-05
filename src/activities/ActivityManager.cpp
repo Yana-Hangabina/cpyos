@@ -704,9 +704,22 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
-  if (replaceActivityWith<SleepActivity>(fromTimeout)) {
-    loop();  // The caller sleeps immediately after this returns, so render now.
+  if (!replaceActivityWith<SleepActivity>(fromTimeout)) return;
+  // replaceActivity() queues the switch; loop() normally applies it in one
+  // pass. It can defer while the render task holds the lock (or return early on
+  // a suppressed release / exclusive-storage activity), and the caller then
+  // powers the device off with the previous page still on the glass -- the
+  // "it froze on Home" report. Wait for the switch before letting
+  // enterDeepSleep() continue.
+  const uint32_t deadline = millis() + 1500;
+  for (;;) {
+    if (isSleepActivity()) return;
+    loop();
+    if (isSleepActivity()) return;
+    if (static_cast<int32_t>(deadline - millis()) <= 0) break;
+    delay(10);
   }
+  LOG_ERR("ACT", "sleep activity did not become current; the panel keeps the previous frame");
 }
 
 void ActivityManager::goToBoot() { replaceActivityWith<BootActivity>(); }
@@ -859,6 +872,7 @@ bool ActivityManager::stackPreventAutoSleep() const {
 }
 
 bool ActivityManager::isStandbyActivity() const { return currentActivity && currentActivity->name == "Standby"; }
+bool ActivityManager::isSleepActivity() const { return currentActivity && currentActivity->name == "Sleep"; }
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();

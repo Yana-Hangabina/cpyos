@@ -507,10 +507,22 @@ void releaseSdFontCachesForDecode(const GfxRenderer& renderer) {
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
-  (void)fromTimeout;  // deep sleep has one style; timeout is no longer an exception
-  const bool renderQuickResume = SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
-  const bool preservesCurrentFrame =
-      renderQuickResume || SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT;
+  // A timeout sleep has no user looking at the "entering sleep" moment. Quick
+  // Resume would leave the home or reader page on the glass, which reads as
+  // "the device froze on this page" until the power key is pressed. For a
+  // timeout, fall back to the normal sleep screen; a manual sleep keeps the
+  // user's selection. (Transparent already overlays a sleep image, or falls
+  // back to the night scene when no overlay exists, so it stays as selected.)
+  const bool quickResumeSelected = SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
+  const bool framePreserving =
+      quickResumeSelected || SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT;
+  const uint8_t sleepStyle = (fromTimeout && quickResumeSelected) ? CrossPointSettings::DEEP_SLEEP_NIGHT
+                                                                  : SETTINGS.deepSleepStyle;
+  if (fromTimeout && quickResumeSelected) {
+    LOG_INF("SLP", "auto-sleep: showing the night sleep screen instead of Quick Resume");
+  }
+  const bool renderQuickResume = sleepStyle == CrossPointSettings::DEEP_SLEEP_QUICK_RESUME;
+  const bool preservesCurrentFrame = renderQuickResume || sleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT;
   if (display.isInverted() && preservesCurrentFrame) renderer.invertScreen();
 
   if (renderQuickResume) {
@@ -528,7 +540,7 @@ void SleepActivity::onEnter() {
   // night-mode reader render.
   display.setInverted(false);
 
-  if (SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT) {
+  if (sleepStyle == CrossPointSettings::DEEP_SLEEP_TRANSPARENT) {
     // Transparent mode retains the current framebuffer. Materialize any
     // output-level inversion first so the retained content keeps its visible
     // polarity after the display driver returns to normal.
@@ -608,7 +620,7 @@ void SleepActivity::onEnter() {
   renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 #endif
 
-  switch (SETTINGS.deepSleepStyle) {
+  switch (sleepStyle) {
     case (CrossPointSettings::DEEP_SLEEP_BLANK):
       return renderBlankSleepScreen();
     case (CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE):

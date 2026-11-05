@@ -545,8 +545,13 @@ void CpyTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
         renderer.drawRoundedRect(row.x, row.y, row.width, row.height, CpyMetrics::values.popupFrameThickness,
                                  CpyMetrics::values.optionPopupSelectionRadius, true);
       }
-      const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), row.width - 40);
-      const int textX = row.x + 20;
+      const std::string option = renderer.truncatedText(UI_10_FONT_ID, options[optionIndex].c_str(), row.width - 32);
+      // One text axis: the title sits at panel + 28, the row starts at
+      // panel + 12, so the option text starts 16 px into the row. A dialog with
+      // a single option is a button, not a menu row: centre its label.
+      const int textX = optionCount == 1
+                            ? row.x + (row.width - renderer.getTextWidth(UI_10_FONT_ID, option.c_str())) / 2
+                            : row.x + 16;
       const int textY = row.y + (row.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
       renderer.drawText(UI_10_FONT_ID, textX, textY, option.c_str(), !isSelected,
                         isSelected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);

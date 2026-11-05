@@ -1,0 +1,22 @@
+{
+  "en": [
+    "Chapter comments in the reader menu",
+    "Like and reply to chapter comments",
+    "One-line reader header, progress on the wave",
+    "Three-column tool drawer, full app names",
+    "Timeout sleep shows the sleep screen",
+    "Wi-Fi icons and wait cards aligned",
+    "More emoji; resizing keeps the old face",
+    "Language pack changed: use a full install"
+  ],
+  "zh": [
+    "阅读器新增章评，可点赞和回复",
+    "阅读器改为单行标题栏",
+    "进度百分比移到页脚波浪",
+    "工具抽屉改为三列，长名称完整显示",
+    "超时休眠改为显示睡眠画面",
+    "Wi-Fi 图标与等待卡对齐修正",
+    "emoji 覆盖扩充，切换字号不再丢失",
+    "语言包键数变化，建议完整安装"
+  ]
+}

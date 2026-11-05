@@ -611,7 +611,9 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     // State pills: source (always real), finished state (derived from progress),
     // and the snapshot's new-chapter count when present.
     int pillX = textX;
-    const int pillY = rects.firstCard.y + 170;
+    // 4 px lower than the old +170: at the current 14 pt chapter line the pill
+    // outline sat only 3 px under the chapter glyphs and read as an underline.
+    const int pillY = rects.firstCard.y + 175;
     const auto drawPill = [&](const char* label) {
       const int textWpx = renderer.getTextWidth(SMALL_FONT_ID, label);
       const int ph = 34;

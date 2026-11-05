@@ -93,6 +93,7 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
   if (isJjwxc) {
     items.push_back({MenuAction::JJWXC_UPDATE_CURRENT, StrId::STR_JJWXC_UPDATE_CURRENT});
     items.push_back({MenuAction::JJWXC_UPDATE_LIST, StrId::STR_JJWXC_UPDATE_LIST});
+    items.push_back({MenuAction::JJWXC_CHAPTER_COMMENTS, StrId::STR_JJWXC_CHAPTER_COMMENTS});
     items.push_back({MenuAction::JJWXC_BOOK_DETAIL, StrId::STR_JJWXC_BOOK_INFO});
   }
   // This clears CrossMux's derived pagination cache for THIS EPUB (and returns

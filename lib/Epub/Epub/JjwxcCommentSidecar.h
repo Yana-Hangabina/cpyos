@@ -140,6 +140,8 @@ inline bool decode(const uint8_t* data, const size_t len, Count* out, const size
 // Comment bodies for one paragraph, cached so a second open of the same panel
 // works with the radio off. Stored beside the count sidecar:
 //   /.crosspoint/jjwxc/<novelId>/comments/<chapterId>-<paragraphId>.bin
+// `paragraphId == 0` is the whole-chapter (章评) scope; the same JJD1 image is
+// used because nothing in it depends on the paragraph.
 //
 // Layout, little-endian, 16-byte header + variable records:
 //   offset  size  field

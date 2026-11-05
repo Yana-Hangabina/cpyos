@@ -63,11 +63,11 @@ int signalBarsForRssi(const int32_t rssi) {
 
 // 27x22 four-bar indicator: outlined bars, filled up to `bars`.
 void drawSheetSignalBars(const GfxRenderer& renderer, const int x, const int y, const int bars) {
-  constexpr int kWidth = 27;
-  constexpr int kHeight = 22;
-  constexpr int kGap = 2;
-  constexpr int kBarHeights[4] = {6, 10, 15, 21};
-  const int barW = std::max(3, (kWidth - kGap * 3) / 4);
+  constexpr int kWidth = 32;
+  constexpr int kHeight = 26;
+  constexpr int kGap = 3;
+  constexpr int kBarHeights[4] = {7, 12, 18, 25};
+  const int barW = std::max(4, (kWidth - kGap * 3) / 4);
   for (int i = 0; i < 4; ++i) {
     const int barH = kBarHeights[i];
     const int bx = x + i * (barW + kGap);
@@ -78,14 +78,24 @@ void drawSheetSignalBars(const GfxRenderer& renderer, const int x, const int y, 
 }
 
 // Small padlock for encrypted networks (the SDK icon set has no lock at 48 px).
+// Kept visually matched to the 26 px signal bars beside it.
 void drawSheetLock(const GfxRenderer& renderer, const int x, const int y) {
-  constexpr int kH = 22;
-  constexpr int kW = 15;
-  const int bodyY = y + kH - 12;
-  renderer.drawRect(x, bodyY, kW, 12, true);
-  renderer.drawLine(x + kW / 4, bodyY, x + kW / 4, bodyY - 5, 1, true);
-  renderer.drawLine(x + kW - 1 - kW / 4, bodyY, x + kW - 1 - kW / 4, bodyY - 5, 1, true);
-  renderer.drawLine(x + kW / 4, bodyY - 5, x + kW - 1 - kW / 4, bodyY - 5, 1, true);
+  constexpr int kH = 26;
+  constexpr int kW = 19;
+  const int bodyY = y + kH - 15;
+  renderer.drawRect(x, bodyY, kW, 15, true);
+  renderer.drawLine(x + kW / 4, bodyY, x + kW / 4, bodyY - 6, 2, true);
+  renderer.drawLine(x + kW - 1 - kW / 4, bodyY, x + kW - 1 - kW / 4, bodyY - 6, 2, true);
+  renderer.drawLine(x + kW / 4, bodyY - 6, x + kW - 1 - kW / 4, bodyY - 6, 2, true);
+}
+
+// Chevron drawn as strokes so it keeps its weight at this row height (the
+// ">" glyph from the caption face is only a few pixels wide and looks lost).
+void drawSheetChevron(const GfxRenderer& renderer, const int x, const int y) {
+  constexpr int kW = 14;
+  constexpr int kH = 26;
+  renderer.drawLine(x, y + 5, x + kW - 1, y + kH / 2, 2, true);
+  renderer.drawLine(x + kW - 1, y + kH / 2, x, y + kH - 5, 2, true);
 }
 
 // Radar: dashed ring plus three upward arcs and a dot (static, never rotated).
@@ -485,6 +495,35 @@ void WifiSelectionActivity::appendHiddenNetworkEntry() {
   placeholder.hasSavedPassword = false;
   placeholder.isHiddenPlaceholder = true;
   networks.push_back(std::move(placeholder));
+}
+
+void WifiSelectionActivity::debugWifiDemo() {
+  // Covered emoji (in the bundled subset) and missing ones side by side, so a
+  // single screenshot shows whether the Wi-Fi row path reaches the emoji face
+  // and where its coverage ends. Serial-only; never connects anything.
+  static const char* const kNames[] = {
+      "开心😀",      // U+1F600, bundled
+      "苹果🍎",      // U+1F34E, bundled
+      "家🏠",        // U+1F3E0, not bundled -> hollow box before the fix
+      "信号📶",      // U+1F4F6, not bundled
+      "猫猫🐱",      // U+1F431, not bundled
+  };
+  constexpr size_t kCount = sizeof(kNames) / sizeof(kNames[0]);
+  for (size_t i = kCount; i-- > 0;) {
+    WifiNetworkInfo demo;
+    demo.ssid = kNames[i];
+    demo.rssi = -52 - static_cast<int32_t>(i * 4);
+    demo.isEncrypted = true;
+    demo.hasSavedPassword = false;
+    networks.insert(networks.begin(), std::move(demo));
+  }
+  realNetworkCount += kCount;
+  selectedNetworkIndex = 0;
+  listNav.selected = 0;
+  listNav.top = 0;
+  rebuildNetworkRowItems();
+  state = WifiSelectionState::NETWORK_LIST;
+  requestUpdate();
 }
 
 // Derives networkStatuses/networkRowItems from `networks`. Called whenever
@@ -1627,41 +1666,41 @@ void WifiSelectionActivity::renderSheet() {
         if (index == static_cast<int>(selectedNetworkIndex)) {
           renderer.fillRect(rowX, rowY + 14, 5, kSheetRowH - 28, true);
         }
-        renderer.drawLine(rowX + kPad, rowY + kSheetRowH - 1, rowX + rowW, rowY + kSheetRowH - 1, 1, true);
+        renderer.drawLine(rowX + kPad, rowY + kSheetRowH - 1, rowX + rowW - kPad, rowY + kSheetRowH - 1, 1, true);
 
         const WifiNetworkInfo& network = networks[index];
         if (network.isHiddenPlaceholder) {
           const int plusY = rowY + (kSheetRowH - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
           renderer.drawText(UI_12_FONT_ID, kPad, plusY, "+", true, EpdFontFamily::BOLD);
-          renderer.drawText(UI_12_FONT_ID, kPad + 28, plusY, tr(STR_ADD_HIDDEN_NETWORK), true, EpdFontFamily::BOLD);
+          renderer.drawText(UI_12_FONT_ID, kPad + 48, plusY, tr(STR_ADD_HIDDEN_NETWORK), true, EpdFontFamily::BOLD);
           continue;
         }
 
-        const int signalY = rowY + (kSheetRowH - 22) / 2;
+        const int signalY = rowY + (kSheetRowH - 26) / 2;
         drawSheetSignalBars(renderer, kPad, signalY, signalBarsForRssi(network.rssi));
 
-        // Right cluster: save tag, lock, chevron. Text keeps clear of it.
-        int right = kPad + rowW - kPad;
-        const int chevW = renderer.getTextWidth(SMALL_FONT_ID, ">");
-        renderer.drawText(SMALL_FONT_ID, right - chevW, rowY + (kSheetRowH - renderer.getLineHeight(SMALL_FONT_ID)) / 2,
-                          ">");
-        right -= chevW + 12;
+        // Right cluster: save tag, lock, chevron. Everything stays inside the
+        // 40 px side margin; text keeps clear of it.
+        int right = rowW - kPad;
+        constexpr int kChevronW = 14;
+        drawSheetChevron(renderer, right - kChevronW, rowY + (kSheetRowH - 26) / 2);
+        right -= kChevronW + 14;
         if (network.isEncrypted) {
-          drawSheetLock(renderer, right - 15, rowY + (kSheetRowH - 22) / 2);
-          right -= 15 + 10;
+          drawSheetLock(renderer, right - 19, rowY + (kSheetRowH - 26) / 2);
+          right -= 19 + 12;
         }
         if (network.hasSavedPassword) {
           char tag[4] = "+";
-          const int tagW = renderer.getTextWidth(SMALL_FONT_ID, tag) + 16;
-          const int tagH = 28;
+          const int tagW = renderer.getTextWidth(SMALL_FONT_ID, tag) + 18;
+          const int tagH = 30;
           const int tagY = rowY + (kSheetRowH - tagH) / 2;
-          renderer.drawRoundedRect(right - tagW, tagY, tagW, tagH, 1, 14, true);
-          renderer.drawText(SMALL_FONT_ID, right - tagW + 8, tagY + (tagH - renderer.getLineHeight(SMALL_FONT_ID)) / 2,
-                            tag);
-          right -= tagW + 10;
+          renderer.drawRoundedRect(right - tagW, tagY, tagW, tagH, 1, tagH / 2, true);
+          renderer.drawText(SMALL_FONT_ID, right - tagW + (tagW - renderer.getTextWidth(SMALL_FONT_ID, tag)) / 2,
+                            tagY + (tagH - renderer.getLineHeight(SMALL_FONT_ID)) / 2, tag);
+          right -= tagW + 12;
         }
 
-        const int textX = kPad + 27 + 14;
+        const int textX = kPad + 48;
         const int maxTextW = std::max(1, right - textX);
         const std::string ssid = renderer.truncatedText(UI_12_FONT_ID, network.ssid.c_str(), maxTextW);
         renderer.drawText(UI_12_FONT_ID, textX, rowY + (kSheetRowH - renderer.getLineHeight(UI_12_FONT_ID)) / 2,

@@ -15,7 +15,7 @@ import zlib
 HEADER = struct.Struct("<4sB3xII16x")
 MAGIC = b"EMJ1"
 VERSION = 1
-MAX_BYTES = 0x20000
+MAX_BYTES = 0x20000 - HEADER.size  # payload budget; the 32-byte header shares the slot
 
 
 def fail(msg):

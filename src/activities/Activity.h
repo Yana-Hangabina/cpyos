@@ -74,6 +74,9 @@ class Activity {
   virtual void debugOpenPanel(int) {}
   virtual void debugCloseOverlay() {}
   virtual void debugTypeChar() {}
+  // Serial-only: prepend synthetic SSIDs that exercise the text fallback chain
+  // (covered and missing emoji) to the current Wi-Fi list.
+  virtual void debugWifiDemo() {}
   // Serial-only hooks for the reading browser. Kept on the base so main.cpp can
   // drive the app without knowing its type.
   virtual void debugBrowserPage(int) {}
@@ -106,6 +109,7 @@ class Activity {
   virtual void debugDismissHint() {}
   virtual void debugOpenJjwxcComment() {}
   virtual void debugOpenFakeJjwxcComment() {}
+  virtual void debugOpenJjwxcChapterComments() {}
   // Serial-only probe for the comment panel's background prefetch: exercise the
   // real refresh/like paths without a touch screen.
   virtual void debugRefreshJjwxcComment() {}
