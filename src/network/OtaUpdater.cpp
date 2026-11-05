@@ -370,9 +370,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
   constexpr char kGhfastManifest[] =
       "https://ghfast.top/https://github.com/Yana-Hangabina/cpyos/releases/latest/download/readpico-ota.json";
   const char* manifestCandidates[] = {
-      CrossMuxEndpoints::CPYOS_OTA_PAGES_URL,
-      kGhfastManifest,
+      // gh-proxy.com is the route the 0.2.x line used successfully and the one
+      // that answered on the affected network; Pages and ghfast follow.
       CrossMuxEndpoints::CPYOS_OTA_URL,
+      kGhfastManifest,
+      CrossMuxEndpoints::CPYOS_OTA_PAGES_URL,
       kGithubManifest,
   };
   for (const char* candidate : manifestCandidates) {
