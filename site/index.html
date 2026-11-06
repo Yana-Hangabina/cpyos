@@ -20,10 +20,12 @@
     if (saved === 'light' || saved === 'dark') document.documentElement.dataset.theme = saved;
   } catch (error) {}
 </script>
-<script type="module"
-        src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"
-        integrity="sha384-f+R3K1mnKB2tVps4hdEh+qJvLgH2bKw81Yn+eNE3+gE8YpqocjkxQON4k19I3e/"
-        crossorigin="anonymous"></script>
+<!-- Vendored so the flasher does not depend on unpkg.com, which is blocked on
+     some networks. The onerror fallback replaces the install buttons with a
+     download hint instead of leaving unstyled slot text on screen. -->
+<script type="module" id="esp-web-tools"
+        src="./vendor/esp-web-tools/install-button.js"
+        onerror="var n=document.getElementById('install-loader'); if(n){n.hidden=false;}"></script>
 </head>
 <body>
 <a class="skip" href="#main">跳到正文</a>
@@ -278,13 +280,17 @@
           <div class="install-actions">
             <esp-web-install-button id="install-button" manifest="./downloads/0.7.0/manifest-install.json">
               <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
-              <span slot="unsupported" class="warn">这个浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge。</span>
-              <span slot="not-allowed" class="warn">刷机页必须通过 https 打开；本地预览请用 http://localhost。</span>
+              <span slot="unsupported" class="warn">当前浏览器无法直接刷写。请用桌面版 Chrome 或 Edge 打开本页，或下载安装包手动刷写。</span>
+              <span slot="not-allowed" class="warn">刷机页必须通过 HTTPS 打开。</span>
             </esp-web-install-button>
             <esp-web-install-button id="upgrade-button" manifest="./downloads/0.7.0/manifest-upgrade.json">
               <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
+              <span slot="unsupported" class="warn">当前浏览器无法直接刷写。请用桌面版 Chrome 或 Edge 打开本页，或下载安装包手动刷写。</span>
+              <span slot="not-allowed" class="warn">刷机页必须通过 HTTPS 打开。</span>
             </esp-web-install-button>
           </div>
+          <p id="install-loader" class="warn" hidden>刷机组件未能加载。请刷新页面，或使用下方的完整安装包手动刷写。</p>
+          <noscript><p class="warn">刷机页需要 JavaScript。请启用 JavaScript，或使用下方的完整安装包手动刷写。</p></noscript>
           <p class="warn">首次安装会重建分区表并要求浏览器擦除芯片。开始前请确认已备份整片 Flash；SD 卡里的书和设置不会被网页刷机删除。</p>
           <ol style="margin-top:18px">
             <li>用 USB-C 数据线连接设备；它应显示为 <span class="mono">USB JTAG/serial debug unit</span>。</li>

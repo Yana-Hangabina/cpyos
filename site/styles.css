@@ -331,3 +331,12 @@ footer .duckfoot svg { width: 30px; height: 22px; }
   .gallery { gap: 16px; }
   footer .wrap { flex-direction: column; }
 }
+
+/* esp-web-install-button light-DOM fallback: the element only upgrades when its
+   module loads. While it is undefined the slot text would render as ordinary
+   paragraphs, so hide it and let #install-loader explain a failed load. */
+esp-web-install-button:not(:defined) > [slot="activate"],
+esp-web-install-button:not(:defined) > [slot="unsupported"],
+esp-web-install-button:not(:defined) > [slot="not-allowed"] {
+  display: none;
+}

@@ -36,9 +36,14 @@ first paint by the inline script in `<head>`.
 ## Flashing
 
 The install and upgrade buttons are `esp-web-install-button` elements from
-esp-web-tools 10.4.0 (pinned with SRI). Their manifests are set from
-`latest.json` at runtime. Browsers must support Web Serial and the page must be
-served over https or localhost.
+esp-web-tools 10.4.0, vendored under `vendor/esp-web-tools/` so the flasher
+does not depend on `unpkg.com` (unreachable on some networks). Their manifests
+are set from `latest.json` at runtime. Browsers must support Web Serial and the
+page must be served over https (or localhost for development).
+
+If the vendored module cannot load, `main.js` reveals `#install-loader` and the
+slot text stays hidden, so users see a download fallback rather than an
+"unsupported browser" message caused by a missing script.
 
 esp-web-tools 10.4.0 calls `navigator.serial.requestPort()` without filters.
 For the duration of one connection attempt, `main.js` wraps that call with:

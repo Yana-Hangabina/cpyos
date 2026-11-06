@@ -28,6 +28,21 @@
     target.addEventListener('click', filterNextSerialRequest, true);
   });
 
+  // The install buttons stay hidden until the vendored module defines the
+  // custom element. If it never does (blocked file, parse error), show the
+  // download fallback instead of leaving the page without any explanation.
+  const installLoader = document.getElementById('install-loader');
+  const showInstallLoader = () => {
+    if (installLoader) installLoader.hidden = false;
+  };
+  const espToolsScript = document.getElementById('esp-web-tools');
+  if (espToolsScript) espToolsScript.addEventListener('error', showInstallLoader);
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      if (!customElements.get('esp-web-install-button')) showInstallLoader();
+    }, 1500);
+  });
+
   const root = document.documentElement;
   const themeButton = document.getElementById('theme-toggle');
   const themeOrder = ['auto', 'light', 'dark'];
