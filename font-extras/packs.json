@@ -1,0 +1,28 @@
+{
+  "packs": [
+    {
+      "id": "emoji-full",
+      "kind": "emoji",
+      "family": "-",
+      "name": "完整 Emoji",
+      "file": "NotoEmoji-Full.ttf",
+      "url": "https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/NotoEmoji-Full.ttf"
+    },
+    {
+      "id": "cjk-full",
+      "kind": "fallback",
+      "family": "CPYOSCJK",
+      "name": "中文扩展（含日文假名）",
+      "file": "CPYOSCJK.ttf",
+      "url": "https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/CPYOSCJK.ttf"
+    },
+    {
+      "id": "world-scripts",
+      "kind": "fallback",
+      "family": "CPYOSWorld",
+      "name": "多语言文字（韩泰阿希梵越）",
+      "file": "CPYOSWorldScripts.ttf",
+      "url": "https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/CPYOSWorldScripts.ttf"
+    }
+  ]
+}

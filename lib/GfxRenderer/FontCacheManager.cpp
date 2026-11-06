@@ -207,17 +207,70 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
 }
 
 #ifdef ENABLE_CHINESE_VERSION
-void FontCacheManager::reportMissingChineseCodepoint(const int fontId, const uint32_t codepoint) {
-  if (missingChineseCodepoint_ != 0 || sdCardFonts_.count(fontId) != 0 || !isDownloadableChineseCodepoint(codepoint)) {
-    return;
+namespace {
+bool isIgnorableMissingCodepoint(const uint32_t cp) {
+  if (cp < 0x20 || cp == 0x7f || cp == 0x00AD) return true;  // controls / soft hyphen
+  if (cp >= 0xE000 && cp <= 0xF8FF) return true;             // private use (watermarks)
+  if (cp >= 0xFE00 && cp <= 0xFE0F) return true;             // variation selectors
+  if (cp >= 0xE0100 && cp <= 0xE01EF) return true;           // variation selectors supplement
+  if (cp >= 0x200B && cp <= 0x200F) return true;             // zero-width / bidi controls
+  if (cp >= 0x202A && cp <= 0x202E) return true;
+  if (cp >= 0x2060 && cp <= 0x206F) return true;
+  return false;
+}
+}  // namespace
+
+void FontCacheManager::reportMissingCodepoint(const int fontId, const uint32_t codepoint,
+                                              const EpdFontFamily::Style style) {
+  (void)fontId;  // kept for symmetry with the old API / future per-face policy
+  if (codepoint == 0 || isIgnorableMissingCodepoint(codepoint)) return;
+  // Only report a character when *no* registered face can draw it. If another
+  // face covers it, resolveTextFontId() should have selected that face; a
+  // report here would make the prompt fire on every render of a fallback run.
+  for (const auto& [id, family] : fontMap_) {
+    (void)id;
+    if (family.hasCodepoint(codepoint, style)) return;
   }
-  missingChineseCodepoint_ = codepoint;
+  if (missingCodepointCount_ >= MAX_MISSING_CODEPOINTS) return;
+  for (uint8_t i = 0; i < missingCodepointCount_; ++i) {
+    if (missingCodepoints_[i] == codepoint) return;
+  }
+  LOG_INF("FCM", "missing glyph U+%04X; no registered face covers it", static_cast<unsigned>(codepoint));
+  missingCodepoints_[missingCodepointCount_++] = codepoint;
+}
+
+void FontCacheManager::reportMissingChineseCodepoint(const int fontId, const uint32_t codepoint) {
+  if (!isDownloadableChineseCodepoint(codepoint)) return;
+  reportMissingCodepoint(fontId, codepoint, EpdFontFamily::REGULAR);
 }
 
 uint32_t FontCacheManager::consumeMissingChineseCodepoint() {
-  const uint32_t codepoint = missingChineseCodepoint_;
-  missingChineseCodepoint_ = 0;
-  return codepoint;
+  uint32_t first = 0;
+  for (uint8_t i = 0; i < missingCodepointCount_; ++i) {
+    if (isDownloadableChineseCodepoint(missingCodepoints_[i])) {
+      first = missingCodepoints_[i];
+      break;
+    }
+  }
+  if (first == 0 && missingCodepointCount_ != 0) first = missingCodepoints_[0];
+  clearMissingCodepoints();
+  return first;
+}
+
+uint8_t FontCacheManager::consumeMissingCodepoints(uint32_t* out, const uint8_t capacity) {
+  if (out == nullptr || capacity == 0) {
+    clearMissingCodepoints();
+    return 0;
+  }
+  const uint8_t count = missingCodepointCount_ < capacity ? missingCodepointCount_ : capacity;
+  for (uint8_t i = 0; i < count; ++i) out[i] = missingCodepoints_[i];
+  clearMissingCodepoints();
+  return count;
+}
+
+void FontCacheManager::clearMissingCodepoints() {
+  missingCodepointCount_ = 0;
+  for (auto& cp : missingCodepoints_) cp = 0;
 }
 #endif
 
@@ -232,7 +285,7 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
   manager_->scanOverflowWarned_ = false;
   memset(manager_->scanGroupCounts_, 0, sizeof(manager_->scanGroupCounts_));
 #ifdef ENABLE_CHINESE_VERSION
-  manager_->missingChineseCodepoint_ = 0;
+  manager_->clearMissingCodepoints();
 #endif
 }
 

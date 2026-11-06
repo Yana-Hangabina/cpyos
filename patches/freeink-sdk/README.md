@@ -259,9 +259,16 @@ gray, so each needs on-panel comparison, not just a host test.
     `dirty_columns` byte covers two pixels with the low nibble first, and a mask byte
     covers four pixels with the first pixel in the low two bits.
 
+12. **Abort poll after a failed TCP connect (`SecureClient`).** `connect()` already polls
+    the caller's abort hook before and during the TLS handshake, but the failure branch
+    returned before the first check. A cancel that arrived during the blocking TCP connect
+    was therefore forgotten, and a request that the user had already cancelled still spent
+    a second full timeout on the TLS 1.2 retry before the caller moved on. The failure path
+    now polls once and returns immediately when the request was aborted.
+
 ## Upgrading an older tree
 
-This patch grew from 20 to 30 files when items 6–11 landed; the idempotence marker
+This patch grew from 20 to 31 files when items 6–12 landed; the idempotence marker
 moved from `e0470_textturn_soft_settle` to `epd_draw_base_start` when item 6 landed. A working tree that still
 carries the earlier version cannot be patched in place: `apply.sh` detects that state and
 refuses. Restore the tree to `96de1be` first (re-checkout in a scratch clone, then

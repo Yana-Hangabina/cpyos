@@ -2,17 +2,20 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalMemory.h>
 #include <Logging.h>
 #include <WiFi.h>
 
 #if !defined(SIMULATOR)
 #include <esp_heap_caps.h>
+#include <esp_sntp.h>
 #include <esp_wifi.h>
 #include <sdkconfig.h>
 #endif
 
 #include "BleInput.h"
+#include "CrossPointSettings.h"
 #include "SdCardFontSystem.h"
 #include "activities/RenderLock.h"
 
@@ -77,9 +80,34 @@ void prepare(GfxRenderer& renderer) {
   {
     RenderLock lock;
     sdFontSystem.releaseLoadedFont(renderer);
-    if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
+    if (auto* fontCache = renderer.getFontCacheManager()) {
+      // clearCache() only drops glyph references; the SD font arenas and the
+      // decompressor's resident buffers stay allocated. Wi-Fi init needs
+      // internal/DMA RAM, so release those too (the same call the browser
+      // makes before its first handshake).
+      fontCache->clearCache();
+      fontCache->releaseSdFontCaches();
+    }
   }
   logMemory("after font reclaim");
+}
+
+namespace {
+int g_timeSyncPauseDepth = 0;
+}  // namespace
+
+void suspendTimeSync() {
+  if (g_timeSyncPauseDepth++ != 0) return;
+  halClock.setAutoSyncEnabled(false);
+#if !defined(SIMULATOR)
+  if (esp_sntp_enabled()) esp_sntp_stop();
+#endif
+}
+
+void resumeTimeSync() {
+  if (g_timeSyncPauseDepth == 0) return;
+  if (--g_timeSyncPauseDepth != 0) return;
+  halClock.setAutoSyncEnabled(SETTINGS.clockAutoSync != 0);
 }
 
 void releaseRadio() {
@@ -91,6 +119,8 @@ void releaseRadio() {
   delay(30);
   esp_wifi_deinit();
   LOG_INF("NET", "radio released, mode=%d", static_cast<int>(WiFi.getMode()));
+  // The radio session ends here, so the SNTP hold that setMode() took can go.
+  resumeTimeSync();
 #endif
 }
 
@@ -98,7 +128,12 @@ bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) {
   bleinput::stop();
   logMemory("after BLE stop");
   prepare(renderer);
+  // A pending SNTP DNS callback is what makes lwIP assert when association
+  // clears the DNS cache; hold the clock off for the whole radio session.
+  const bool wasOff = WiFi.getMode() == WIFI_MODE_NULL;
+  if (wasOff) suspendTimeSync();
   const bool started = WiFi.mode(mode);
+  if (!started && wasOff) resumeTimeSync();
   logMemory(started ? "WiFi mode ready" : "WiFi mode failed");
   return started;
 }

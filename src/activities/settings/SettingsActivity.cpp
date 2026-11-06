@@ -35,6 +35,7 @@
 #endif
 #include "DictionaryDownloadActivity.h"
 #include "FontDownloadActivity.h"
+#include "FontExtrasActivity.h"
 #include "HomeButtonSettingsActivity.h"
 #include "InxItemLayout.h"
 #include "KOReaderSettingsActivity.h"
@@ -114,6 +115,7 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
       return {StrId::STR_SET_GROUP_KEYS, 0};
     case SettingAction::TextSettings:
     case SettingAction::DownloadFonts:
+    case SettingAction::DownloadFontExtras:
     case SettingAction::ManageDictionaries:
       return {StrId::STR_SET_GROUP_FONTS_DICTS, 4};
     case SettingAction::CustomiseStatusBar:
@@ -538,8 +540,18 @@ void SettingsActivity::rebuildSettingsLists() {
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.insert(readerSettings.begin() + 1,
                         SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
+#if defined(BOARD_HAS_PSRAM)
+  // Font extensions stream from the SD card and register extra faces; without
+  // PSRAM the C3 keeps its single resident face and this entry would only be a
+  // path to memory pressure.
+  readerSettings.insert(readerSettings.begin() + 2,
+                        SettingInfo::Action(StrId::STR_MANAGE_FONT_EXTRAS, SettingAction::DownloadFontExtras));
+  readerSettings.insert(readerSettings.begin() + 3,
+                        SettingInfo::Action(StrId::STR_MANAGE_DICTIONARIES, SettingAction::ManageDictionaries));
+#else
   readerSettings.insert(readerSettings.begin() + 2,
                         SettingInfo::Action(StrId::STR_MANAGE_DICTIONARIES, SettingAction::ManageDictionaries));
+#endif
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_READING_STATS, SettingAction::ReadingStatsSettings));
 
@@ -1046,6 +1058,13 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::DownloadFonts:
         releaseListsForMemoryHungryChild();
         if (!startActivityForResultWith<FontDownloadActivity>(resultHandler)) {
+          rebuildSettingsLists();
+          requestUpdate();
+        }
+        break;
+      case SettingAction::DownloadFontExtras:
+        releaseListsForMemoryHungryChild();
+        if (!startActivityForResultWith<FontExtrasActivity>(resultHandler)) {
           rebuildSettingsLists();
           requestUpdate();
         }

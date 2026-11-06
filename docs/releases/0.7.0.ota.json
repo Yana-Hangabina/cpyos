@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Downloadable font packs: emoji, extended CJK, more scripts",
+    "Missing glyphs offer the right font pack",
+    "Font downloads try Pages, GitHub and one mirror",
+    "Cancel a font download at any time",
+    "TLS uses PSRAM, so updates work with low memory",
+    "Language and resource packs update with the app"
+  ],
+  "zh": [
+    "新增扩展字体：Emoji、扩展中文与多语言文字",
+    "缺字时提示下载对应字体包",
+    "字体下载依次尝试 Pages、GitHub 与镜像",
+    "字体下载可随时取消",
+    "联网改用 PSRAM，内存紧张也能更新",
+    "语言与资源包随系统一并更新"
+  ]
+}

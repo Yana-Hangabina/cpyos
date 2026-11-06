@@ -350,23 +350,34 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   // Resolving it here, instead of swapping fontMap entries, keeps measuring and drawing
   // on one face -- both call this function.
   const int effectiveFontId = resolveFontFamilyId(fontId);
+  if (text == nullptr || *text == '\0') return effectiveFontId;
 
   // Fallbacks stay keyed by the requested id; for a rebound id the entry names the
   // built-in family, which is exactly what the SD face should fall back to.
   const auto fbIt = fallbackFontMap_.find(fontId);
-  if (fbIt == fallbackFontMap_.end() || text == nullptr || *text == '\0') {
-    return effectiveFontId;
-  }
+  const bool hasSupplement = supplementalFontMap_.find(fontId) != supplementalFontMap_.end() ||
+                             supplementalFontMap_.find(effectiveFontId) != supplementalFontMap_.end();
+  if (fbIt == fallbackFontMap_.end() && !hasSupplement) return effectiveFontId;
   const auto fontIt = fontMap.find(effectiveFontId);
   if (fontIt == fontMap.end()) return effectiveFontId;
   const EpdFontFamily& primary = fontIt->second;
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   // UI subsets can cover only part of a filename. Choose one face for the
-  // complete run, following the existing CJK subset -> common CJK -> RTL chain.
-  // Eight IDs bound the registered UI/SD chain; duplicate IDs also break cycles.
-  std::array<int, 8> candidates{fontId};
-  size_t count = 1;
-  int bestFontId = effectiveFontId;
+  // complete run, following the existing CJK subset -> common CJK -> RTL chain,
+  // plus any downloaded font-extension faces. Twelve IDs bound the chain;
+  // duplicate IDs also break cycles.
+  std::array<int, 12> candidates{};
+  size_t count = 0;
+  const auto addCandidate = [&](const int id) {
+    if (id == 0 || count >= candidates.size()) return;
+    if (std::find(candidates.begin(), candidates.begin() + static_cast<ptrdiff_t>(count), id) ==
+        candidates.begin() + static_cast<ptrdiff_t>(count)) {
+      candidates[count++] = id;
+    }
+  };
+  addCandidate(fontId);
+  addCandidate(effectiveFontId);
+
   size_t bestMissing = 0;
   const char* cursor = text;
   uint32_t cp;
@@ -374,17 +385,23 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
     if (!primary.hasCodepoint(cp, style)) ++bestMissing;
   }
   if (bestMissing == 0) return effectiveFontId;
+
+  // Breadth-first expansion: a supplement can be attached to a UI id, to the
+  // preferred face, or to another fallback in the chain.
   for (size_t i = 0; i < count; ++i) {
     const auto chain = fallbackFontMap_.find(candidates[i]);
     if (chain != fallbackFontMap_.end()) {
-      for (const int id : chain->second) {
-        if (id != 0 && count < candidates.size() &&
-            std::find(candidates.begin(), candidates.begin() + count, id) == candidates.begin() + count) {
-          candidates[count++] = id;
-        }
-      }
+      for (const int id : chain->second) addCandidate(id);
     }
-    if (i == 0 && effectiveFontId == fontId) continue;
+    const auto supplements = supplementalFontMap_.find(candidates[i]);
+    if (supplements != supplementalFontMap_.end()) {
+      for (const int id : supplements->second) addCandidate(id);
+    }
+  }
+
+  int bestFontId = effectiveFontId;
+  for (size_t i = 0; i < count; ++i) {
+    if (candidates[i] == effectiveFontId) continue;  // already measured
     const auto candidate = fontMap.find(candidates[i]);
     if (candidate == fontMap.end()) continue;
     size_t missing = 0;
@@ -400,19 +417,30 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   }
   return bestFontId;
 #else
-  for (const int fallbackFontId : fbIt->second) {
-    if (fallbackFontId == 0) continue;
-    const auto fallbackIt = fontMap.find(fallbackFontId);
-    if (fallbackIt == fontMap.end()) continue;
+  const auto coversWith = [&](const int candidateId) {
+    const auto fallbackIt = fontMap.find(candidateId);
+    if (fallbackIt == fontMap.end()) return false;
     const EpdFontFamily& fallback = fallbackIt->second;
     const char* cursor = text;
     uint32_t cp;
     while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
       const bool eligible = effectiveFontId != fontId || cp >= 0x80;
-      if (eligible && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) {
-        return fallbackFontId;
-      }
+      if (eligible && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) return true;
     }
+    return false;
+  };
+  if (fbIt != fallbackFontMap_.end()) {
+    for (const int fallbackFontId : fbIt->second) {
+      if (fallbackFontId != 0 && coversWith(fallbackFontId)) return fallbackFontId;
+    }
+  }
+  for (const int primaryId : {fontId, effectiveFontId}) {
+    const auto supplements = supplementalFontMap_.find(primaryId);
+    if (supplements == supplementalFontMap_.end()) continue;
+    for (const int supplementId : supplements->second) {
+      if (coversWith(supplementId)) return supplementId;
+    }
+    if (primaryId == effectiveFontId) break;
   }
   return effectiveFontId;
 #endif
@@ -1379,7 +1407,7 @@ void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const 
     bool usedReplacement = false;
     const EpdGlyph* glyph = font.getGlyph(cp, renderStyle, &usedReplacement);
     if (usedReplacement && fontCacheManager_) {
-      fontCacheManager_->reportMissingChineseCodepoint(resolvedFontId, sourceCp);
+      fontCacheManager_->reportMissingCodepoint(resolvedFontId, sourceCp, renderStyle);
     }
 #else
     const EpdGlyph* glyph = font.getGlyph(cp, renderStyle);
@@ -4150,7 +4178,7 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     bool usedReplacement = false;
     const EpdGlyph* glyph = font.getGlyph(cp, style, &usedReplacement);
     if (usedReplacement && fontCacheManager_) {
-      fontCacheManager_->reportMissingChineseCodepoint(resolvedFontId, sourceCp);
+      fontCacheManager_->reportMissingCodepoint(resolvedFontId, sourceCp, style);
     }
 #else
     const EpdGlyph* glyph = font.getGlyph(cp, style);

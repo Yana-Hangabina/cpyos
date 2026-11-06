@@ -35,8 +35,15 @@ class FontCacheManager {
   bool isScanning() const;
   void recordText(const char* text, int fontId, EpdFontFamily::Style style);
 #ifdef ENABLE_CHINESE_VERSION
+  // Records a codepoint that no registered face can render. The original
+  // Chinese-only entry point stays as a wrapper for older callers/tests.
+  void reportMissingCodepoint(int fontId, uint32_t codepoint, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
   void reportMissingChineseCodepoint(int fontId, uint32_t codepoint);
   uint32_t consumeMissingChineseCodepoint();
+  // Copies up to `capacity` distinct missing codepoints and clears the list.
+  uint8_t consumeMissingCodepoints(uint32_t* out, uint8_t capacity);
+  void clearMissingCodepoints();
+  bool hasMissingCodepoint() const { return missingCodepointCount_ != 0; }
 #endif
 
   // The FontDecompressor pointer, needed by GfxRenderer::getGlyphBitmap()
@@ -86,6 +93,8 @@ class FontCacheManager {
   uint8_t scanFontCount_ = 0;
   bool scanOverflowWarned_ = false;
 #ifdef ENABLE_CHINESE_VERSION
-  uint32_t missingChineseCodepoint_ = 0;
+  static constexpr uint8_t MAX_MISSING_CODEPOINTS = 4;
+  uint32_t missingCodepoints_[MAX_MISSING_CODEPOINTS] = {};
+  uint8_t missingCodepointCount_ = 0;
 #endif
 };

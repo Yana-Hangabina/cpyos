@@ -44,6 +44,7 @@ Enter a URL and the page is fetched and re-typeset as text at the current readin
 - Separate UI and reading sizes (reading 10–34pt); richer SD-card fonts fill in rarer characters.
 - Offline pinyin search and continuous pinyin input; 11 hyphenation languages loaded on demand.
 - Bundled emoji glyphs for common names and titles.
+- Optional font-extension packs (full emoji, extended CJK, more scripts) download to the SD card on demand; missing glyphs prompt for the right pack, and the firmware size is unchanged.
 
 ### E-ink display and page turns
 
@@ -54,7 +55,7 @@ Enter a URL and the page is fetched and re-typeset as text at the current readin
 
 ### System
 
-- Device OTA (mirror-hosted manifest, dual app-slot upgrade manifest) and SD-card firmware update.
+- Device OTA (GitHub first, mirrors on failure, dual app-slot upgrade manifest) and SD-card firmware update.
 - Data partition packs loaded on demand: pinyin, hyphenation, language pack, web assets and emoji.
 - 33 UI languages; a crash report page records the reset reason and the last boot stage.
 - Optional USB mass storage, browser transfer/settings, WebDAV, OPDS and Calibre wireless (from CrossMux).

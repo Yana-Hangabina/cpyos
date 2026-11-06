@@ -3800,3 +3800,18 @@ diff -ruN --exclude=.git sdk_pristine/libs/hardware/SDCardManager/src/SdmmcBlock
  
    // esp-idf's sdmmc_card_t is a typedef of an anonymous struct, so it can't be
    // forward-declared here (a `struct sdmmc_card_t;` tag is a different, conflicting
+diff -ruN --exclude=.git sdk_pristine/libs/network/SecureNet/src/SecureClient.cpp sdk_work/libs/network/SecureNet/src/SecureClient.cpp
+--- sdk_pristine/libs/network/SecureNet/src/SecureClient.cpp
++++ sdk_work/libs/network/SecureNet/src/SecureClient.cpp
+@@ -72,6 +72,11 @@
+   _transport.setConnectionTimeout(timeoutMs);
+   if (!_transport.connect(host, port)) {
+     if (Serial) Serial.printf("[SecureClient] TCP connect failed (%s): %s:%u\n", label, host, port);
++    // The blocking TCP connect cannot be interrupted, so poll the abort hook
++    // once it returns: otherwise a cancel that arrived during the connect is
++    // forgotten and connect() still spends a second full timeout on the TLS
++    // 1.2 retry (and the caller then walks the remaining routes).
++    abortRequested();
+     return 0;
+   }
+   if (abortRequested()) {

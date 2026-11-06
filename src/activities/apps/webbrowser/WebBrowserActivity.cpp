@@ -788,6 +788,12 @@ void WebBrowserActivity::beginFetch(const std::string& url) {
   NetworkStartup::prepare(renderer);
   {
     const RenderLock lock;
+    // prepare() only reclaims above its own internal-heap threshold, but the
+    // fetch task needs one contiguous 2 MB PSRAM block and a loaded reader
+    // font (2-3 MB) leaves PSRAM too fragmented -- "no fetch buffer" on a
+    // device with 3.7 MB free. Drop the loaded face unconditionally; it is
+    // lazily rebuilt by the next reader render.
+    sdFontSystem.releaseLoadedFont(renderer);
     if (auto* fontCache = renderer.getFontCacheManager()) fontCache->releaseSdFontCaches();
   }
   jobUrl_ = url;

@@ -1,0 +1,28 @@
+{
+  "packs": [
+    {
+      "id": "emoji-full",
+      "kind": "emoji",
+      "family": "-",
+      "name": "Full Emoji",
+      "file": "NotoEmoji-Regular.ttf",
+      "url": "https://github.com/Yana-Hangabina/cpyos/releases/download/fonts-1/NotoEmoji-Regular.ttf"
+    },
+    {
+      "id": "cjk-ext",
+      "kind": "fallback",
+      "family": "CPYOSHanSansSCExt",
+      "name": "CJK Extension",
+      "file": "CPYOSHanSansSC-Ext.ttf",
+      "url": "https://github.com/Yana-Hangabina/cpyos/releases/download/fonts-1/CPYOSHanSansSC-Ext.ttf"
+    },
+    {
+      "id": "script-kr",
+      "kind": "fallback",
+      "family": "CPYOSNotoSansKR",
+      "name": "Noto Sans KR",
+      "file": "NotoSansKR-Regular.ttf",
+      "url": "https://github.com/Yana-Hangabina/cpyos/releases/download/fonts-1/NotoSansKR-Regular.ttf"
+    }
+  ]
+}

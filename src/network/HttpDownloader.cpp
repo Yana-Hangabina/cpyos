@@ -1,6 +1,7 @@
 #include "HttpDownloader.h"
 
 #include <Arduino.h>
+#include <WiFi.h>
 #include <HalMemory.h>
 #include <HalSystem.h>
 #include <Logging.h>
@@ -34,6 +35,16 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
       snprintf(userAgent, sizeof(userAgent), "CrossMux-%s-" CROSSPOINT_VERSION, HalSystem::getDeviceModel());
   if (length < 0 || static_cast<size_t>(length) >= sizeof(userAgent)) return HttpDownloader::HTTP_ERROR;
   WifiPowerSaveGuard psGuard;
+  // Never start DNS/TLS on a dead radio: lwIP asserts udp_new_ip_type when
+  // SNTP's pending DNS callback runs without the TCPIP lock, and a connect
+  // attempted with the driver down fails 0 ms later anyway. One guard here
+  // covers every HttpDownloader caller (OTA, OPDS, plugins, catalog, fonts).
+#if !defined(SIMULATOR)
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_ERR("HTTP", "no Wi-Fi link; refusing request: %s", url.c_str());
+    return HttpDownloader::NO_WIFI;
+  }
+#endif
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
   const freeink::FetchResult result = freeink::fetchResumable(
@@ -98,12 +109,15 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
-                              const std::string& password, const int timeoutMs) {
+                              const std::string& password, const int timeoutMs, const bool* cancelFlag,
+                              DownloadError* error) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   freeink::FetchSink sink;
   sink.write = onData;
-  return runGetSecure(url, username, password, {}, sink, nullptr, nullptr, false,
-                      timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS) == OK;
+  const DownloadError result = runGetSecure(url, username, password, {}, sink, cancelFlag, nullptr, false,
+                                            timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS);
+  if (error != nullptr) *error = result;
+  return result == OK;
 }
 
 HttpDownloader::ProbeResult HttpDownloader::probeUrl(const std::string& url, const size_t maxBytes,
@@ -129,7 +143,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
                                                              ProgressCallback progress, const bool* cancelFlag,
                                                              const std::string& username, const std::string& password,
                                                              const std::vector<Header>& headers,
-                                                             bool downgradeRedirectsToHttp) {
+                                                             bool downgradeRedirectsToHttp, const int timeoutMs) {
   LOG_DBG("HTTP", "Downloading: %s -> %s", url.c_str(), destPath.c_str());
 
   // Stage in <dest>.part: a failed or cancelled download never replaces an
@@ -153,7 +167,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
 
   size_t downloaded = 0;
   const DownloadError result =
-      runGetSecure(url, username, password, headers, sink, cancelFlag, &downloaded, downgradeRedirectsToHttp);
+      runGetSecure(url, username, password, headers, sink, cancelFlag, &downloaded, downgradeRedirectsToHttp,
+                   timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS);
   // Close before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
   // otherwise close only after the remove. A failed rewind leaves no open handle.
   if (file.isOpen()) file.close();

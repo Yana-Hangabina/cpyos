@@ -23,4 +23,12 @@ bool setMode(GfxRenderer& renderer, wifi_mode_t mode);
 // (JJWXC, WeRead) already tear it down themselves.
 void releaseRadio();
 
+// Nested-safe SNTP suspension for a radio session. setMode() takes one hold and
+// releaseRadio() drops it, so no caller has to remember: a pending NTP DNS
+// query at the moment something clears the DNS cache (on association) is what
+// trips lwIP's "Required to lock TCPIP core functionality" assert. Activities
+// that must keep the clock off for longer hold their own nested suspension.
+void suspendTimeSync();
+void resumeTimeSync();
+
 }  // namespace NetworkStartup

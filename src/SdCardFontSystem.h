@@ -61,6 +61,19 @@ class SdCardFontSystem {
   /// Release the resident SD font without changing the saved selection.
   void releaseLoadedFont(GfxRenderer& renderer);
 
+#if CROSSPOINT_VECTOR_FONTS
+  /// Load every installed Font Extras fallback pack as an additive renderer
+  /// fallback. Idempotent for the same family set and point size. Returns true
+  /// when at least one supplement is active.
+  bool loadSupplementFonts(GfxRenderer& renderer, uint8_t readerPointSize);
+  void unloadSupplementFonts(GfxRenderer& renderer);
+  // ensureLoaded() may load the selected SD reader family *after* the
+  // supplements were attached; re-point the supplement faces at the id that is
+  // actually live now. Cheap and idempotent.
+  void attachSupplementReaderFonts(GfxRenderer& renderer, uint8_t readerPointSize);
+  bool hasSupplementFonts() const { return !supplementFamilies_.empty(); }
+#endif
+
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   /// Pure lookup: never loads and never mutates residency, so
@@ -121,6 +134,7 @@ class SdCardFontSystem {
   void setupUiFallbacks(GfxRenderer& renderer);
 
 #if CROSSPOINT_VECTOR_FONTS
+  struct TtfSource;  // defined below; used by the source-loading helpers
   // --- Vector (.ttf/.otf) font path (FreeInkFont via TtfEpdFont) -------------
   // Load/refresh the selected TTF family at the current reader size, register
   // it with the renderer, and track it so ensureSdCardFontReady() rebuilds its
@@ -135,10 +149,16 @@ class SdCardFontSystem {
   // Open one style source file (resident if small, streamed if large) into
   // ttfSources_[style]. Returns false on open/read failure.
   bool openTtfSource(uint8_t style, const std::string& path);
+  // Shared implementation for the selected reader family and supplementary
+  // packs (different resident/streaming budgets).
+  bool openTtfSourceInto(TtfSource* sources, uint8_t style, const std::string& path, size_t residentMax,
+                         size_t familyResidentMax, size_t streamPrefix, size_t psramReserve);
   // Register every present source with `font` (shared bytes / file handles).
   void addTtfSources(TtfEpdFont& font);
+  void addTtfSourcesFrom(const TtfSource* sources, TtfEpdFont& font);
   // Close/free all style sources.
   void freeTtfSources();
+  void freeSupplementSources();
   // ReadFn for streamed sources: serves the PSRAM prefix cache first, SD after.
   static unsigned long prefixRead(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
 #endif  // CROSSPOINT_VECTOR_FONTS
@@ -160,6 +180,20 @@ class SdCardFontSystem {
     unsigned long size = 0;
     bool present = false;
   };
+
+  // One installed Font Extras fallback family. Sources are kept separate from
+  // the selected reader family's ttfSources_ because the two families can be
+  // different files and have different memory budgets.
+  struct SupplementFamily {
+    std::string family;
+    TtfSource sources[4];
+    std::unique_ptr<TtfEpdFont> reader;
+    std::vector<std::unique_ptr<TtfEpdFont>> ui;
+    std::vector<int> uiIds;
+    int readerId = 0;
+  };
+  std::vector<std::unique_ptr<SupplementFamily>> supplementFamilies_;
+  uint8_t supplementPointSize_ = 0;
 
   // Active TTF font (at most one reader-size vector family loaded at a time).
   std::unique_ptr<TtfEpdFont> ttf_;

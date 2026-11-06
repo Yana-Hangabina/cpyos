@@ -68,7 +68,7 @@
   <section class="hero" aria-labelledby="hero-title">
     <div class="wrap">
       <div>
-        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.6.2</span></span><span class="dot"></span><span>非官方固件</span></div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.7.0</span></span><span class="dot"></span><span>非官方固件</span></div>
         <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
         <p class="lede">让 Read Pico 能读晋江、微信读书、本地书和网页。</p>
         <p class="en-lede">A reading system for the MindReset Read Pico: JJWXC, WeRead, a text-mode web browser, Chinese typography, partial refresh and device OTA — built on CrossMux.</p>
@@ -124,8 +124,8 @@
           <div class="idx">04</div>
           <div>
             <h3>中文与字体</h3>
-            <p>一套覆盖 8,105 个通用规范汉字 + GB2312 的可缩放字体，界面、书名、晋江和正文共用。界面与阅读字号分开（阅读 10–34pt）；离线拼音输入与书名搜索；常见 emoji 有内置字形。</p>
-            <div class="tags"><span>FONTS</span><span>PINYIN</span><span>EMOJI</span></div>
+            <p>一套覆盖 8,105 个通用规范汉字 + GB2312 的可缩放字体，界面、书名、晋江和正文共用。界面与阅读字号分开（阅读 10–34pt）；离线拼音输入与书名搜索；常见 emoji 有内置字形。缺字时可下载扩展字体包（完整 Emoji、扩展中文、多语言文字），字体不占固件空间。</p>
+            <div class="tags"><span>FONTS</span><span>EXTENSIONS</span><span>PINYIN</span><span>EMOJI</span></div>
           </div>
         </article>
         <article class="feature reveal">
@@ -156,7 +156,7 @@
           <div class="idx">08</div>
           <div>
             <h3>系统与连接</h3>
-            <p>设备内 OTA 同时更新 app 与数据包（镜像源、双 app 槽升级），另有 SD 卡固件更新；数据包按需加载；33 种界面语言；崩溃报告页记录重启原因。浏览器传书、WebDAV、OPDS 与 Calibre 无线沿用 CrossMux。</p>
+            <p>设备内 OTA 同时更新 app 与数据包（优先 GitHub，失败后自动换镜像；双 app 槽升级），另有 SD 卡固件更新；数据包按需加载；33 种界面语言；崩溃报告页记录重启原因。扩展字体与网页资源均可在设备上按需下载。</p>
             <div class="tags"><span>OTA</span><span>DATA PACKS</span><span>i18n</span></div>
           </div>
         </article>
@@ -229,7 +229,7 @@
           <tr><th>SoC</th><td>ESP32-S3 · 双核 240 MHz · 8 MB PSRAM · Wi-Fi / BT5</td></tr>
           <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
           <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
-          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.6.2</span></b> · 预编译包只面向 Read Pico</td></tr>
+          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.7.0</span></b> · 预编译包只面向 Read Pico</td></tr>
         </table>
       </div>
     </div>
@@ -243,13 +243,13 @@
       </div>
       <div class="panel reveal" style="margin-bottom:26px;border-color:#b08a2e">
         <h3>0.2.1 及更早版本：请用网页刷机升级</h3>
-        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.6.2 已于 2026-11-05 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.6.2 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
+        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.7.0 已于 2026-11-06 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.7.0 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
         <p class="muted">Devices on 0.2.1 or older: use the web flasher on this page. Their OTA manifest is hosted on GitHub Pages, which some networks cannot reach.</p>
       </div>
       <div class="install-grid">
         <div class="panel reveal">
           <div class="status">
-            <span class="v" id="release-version">0.6.2</span>
+            <span class="v" id="release-version">0.7.0</span>
             <span class="date" id="release-date">READ PICO · 2026.11.05</span>
           </div>
           <h3>这次更新</h3>
@@ -275,12 +275,12 @@
           <h3>选择安装方式</h3>
           <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留设置和数据分区。</p>
           <div class="install-actions">
-            <esp-web-install-button id="install-button" manifest="./downloads/0.6.2/manifest-install.json">
+            <esp-web-install-button id="install-button" manifest="./downloads/0.7.0/manifest-install.json">
               <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">这个浏览器不支持 Web Serial。请用桌面版 Chrome 或 Edge。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 https 打开；本地预览请用 http://localhost。</span>
             </esp-web-install-button>
-            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.6.2/manifest-upgrade.json">
+            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.7.0/manifest-upgrade.json">
               <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
             </esp-web-install-button>
           </div>
@@ -303,7 +303,7 @@
             <li>确认升级后不要断电；完成后设备会重启。</li>
           </ol>
           <p class="warn" style="margin-top:14px">0.2.1 及更早版本请先用网页刷机升级。</p>
-          <p class="muted" style="margin-top:14px">0.6.2 起检查更新优先直连 GitHub，失败后才依次尝试 gh-proxy、GitHub Pages 与 ghfast；固件下载最多只探测三条线路，并复用刚成功的镜像。OTA 会更新非活动的 app 槽和数据包，不动 SD 卡、书库和设置。只有分区表或包格式破坏性变化才需要完整安装。</p>
+          <p class="muted" style="margin-top:14px">0.7.0 起检查更新优先直连 GitHub，失败后才依次尝试镜像与 Pages；固件下载最多只探测三条线路，并复用刚成功的线路。OTA 会更新非活动的 app 槽和数据包，不动 SD 卡、书库和设置。扩展字体是可选下载，不计入固件或 OTA 数据包。</p>
         </div>
         <div class="panel reveal">
           <h3>先备份，再刷机</h3>

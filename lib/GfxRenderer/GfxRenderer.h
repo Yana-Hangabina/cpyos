@@ -178,6 +178,10 @@ class GfxRenderer {
   // Ordered UI fallbacks: optional SD face, then the built-in CJK subset.
   // Resolve the whole string through one face for consistent draw/measure metrics.
   std::map<int, std::array<int, 2>> fallbackFontMap_;
+  // Additive fallback chain for downloaded font-extension packs. Unlike
+  // fallbackFontMap_ (exactly two slots owned by the built-in/SD setup), this
+  // list only adds candidates: the existing chain stays intact.
+  std::map<int, std::vector<int>> supplementalFontMap_;
   // fontId -> the family it should actually resolve to (see setPreferredFont()).
   std::map<int, int> preferredFontMap_;
   // The family a font id really resolves to (identity unless rebound). EVERY path that
@@ -266,6 +270,11 @@ class GfxRenderer {
     std::erase_if(fallbackFontMap_, [fontId](const auto& mapping) {
       return mapping.first == fontId || (mapping.second[0] == 0 && mapping.second[1] == 0);
     });
+    for (auto& [primary, supplements] : supplementalFontMap_) {
+      std::erase(supplements, fontId);
+    }
+    std::erase_if(supplementalFontMap_,
+                  [fontId](const auto& mapping) { return mapping.first == fontId || mapping.second.empty(); });
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -301,6 +310,17 @@ class GfxRenderer {
     fallbackFontMap_[primaryFontId] = {fallbackFontId, backupFontId};
   }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
+  // Append a downloaded font-extension face to the primary id's fallback chain.
+  // Does not replace setFallbackFont's entries, so typography and the RTL chain
+  // keep working.
+  void addSupplementFont(int primaryFontId, int supplementFontId) {
+    if (supplementFontId == 0) return;
+    auto& chain = supplementalFontMap_[primaryFontId];
+    if (std::find(chain.begin(), chain.end(), supplementFontId) == chain.end()) {
+      chain.push_back(supplementFontId);
+    }
+  }
+  void clearSupplementFonts() { supplementalFontMap_.clear(); }
   // Rebind which family a font id actually resolves to, leaving fontMap untouched.
   // Read Pico sets this so its whole UI renders in the selected reading family at the
   // UI's own point sizes; without it only the handful of screens that go through

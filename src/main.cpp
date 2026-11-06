@@ -64,6 +64,10 @@
 #include "Typography.h"
 #endif
 #include "WifiCredentialStore.h"
+#if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR)
+#include <esp_heap_caps.h>
+#include <wolfssl/wolfcrypt/memory.h>
+#endif
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/home/FindBooksActivity.h"
@@ -86,7 +90,9 @@
 #endif
 #include "activities/network/WifiSelectionActivity.h"
 #ifdef ENABLE_CHINESE_VERSION
+#include "FontExtras.h"
 #include "activities/settings/FontDownloadActivity.h"
+#include "activities/settings/FontExtrasActivity.h"
 #include "activities/settings/SettingsActivity.h"
 #include "activities/settings/SettingsSearchActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
@@ -952,6 +958,58 @@ bool setupDisplayAndFonts(bool seamless = false, bool logSdFontLoadHeap = false)
   return fontDecompressorReady;
 }
 
+#if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
+// The reader has its own prompt. Everywhere else (Wi-Fi SSIDs, book titles,
+// lists) a missing glyph used to be silently rendered as tofu because nothing
+// consumed FontCacheManager's list. Offer the downloadable packs once per boot
+// as soon as the UI actually needs a glyph that no registered face covers.
+void maybeOfferFontExtrasForMissingUiGlyph() {
+  if (activityManager.isReaderActivity() || activityManager.isStandbyActivity()) return;
+  if (FontExtrasActivity::wasPromptShownThisBoot()) return;
+  auto* current = activityManager.currentActivityPtr();
+  if (current == nullptr) return;
+  // Do not stack this prompt over Wi-Fi selection (or another network/child
+  // activity): only the top activity's loop runs, so covering WifiSelection
+  // freezes its auto-connect timeout/fallback at status=6 forever. The missing
+  // codepoints stay queued; the prompt fires after the user is back on a stable
+  // page.
+  const char* currentName = current->debugName();
+  const bool stablePage = strcmp(currentName, "InxRecent") == 0 || strcmp(currentName, "LibraryList") == 0 ||
+                          strcmp(currentName, "My") == 0 || strcmp(currentName, "Settings") == 0 ||
+                          strcmp(currentName, "FindBooks") == 0;
+  if (!stablePage) return;
+  auto* fcm = renderer.getFontCacheManager();
+  if (fcm == nullptr || !fcm->hasMissingCodepoint()) return;
+
+  uint32_t codepoints[4] = {};
+  const uint8_t count = fcm->consumeMissingCodepoints(codepoints, 4);
+  if (count == 0) return;
+
+  std::vector<std::string> families;
+  font_extras::installedFallbackFamilies(families);
+  const bool emojiReady = font_extras::emojiInstalled();
+  bool fixable = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    const uint32_t cp = codepoints[i];
+    const bool emojiLike = (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF);
+    // An emoji pack can fix an emoji codepoint; a fallback family can fix text.
+    // Already-installed packs must not suppress the other kind, and an
+    // unfixable codepoint (e.g. a regional indicator) must not cause a prompt
+    // on every boot after the emoji pack is installed.
+    if ((emojiLike && !emojiReady) || (!emojiLike && families.empty())) {
+      fixable = true;
+      break;
+    }
+  }
+  if (!fixable) return;
+
+  LOG_INF("FEXT", "missing UI glyph U+%04X; offering font extras", static_cast<unsigned>(codepoints[0]));
+  FontExtrasActivity::suppressPromptThisBoot();
+  activityManager.pushActivity(std::make_unique<FontExtrasActivity>(
+      renderer, mappedInputManager, FontExtrasActivity::Purpose::ReaderPrompt));
+}
+#endif
+
 #ifdef ENABLE_CHINESE_VERSION
 void continueChineseFontInstall(const uint8_t expectedPointSize) {
   if (APP_STATE.openEpubPath.empty() || !Storage.exists(APP_STATE.openEpubPath.c_str())) {
@@ -1016,9 +1074,37 @@ void continueChineseFontInstall(const uint8_t expectedPointSize) {
 }
 #endif
 
+#if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR)
+namespace {
+// wolfSSL's per-session allocations (CTX, session, handshake buffers) were the
+// last thing that needed a contiguous INTERNAL block on this board: after
+// Wi-Fi init fragments the 32 KB region, only ~7 KB is left and every
+// handshake times out (measured; the same request succeeds when 13 KB is
+// available). PSRAM has megabytes free and is CPU-accessible, and TLS never
+// DMAs these buffers, so move the whole allocator to PSRAM. Failures surface
+// as a normal handshake MEMORY_E, never as a crash.
+void* wcAllocPsram(const size_t size) {
+  // malloc(0) is legal in C and wolfSSL does it; aligned_alloc(0) returns null.
+  return heap_caps_aligned_alloc(8, size == 0 ? 1 : size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+void wcFreePsram(void* ptr) { heap_caps_free(ptr); }
+void* wcReallocPsram(void* ptr, const size_t size) {
+  if (ptr == nullptr) return wcAllocPsram(size);
+  return heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+}  // namespace
+#endif
+
 void setup() {
   // Stage timing starts before the board bring-up it is meant to measure.
   boottimings::begin();
+#if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR)
+  if (wolfSSL_SetAllocators(wcAllocPsram, wcFreePsram, wcReallocPsram) != 0) {
+    LOG_ERR("TLS", "wolfSSL rejected the PSRAM allocators; using the default heap");
+  } else {
+    LOG_INF("TLS", "wolfSSL allocations: PSRAM (8-byte aligned)");
+  }
+#endif
   BoardConfig::holdPowerRails();
 
   // --- Read Pico boot order (read-pico.md 1.4) ------------------------------
@@ -1895,6 +1981,8 @@ void loop() {
         logSerial.printf("DARK=%u\n", (unsigned)SETTINGS.screenInverted);
       } else if (cmd == "CONFIRM") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugConfirm();
+      } else if (cmd == "FEXTCANCEL") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugCancel();
       } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
         if (auto* activity = activityManager.currentActivityPtr())
           activity->debugMoveRing(cmd == "ROWDOWN" ? 1 : -1);
@@ -2013,6 +2101,13 @@ void loop() {
         // Radio state probe for the power experiments (mode, status, CPU, USB).
         logSerial.printf("NET mode=%d status=%d cpu=%u\n", static_cast<int>(WiFi.getMode()),
                          static_cast<int>(WiFi.status()), static_cast<unsigned>(getCpuFrequencyMhz()));
+      } else if (cmd == "HEAPINFO") {
+        // Full internal-heap region/block map; tells fragmentation apart from
+        // "not enough RAM" when a TLS handshake fails at a low largest block.
+        logSerial.printf("HEAPINFO internal free=%u largest=%u psram=%u\n", (unsigned)ESP.getFreeHeap(),
+                         (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getFreePsram());
+        heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
+        logSerial.flush();
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
       } else if (cmd.startsWith("TLSPROBE")) {
         // Diagnostic-only: handshake probe, plus an optional HTTP/1.1 exchange.
@@ -2055,6 +2150,82 @@ void loop() {
 #endif
       } else if (cmd == "WIFI") {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
+#if defined(BOARD_HAS_PSRAM) && defined(ENABLE_CHINESE_VERSION)
+      } else if (cmd == "FEXTDEMO") {
+        activityManager.pushActivity(std::make_unique<FontExtrasActivity>(renderer, mappedInputManager));
+      } else if (cmd.startsWith("FEXTURL")) {
+        const int space = cmd.indexOf(' ');
+        const String url = space > 0 ? cmd.substring(space + 1) : String();
+        font_extras::setManifestUrlOverride(url.length() > 0 ? url.c_str() : nullptr);
+        LOG_INF("FEXT", "manifest URL override: %s", font_extras::manifestUrl());
+      } else if (cmd == "FEXTCHECK") {
+        std::vector<font_extras::Pack> packs;
+        bool fromCache = false;
+        std::string error;
+        if (font_extras::debugCheck(packs, fromCache, error)) {
+          LOG_INF("FEXT", "check ok: %zu packs (cache=%d)", packs.size(), fromCache ? 1 : 0);
+          for (const auto& pack : packs) {
+            LOG_INF("FEXT", "  %s kind=%s family=%s size=%llu", pack.id, font_extras::kindName(pack.kind), pack.family,
+                    static_cast<unsigned long long>(pack.size));
+          }
+        } else {
+          LOG_ERR("FEXT", "check failed: %s", error.c_str());
+        }
+      } else if (cmd.startsWith("FEXTINSTALL")) {
+        const int space = cmd.indexOf(' ');
+        const String id = space > 0 ? cmd.substring(space + 1) : String();
+        std::string error;
+        if (id.length() == 0 || !font_extras::debugInstallById(id.c_str(), error)) {
+          LOG_ERR("FEXT", "install failed: %s", error.empty() ? "missing id" : error.c_str());
+        } else {
+          sdFontSystem.markRegistryDirty();
+          sdFontSystem.refreshIfDirty();
+          sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+          emoji_font::reload(renderer, SETTINGS.fontPointSize);
+          renderer.requestNextFullRefresh();
+          LOG_INF("FEXT", "installed and activated %s", id.c_str());
+        }
+      } else if (cmd == "FEXTSTATUS") {
+        font_extras::debugPrintStatus();
+      } else if (cmd.startsWith("FEXTADDLOCAL ")) {
+        String rest = cmd.substring(12);
+        rest.trim();
+        const int a = rest.indexOf(' ');
+        const int b = a > 0 ? rest.indexOf(' ', a + 1) : -1;
+        const int c = b > 0 ? rest.indexOf(' ', b + 1) : -1;
+        if (a < 0 || b < 0 || c < 0) {
+          LOG_ERR("FEXT", "usage: FEXTADDLOCAL <id> <kind> <family> <path>");
+        } else {
+          const String id = rest.substring(0, a);
+          const String kind = rest.substring(a + 1, b);
+          const String family = rest.substring(b + 1, c);
+          String path = rest.substring(c + 1);
+          path.trim();
+          std::string error;
+          if (!font_extras::installLocalFile(id.c_str(), kind.c_str(), family.c_str(), path.c_str(), error)) {
+            LOG_ERR("FEXT", "local install failed: %s", error.c_str());
+          } else {
+            sdFontSystem.markRegistryDirty();
+            sdFontSystem.refreshIfDirty();
+            sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+            emoji_font::reload(renderer, SETTINGS.fontPointSize);
+            renderer.requestNextFullRefresh();
+          }
+        }
+      } else if (cmd.startsWith("FEXTREMOVE ")) {
+        String id = cmd.substring(11);
+        id.trim();
+        std::string error;
+        if (!font_extras::removeById(id.c_str(), error)) {
+          LOG_ERR("FEXT", "remove failed: %s", error.c_str());
+        } else {
+          sdFontSystem.markRegistryDirty();
+          sdFontSystem.refreshIfDirty();
+          sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+          emoji_font::reload(renderer, SETTINGS.fontPointSize);
+          renderer.requestNextFullRefresh();
+        }
+#endif
       } else if (cmd == "WIFIDEMO") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugWifiDemo();
       } else if (cmd == "SLEEP") {
@@ -2475,6 +2646,9 @@ void loop() {
   const unsigned long activityStartTime = millis();
   const bool readerWasActive = activityManager.isReaderActivity();
   activityManager.loop();
+#if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
+  maybeOfferFontExtrasForMissingUiGlyph();
+#endif
   updateBluetoothLifecycle();
   const bool readerIsActive = activityManager.isReaderActivity();
   const unsigned long activityDuration = millis() - activityStartTime;

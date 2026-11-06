@@ -33,6 +33,7 @@ enum class SettingAction {
   ScreenRepair,
   Language,
   DownloadFonts,
+  DownloadFontExtras,
   ManageDictionaries,
   TextSettings,
   About,

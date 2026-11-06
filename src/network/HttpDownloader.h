@@ -28,6 +28,7 @@ class HttpDownloader {
     FILE_ERROR,
     ABORTED,
     UNAUTHORIZED,  // 401/403: callers holding a refreshable credential can retry
+    NO_WIFI,       // no station link: refused before TLS (see the lwIP assert)
   };
 
   // Pre-flight floor for the ordinary allocator used by TLS (including
@@ -58,9 +59,13 @@ class HttpDownloader {
 
   /**
    * Stream the response body to onData as it arrives, without buffering it.
+   * `cancelFlag` is polled during DNS/TCP/TLS and every body chunk, so a
+   * caller that shows a Cancel affordance can honour it before the connect
+   * timeout expires.
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
-                       const std::string& password = "", int timeoutMs = 0);
+                       const std::string& password = "", int timeoutMs = 0, const bool* cancelFlag = nullptr,
+                       DownloadError* error = nullptr);
 
   using Header = std::pair<std::string, std::string>;
 
@@ -72,5 +77,6 @@ class HttpDownloader {
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, const bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "",
-                                      const std::vector<Header>& headers = {}, bool downgradeRedirectsToHttp = false);
+                                      const std::vector<Header>& headers = {}, bool downgradeRedirectsToHttp = false,
+                                      int timeoutMs = 0);
 };

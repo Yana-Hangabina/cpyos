@@ -14,6 +14,10 @@ class GfxRenderer;
 namespace emoji_font {
 
 bool begin(GfxRenderer& renderer, uint8_t pointSize);
+// Drop the cached TTF and re-read storage. Used after Font Extras installs (or
+// removes) the optional full emoji font; prefers /.crosspoint/font_extras/emoji.ttf
+// and falls back to the data-partition subset.
+bool reload(GfxRenderer& renderer, uint8_t pointSize);
 // Reload at a new reader point size. No-op when unchanged. Call on the UI task
 // before the next render (EpubReaderActivity::onEnter does).
 void setPointSize(GfxRenderer& renderer, uint8_t pointSize);

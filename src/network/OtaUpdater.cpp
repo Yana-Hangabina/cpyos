@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "CrossMuxEndpoints.h"
+#include "DownloadRoutes.h"
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
 
@@ -68,66 +69,16 @@ constexpr size_t releaseUrlCapacity = 192;
 static_assert(releaseUrlCapacity < 256);
 
 #ifdef CPYOS_OTA_MANIFEST_URL
-struct DownloadCandidate {
-  const char* label;
-  std::string url;
-};
-
-bool startsWith(const std::string& value, const char* prefix) {
-  const size_t length = std::strlen(prefix);
-  return value.size() >= length && value.compare(0, length, prefix) == 0;
-}
-
-bool isGithubHosted(const std::string& url) {
-  return startsWith(url, "https://github.com/") || startsWith(url, "https://raw.githubusercontent.com/") ||
-         startsWith(url, "https://objects.githubusercontent.com/");
-}
-
-// The release manifest advertises a mirror-prefixed URL so firmware that
-// predates this probe (0.1.1 and earlier) also gets a fast download. Strip the
-// prefix to recover the canonical GitHub asset, then measure a short list of
-// routes.
-//
-// Probing all seven mirrors made an update check on a blocked network crawl:
-// every dead route cost a full timeout before a working one was tried (0.6.1).
-// Now only the canonical GitHub route and the route that actually served the
-// manifest are measured, plus the advertised URL. `includeAllMirrors` remains
-// for the OTAPROBE diagnostic.
+// Shared with FontExtras: the manifest route is preferred, then the canonical
+// GitHub asset, then one ordinary mirror. The full list is only used by the
+// OTAPROBE diagnostic.
 std::string selectFastestDownloadUrl(const std::string& advertised, const int probeTimeoutMs = 6000,
                                      const std::string& preferredMirror = {},
                                      const bool includeAllMirrors = false) {
-  std::string origin = advertised;
-  for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
-    const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
-    if (startsWith(origin, prefix)) {
-      origin = origin.substr(std::strlen(prefix));
-      break;
-    }
-  }
-
-  std::vector<DownloadCandidate> candidates;
-  const auto add = [&candidates](const char* label, const std::string& url) {
-    for (const auto& existing : candidates) {
-      if (existing.url == url) return;
-    }
-    candidates.push_back({label, url});
-  };
-  add("github", origin);
-  if (isGithubHosted(origin)) {
-    if (!preferredMirror.empty()) add("manifest mirror", preferredMirror + origin);
-    // Keep these in the same order as CPYOS_DOWNLOAD_MIRRORS.
-    static constexpr const char* kMirrorLabels[] = {"gh-proxy.org", "git.yylx.win", "ghfast.top",
-                                                      "gh-proxy.com", "github.tbap.top", "gh.dpik.top",
-                                                      "ghproxy.net"};
-    static_assert(sizeof(kMirrorLabels) / sizeof(kMirrorLabels[0]) ==
-                  CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT);
-    const size_t mirrorCount = includeAllMirrors ? CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT : 0;
-    for (size_t i = 0; i < mirrorCount; ++i) {
-      add(kMirrorLabels[i], std::string(CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i]) + origin);
-    }
-  }
-  add("advertised", advertised);
-
+  const auto candidates = download_routes::buildGithubShortlist(
+      advertised, preferredMirror, CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS,
+      CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT, includeAllMirrors ? 8 : 3, probeTimeoutMs,
+      includeAllMirrors);
   if (candidates.size() == 1) return candidates.front().url;
 
   size_t best = SIZE_MAX;
@@ -136,11 +87,12 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
   for (size_t i = 0; i < candidates.size(); ++i) {
     const auto probe = HttpDownloader::probeUrl(candidates[i].url, 32768, probeTimeoutMs);
     if (!probe.ok) {
-      LOG_INF("OTA", "probe %s: failed after %u ms", candidates[i].label, static_cast<unsigned>(probe.elapsedMs));
+      LOG_INF("OTA", "probe %s: failed after %u ms", candidates[i].label.c_str(),
+              static_cast<unsigned>(probe.elapsedMs));
       continue;
     }
     const uint32_t bps = probe.bytesPerSecond();
-    LOG_INF("OTA", "probe %s: %u KB in %u ms (%u KB/s, first byte %u ms)", candidates[i].label,
+    LOG_INF("OTA", "probe %s: %u KB in %u ms (%u KB/s, first byte %u ms)", candidates[i].label.c_str(),
             static_cast<unsigned>(probe.bytes / 1024), static_cast<unsigned>(probe.elapsedMs),
             static_cast<unsigned>(bps / 1024), static_cast<unsigned>(probe.firstByteMs));
     if (best == SIZE_MAX || bps > bestBps || (bps == bestBps && probe.firstByteMs < bestFirstByte)) {
@@ -153,7 +105,7 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
     LOG_ERR("OTA", "all download routes failed to probe; falling back to %s", advertised.c_str());
     return advertised;
   }
-  LOG_INF("OTA", "download route: %s (%u KB/s)", candidates[best].label,
+  LOG_INF("OTA", "download route: %s (%u KB/s)", candidates[best].label.c_str(),
           static_cast<unsigned>(bestBps / 1024));
   return candidates[best].url;
 }
@@ -162,11 +114,8 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
 // blobs should be fetched through the same route: it is known to work on this
 // network, while another mirror may be blocked.
 std::string mirrorPrefixForUrl(const std::string& url) {
-  for (size_t i = 0; i < CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT; ++i) {
-    const char* prefix = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS[i];
-    if (startsWith(url, prefix)) return prefix;
-  }
-  return {};
+  return download_routes::mirrorPrefixForUrl(url, CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS,
+                                             CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT);
 }
 #endif
 
@@ -557,6 +506,13 @@ void OtaUpdater::debugProbeDownloadMirrors() {
 
 OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
   if (packsLoaded) return OK;
+#ifndef CPYOS_OTA_MANIFEST_URL
+  // Only the CPYOS Read Pico builds carry the pack channel (and the endpoint
+  // constants it uses). Other targets keep the app-only OTA they shipped with.
+  LOG_INF("OTA", "pack manifest: this build has no data-pack channel");
+  packsLoaded = true;
+  return OK;
+#else
   packCount = 0;
   dataTotalSize = 0;
   packUpdates = false;
@@ -666,6 +622,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
   LOG_INF("OTA", "pack manifest: %u pack(s), %s", static_cast<unsigned>(packCount),
           packUpdates ? "changes pending" : "all current");
   return OK;
+#endif
 }
 
 bool OtaUpdater::checkPackUpdates() {

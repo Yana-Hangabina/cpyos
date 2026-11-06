@@ -13,8 +13,10 @@
 
 #include <cstring>
 #include <iterator>
+#include <map>
 
 #include "CrossPointSettings.h"
+#include "FontExtras.h"
 #include "ReaderFontSizes.h"
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "SystemFontPack.h"
@@ -163,10 +165,28 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
     }
   }
 
+#if CROSSPOINT_VECTOR_FONTS
+  // Downloaded font-extension packs are additive fallbacks; load them after the
+  // user's selected family so a pack can never replace it.
+  loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+#endif
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());
 }
 
 void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, bool allowFlashCache) {
+#if CROSSPOINT_VECTOR_FONTS
+  // Cheap when the installed set and reader size are unchanged; reloads after a
+  // Font Extras download or a reader-size change.
+  loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+  // The selected SD reader family may be (re)loaded below, changing the id that
+  // SETTINGS.getReaderFontId() returns. Re-attach the supplements on every exit
+  // path, including the early returns above the family load.
+  struct AttachAtExit {
+    SdCardFontSystem& self;
+    GfxRenderer& renderer;
+    ~AttachAtExit() { self.attachSupplementReaderFonts(renderer, SETTINGS.fontPointSize); }
+  } attachAtExit{*this, renderer};
+#endif
   // If the web server (or another task) installed/deleted fonts, re-discover.
   // Track whether we just re-discovered so we can force a reload below even
   // when the wanted family/size still maps to the same point size — the file
@@ -270,6 +290,9 @@ void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) {
   // resident SD font" left it loaded. That made the text-settings preview budget
   // (128 KB) stick for the reader, which then re-rasterised most of every page.
   unloadTtf(renderer);
+  // Font Extras faces are also resident; a memory-critical transition must be
+  // able to reclaim them. ensureLoaded()/reader entry reloads them.
+  unloadSupplementFonts(renderer);
 #endif
 }
 
@@ -467,30 +490,21 @@ void SdCardFontSystem::unloadTtf(GfxRenderer& renderer) {
 }
 
 bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& path) {
-  if (style >= 4) return false;
-  // Small fonts are read fully into RAM (fastest, fewest SD reads; PSRAM when
-  // present). Large fonts (e.g. multi-MB variable/CJK) STREAM from SD so the
-  // whole file never sits in RAM — the handle is kept open for the font's life.
-  // PSRAM boards only (this whole path is vector-font gated), so size the
-  // resident cap for the 8MB parts: a 4.5MB variable font held resident gets
-  // GPOS kerning (streamed faces skip it, and GPOS-only fonts like
-  // Merriweather VF lose ALL kerning when streamed) and skips per-glyph SD
-  // reads. The heap gate below still falls back to streaming when PSRAM
-  // can't fund the buffer.
-  static constexpr size_t kResidentMax = 6 * 1024 * 1024;
+  // Selected reader family: small fonts resident, large fonts streamed. The
+  // 1 MB prefix keeps a whole page's worth of glyph faults off the card and the
+  // 4 MB family cap leaves room for the reader arena and UI faces.
+  constexpr size_t kStreamPrefix = 1024 * 1024;
+  const size_t prefix = ttfPreviewBudget_ ? 256 * 1024 : kStreamPrefix;
+  return openTtfSourceInto(ttfSources_, style, path, 6 * 1024 * 1024, 4 * 1024 * 1024, prefix, 1024 * 1024);
+}
+
+bool SdCardFontSystem::openTtfSourceInto(TtfSource* sources, const uint8_t style, const std::string& path,
+                                         const size_t residentMax, const size_t familyResidentMax,
+                                         const size_t streamPrefix, const size_t psramReserve) {
+  if (style >= 4 || sources == nullptr) return false;
   // Working headroom that must remain in internal DRAM after a resident load
   // (FreeType face setup, glyph caches, and the rest of the system).
   static constexpr size_t kInternalHeadroom = 96 * 1024;
-  // Contiguous PSRAM that must survive a resident copy: the reader face's glyph
-  // arena is 1 MB on Read Pico and FreeType's face tables are allocated after
-  // this buffer, so a copy that eats the last megabyte strands the loader.
-  static constexpr size_t kResidentContiguousReserve = 1024 * 1024;
-  // Family-level cap. The per-file checks below only look at what is free right
-  // now, so a family that ships four style files could spend the whole 8 MB one
-  // file at a time. Cap the aggregate: above it, later styles stream (which is
-  // slower but bounded). 4 MB leaves room for the reader face, three UI faces,
-  // the glyph arena and the rest of the firmware.
-  static constexpr size_t kFamilyResidentMax = 4 * 1024 * 1024;
   HalFile f = Storage.open(path.c_str());
   if (!f) {
     LOG_ERR("SDFS", "Failed to open TTF: %s", path.c_str());
@@ -502,7 +516,7 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
     f.close();
     return false;
   }
-  TtfSource& s = ttfSources_[style];
+  TtfSource& s = sources[style];
   // A resident buffer lands in PSRAM when fiFontMalloc can place it there;
   // otherwise it competes with everything else in internal DRAM. PsramAlloc
   // aborts on OOM, so this gate is load-bearing on no-PSRAM boards (X4/C3):
@@ -513,17 +527,17 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
   // reader glyph arena takes 1 MB and every UI fallback takes its own face. A
   // font that merely fits the largest block at the moment we read it can still
   // leave the loader with no room to stand the face up -- and then PsramAlloc
-  // aborts the firmware. Keeping kResidentContiguousReserve free turns that into
-  // a streaming load, which is the path that is supposed to absorb this.
-  const size_t familyReserve = kResidentContiguousReserve;
+  // aborts the firmware. Keeping `psramReserve` free turns that into a
+  // streaming load, which is the path that is supposed to absorb this.
+  const size_t familyReserve = psramReserve;
   size_t residentTotal = 0;
-  for (const auto& src : ttfSources_) {
-    if (src.present && !src.streamed) residentTotal += src.bytes.size();
+  for (uint8_t i = 0; i < 4; ++i) {
+    if (sources[i].present && !sources[i].streamed) residentTotal += sources[i].bytes.size();
   }
-  bool resident = len <= kResidentMax;
-  if (resident && residentTotal + len > kFamilyResidentMax) {
+  bool resident = len <= residentMax;
+  if (resident && residentTotal + len > familyResidentMax) {
     LOG_INF("SDFS", "TTF %s (%u KB) would push the family past %u MB resident; streaming", path.c_str(),
-            static_cast<unsigned>(len / 1024), static_cast<unsigned>(kFamilyResidentMax / 1024 / 1024));
+            static_cast<unsigned>(len / 1024), static_cast<unsigned>(familyResidentMax / 1024 / 1024));
     resident = false;
   }
   if (resident) {
@@ -562,11 +576,9 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
     // 1 MB from RAM turns each glyph fault's 4-6 scattered SD seeks into one
     // glyf read. Gated per source so a small-PSRAM board takes what fits.
     // The prefix holds the runtime tables (cmap/loca/hmtx) that every glyph fault
-    // reads. A reading session wants the full megabyte so a page turn does not go
-    // back to the card; the settings preview draws one sample line, so a quarter of
-    // that is enough and the difference stays available to the rest of the system.
-    const size_t kStreamPrefix = ttfPreviewBudget_ ? 256 * 1024 : 1024 * 1024;
-    const size_t prefix = len < kStreamPrefix ? len : kStreamPrefix;
+    // reads. The selected reader family gets the full megabyte; supplements use a
+    // smaller prefix because they are rare-glyph fallbacks, not page text.
+    const size_t prefix = len < streamPrefix ? len : streamPrefix;
     if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) > prefix + 256 * 1024) {
       s.bytes.resize(prefix);
       if (s.file.seek(0) && static_cast<size_t>(s.file.read(s.bytes.data(), prefix)) == prefix) {
@@ -600,12 +612,18 @@ unsigned long SdCardFontSystem::prefixRead(void* ctx, const unsigned long offset
   return SdCardFontRegistry::halFileRead(&s->file, offset, buffer, count);
 }
 
-void SdCardFontSystem::addTtfSources(TtfEpdFont& font) {
+void SdCardFontSystem::addTtfSources(TtfEpdFont& font) { addTtfSourcesFrom(ttfSources_, font); }
+
+void SdCardFontSystem::addTtfSourcesFrom(const TtfSource* sources, TtfEpdFont& font) {
+  if (sources == nullptr) return;
   for (uint8_t st = 0; st < 4; ++st) {
-    TtfSource& s = ttfSources_[st];
+    const TtfSource& s = sources[st];
     if (!s.present) continue;
     if (s.streamed) {
-      font.addStreamSource(st, &SdCardFontSystem::prefixRead, &s, s.size);
+      // prefixRead() mutates the source object (none of its mutable state is
+      // written, but the file handle is used), so const_cast is intentional:
+      // the source outlives every font that references it.
+      font.addStreamSource(st, &SdCardFontSystem::prefixRead, const_cast<TtfSource*>(&s), s.size);
     } else {
       font.addResidentSource(st, s.bytes.data(), static_cast<uint32_t>(s.bytes.size()));
     }
@@ -803,6 +821,162 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
           (unsigned)ESP.getMaxAllocHeap());
   setupTtfUiFallbacks(renderer);  // CJK/script UI fallback at the built-in UI sizes
   LOG_DBG("SDFS", "Loaded TTF font: %s @ %upt (id %d)", family.name.c_str(), size, ttfFontId_);
+}
+
+void SdCardFontSystem::freeSupplementSources() {
+  for (auto& set : supplementFamilies_) {
+    for (auto& s : set->sources) {
+      s.bytes.clear();
+      freeink::font::PsramVector<uint8_t>().swap(s.bytes);
+      if (s.file) s.file.close();
+      s.streamed = false;
+      s.size = 0;
+      s.present = false;
+    }
+  }
+}
+
+void SdCardFontSystem::attachSupplementReaderFonts(GfxRenderer& renderer, const uint8_t readerPointSize) {
+  if (supplementFamilies_.empty()) return;
+  const int liveReaderId = SETTINGS.getReaderFontId();
+  for (const auto& set : supplementFamilies_) {
+    if (set->readerId == 0) continue;
+    renderer.addSupplementFont(liveReaderId, set->readerId);
+    renderer.addSupplementFont(CJK_READER_SIZE_FONT_ID(readerPointSize), set->readerId);
+  }
+}
+
+void SdCardFontSystem::unloadSupplementFonts(GfxRenderer& renderer) {
+  for (auto& set : supplementFamilies_) {
+    for (const int id : set->uiIds) {
+      renderer.unregisterTtfFont(id);
+      renderer.removeFont(id);
+    }
+    if (set->readerId != 0) {
+      renderer.unregisterTtfFont(set->readerId);
+      renderer.removeFont(set->readerId);
+    }
+    set->ui.clear();
+    set->uiIds.clear();
+    set->reader.reset();
+  }
+  freeSupplementSources();
+  supplementFamilies_.clear();
+  supplementPointSize_ = 0;
+  renderer.clearSupplementFonts();
+}
+
+bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t readerPointSize) {
+  std::vector<std::string> families;
+  if (!font_extras::installedFallbackFamilies(families)) families.clear();
+  if (readerPointSize == 0) readerPointSize = 12;
+  if (families.empty()) {
+    if (!supplementFamilies_.empty()) unloadSupplementFonts(renderer);
+    supplementPointSize_ = 0;
+    return false;
+  }
+
+  bool same = supplementPointSize_ == readerPointSize && families.size() == supplementFamilies_.size();
+  if (same) {
+    for (size_t i = 0; i < families.size(); ++i) {
+      if (families[i] != supplementFamilies_[i]->family) {
+        same = false;
+        break;
+      }
+    }
+  }
+  if (same) return true;
+
+  unloadSupplementFonts(renderer);
+  // A pack installs a new family directory; re-scan so findFamily() sees it.
+  registry_.discover();
+
+  const bool fourBit = renderer.getGrayscaleLevels() == 16;
+  for (const auto& name : families) {
+    const auto* family = registry_.findFamily(name);
+    if (family == nullptr || !family->vector || family->files.empty()) {
+      LOG_ERR("SDFS", "font supplement %s is missing or not a vector family", name.c_str());
+      continue;
+    }
+    auto set = makeUniqueNoThrow<SupplementFamily>();
+    if (!set) {
+      LOG_ERR("SDFS", "OOM: font supplement %s", name.c_str());
+      continue;
+    }
+    set->family = name;
+    const auto* regular = family->findFile(0, 0);
+    if (regular == nullptr) regular = &family->files.front();
+    // Supplements are rare-glyph faces, not page text: a 512 KB resident cap and
+    // a 256 KB stream prefix keep several script packs inside one PSRAM budget.
+    if (!openTtfSourceInto(set->sources, 0, regular->path, 512 * 1024, 2 * 1024 * 1024, 256 * 1024,
+                           512 * 1024)) {
+      LOG_ERR("SDFS", "font supplement %s: cannot open %s", name.c_str(), regular->path.c_str());
+      continue;
+    }
+
+    auto reader = makeUniqueNoThrow<TtfEpdFont>();
+    if (reader) {
+      addTtfSourcesFrom(set->sources, *reader);
+      // Rare-glyph fallback: a smaller arena than the primary reader face is
+      // enough, and leaves room for several script packs.
+      if (reader->load(readerPointSize, true, 256 * 1024, 1024, fourBit)) {
+        const int id = computeTtfFontId((name + "\x01supp").c_str(), readerPointSize);
+        renderer.insertFont(id, reader->family());
+        renderer.registerTtfFont(id, reader.get());
+        set->readerId = id;
+        set->reader = std::move(reader);
+        renderer.addSupplementFont(SETTINGS.getReaderFontId(), id);
+        renderer.addSupplementFont(CJK_READER_SIZE_FONT_ID(readerPointSize), id);
+      } else {
+        LOG_ERR("SDFS", "font supplement %s: reader face failed at %upt", name.c_str(),
+                static_cast<unsigned>(readerPointSize));
+      }
+    }
+
+    // Several UI slots share a point size on this panel (SMALL/READER_STATUS at
+    // 12pt, UI_10/READER_ESTIMATE at 14pt). One face per size is enough; a
+    // second insertFont() with the same id would be ignored and waste a face.
+    std::map<uint8_t, int> uiIdBySize;
+    for (const auto& ui : kUiFontSizes) {
+      const auto existing = uiIdBySize.find(ui.pointSize);
+      if (existing != uiIdBySize.end()) {
+        renderer.addSupplementFont(ui.fontId, existing->second);
+        continue;
+      }
+      auto face = makeUniqueNoThrow<TtfEpdFont>();
+      if (!face) break;
+      addTtfSourcesFrom(set->sources, *face);
+      if (!face->load(ui.pointSize, true, 16 * 1024, 384, false)) {
+        LOG_ERR("SDFS", "font supplement %s: UI face failed at %upt", name.c_str(),
+                static_cast<unsigned>(ui.pointSize));
+        continue;
+      }
+      const int id = computeTtfFontId((name + "\x01suppui").c_str(), ui.pointSize);
+      renderer.insertFont(id, face->family());
+      renderer.registerTtfFont(id, face.get());
+      set->uiIds.push_back(id);
+      set->ui.push_back(std::move(face));
+      uiIdBySize[ui.pointSize] = id;
+      renderer.addSupplementFont(ui.fontId, id);
+    }
+
+    if (set->readerId == 0 && set->uiIds.empty()) {
+      // Nothing could be stood up; free this set's sources before dropping it.
+      for (auto& s : set->sources) {
+        s.bytes.clear();
+        freeink::font::PsramVector<uint8_t>().swap(s.bytes);
+        if (s.file) s.file.close();
+        s.present = false;
+      }
+      continue;
+    }
+    supplementFamilies_.push_back(std::move(set));
+  }
+
+  supplementPointSize_ = readerPointSize;
+  LOG_INF("SDFS", "font supplements: %zu families at %upt", supplementFamilies_.size(),
+          static_cast<unsigned>(readerPointSize));
+  return !supplementFamilies_.empty();
 }
 
 // Public wrapper (distinct name) so a caller can mint an id with the SD font

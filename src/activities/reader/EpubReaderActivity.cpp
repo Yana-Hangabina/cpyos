@@ -90,6 +90,7 @@ extern void disarmScanWatchdog();
 
 #include "activities/apps/weread/WeReadProgressSyncActivity.h"
 #include "activities/settings/FontDownloadActivity.h"
+#include "activities/settings/FontExtrasActivity.h"
 #endif
 #include "components/UITheme.h"
 #include "components/icons/listIcons.h"
@@ -853,16 +854,33 @@ void EpubReaderActivity::openDictionaryWordSelect() {
 
 #ifdef ENABLE_CHINESE_VERSION
 bool EpubReaderActivity::maybeOfferCompleteChineseFont() {
-  if (SETTINGS.sdFontFamilyName[0] != '\0') {
-    pendingMissingChineseCodepoint_.store(0, std::memory_order_relaxed);
+  const uint32_t codepoint = pendingMissingChineseCodepoint_.exchange(0, std::memory_order_relaxed);
+  if (codepoint == 0 || FontExtrasActivity::wasPromptShownThisBoot()) return false;
+
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK) && defined(BOARD_HAS_PSRAM)
+  // The embedded vector pack already covers the common 8,105 characters. A
+  // missing glyph now means an extension is needed (rare CJK, another script,
+  // or an emoji outside the bundled subset). Offer the downloadable packs
+  // instead of switching to the old 2-bit NotoSansSC .cpfont: that path is
+  // cleared by SdCardFontSystem::begin() on the next boot and hides 16-level AA.
+  LOG_INF("FONT", "Missing glyph U+%04X; offering the Font Extras download", static_cast<unsigned>(codepoint));
+  auto extras =
+      makeUniqueNoThrow<FontExtrasActivity>(renderer, mappedInput, FontExtrasActivity::Purpose::ReaderPrompt);
+  if (!extras) {
+    LOG_ERR("FONT", "OOM allocating FontExtrasActivity (%zu bytes)", sizeof(FontExtrasActivity));
     return false;
   }
-
-  const uint32_t codepoint = pendingMissingChineseCodepoint_.exchange(0, std::memory_order_relaxed);
-  if (codepoint == 0 || FontDownloadActivity::wasChineseFontPromptShownThisBoot()) return false;
+  startActivityForResult(std::move(extras), [this](const ActivityResult&) {
+    READING_STATS.resumeSession();
+    requestUpdate();
+  });
+  return true;
+#else
+  if (SETTINGS.sdFontFamilyName[0] != '\0') return false;
 
   LOG_INF("FONT", "Missing built-in Chinese glyph U+%04X; offering automatic NotoSansSC install",
           static_cast<unsigned>(codepoint));
+  if (FontDownloadActivity::wasChineseFontPromptShownThisBoot()) return false;
   auto downloader =
       makeUniqueNoThrow<FontDownloadActivity>(renderer, mappedInput, FontDownloadActivity::Purpose::ReaderAutoInstall);
   if (!downloader) {
@@ -874,6 +892,7 @@ bool EpubReaderActivity::maybeOfferCompleteChineseFont() {
     requestUpdate();
   });
   return true;
+#endif
 }
 #endif
 namespace {
@@ -4327,35 +4346,7 @@ bool EpubReaderActivity::buildPageCacheSlot(const int slot, const ReaderPageCach
 }
 #endif
 
-#ifndef BOARD_HAS_PSRAM
-// The contents helpers are generic (they only walk the EPUB TOC), but their
-// definitions live in the PSRAM-only JJWXC block below. C3 still builds the
-// toolbar Contents panel, so provide the non-filtered definitions here.
-bool EpubReaderActivity::contentsFilterable() const { return false; }
-
-void EpubReaderActivity::rebuildContentsRows() {
-  contentsRows_.clear();
-  if (!epub) return;
-  const int n = epub->getTocItemsCount();
-  if (n <= 0) return;
-  contentsRows_.reserve(static_cast<size_t>(n));
-  for (int i = 0; i < n && i < 32000; ++i) contentsRows_.push_back(static_cast<int16_t>(i));
-}
-
-int EpubReaderActivity::contentsTocForRow(const int row) const {
-  if (row < 0 || static_cast<size_t>(row) >= contentsRows_.size()) return -1;
-  return contentsRows_[static_cast<size_t>(row)];
-}
-
-int EpubReaderActivity::contentsRowForToc(const int toc) const {
-  for (size_t i = 0; i < contentsRows_.size(); ++i) {
-    if (contentsRows_[i] == toc) return static_cast<int>(i);
-  }
-  return -1;
-}
-#endif
-
-
+#ifdef BOARD_HAS_PSRAM
 bool EpubReaderActivity::reopenBookAfterExternalChange() {
   if (!epub) return false;
 
@@ -4424,6 +4415,7 @@ bool EpubReaderActivity::reopenBookAfterExternalChange() {
   loadJjwxcTocMeta();
   return true;
 }
+#endif
 
 bool EpubReaderActivity::contentsFilterable() const {
 #ifdef BOARD_HAS_PSRAM
@@ -4468,10 +4460,12 @@ int EpubReaderActivity::contentsRowForToc(const int toc) const {
   return -1;
 }
 
+#ifdef BOARD_HAS_PSRAM
 void EpubReaderActivity::openContentsPanel(const int focusTocIndex) {
   pendingContentsFocus_ = focusTocIndex;
   openOverlay(Overlay::Contents);
 }
+#endif
 
 // First-run page (refreshed UI frame 16): "body text lives in three zones, the
 // device only has three keys". It is a real page of its own -- white paper,
@@ -5010,6 +5004,21 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderPageWithGuideLines();
     }
 #ifdef ENABLE_CHINESE_VERSION
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK) && defined(BOARD_HAS_PSRAM)
+    uint32_t missingCodepoints[4] = {};
+    uint8_t missingCount = 0;
+    if (pageCacheHit) {
+      missingCodepoints[0] = pageCacheMissingCodepoint_[pageCacheLiveSlot_];
+      missingCount = missingCodepoints[0] != 0 ? 1 : 0;
+    } else {
+      missingCount = fcm->consumeMissingCodepoints(missingCodepoints, 4);
+    }
+    if (missingCount != 0 && !FontExtrasActivity::wasPromptShownThisBoot()) {
+      uint32_t expected = 0;
+      pendingMissingChineseCodepoint_.compare_exchange_strong(expected, missingCodepoints[0],
+                                                              std::memory_order_relaxed);
+    }
+#else
 #if FREEINK_DEVICE_READPICO
     const uint32_t missingCodepoint =
         pageCacheHit ? pageCacheMissingCodepoint_[pageCacheLiveSlot_] : fcm->consumeMissingChineseCodepoint();
@@ -5020,6 +5029,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       uint32_t expected = 0;
       pendingMissingChineseCodepoint_.compare_exchange_strong(expected, missingCodepoint, std::memory_order_relaxed);
     }
+#endif
 #endif
     renderStatusBar();
     drawBookmarkCorner(orientedMarginTop, orientedMarginRight);
@@ -7521,6 +7531,16 @@ void EpubReaderActivity::openJjwxcBookDetail() {}
 void EpubReaderActivity::activateJjwxcChapterChip(int) {}
 void EpubReaderActivity::openJjwxcChapterAction(uint32_t, bool, int) {}
 void EpubReaderActivity::prepareForJjwxcChild() {}
+void EpubReaderActivity::debugOpenFakeJjwxcComment() {}
+void EpubReaderActivity::debugOpenJjwxcComment() {}
+void EpubReaderActivity::debugOpenJjwxcChapterComments() {}
+void EpubReaderActivity::debugOpenStressComment() {}
+#endif
+
+#if !defined(BOARD_HAS_PSRAM)
+// These virtual debug hooks are declared unconditionally (main.cpp dispatches
+// them from the serial console). The JJWXC implementation is PSRAM-only, so the
+// no-PSRAM target needs inert definitions or the link fails.
 void EpubReaderActivity::debugOpenFakeJjwxcComment() {}
 void EpubReaderActivity::debugOpenJjwxcComment() {}
 void EpubReaderActivity::debugOpenJjwxcChapterComments() {}

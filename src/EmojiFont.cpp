@@ -1,6 +1,7 @@
 #include "EmojiFont.h"
 
 #include <GfxRenderer.h>
+#include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <TtfEpdFont.h>
@@ -10,6 +11,7 @@
 #include <memory>
 
 #include "EmojiPackFormat.h"
+#include "FontExtras.h"
 
 #if CROSSPOINT_VECTOR_FONTS && defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_I18N_PACK)
 
@@ -46,8 +48,57 @@ void unregister(GfxRenderer& renderer) {
   pointSize_ = 0;
 }
 
+bool loadSdPack() {
+  // Absent is the normal case (the partition subset is the shipped default);
+  // do not log an open failure for it.
+  if (!Storage.exists(font_extras::kEmojiPath)) return false;
+  HalFile file;
+  if (!Storage.openFileForRead(kTag, font_extras::kEmojiPath, file)) return false;
+  const size_t bytes = file.size();
+  // The optional full Noto Emoji TTF is ~0.9 MB; cap generously so a corrupt or
+  // wrong file cannot exhaust PSRAM before it is rejected.
+  if (bytes < 512 || bytes > 4 * 1024 * 1024) {
+    LOG_ERR(kTag, "SD emoji font has invalid size %u", static_cast<unsigned>(bytes));
+    file.close();
+    return false;
+  }
+  uint8_t magic[4] = {};
+  if (file.read(magic, sizeof(magic)) != 4) {
+    file.close();
+    return false;
+  }
+  const uint32_t tag = (static_cast<uint32_t>(magic[0]) << 24) | (static_cast<uint32_t>(magic[1]) << 16) |
+                       (static_cast<uint32_t>(magic[2]) << 8) | magic[3];
+  if (tag != 0x00010000u && tag != 0x4F54544Fu && tag != 0x74746366u) {
+    LOG_ERR(kTag, "SD emoji font is not an sfnt");
+    file.close();
+    return false;
+  }
+  if (!memory::psramHasHeadroom(bytes + kGlyphCacheBytes + 128 * 1024, bytes, 64 * 1024)) {
+    LOG_ERR(kTag, "not enough PSRAM for the SD emoji font");
+    file.close();
+    return false;
+  }
+  auto buffer = memory::makePsramByteBufferUninitializedNoThrow(bytes);
+  if (!buffer) {
+    file.close();
+    return false;
+  }
+  if (!file.seek(0) || static_cast<size_t>(file.read(buffer.get(), bytes)) != bytes) {
+    LOG_ERR(kTag, "SD emoji font read failed");
+    file.close();
+    return false;
+  }
+  file.close();
+  ttfBytes_ = std::move(buffer);
+  ttfSize_ = bytes;
+  LOG_INF(kTag, "using SD emoji font: %u bytes", static_cast<unsigned>(bytes));
+  return true;
+}
+
 bool loadPack() {
   if (ttfBytes_) return true;
+  if (loadSdPack()) return true;
   const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "spiffs");
   if (part == nullptr) {
     LOG_ERR(kTag, "no spiffs partition; emoji fallback disabled");
@@ -131,6 +182,12 @@ bool install(GfxRenderer& renderer, const uint8_t pointSize) {
 bool begin(GfxRenderer& renderer, const uint8_t pointSize) {
   return install(renderer, pointSize);
 }
+bool reload(GfxRenderer& renderer, const uint8_t pointSize) {
+  unregister(renderer);
+  ttfBytes_.reset();
+  ttfSize_ = 0;
+  return install(renderer, pointSize);
+}
 void setPointSize(GfxRenderer& renderer, const uint8_t pointSize) { (void)install(renderer, pointSize); }
 uint8_t pointSize() { return pointSize_; }
 int fontId() { return fontId_; }
@@ -141,6 +198,7 @@ int fontId() { return fontId_; }
 
 namespace emoji_font {
 bool begin(GfxRenderer&, uint8_t) { return false; }
+bool reload(GfxRenderer&, uint8_t) { return false; }
 void setPointSize(GfxRenderer&, uint8_t) {}
 uint8_t pointSize() { return 0; }
 int fontId() { return 0; }

@@ -145,6 +145,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_TEXT_SETTINGS:
       return &icon_type_48;
     case StrId::STR_MANAGE_FONTS:
+    case StrId::STR_MANAGE_FONT_EXTRAS:
       return &icon_case_sensitive_48;
     // Status-bar subpage row; it never takes this list's path today, but a
     // hide/bottom/top mode belongs to the same glyph if that changes.
