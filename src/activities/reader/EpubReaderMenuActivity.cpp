@@ -12,6 +12,7 @@
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/themes/upstream/UpstreamStyleTheme.h"
+#include "util/DictionaryRegistry.h"
 #include "util/PluginEvents.h"
 
 namespace fui = freeink::ui;
@@ -100,8 +101,14 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
     items.push_back({MenuAction::FRONTLIGHT, StrId::STR_FRONTLIGHT});
   }
   // No dictionary configured means the row can only lead to an empty lookup UI.
-  if (SETTINGS.dictionaryName[0] != '\0') {
-    items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
+  // Same for a configured dictionary whose folder was deleted from the card: the
+  // settings value survives, so an empty-name check alone would keep offering a
+  // row that cannot do anything.
+  {
+    std::string dictionaryBase;
+    if (DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryBase)) {
+      items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
+    }
   }
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});

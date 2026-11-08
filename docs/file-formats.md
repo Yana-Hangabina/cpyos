@@ -103,6 +103,22 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Versions 87 / 88
+
+The byte layout is unchanged; pagination is rebuilt because hyphenated layout
+changed. With hyphenation on, the greedy line breaker now reserves the ruby
+overhang at the start of a line (`calculateRubyExtraStartOffset`, nothing before
+the first word absorbs it), refuses a line end whose trailing ruby group would
+overflow to the right (`calculateRubyExtraEndOffset`), and lets a closing
+sentence mark hang half an em into the right margin (`LineBreakRules::
+hangableAllowance`). Those three rules already applied to the DP-based
+non-hyphenated breaker, so a hyphenated paragraph could wrap differently from
+the same text with hyphenation off — and could push ruby past the page edge.
+
+Version 87 is the Latin counter, 88 the CJK-capable one; the partial-build
+sentinels are derived (`0xFE - (version - 28)`), so suspended sections rebuild
+too. Progress and book metadata are untouched.
+
 ### Versions 76 / 77
 
 Adds `paragraphIndentSpaces` (0–5, default 3) immediately after the retained

@@ -315,13 +315,20 @@
       .replaceAll("'", "&#039;");
   }
 
+  // 自动消失只用这一个定时器句柄：每次调用各起一个 setTimeout 时，第二条消息会被
+  // 前一条的定时器提前关掉（只剩上一条剩下的时间，而不是完整的 4 秒）。
+  let messageTimeout;
+
   function showMessage(text, isError) {
     const msg = document.getElementById('message');
+    clearTimeout(messageTimeout);
     msg.textContent = text;
     msg.className = 'message ' + (isError ? 'error' : 'success');
     msg.style.display = 'block';
-    setTimeout(function() { msg.style.display = 'none'; }, 4000);
+    messageTimeout = setTimeout(function() { msg.style.display = 'none'; }, 4000);
   }
+
+  window.addEventListener('pagehide', function() { clearTimeout(messageTimeout); });
 
   function renderControl(setting) {
     const id = 'setting-' + setting.key;

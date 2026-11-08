@@ -1148,7 +1148,14 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
 
   while (currentIndex < wordWidths.size()) {
     const size_t lineStart = currentIndex;
-    int lineWidth = 0;
+    // Reserve the right-hand half of a ruby group that is wider than its base on
+    // the line's first word: nothing precedes it to absorb that overhang. Mirrors
+    // computeLineBreaks(), which folds the same offset into its running width.
+    int lineWidth = calculateRubyExtraStartOffset(lineStart, wordWidths.size(), renderer, fontId);
+    // Last word index that both fits and leaves room for the ruby overhang to its
+    // right. The greedy loop below may accept a word it has to give back, so the
+    // line ends here when that happens.
+    size_t lastFittingBreak = lineStart;
 
     // First line has reduced width due to text-indent
     const int effectivePageWidth = isFirstLine ? pageWidth - firstLineIndent : pageWidth;
@@ -1172,10 +1179,26 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       }
       const int candidateWidth = spacing + wordWidths[currentIndex];
 
+      // Kinsoku hanging, as in computeLineBreaks(): a closing sentence mark may
+      // overhang the right margin by half its advance instead of spilling onto
+      // the next line. The glyph still draws where it normally would, so the
+      // overhang lands in the page margin.
+      const int hangingAllowance =
+          LineBreakRules::hangableAllowance(lastCodepoint(wordAt(currentIndex)), wordWidths[currentIndex]);
+
       // Word fits on current line
-      if (lineWidth + candidateWidth <= effectivePageWidth) {
+      if (lineWidth + candidateWidth <= effectivePageWidth + hangingAllowance) {
         lineWidth += candidateWidth;
         ++currentIndex;
+        // Ruby on the group that would end the line protrudes to the right; only
+        // treat this as a legal line end when it still fits once that is reserved
+        // and the boundary allows a break.
+        const int extraEndOffset = calculateRubyExtraEndOffset(lineStart, currentIndex, renderer, fontId);
+        if (lineWidth + extraEndOffset <= effectivePageWidth &&
+            (currentIndex == wordWidths.size() ||
+             TokenBoundary::allowsBreak(continuesVec[currentIndex], noSpaceBeforeVec[currentIndex]))) {
+          lastFittingBreak = currentIndex;
+        }
         continue;
       }
 
@@ -1187,6 +1210,7 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
           hyphenateWordAtIndex(currentIndex, availableWidth, renderer, fontId, wordWidths, allowFallbackBreaks)) {
         // Prefix now fits; append it to this line and move to next line
         ++currentIndex;
+        lastFittingBreak = currentIndex;
         break;
       }
 
@@ -1196,6 +1220,10 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
       }
       break;
     }
+
+    // Fall back to the last word whose ruby overhang still fitted, so a line
+    // never ends with ruby poking past the margin.
+    if (lastFittingBreak > lineStart) currentIndex = lastFittingBreak;
 
     // Don't break before a continuation word (e.g., orphaned "?" after "question").
     // Backtrack to the start of the continuation group so the whole group moves to the next line.
