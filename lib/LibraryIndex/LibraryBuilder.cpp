@@ -9,10 +9,12 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Utf8.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 #include "LibraryIndexFile.h"
 #include "LibraryText.h"
@@ -186,11 +188,11 @@ void clearLibraryIndexDirty() {
   }
 }
 
-// macOS AppleDouble sidecars and hidden entries. The file browser already hides
-// these (FileBrowserActivity isMacOSMetadataEntry); the shelf must agree, or a
-// card written on a Mac shows every book twice. isLibraryBookFile() applies the
-// same rule to whole paths.
-bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
+// macOS AppleDouble sidecars, hidden entries and OS-owned folders. The file
+// browser already hides these (FileBrowserActivity isMacOSMetadataEntry); the
+// shelf must agree, or a card written on a Mac shows every book twice and a
+// FAT "System Volume Information" or XTC "XTCache" folder gets indexed.
+bool isHiddenOrSidecar(const std::string_view name) { return FsHelpers::isProtectedPathComponent(name); }
 
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');
@@ -304,7 +306,8 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
 
   const bool isEpubName = FsHelpers::hasEpubExtension(name);
   const bool isFb2Name = FsHelpers::hasFb2Extension(name);
-  const bool extractionExpected = st.readMetadata && (isEpubName || isFb2Name);
+  const bool isXtcName = FsHelpers::hasXtcExtension(name);
+  const bool extractionExpected = st.readMetadata && (isEpubName || isFb2Name || isXtcName);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -349,6 +352,15 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     if (isEpubName) {
       Epub epub(fullPath, CACHE_DIR);
       extracted = epub.loadMetadata(bookTitle, author);
+    } else if (isXtcName) {
+      // XTC/XTCH carry title and author in their own header block; load() reads
+      // that and the page-table header, and writes no cache.
+      Xtc xtc(fullPath, CACHE_DIR);
+      extracted = xtc.load();
+      if (extracted) {
+        bookTitle = xtc.getTitle();
+        author = xtc.getAuthor();
+      }
     } else {
       extracted = Fb2::probeMetadata(fullPath, bookTitle, author);
     }
@@ -1060,7 +1072,7 @@ bool isLibraryBookFile(const std::string_view path) {
     start = slash + 1;
   }
   return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
-         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::checkFileExtension(path, ".xtc") ||
+         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::hasXtcExtension(path) ||
          FsHelpers::checkFileExtension(path, ".cbz") || FsHelpers::checkFileExtension(path, ".fb2")
 #if defined(CROSSPOINT_MUPDF)
          || FsHelpers::checkFileExtension(path, ".pdf")
