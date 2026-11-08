@@ -16,12 +16,11 @@ void ClearCacheActivity::onEnter() {
 
   state = WARNING;
   const char* options[] = {tr(STR_CANCEL), tr(STR_CLEAR_BUTTON)};
-  confirmPopup.show(tr(STR_CLEAR_READING_CACHE), options, 2, 0, [this](int idx) {
-    if (idx == 1) {
-      beginClear();
-    } else {
-      goBack();
-    }
+  // The warning lives inside the dialog rather than on a page of its own: the
+  // dialog is the only thing the user can act on, and Cancel already returns.
+  warningMessage = std::string(tr(STR_CLEAR_CACHE_WARNING_1)) + " " + tr(STR_CLEAR_CACHE_WARNING_2);
+  confirmPopup.showMessage(tr(STR_CLEAR_READING_CACHE), warningMessage.c_str(), options, 2, 0, [this](int idx) {
+    if (idx == 1) beginClear();
   });
   requestUpdate();
 }
@@ -39,17 +38,8 @@ void ClearCacheActivity::render(RenderLock&&) {
     GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_CLEAR_READING_CACHE));
 
     if (state == WARNING) {
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 60, tr(STR_CLEAR_CACHE_WARNING_1), true);
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 30, tr(STR_CLEAR_CACHE_WARNING_2), true,
-                                EpdFontFamily::BOLD);
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10, tr(STR_CLEAR_CACHE_WARNING_3), true);
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 30, tr(STR_CLEAR_CACHE_WARNING_4), true);
-
-      if (confirmPopup.processRender(renderer, mappedInput)) return;
-
-      const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      renderer.displayBuffer();
+      // The dialog carries the warning text and pushes the frame itself.
+      confirmPopup.processRender(renderer, mappedInput);
       return;
     }
 
@@ -99,25 +89,10 @@ void ClearCacheActivity::render(RenderLock&&) {
   const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int relatedGap = SubpageLayout::relatedGap(metrics);
-  const int sectionGap = SubpageLayout::sectionGap(metrics);
 
   if (state == WARNING) {
-    const int blockHeight = lineHeight * 4 + relatedGap * 2 + sectionGap;
-    int y = SubpageLayout::centeredTop(content, blockHeight);
-    UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, y, tr(STR_CLEAR_CACHE_WARNING_1));
-    y += lineHeight + relatedGap;
-    UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, y, tr(STR_CLEAR_CACHE_WARNING_2), true,
-                              EpdFontFamily::BOLD);
-    y += lineHeight + sectionGap;
-    UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, y, tr(STR_CLEAR_CACHE_WARNING_3));
-    y += lineHeight + relatedGap;
-    UITheme::drawCenteredText(renderer, textBounds, UI_10_FONT_ID, y, tr(STR_CLEAR_CACHE_WARNING_4));
-
-    if (confirmPopup.processRender(renderer, mappedInput)) return;
-
-    const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    // The dialog carries the warning text and pushes the frame itself.
+    confirmPopup.processRender(renderer, mappedInput);
     return;
   }
 
@@ -217,13 +192,10 @@ void ClearCacheActivity::clearCache() {
 
 void ClearCacheActivity::loop() {
   if (state == WARNING) {
-    if (confirmPopup.handleInput(mappedInput, [this] { requestUpdate(); })) return;
-
-    if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      beginClear();
-    }
-
-    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    confirmPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+    // Cancel, Back and a tap outside all close the dialog without changing the
+    // state (the selection callback can move it to CLEARING through beginClear).
+    if (!confirmPopup.isActive() && state == WARNING) {
       LOG_DBG("CLEAR_CACHE", "User cancelled");
       goBack();
     }
