@@ -127,6 +127,7 @@ Query parameters:
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `path` | No | `/` | Destination directory |
+| `overwrite` | No | off | `1` or `true` replaces a file with the same name |
 
 Successful response:
 
@@ -136,13 +137,21 @@ File uploaded successfully: mybook.epub
 
 Notes:
 
-- Existing files with the same name are overwritten.
+- Without `overwrite`, an existing file with the same name is kept and the
+  request fails with `400` "File already exists: <name>".
+- With `overwrite`, the upload is written to `<name>.part` and replaces the
+  existing file only when it is complete, so a failed upload keeps the old file.
+  The card needs free space for both copies while the upload runs. If a folder
+  has the name, the request fails with `400` "A folder with this name already
+  exists: <name>".
 - EPUB cache data for the uploaded path is cleared after a successful upload.
 - Uploading a book file (`.epub`, `.txt`, `.md`, `.xtc`), here or through the
   WebSocket upload, marks the Library index stale, so the book appears the next
   time the Library opens. Hidden files and folders (names that start with `.`)
   don't mark it.
 - HTTP upload uses a 4 KB write buffer before flushing to the SD card.
+- A failed final close is reported as a write error, so an upload the card could
+  not size is never reported as successful.
 
 ### `POST /mkdir`
 
@@ -500,6 +509,11 @@ Error messages include:
 
 Incomplete WebSocket uploads are deleted on disconnect or error.
 
+The server accepts two WebSocket connections at a time and closes further ones
+without a reply. It also closes a connection that sends nothing for two minutes,
+which deletes an unfinished upload — a phone that sleeps or loses Wi-Fi no longer
+holds the upload slot until TCP gives up.
+
 ## WebDAV
 
 The same HTTP server registers a WebDAV-compatible handler for file manager clients.
@@ -567,7 +581,11 @@ Installed plugins that ship a `plugin.js`:
 
 Serves one file from the plugin's folder (first root holding that name). Both
 parameters must be single path components (no `/`, `\`, or `..`); 404 when
-the plugin, file, or a directory is requested.
+the plugin, file, or a directory is requested; 500 when the file cannot be read.
+
+Successful responses carry an `ETag` (MD5 of the file contents) and
+`Cache-Control: no-cache`, so a browser keeps the file and revalidates it on
+each load. A request whose `If-None-Match` matches gets `304` with no body.
 
 ### `POST /api/relay`
 
@@ -579,15 +597,14 @@ to CORS). Body: `{"plugin":"<name>","method":"GET","url":"https://...","headers"
   as JSON `[["name","value"], ...]` in receive order, duplicates kept (every
   `Set-Cookie`). `api.relay()` resolves to `{status, headers, body}`.
 - **Redirects** are not followed: a 3xx comes back with its `location` header.
-- **Limits:** the upstream body is capped at 32KB and is held in memory while
-  TLS is open. The relay also fails if buffering the body would leave less than
-  16KB of heap free, or if no free block is large enough, so on a DRAM-only
-  board a body under 32KB can still fail. Use `/api/fetch` for large files. A
-  GET that fails with 502 can be retried with `/api/fetch` (`api.relay()`
-  throws an error whose `status` is 502).
+- **Limits:** the upstream body is capped at 64KB. The device forwards the body
+  as it arrives and never stores it; larger payloads belong on `/api/fetch`.
 - **Errors:** `400 {"error":"missing plugin/url"}`; `502 {"error":"relay failed; ..."}`
-  for a transport failure, a truncated body, a body over the cap, or low memory
-  (the device log names which).
+  when the request fails before any of the body arrives, or the upstream
+  `Content-Length` is over the cap (the device log names which). If the `200`
+  has already started and the body is then cut short, or goes over the cap
+  without a `Content-Length`, the device closes the connection. `api.relay()`
+  reports that as the same 502 error.
 
 ### `POST /api/crypto`
 
@@ -623,8 +640,13 @@ be edited. The reader enforces `expires` when the book opens.
 ### `POST /api/fetch`
 
 Downloads a URL straight to SD, so a large body never passes through the
-browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...},"offset":0,"maxBytes":0}`.
+browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...},"offset":0,"maxBytes":0,"method":"GET","body":""}`.
 
+- `method` is one of `GET` (default), `POST`, `PUT`, `PATCH`, `DELETE`.
+  `body` is at most 4KB and is sent verbatim (it may contain NUL bytes).
+- Only a `GET` **without** a body resumes, follows redirects, or accepts
+  `offset`/`maxBytes`: any other request is sent once, without redirects, so a
+  side-effecting verb is never replayed or replayed at another origin.
 - `dest` must be absolute with no `..`; missing parent folders are created.
 - The transfer is staged in `<dest>.part` and replaces `dest` only when the
   whole body has arrived, so a failed update keeps the previous file.
@@ -644,8 +666,12 @@ browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...
   5s to keep the browser connection open; the JSON result follows at the end.
 - **Result:** `{"status":200,"bytes":N,"complete":true,"total":N}` (`total`
   when the server reported a size). `error` is set to `transport failure`,
-  `http status`, or `sd write failed` when the file was not installed.
-- **Errors:** `400 {"error":"bad url/dest"}`; `409 {"error":"offset mismatch","bytes":N}`
+  `http status`, or `sd write failed` when the file was not installed; on a
+  non-2xx single request, `body` carries the first 512 bytes of the reply so
+  the plugin can show the server's message.
+- **Errors:** `400 {"error":"bad url/dest" | "unsupported method" |
+  "body over 4KB" | "offset and maxBytes need a GET without a body"}`;
+  `409 {"error":"offset mismatch","bytes":N}`
   when `offset` does not match the `.part` size; `502 {"error":"sd write failed" |
   "range unsupported" | "download truncated","bytes":N,"complete":false}`.
 
@@ -676,7 +702,8 @@ stores opaque `{plugin, action, args}` blobs (fixed 6-slot pool; args/result
 ```bash
 curl -X POST http://crosspoint.local/api/plugin-jobs \
   -d '{"plugin":"<name>","action":"<action>","args":{"path":"/Books/somefile"}}'
-# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy)
+# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy,
+#                      or {"error":"out of memory"} if the queue cannot be allocated)
 ```
 
 ### `GET /api/plugin-jobs/claim?plugin=<name>`

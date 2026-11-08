@@ -664,8 +664,9 @@ bool EpubReaderActivity::loadBook() {
   }
 
   if (currentSpineIndex == 0) {
-    int textSpineIndex = epub->getSpineIndexForTextReference();
-    if (textSpineIndex != 0) {
+    const int textSpineIndex = epub->getSpineIndexForTextReference();
+    // -1 when the book has no linear spine item at all: stay where we are.
+    if (textSpineIndex > 0) {
       currentSpineIndex = textSpineIndex;
       cachedVisibleTextOffset.reset();
       LOG_DBG("ERS", "Opened for first time, navigating to text reference at index %d", textSpineIndex);
@@ -2808,43 +2809,14 @@ void EpubReaderActivity::loop() {
   requestUpdate();
 }
 
-bool EpubReaderActivity::jumpToFraction(float fraction) {
+bool EpubReaderActivity::jumpToFraction(const float fraction) {
   if (!epub || !std::isfinite(fraction)) return false;
-  const size_t bookSize = epub->getBookSize();
-  if (bookSize == 0) return false;
-  fraction = std::clamp(fraction, 0.0f, 1.0f);
-
-  const size_t targetSize =
-      fraction >= 1.0f ? bookSize - 1 : static_cast<size_t>(static_cast<double>(bookSize) * fraction);
-
-  const int spineCount = epub->getSpineItemsCount();
-  if (spineCount == 0) return false;
-
-  int targetSpineIndex = spineCount - 1;
-  size_t prevCumulative = 0;
-
-  // One size-window read instead of a linear walk of per-item SD reads; -1 means
-  // the window is unavailable (OOM or a bad card), so fall back to the exact walk.
-  const int found = epub->getSpineIndexForSize(targetSize);
-  if (found >= 0) {
-    targetSpineIndex = found;
-    prevCumulative = (found > 0) ? epub->getCumulativeSpineItemSize(found - 1) : 0;
-  } else {
-    for (int i = 0; i < spineCount; i++) {
-      const size_t cumulative = epub->getCumulativeSpineItemSize(i);
-      if (targetSize <= cumulative) {
-        targetSpineIndex = i;
-        prevCumulative = (i > 0) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
-        break;
-      }
-    }
-  }
-
-  const size_t cumulative = epub->getCumulativeSpineItemSize(targetSpineIndex);
-  const size_t spineSize = (cumulative > prevCumulative) ? (cumulative - prevCumulative) : 0;
-  pendingSpineProgress =
-      (spineSize == 0) ? 0.0f : static_cast<float>(targetSize - prevCumulative) / static_cast<float>(spineSize);
-  pendingSpineProgress = std::clamp(pendingSpineProgress, 0.0f, 1.0f);
+  // Lands on linear content only: an auxiliary document has no progress weight,
+  // so a percentage must never resolve to one.
+  int targetSpineIndex = -1;
+  float chapterFraction = 0.0f;
+  if (!epub->findSpineForProgress(fraction, targetSpineIndex, chapterFraction)) return false;
+  pendingSpineProgress = std::clamp(chapterFraction, 0.0f, 1.0f);
 
   {
     RenderLock lock;

@@ -58,10 +58,12 @@
     },
     async _readResponse(r, path) {
       if (!r.ok) {
-        let detail = '';
-        try { detail = (await r.json()).error || ''; } catch (e) {}
+        let result = null;
+        try { result = await r.json(); } catch (e) {}
+        const detail = (result && result.error) || '';
         const err = new Error(path + ' ' + r.status + (detail ? ': ' + detail : ''));
         err.status = r.status;
+        if (result) err.result = result;  // e.g. {error: 'body over 4KB'}
         throw err;
       }
       return r.json();
@@ -84,7 +86,17 @@
       // code units, so re-decode the UTF-8 header JSON.
       const raw = r.headers.get('X-Relay-Headers') || '[]';
       const list = JSON.parse(new TextDecoder().decode(Uint8Array.from(raw, (c) => c.charCodeAt(0))));
-      return { status: Number(r.headers.get('X-Relay-Status')), headers: list, body: await r.text() };
+      let text;
+      try {
+        text = await r.text();
+      } catch (e) {
+        // The device streams the body and closes early when it is cut short or
+        // over the cap: report that like the 502 it sends before streaming.
+        const err = new Error('/api/relay 502: relay failed; large bodies need /api/fetch');
+        err.status = 502;
+        throw err;
+      }
+      return { status: Number(r.headers.get('X-Relay-Status')), headers: list, body: text };
     },
     crypto(op, fields) { return this._post('/api/crypto', Object.assign({ op }, fields || {})); },
     async writeFile(plugin, path, dataB64) {
@@ -99,7 +111,20 @@
       const r = await fetch(url, { method: 'POST', body: form });
       return this._readResponse(r, '/api/plugin-fs');
     },
-    async fetchToSd(plugin, url, dest, headers) {
+    async fetchToSd(plugin, url, dest, headers, options) {
+      const method = ((options && options.method) || 'GET').toUpperCase();
+      const body = (options && options.body) || '';
+      // A non-GET request, or one carrying a body, is sent once and not
+      // segmented: replaying it could repeat its effect on the server.
+      if (method !== 'GET' || body) {
+        const result = await this._post('/api/fetch', { plugin, url, dest, headers: headers || {}, method, body });
+        if (result.complete === false) {
+          const err = new Error('/api/fetch: ' + (result.error || 'failed') + ' (HTTP ' + result.status + ')');
+          err.result = result;
+          throw err;
+        }
+        return result;
+      }
       // Keep each browser-facing request short. Mobile browsers may terminate
       // a request after a few minutes even when response heartbeats are flowing,
       // while the device itself is still downloading successfully.
@@ -146,7 +171,7 @@
             relay: (m, u, h, b) => CrossPoint.relay(p.name, m, u, h, b),
             crypto: (op, f) => CrossPoint.crypto(op, f),
             writeFile: (path, d) => CrossPoint.writeFile(p.name, path, d),
-            fetchToSd: (u, dest, h) => CrossPoint.fetchToSd(p.name, u, dest, h),
+            fetchToSd: (u, dest, h, o) => CrossPoint.fetchToSd(p.name, u, dest, h, o),
             registerAction: (a, fn) => CrossPoint.registerAction(p.name, a, fn),
             pluginFile: (f) => '/plugin?name=' + encodeURIComponent(p.name) + '&file=' + encodeURIComponent(f)
           });

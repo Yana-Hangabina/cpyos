@@ -24,6 +24,15 @@ browser-only plugin (no `device.json`) can explain how to use it from the web
 UI; without a README the row does nothing. `title`/`description` are read from
 `manifest.json`, with `device.json` overriding when present.
 
+**Uninstall.** Hold **Confirm** on a listed plugin for one second (or
+long-press its row on a touch screen) to open an uninstall confirmation.
+Confirming deletes that plugin's whole folder — recursively — and rescans, so
+the row disappears immediately; cancelling leaves it installed. Only a folder
+discovery actually reported under one of the roots below can be removed, so a
+crafted `title`/`name` can never point the deletion somewhere else. To keep the
+files and merely stop using the plugin, leave it installed and disable plugins
+in Settings instead.
+
 `<root>` is any of `/.crosspoint/plugins`, `/plugins`, or `/.plugins` — the
 first two-dot-free options exist so plugins are easy to copy onto the card
 from a computer. All three roots are scanned; on a name collision the earlier
@@ -58,7 +67,7 @@ the browser context, and posts the result back.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/plugin-jobs` | enqueue `{plugin, action, args?}` → `{id}` (503 when the pool is full) |
+| `POST /api/plugin-jobs` | enqueue `{plugin, action, args?}` → `{id}` (503 when the pool is full or the device is out of memory) |
 | `GET /api/plugin-jobs/claim?plugin=` | executor claims the next pending job |
 | `POST /api/plugin-jobs/complete` | executor posts `{id, claim, ok, result?}` (`claim` from the claim response; 409 when stale) |
 | `GET /api/plugin-jobs/status?id=` | caller polls: `{id, state, result}`; states: `pending`, `running`, `done`, `error`, `unknown` (recycled) |
@@ -123,11 +132,19 @@ Every string field is a template. Available substitutions:
 | `{token}` | contents of the token file at `token.path` | everywhere |
 | `{cfg.KEY}` | value of `KEY` in the flat JSON config file at `config.file` | everywhere |
 | `{page}` | current 1-based page | browse |
-| `{limit}` | `page_size + 1` (the extra row detects "more pages") | browse |
-| `{id}` `{title}` `{author}` `{url}` | fields of the selected item | download, sidecar |
+| `{limit}` | `page_size + 1` (the extra row detects "more pages"); `page_size` when the URL also uses `{page}` | browse |
+| `{offset}` | 0-based index of the first row on this page (`(page-1) * page_size`) | browse |
+| `{id}` `{title}` `{author}` `{url}` | fields of the selected item, as the catalog sent them | download, sidecar |
+| `{id_enc}` `{title_enc}` `{author_enc}` `{url_enc}` | the same fields percent-encoded (letters, digits and `-_.~` kept) for a query value or a single path segment | download, sidecar |
 | `{md5}` | MD5 hex of the destination file path | sidecar |
 | `{dest}` | sanitized on-SD path of the downloaded file | sidecar |
 | `{device_code}` | from the auth request response | auth poll |
+
+Templates are filled with the catalog's raw text. Request URLs are made valid
+before they are sent: a space, a control character or a non-ASCII byte becomes
+`%XX`, while everything else (including an existing `%XX` escape) is kept. That
+is enough for a path segment, but a value inside a query string must be encoded
+whole, so use the `_enc` forms there: `?q={title_enc}`, not `?q={title}`.
 
 Two browse formats:
 - **`"json"`** (default) — a paged JSON list, using `items`/`fields` below.
@@ -199,6 +216,8 @@ Two browse formats:
     "username": "{cfg.user}",              // optional HTTP Basic creds for the file GET
     "password": "{cfg.pass}",             // omit for token/header auth
     "dest_dir": "/ServiceName",             // created if missing; falls back to SD root
+                                            // a "dest_dir" in the config file overrides it,
+                                            // so the plugin's web card can offer the setting
     "filename": "{title}.epub",             // rendered filename is sanitized to 100 bytes;
                                             // a conventional extension is preserved
     "sidecar": {                            // optional per-book metadata file
@@ -250,9 +269,16 @@ Two browse formats:
   than an error.
 - **Pagination** (json): the browse request should return up to `{limit}`
   items; the firmware displays `page_size` and uses the extra row to know
-  another page exists. Navigation matches the OPDS browser: a "Previous
-  page" row precedes the items past page 1 and a "Next page" row follows
-  them while more pages exist — tappable and button-reachable like any row.
+  another page exists. A URL using both `{page}` and `{limit}` is treated as
+  sized pages: it is asked for exactly `page_size` rows, and a full page means
+  there may be another. Neither `{page}` nor `{offset}` means the response is
+  one static list, and the firmware pages through it locally.
+  Rows without a title are not shown. When the request uses `{page}` or
+  `{offset}`, these rows still count toward the page, so a page can show
+  fewer rows and still offer "Next page".
+  Navigation matches the OPDS browser: a "Previous page" row precedes the
+  items past page 1 and a "Next page" row follows them while more pages
+  exist — tappable and button-reachable like any row.
 - **Lists** (json): with `browse.lists`, opening the catalog shows a picker
   of the named entries first; each entry browses with its own url/body
   overrides (server-side categories, shelves, sort orders). Back from the
@@ -381,7 +407,7 @@ browser-side.
 | Need | Use |
 |---|---|
 | Outbound HTTP(S), any method (CORS-free) | `api.relay(method, url, headers, body)` |
-| Download a URL straight to SD | `api.fetchToSd(url, dest, headers)` |
+| Download a URL straight to SD | `api.fetchToSd(url, dest, headers, {method, body})` (options optional; with a method other than GET, or a non-empty body, the request is sent once, and on failure the thrown error carries the `/api/fetch` result in `err.result`, including the start of the server's answer in `err.result.body` when there is one) |
 | Write a small file to SD | `api.writeFile(path, base64)` |
 | The plugin's own folder (keep its data here) | `api.dir` |
 | Crypto (hash, HMAC via SHA, AES, RSA) | `api.crypto(op, fields)` or browser `crypto.subtle` |

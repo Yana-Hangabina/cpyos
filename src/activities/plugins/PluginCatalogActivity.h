@@ -6,7 +6,9 @@
 #include <utility>
 #include <vector>
 
+#include "PluginCatalogPaging.h"
 #include "activities/CatalogActivity.h"
+#include "components/InlineConfirm.h"
 #include "network/HttpDownloader.h"
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
@@ -19,6 +21,7 @@ class SecureHttpClient;
 // Picker entry; an empty manifestPath marks an inert browser-only plugin.
 struct PluginRef {
   std::string name;          // folder name
+  std::string dir;           // exact discovered installation directory
   std::string title;         // from device.json or manifest.json (falls back to name)
   std::string description;   // one-line summary, if provided
   std::string manifestPath;  // device.json path, "" for a web-only plugin
@@ -116,6 +119,8 @@ class PluginCatalogActivity final : public CatalogActivity {
   bool showOpds = false;
   bool rootMode = false;
   int pickerReturnRow = 0;  // picker row to reselect after leaving a catalog
+  // Uninstall stays inside this activity (surface kit: confirmations are inline).
+  InlineConfirm confirm_;
   std::vector<Item> items;
   // Row buffer over items/browseLists plus the synthetic pager rows; rebuilt
   // lazily on the render task whenever rowsDirty (items or state changed).
@@ -169,8 +174,13 @@ class PluginCatalogActivity final : public CatalogActivity {
   int listCount() const override { return rowCount(); }
   // Row dispatch: pager rows page, picker rows pick, item rows open/download.
   void activateIndex(int index) override;
+  // Picker rows: confirm = open, touch long-press / 1 s Confirm hold = uninstall.
+  void onRowLongPress(int index) override;
+  bool handleButtons() override;
+  void confirmUninstallPlugin(int pickerIndex);
   void buildScreen(UiScreen& screen) override;
   bool handleCustomInput() override;
+  bool paintOverlayBeforePresent() override;
   void onBackButton() override;
   void drawFooter() override;
   void rebuildRowItems();
@@ -182,6 +192,8 @@ class PluginCatalogActivity final : public CatalogActivity {
   // Browse url/body with the selected browse list's overrides applied.
   const std::string& activeBrowseUrl() const;
   const std::string& activeBrowseBody() const;
+  // How the active browse request pages, read from the variables it uses.
+  plugincatalogpaging::Paging browsePaging() const;
   // Copies `headers` with `substituted()` applied to each value.
   pluginhttp::Headers substitutedHeaders(const pluginhttp::Headers& headers, const Item* item) const;
   void fetchPage(int newPage);
@@ -202,4 +214,7 @@ class PluginCatalogActivity final : public CatalogActivity {
   int apiRequest(const pluginhttp::RequestSpec& req, String& out);
   pluginhttp::RequestSpec substitutedRequest(const pluginhttp::RequestSpec& req, const Item* item = nullptr) const;
   std::string substituted(std::string tpl, const Item* item) const;
+  // Where downloads land: a "dest_dir" in the plugin's config.json (its web
+  // card can offer the setting), else the manifest's download.dest_dir.
+  std::string downloadDir() const;
 };

@@ -172,3 +172,23 @@ TEST(ContentOpfParserFonts, IgnoresNonFontItems) {
   parse(parser, xml);
   EXPECT_TRUE(parser.fontFiles.empty());
 }
+
+TEST(ContentOpfParserSpine, CarriesTheLinearFlagFromItemref) {
+  const std::string xml = R"(<package><metadata/>
+    <manifest>
+      <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+      <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+      <item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/>
+    </manifest>
+    <spine>
+      <itemref idref="cover" linear="no"/>
+      <itemref idref="chapter"/>
+      <itemref idref="notes" linear="no"/>
+    </spine></package>)";
+  BookMetadataCache cache;
+  Storage = {};
+  ContentOpfParser parser("/reading-cache", "OPS/", xml.size(), &cache);
+  parse(parser, xml);
+  // One entry per itemref, in spine order, carrying its own linear flag.
+  EXPECT_EQ(cache.linearFlags, (std::vector<bool>{false, true, false}));
+}

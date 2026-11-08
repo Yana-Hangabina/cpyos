@@ -21,10 +21,13 @@ class BookMetadataCache {
     std::string href;
     uint32_t cumulativeSize;
     int16_t tocIndex;
+    // OPF linear="no": an auxiliary document with no place in chapter order or
+    // progress weights (notes, cover pages, ad pages).
+    bool linear;
 
-    SpineEntry() : cumulativeSize(0), tocIndex(-1) {}
-    SpineEntry(std::string href, const uint32_t cumulativeSize, const int16_t tocIndex)
-        : href(std::move(href)), cumulativeSize(cumulativeSize), tocIndex(tocIndex) {}
+    SpineEntry() : cumulativeSize(0), tocIndex(-1), linear(true) {}
+    SpineEntry(std::string href, const uint32_t cumulativeSize, const int16_t tocIndex, const bool linear = true)
+        : href(std::move(href)), cumulativeSize(cumulativeSize), tocIndex(tocIndex), linear(linear) {}
   };
 
   struct TocEntry {
@@ -76,6 +79,12 @@ class BookMetadataCache {
   mutable uint32_t window[SIZE_WINDOW] = {};
   bool fillWindow(int first) const;  // caller holds the size window lock
 
+  // One linear bit per spine item: auxiliary documents (linear="no") stay openable
+  // but carry no progress weight. 6000 chapters cost 750 B, still far below a
+  // full per-item cumulative-size array.
+  std::unique_ptr<uint32_t[]> linearBits;
+  uint16_t linearBitCount = 0;
+
   // Index for fast href→spineIndex lookup. Exists only during a large EPUB's
   // TOC pass; a member container would hold its storage for every open book,
   // and clear()/shrink_to_fit() cannot give the deque's node map back.
@@ -119,7 +128,7 @@ class BookMetadataCache {
   // Building phase (stream to disk immediately)
   bool beginWrite();
   bool beginContentOpfPass();
-  void createSpineEntry(const std::string& href);
+  void createSpineEntry(const std::string& href, bool linear = true);
   bool endContentOpfPass();
   bool beginTocPass();
   void createTocEntry(const std::string& title, const std::string& href, const std::string& anchor, uint8_t level);
@@ -140,6 +149,8 @@ class BookMetadataCache {
   // First spine index whose cumulative size reaches `size`; -1 past the end, not
   // loaded, or when the window holding the answer cannot be read.
   int getSpineIndexForSize(uint32_t size) const;
+  // Whether the in-RAM cache holds the linear flag for this spine item.
+  bool getLinear(int index, bool& linear) const;
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isLoaded() const { return loaded; }

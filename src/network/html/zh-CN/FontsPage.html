@@ -178,6 +178,9 @@
       const el = document.getElementById('families');
       try {
         const res = await fetch('/api/fonts');
+        // A failed load answers with no families: say so instead of claiming
+        // "No fonts installed", which would invite a pointless re-upload.
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         const data = await res.json();
         // Build rows with DOM APIs and textContent so on-device family names
         // (which can contain arbitrary characters) cannot break markup or

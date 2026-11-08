@@ -7,6 +7,7 @@
 #include <Utf8.h>
 #include <ZipFile.h>
 
+#include <algorithm>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -21,7 +22,8 @@ namespace {
 // one-time clean re-parse that re-composes existing caches' titles to NFC.
 // v11: ignore ambiguous guide text references. Upstream shipped that behavior
 // as v10, so CrossMux advances past both lineages to avoid a version collision.
-constexpr uint8_t BOOK_CACHE_VERSION = 11;
+// v12: retain the OPF linear flag; auxiliary documents carry zero progress weight.
+constexpr uint8_t BOOK_CACHE_VERSION = 12;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -41,6 +43,7 @@ uint32_t writeSpineEntryTo(F& file, const BookMetadataCache::SpineEntry& entry) 
   serialization::writeString(file, entry.href);
   serialization::writePod(file, entry.cumulativeSize);
   serialization::writePod(file, entry.tocIndex);
+  serialization::writePod(file, static_cast<uint8_t>(entry.linear));
   return pos;
 }
 
@@ -58,26 +61,35 @@ uint32_t writeTocEntryTo(F& file, const BookMetadataCache::TocEntry& entry) {
 template <typename F>
 bool readSpineEntryFrom(F& file, BookMetadataCache::SpineEntry& entry) {
   BookMetadataCache::SpineEntry next;
+  uint8_t linear = 0;
   if (!serialization::readString(file, next.href, serialization::MAX_PATH_BYTES) ||
-      !serialization::readPod(file, next.cumulativeSize) || !serialization::readPod(file, next.tocIndex)) {
+      !serialization::readPod(file, next.cumulativeSize) || !serialization::readPod(file, next.tocIndex) ||
+      !serialization::readPod(file, linear) || linear > 1) {
     return false;
   }
+  next.linear = linear != 0;
   entry = std::move(next);
   return true;
 }
 
-bool readSpineCumulativeSize(HalFile& file, uint32_t& cumulativeSize) {
+bool readSpineCumulativeSize(HalFile& file, uint32_t& cumulativeSize, bool& linear) {
   uint32_t hrefLength = 0;
   if (!serialization::readPod(file, hrefLength)) return false;
   const size_t position = file.position();
   const size_t fileSize = file.size();
-  constexpr size_t trailingBytes = sizeof(uint32_t) + sizeof(int16_t);
+  constexpr size_t trailingBytes = sizeof(uint32_t) + sizeof(int16_t) + sizeof(uint8_t);
   if (position > fileSize || hrefLength > fileSize - position || trailingBytes > fileSize - position - hrefLength ||
       !file.seek(position + hrefLength)) {
     return false;
   }
   int16_t tocIndex = -1;
-  return serialization::readPod(file, cumulativeSize) && serialization::readPod(file, tocIndex);
+  uint8_t flag = 0;
+  if (!serialization::readPod(file, cumulativeSize) || !serialization::readPod(file, tocIndex) ||
+      !serialization::readPod(file, flag) || flag > 1) {
+    return false;
+  }
+  linear = flag != 0;
+  return true;
 }
 
 template <typename F>
@@ -389,7 +401,8 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
       }
     }
 
-    cumSize += itemSize;
+    // An auxiliary document (linear="no") has no place in progress weights.
+    if (spineEntry.linear) cumSize += itemSize;
     spineEntry.cumulativeSize = cumSize;
     writeSpineEntryTo(bookOut, spineEntry);
   }
@@ -445,13 +458,13 @@ uint32_t BookMetadataCache::writeTocEntry(HalFile& file, const TocEntry& entry) 
 
 // Note: for the LUT to be accurate, this **MUST** be called for all spine items before `addTocEntry` is ever called
 // this is because in this function we're marking positions of the items
-void BookMetadataCache::createSpineEntry(const std::string& href) {
+void BookMetadataCache::createSpineEntry(const std::string& href, const bool linear) {
   if (!buildMode || !spineFile) {
     LOG_DBG("BMC", "createSpineEntry called but not in build mode");
     return;
   }
 
-  const SpineEntry entry(href, 0, -1);
+  const SpineEntry entry(href, 0, -1, linear);
   if (passOut) {
     writeSpineEntryTo(*passOut, entry);
   } else {
@@ -566,17 +579,22 @@ bool BookMetadataCache::load() {
     return false;
   }
 
-  // Spine entries follow the LUTs in index order, so a single sequential pass keeps
-  // the total before every SIZE_WINDOW-th item. The progress bar (every render) and
-  // percent jumps then pay at most one window read instead of 2 seeks + a
-  // heap-allocating SpineEntry read per access.
+  // Spine entries follow the LUTs in index order, so a single sequential pass
+  // records the total before every SIZE_WINDOW-th item plus one linear bit per
+  // item. The progress bar (every render) and percent jumps then pay at most one
+  // window read instead of 2 seeks + a heap-allocating SpineEntry read per access.
   std::unique_ptr<uint32_t[]> nextWindowStarts;
   uint16_t nextWindowStartCount = 0;
   uint32_t nextBookSize = 0;
+  std::unique_ptr<uint32_t[]> nextLinearBits;
+  uint16_t nextLinearBitCount = 0;
   if (nextSpineCount > 0) {
     const int slots = (nextSpineCount + SIZE_WINDOW - 1) / SIZE_WINDOW;
+    const int flagWords = (nextSpineCount + 31) / 32;
     auto starts = makeUniqueNoThrow<uint32_t[]>(slots);
-    if (starts) {
+    auto bits = makeUniqueNoThrow<uint32_t[]>(flagWords);
+    if (starts && bits) {
+      std::fill(bits.get(), bits.get() + flagWords, 0);
       if (!bookFile.seek(nextLutOffset + lutSize)) {
         LOG_ERR("BMC", "Could not seek to cache spine data");
         invalidateCorruptCache();
@@ -585,15 +603,19 @@ bool BookMetadataCache::load() {
       for (uint16_t i = 0; i < nextSpineCount; i++) {
         if (i % SIZE_WINDOW == 0) starts[i / SIZE_WINDOW] = nextBookSize;
         uint32_t cumulative = 0;
-        if (!readSpineCumulativeSize(bookFile, cumulative)) {
+        bool linear = true;
+        if (!readSpineCumulativeSize(bookFile, cumulative, linear)) {
           LOG_ERR("BMC", "Cache spine entry %u is truncated", i);
           invalidateCorruptCache();
           return false;
         }
         nextBookSize = cumulative;
+        if (linear) bits[i / 32] |= uint32_t{1} << (i % 32);
       }
       nextWindowStartCount = static_cast<uint16_t>(slots);
       nextWindowStarts = std::move(starts);
+      nextLinearBitCount = nextSpineCount;
+      nextLinearBits = std::move(bits);
     } else {
       LOG_ERR("BMC", "OOM caching %d spine size windows", slots);
     }
@@ -606,9 +628,17 @@ bool BookMetadataCache::load() {
   windowStarts = std::move(nextWindowStarts);
   windowStartCount = nextWindowStartCount;
   bookSize = nextBookSize;
+  linearBits = std::move(nextLinearBits);
+  linearBitCount = nextLinearBitCount;
   windowFirst = -1;
   loaded = true;
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);
+  return true;
+}
+
+bool BookMetadataCache::getLinear(const int index, bool& linear) const {
+  if (!linearBits || index < 0 || index >= linearBitCount) return false;
+  linear = (linearBits[index / 32] & (uint32_t{1} << (index % 32))) != 0;
   return true;
 }
 
@@ -644,7 +674,8 @@ bool BookMetadataCache::fillWindow(const int first) const {
     return false;
   }
   for (int i = 0; first + i < spineCount && i < SIZE_WINDOW; i++) {
-    if (!readSpineCumulativeSize(file, window[i])) return false;
+    bool linear = true;
+    if (!readSpineCumulativeSize(file, window[i], linear)) return false;
   }
   windowFirst = first;
   return true;

@@ -37,6 +37,17 @@ class HttpDownloader {
   static constexpr uint32_t MIN_TLS_MAX_ALLOC = 20000;
   static bool hasMemoryForTls();
 
+  // HTTP status of the last request, or 0 when it never got a response (DNS,
+  // connect, TLS, timeout). fetchUrl() says only success or failure; this lets a
+  // caller tell a dead server from a catalog that wants a password.
+  // Not thread-safe by design: one fetch runs at a time.
+  static int lastStatus();
+
+  // True when the last answer came from a different origin (scheme, host or
+  // port) than the URL asked for, after a redirect. Credentials are withheld
+  // from such a hop, so a 401 there is not a wrong password.
+  static bool lastAnswerRedirected();
+
   // Measures how fast a URL delivers the first `maxBytes`. Used to pick an OTA
   // mirror: the body is aborted as soon as the sample is complete, so the
   // probe costs a few dozen KB rather than the whole file.

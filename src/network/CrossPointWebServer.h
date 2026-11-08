@@ -3,11 +3,11 @@
 #include <ArduinoJson.h>
 #include <HalStorage.h>
 #include <Memory.h>
-#include <NetworkUdp.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,6 +39,9 @@ class CrossPointWebServer {
     size_t size = 0;
     bool success = false;
     String error = "";
+    // Overwriting an existing file: the body goes to "<file>.part", which
+    // replaces the original only after the whole upload has been written.
+    bool staged = false;
 
     // Upload write buffer - batches small writes into larger SD card operations
     // 4KB is a good balance: large enough to reduce syscall overhead, small enough
@@ -79,9 +82,11 @@ class CrossPointWebServer {
   bool running = false;
   bool apMode = false;  // true when running in AP mode, false for STA mode
   uint16_t port = 80;
-  uint16_t wsPort = 81;  // WebSocket port
-  NetworkUDP udp;
-  bool udpActive = false;
+  uint16_t wsPort = 81;      // WebSocket port
+  int discoverySocket = -1;  // UDP discovery, -1 when closed
+  void openDiscoverySocket();
+  void closeDiscoverySocket();
+  void answerDiscovery() const;
   std::function<bool()> uploadCancelCheck;
   bool dropUploadIfCancelled() const;
 
@@ -197,7 +202,9 @@ class CrossPointWebServer {
   static constexpr uint8_t JOB_ERROR = 4;
   static constexpr size_t MAX_PLUGIN_JOBS = 6;
   static constexpr uint32_t PLUGIN_JOB_LEASE_MS = 10UL * 60 * 1000;
-  PluginJob pluginJobs[MAX_PLUGIN_JOBS];
+  // Allocated by the first job submit: most web sessions never use plugin jobs.
+  std::unique_ptr<PluginJob[]> pluginJobs;
+  std::span<PluginJob> pluginJobSlots() { return {pluginJobs.get(), pluginJobs ? MAX_PLUGIN_JOBS : 0}; }
   uint32_t nextPluginJobId = 1;
   uint32_t nextPluginJobClaim = 1;
   PluginJob* allocPluginJob();

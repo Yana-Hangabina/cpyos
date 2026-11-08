@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -27,9 +28,16 @@ freeink::SecureHttpClient* openClient(freeink::SecureHttpClient* session, freein
   // with the transport, so verification is skipped; traffic stays encrypted.
   http.setInsecure();
   http.setTimeout(30000);
-  if (!http.begin(url)) return nullptr;
+  // A template filled with raw item text can contain a space or a non-ASCII
+  // byte, which the request line cannot carry; existing escapes are kept.
+  if (!http.begin(escapeUrl(url))) return nullptr;
   for (const auto& h : headers) http.addHeader(h.first, h.second);
   return &http;
+}
+
+// A chunked body's Content-Length, if any, is not its size.
+bool hasKnownLength(const freeink::SecureHttpClient& http) {
+  return http.hasContentLength() && http.getHeader("transfer-encoding").empty();
 }
 }  // namespace
 
@@ -109,6 +117,24 @@ std::string urlEncodeQuery(const std::string& s) {
   out.reserve(s.size() * 3);
   for (const unsigned char c : s) {
     if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      out += static_cast<char>(c);
+    } else {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%%%02X", c);
+      out += buf;
+    }
+  }
+  return out;
+}
+
+std::string escapeUrl(const std::string& url) {
+  const auto kept = [](const unsigned char c) { return c > 0x20 && c < 0x7F; };
+  const size_t escaped =
+      static_cast<size_t>(std::count_if(url.begin(), url.end(), [&](const char c) { return !kept(c); }));
+  std::string out;
+  out.reserve(url.size() + 2 * escaped);
+  for (const unsigned char c : url) {
+    if (kept(c)) {
       out += static_cast<char>(c);
     } else {
       char buf[4];
@@ -251,6 +277,44 @@ int request(freeink::SecureHttpClient* session, const std::string& url, const st
     return -1;
   }
   return status;
+}
+
+int requestStream(freeink::SecureHttpClient* session, const std::string& url, const std::string& method,
+                  const std::string& body, const Headers& headers, const StreamStart& onStart, const StreamData& onData,
+                  bool& complete, const std::function<bool()>& shouldAbort) {
+  complete = false;
+  WifiPowerSaveGuard psGuard;
+  freeink::SecureHttpClient tmp;
+  freeink::SecureHttpClient* httpPtr = openClient(session, tmp, url, headers);
+  if (!httpPtr) return -1;
+  freeink::SecureHttpClient& http = *httpPtr;
+
+  bool started = false;
+  bool stopped = false;
+  const auto start = [&] {
+    const long length =
+        hasKnownLength(http) ? static_cast<long>(std::min<size_t>(http.getContentLength(), LONG_MAX)) : -1;
+    started = onStart(http.getStatus(), http.getHeaders(), length);
+    return started;
+  };
+  const int status = http.sendRequest(
+      method.c_str(), reinterpret_cast<const uint8_t*>(body.data()), body.size(),
+      [&](const uint8_t* data, size_t len) {
+        if ((!started && !start()) || !onData(data, len)) {
+          stopped = true;
+          return false;
+        }
+        return true;
+      },
+      shouldAbort);
+  complete = status >= 0 && !stopped && http.responseComplete();
+  // An empty body never calls the data callback, so start here.
+  if (complete && !started && !start()) complete = false;
+  if (!complete) {
+    LOG_ERR("PHTP", "Streamed request failed: status=%d started=%d stopped=%d %s", status, started, stopped,
+            url.c_str());
+  }
+  return started ? status : -1;
 }
 
 int requestToFile(freeink::SecureHttpClient* session, const std::string& url, const std::string& method,

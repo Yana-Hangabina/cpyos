@@ -18,7 +18,8 @@ using HeaderCallback = std::function<void(const char* name, const char* value)>;
 enum class Result : uint8_t {
   Ok,
   NetworkError,
-  Aborted,
+  Aborted,    // an onData callback or a rejected status stopped the transfer
+  Cancelled,  // the caller's shouldAbort fired
 };
 
 struct Header {
@@ -35,6 +36,13 @@ struct RequestOptions {
   int timeoutMs = 60000;
   uint8_t* readBuffer = nullptr;
   size_t readBufferSize = 0;
+  // Optional: refuse a response by its status before its body is read, so a
+  // chapter 403 (a purchase restriction, not an expired session) costs nothing.
+  bool (*acceptStatus)(int status) = nullptr;
+  // Optional caller cancellation, polled in every wait loop and by the TLS
+  // handshake. A raw callback + context so the transport allocates nothing.
+  bool (*shouldAbort)(void* context) = nullptr;
+  void* abortContext = nullptr;
 };
 
 struct HttpsUrlView {
