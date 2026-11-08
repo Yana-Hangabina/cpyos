@@ -787,6 +787,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 inline bool isSettingAvailableOnBoard(const SettingInfo& setting) {
   if (!BoardConfig::hasTouch() && setting.nameId == StrId::STR_TOUCH_READER_CONTROLS) return false;
   if (!BoardConfig::hasHomeKey() && setting.nameId == StrId::STR_SHOW_READER_MENU) return false;
+  // The Home key carries the remaining reading shortcuts on this board, so the
+  // long-press menu picker would be a dead row. UI-only: the value stays
+  // persisted (and reachable from the web API) for other boards.
+  if (BoardConfig::hasHomeKey() && setting.valuePtr == &CrossPointSettings::longPressMenuFunction) return false;
   const bool frontlightSetting = setting.valuePtr == &CrossPointSettings::frontlightBrightness ||
                                  setting.valuePtr == &CrossPointSettings::frontlightOn ||
                                  setting.valuePtr == &CrossPointSettings::frontlightRestoreOnWake
