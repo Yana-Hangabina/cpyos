@@ -27,11 +27,16 @@
 // Back jumps straight back to book word selection.
 class DictionaryDefinitionActivity final : public Activity {
  public:
+  // `hint` (optional) is a one-line note drawn above the definition body — the
+  // phrase lookup uses it to say which headword actually answered a fallback
+  // candidate ("phrase not found; looked up: X").
   explicit DictionaryDefinitionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string headword,
-                                        std::string definition, bool htmlDefinition = false)
+                                        std::string definition, bool htmlDefinition = false,
+                                        std::string hint = {})
       : Activity("DictionaryDefinition", renderer, mappedInput),
         content{.headword = std::move(headword), .text = std::move(definition)},
-        htmlDefinition(htmlDefinition) {}
+        htmlDefinition(htmlDefinition),
+        hint(std::move(hint)) {}
 
   // Arm recursive lookup. The dictionary must outlive this activity (it is the
   // parent word-select screen's member). The query is the word this activity was
@@ -107,6 +112,7 @@ class DictionaryDefinitionActivity final : public Activity {
   bool wrapText(Definition& next);
   int measureSpan(int fontId, const char* text, size_t len, EpdFontFamily::Style family = EpdFontFamily::REGULAR) const;
   void drawBody(int fontId, int x, int startY, int currentPage) const;
+  void drawHintLine(int fontId, int x, int y) const;
   // Plain-text page packed into a Page only while the selection screen runs.
   bool buildPlainSelectionPage();
   void startSelection();
@@ -116,6 +122,9 @@ class DictionaryDefinitionActivity final : public Activity {
 
   Definition content;
   const bool htmlDefinition;
+  // Empty for every entry except the phrase-lookup fallback hit this screen was
+  // opened for; cleared once the user navigates to another entry.
+  std::string hint;
   std::unique_ptr<LookupState> lookup;
   // Plain-mode selection page: the child borrows it, so it lives only while
   // the selection screen is on top.

@@ -8,6 +8,7 @@
 
 #include "activities/Activity.h"
 #include "util/Dictionary.h"
+#include "util/SelectionText.h"
 
 // Word selection over the current reader page: Left/Right step through words
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
@@ -29,6 +30,14 @@ class DictionaryWordSelectActivity final : public Activity {
         marginLeft(marginLeft),
         marginTop(marginTop),
         selectOnly(selectOnly) {}
+
+  // Phrase lookup (upstream c201af43): no picker and no page — onEnter() runs the
+  // lookup directly, walking the candidate ladder when the whole phrase is not a
+  // headword. A total miss keeps a "not found" card up and Confirm asks the
+  // reader to reopen its word picker at the same page.
+  explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                        selection_text::PhraseQuery query)
+      : Activity("DictionaryWordSelect", renderer, mappedInput), lookupText_(std::move(query)), phraseMode(true) {}
 
   // Borrowed-page form used by the definition viewer: the styled definition
   // Page is owned by the parent activity, which outlives this child.
@@ -63,11 +72,19 @@ class DictionaryWordSelectActivity final : public Activity {
   int wordAt(int x, int y) const;
   void moveVertical(int direction);
   void performLookup();
+  void performPhraseLookup();
+  // Opens the dictionary and builds its index when needed. Returns false with the
+  // Error popup already up; shared by the word and phrase paths.
+  bool openAndIndex();
   bool drawHighlightWithSnapshot();
   void drawHints() const;
 
+  const selection_text::PhraseQuery lookupText_{};  // phrase mode: the text to look up
+  const bool phraseMode = false;
+  bool lookupPending = false;   // phrase mode: run the lookup on the next loop tick
+  bool phraseMiss = false;      // phrase mode: nothing matched, Confirm opens the picker
   std::unique_ptr<Page> ownedPage;  // set by the owned-page form
-  Page* page = nullptr;             // owned or borrowed, never null in onEnter
+  Page* page = nullptr;             // owned or borrowed; null in phrase mode
   const int marginLeft;
   const int marginTop;
   const bool selectOnly;

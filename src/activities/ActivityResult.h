@@ -85,13 +85,18 @@ struct DictionarySelectionResult {
   std::string word;
 };
 
+// A phrase lookup ran out of candidates (upstream c201af43). The reader reopens
+// the word picker at the same page so the user can choose a word by hand; the
+// phrase screen has no page of its own to show a picker over.
+struct DictionaryPickerRequest {};
+
 // A book source's app returns booksource::AppResult when it finished a
 // maintenance action on its own (see booksource/BookSource.h).
 
 using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
                                    IntervalResult, ChapterRangeResult, PageResult, TxtOffsetResult,
                                    ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult,
-                                   DictionarySelectionResult, booksource::AppResult>;
+                                   DictionarySelectionResult, DictionaryPickerRequest, booksource::AppResult>;
 
 struct ActivityResult {
   bool isCancelled = false;
