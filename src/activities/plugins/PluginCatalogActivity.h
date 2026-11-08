@@ -67,8 +67,16 @@ class PluginCatalogActivity final : public CatalogActivity {
     // Named JSON views override the browse URL/body; Back returns to their picker.
     struct BrowseList {
       std::string title, url, body;
+      // Fills {list_id}; lets a fetched index share one browse URL across lists.
+      std::string id;
     };
     std::vector<BrowseList> browseLists;
+    // Optional remote index whose views follow the manifest's own lists.
+    // Fetched once per catalog visit (bounded, see pluginlistindex).
+    std::string browseListsUrl;
+    pluginhttp::Headers listsHeaders;
+    std::string listsItemsPath = "lists", listsTitlePath = "title", listsUrlPath = "url", listsIdPath = "id";
+    size_t fixedListCount = 0;  // leading browseLists entries from the manifest
     // JSON search overrides URL/body independently; empty fields reuse browse.
     std::string searchUrl, searchBody;
     bool hasSearch() const { return (!searchUrl.empty() || !searchBody.empty()) && browseFormat != "xml"; }
@@ -131,6 +139,9 @@ class PluginCatalogActivity final : public CatalogActivity {
   int page = 1;
   bool hasMore = false;
   int currentList = -1;  // index into manifest.browseLists; -1 = none/default
+  // browseListsUrl was fetched, or failed while fixed lists remain to show.
+  // Back from a list must not refetch it.
+  bool listIndexLoaded = false;
   std::string searchQuery;
   bool searchActive = false;
   // Reuse browse TLS; release in the picker and before a single-file download.
@@ -155,6 +166,9 @@ class PluginCatalogActivity final : public CatalogActivity {
   // JSON catalog with named lists and none picked yet.
   bool wantsListPicker() const;
   bool loadManifest();
+  // Fetch the remote list index and merge it after the manifest's fixed lists.
+  // `status` is the index request's HTTP status (200 when there is no index).
+  bool loadBrowseListIndex(int& status);
   bool loadToken();
   void loadConfig();
   bool saveToken(const std::string& value);

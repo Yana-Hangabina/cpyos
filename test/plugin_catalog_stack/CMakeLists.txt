@@ -1,5 +1,6 @@
 add_executable(PluginCatalogStackTest
   FirmwareIdentityTest.cpp
+  PluginListIndexTest.cpp
 )
 
 target_link_libraries(PluginCatalogStackTest PRIVATE
