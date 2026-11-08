@@ -4,12 +4,30 @@ CROSSPOINT_VERSION for development environments.
 
 Results in a version string like:  1.1.0-dev-feat-kosync-xpath-05c6cf8
 Release environments are unaffected; they set CROSSPOINT_VERSION in the ini.
+
+The define is added through AddBuildMiddleware and only to translation units
+whose source text contains the token, so changing the branch or commit
+recompiles one object instead of the whole tree. Never replace this with a
+global `env.Append` of `CPPDEFINES`: that would put the value on every compile
+line and invalidate every cached object whenever the version changes.
+scripts/tests/test_git_version_scoping.py enforces both properties.
 """
 
 import configparser
 import os
 import subprocess
 import sys
+
+# Environments that take their version from git metadata instead of platformio.ini
+# build flags. Release and RC environments keep an explicit string in the ini.
+DEV_GIT_VERSION_ENVS = (
+    'default',
+    'sticky',
+    'eego_a4',
+    'murphy_m4',
+    'waveshare_epaper_397',
+    'metalio_eink4',
+)
 
 
 def warn(msg):
@@ -58,8 +76,10 @@ def get_git_branch(project_dir):
 
 
 def get_git_short_sha(project_dir):
+    # Fixed width: --short alone grows the abbreviation as the repository gains
+    # ambiguous objects, which would silently change the version string length.
     return run_git_value(
-        project_dir, ['rev-parse', '--short', 'HEAD'], 'short SHA'
+        project_dir, ['rev-parse', '--short=7', 'HEAD'], 'short SHA'
     )
 
 
@@ -80,7 +100,7 @@ def inject_version(env):
     pioenv = env['PIOENV']
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if pioenv not in ('default', 'sticky', 'eego_a4', 'murphy_m4', 'waveshare_epaper_397', 'metalio_eink4'):
+    if pioenv not in DEV_GIT_VERSION_ENVS:
         return
 
     project_dir = env['PROJECT_DIR']

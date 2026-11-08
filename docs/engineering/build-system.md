@@ -138,6 +138,28 @@ The seven S3 environments are separate hardware binaries, but each is a unified
 language firmware. `bin/ci-check` builds the default C3 target and six S3 release
 targets; X4 Classic is build-only and covered separately by Hardware CI.
 
+### Version strings and incremental rebuilds
+
+Development environments take `CROSSPOINT_VERSION` from `scripts/git_branch.py`;
+release and RC environments keep an explicit string in `platformio.ini`
+(`-cpyos`, `-cpyos-rc+${sysenv.CROSSPOINT_RC_HASH}`). The development value
+embeds the branch and short SHA, so it changes on every switch — that is why it
+is not a build flag.
+
+* The script injects the define through `env.AddBuildMiddleware`, and the
+  middleware only clones the build environment for translation units whose
+  source text contains the `CROSSPOINT_VERSION` token. Switching branch or
+  commit therefore recompiles that one object group instead of the tree.
+* Adding `-DCROSSPOINT_VERSION` to a shared `build_flags`, or appending
+  `CPPDEFINES` to the shared environment, puts the value on every compile line
+  and invalidates every cached object. Do not do either.
+* Git output is sanitized (`"` and `\` removed) before it becomes a C string
+  literal, and the abbreviated SHA is pinned to `--short=7` so the version
+  string cannot change width as the repository grows.
+* `scripts/tests/test_git_version_scoping.py` enforces these properties
+  (per-TU injection, no shared-env append, fixed SHA width, dev envs carrying
+  no version flag).
+
 Routine pull-request CI builds only `default` and `x4pro`. `default` remains the
 shared X3/X4 firmware with runtime device detection. The path-filtered Hardware
 CI workflow builds all five simulators and the configured S3 environments when
