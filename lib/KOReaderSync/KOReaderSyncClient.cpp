@@ -190,7 +190,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     outProgress.timestamp = doc["timestamp"].as<int64_t>();
 
     outProgress.position.reset();
-    if (KOREADER_STORE.usesCrossPointSyncServer()) {
+    if (KOREADER_STORE.supportsRichProgress()) {
       const JsonObjectConst pos = doc["position"].as<JsonObjectConst>();
       if (!pos.isNull()) {
         KOReaderRichPosition rich;
@@ -254,8 +254,8 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   doc["percentage"] = progress.percentage;
   doc["device"] = DEVICE_NAME;
   doc["device_id"] = DEVICE_ID;
-  if (progress.position.has_value() && KOREADER_STORE.usesCrossPointSyncServer()) {
-    // CrossPoint-specific extension: do not send it to third-party KOSync servers.
+  if (progress.position.has_value() && KOREADER_STORE.supportsRichProgress()) {
+    // Enhanced position is opt-in by server type; strict KOSync never receives it.
     const auto& p = *progress.position;
     auto pos = doc["position"].to<JsonObject>();
     pos["pctQ"] = p.pctQ;

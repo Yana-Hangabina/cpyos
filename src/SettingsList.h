@@ -658,6 +658,17 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
               KOREADER_STORE.saveToFile();
             },
             "koSyncBehavior", StrId::STR_KOREADER_SYNC),
+        // Protocol profile of the sync server (appended: existing rows keep
+        // their order so stored per-key values and muscle memory survive).
+        SettingInfo::DynamicEnum(
+            StrId::STR_SERVER_TYPE,
+            {StrId::STR_SERVER_TYPE_CROSSPOINT, StrId::STR_SERVER_TYPE_KOSYNC, StrId::STR_SERVER_TYPE_OTHER},
+            [] { return static_cast<uint8_t>(KOREADER_STORE.getServerType()); },
+            [](uint8_t v) {
+              KOREADER_STORE.setServerType(static_cast<KOReaderServerType>(v));
+              KOREADER_STORE.saveToFile();
+            },
+            "koServerType", StrId::STR_KOREADER_SYNC),
     });
     v.insert(v.end(), {
         // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
