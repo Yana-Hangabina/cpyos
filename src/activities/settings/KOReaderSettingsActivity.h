@@ -3,6 +3,7 @@
 #include <string>
 
 #include "activities/UiListActivity.h"
+#include "components/OptionPopup.h"
 
 /**
  * Submenu for KOReader Sync settings.
@@ -14,10 +15,17 @@ class KOReaderSettingsActivity final : public UiListActivity {
 
   static constexpr int MENU_ITEMS = 11;
 
+  void render(RenderLock&& lock) override;
+
  private:
+  // Server type is a three-way pick, not a blind cycle: a cycle hides two of
+  // the three names and the user cannot see what the next tap will pick.
+  OptionPopup optionPopup;
+
   int listCount() const override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
+  bool handleCustomInput() override;
   const char* headerTitle() const override;
 
   // Row storage: MENU_ITEMS is a compile-time constant, so fixed-capacity

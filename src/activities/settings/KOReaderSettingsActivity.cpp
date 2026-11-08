@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 #include "KOReaderAuthActivity.h"
 #include "KOReaderCredentialStore.h"
@@ -22,6 +23,12 @@ const StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
     StrId::STR_USERNAME,        StrId::STR_PASSWORD,       StrId::STR_SYNC_SERVER_URL,   StrId::STR_DOCUMENT_MATCHING,
     StrId::STR_SEND_METADATA,   StrId::STR_SYNC_BEHAVIOR,  StrId::STR_SIGN_UP,           StrId::STR_AUTHENTICATE,
     StrId::STR_CUSTOM_HEADER_1, StrId::STR_CUSTOM_HEADER_2, StrId::STR_SERVER_TYPE};
+
+// Order matches KOReaderServerType (CROSSPOINT, KOSYNC, OTHER) so the popup
+// index is the stored value.
+constexpr int SERVER_TYPE_ITEMS = 3;
+constexpr StrId serverTypeNames[SERVER_TYPE_ITEMS] = {StrId::STR_SERVER_TYPE_CROSSPOINT, StrId::STR_SERVER_TYPE_KOSYNC,
+                                                      StrId::STR_SERVER_TYPE_OTHER};
 }  // namespace
 
 KOReaderSettingsActivity::KOReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -38,7 +45,12 @@ int KOReaderSettingsActivity::listCount() const { return MENU_ITEMS; }
 
 const char* KOReaderSettingsActivity::headerTitle() const { return tr(STR_KOREADER_SYNC); }
 
+bool KOReaderSettingsActivity::handleCustomInput() {
+  return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
+}
+
 void KOReaderSettingsActivity::activateIndex(const int index) {
+  if (optionPopup.isActive()) return;
   // Activation opens a keyboard/sub-activity or repaints a new value; a
   // lingering flash would gray an unrelated row.
   app.clearTapFlash();
@@ -79,17 +91,15 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
         },
         tr(STR_SYNC_SERVER_URL), prefillUrl, 128, InputType::Url);
   } else if (index == 10) {
-    // Server Type - cycle CrossPoint -> KOSync -> Other. The profile decides
-    // whether the rich position and the extended metadata are transmitted.
+    // Server Type - pick from a popup. The profile decides whether the rich
+    // position and the extended metadata are transmitted.
     const auto current = KOREADER_STORE.getServerType();
-    KOReaderServerType next = KOReaderServerType::CROSSPOINT;
-    if (current == KOReaderServerType::CROSSPOINT) {
-      next = KOReaderServerType::KOSYNC;
-    } else if (current == KOReaderServerType::KOSYNC) {
-      next = KOReaderServerType::OTHER;
-    }
-    KOREADER_STORE.setServerType(next);
-    KOREADER_STORE.saveToFile();
+    optionPopup.show(StrId::STR_SERVER_TYPE, serverTypeNames, SERVER_TYPE_ITEMS, static_cast<int>(current),
+                     [](const int selected) {
+                       if (selected == static_cast<int>(KOREADER_STORE.getServerType())) return;
+                       KOREADER_STORE.setServerType(static_cast<KOReaderServerType>(selected));
+                       KOREADER_STORE.saveToFile();
+                     });
     requestUpdate();
   } else if (index == 3) {
     // Document Matching - toggle between Filename and Binary
@@ -207,4 +217,9 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
   props.labelText.maxLines = 2;
   syncListViewport(screen, props);
   screen.list(props);
+}
+
+void KOReaderSettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+  UiListActivity::render(std::move(lock));
 }
