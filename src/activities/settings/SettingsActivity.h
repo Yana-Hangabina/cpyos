@@ -69,6 +69,7 @@ struct SettingInfo {
   bool inTextSettings = false;           // Surfaced in the Text Settings screen; hidden from the flat Reader list
   bool inReadingStatsSettings = false;   // Surfaced in Reading Stats Settings; hidden from the flat Reader list
   bool managedEnumPicker = false;        // Always open a picker; the dynamic setter owns the change lifecycle
+  bool webHidden = false;                // Persisted normally, but omitted from the generic Web Settings API
 
   // Direct char[] string fields (for settings stored in CrossPointSettings)
   size_t stringOffset = 0;
@@ -97,6 +98,11 @@ struct SettingInfo {
 
   SettingInfo& withManagedEnumPicker() {
     managedEnumPicker = true;
+    return *this;
+  }
+
+  SettingInfo& withWebHidden() {
+    webHidden = true;
     return *this;
   }
 

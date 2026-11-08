@@ -236,7 +236,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
-    constexpr size_t entryCount = 93
+    constexpr size_t entryCount = 94
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -711,6 +711,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // on next WiFi connect, which is useful when crossing time zones.
         SettingInfo::Toggle(StrId::STR_CLOCK_SYNCED, &CrossPointSettings::clockHasBeenSynced, "clockHasBeenSynced",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
+    });
+    v.insert(v.end(), {
+        // Master Plugin System switch. Category-less: the System -> Plugins row
+        // owns the popup, and the generic web API must not toggle it behind a
+        // running plugin session.
+        SettingInfo::Toggle(StrId::STR_PLUGINS, &CrossPointSettings::pluginsEnabled, "pluginsEnabled").withWebHidden(),
     });
     // clang-format on
     // Erasing keeps the list at its initial allocation; inserting into a full

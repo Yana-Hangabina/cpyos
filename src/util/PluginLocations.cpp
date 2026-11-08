@@ -7,9 +7,11 @@
 
 #include <algorithm>
 
+#include "CrossPointSettings.h"
+
 namespace PluginLocations {
 
-std::vector<Entry> scanPlugins() {
+std::vector<Entry> scanPluginsOnDisk() {
   std::vector<Entry> plugins;
   // ponytail: 32 installed entries fit the C3 picker budget; page discovery if that ceiling is needed.
   constexpr size_t MAX_PLUGINS = 32;
@@ -30,7 +32,7 @@ std::vector<Entry> scanPlugins() {
       e.name = name;
       e.dir = std::string(ROOTS[r]) + "/" + name;
       // Reuse the authoritative root precedence; no unbounded seen-name table.
-      if (findPluginDir(name) != e.dir) continue;
+      if (findPluginDirOnDisk(name) != e.dir) continue;
       e.hasPluginJs = Storage.exists((e.dir + "/plugin.js").c_str());
       e.hasDevice = Storage.exists((e.dir + "/device.json").c_str());
       e.hasManifest = Storage.exists((e.dir + "/manifest.json").c_str());
@@ -46,12 +48,42 @@ std::vector<Entry> scanPlugins() {
   return plugins;
 }
 
-std::string findPluginDir(const char* name) {
+std::vector<Entry> scanPlugins() {
+  // The global Plugin System switch turns discovery off without touching the
+  // card: nothing lists, loads or runs while it is disabled.
+  if (!SETTINGS.pluginsEnabled) return {};
+  return scanPluginsOnDisk();
+}
+
+bool anyPluginInstalledOnDisk() {
+  for (size_t r = 0; r < ROOT_COUNT; r++) {
+    HalFile root = Storage.open(ROOTS[r]);
+    if (!root || !root.isDirectory()) continue;
+    for (HalFile entry = root.openNextFile(); entry; entry = root.openNextFile()) {
+      if (!entry.isDirectory()) continue;
+      char name[128];
+      if (entry.getName(name, sizeof(name)) == 0 || name[0] == '.') continue;
+      const std::string dir = std::string(ROOTS[r]) + "/" + name;
+      if (Storage.exists((dir + "/plugin.js").c_str()) || Storage.exists((dir + "/device.json").c_str()) ||
+          Storage.exists((dir + "/manifest.json").c_str())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::string findPluginDirOnDisk(const char* name) {
   for (size_t i = 0; i < ROOT_COUNT; i++) {
     std::string dir = std::string(ROOTS[i]) + "/" + name;
     if (Storage.exists(dir.c_str())) return dir;
   }
   return {};
+}
+
+std::string findPluginDir(const char* name) {
+  if (!SETTINGS.pluginsEnabled) return {};
+  return findPluginDirOnDisk(name);
 }
 
 }  // namespace PluginLocations

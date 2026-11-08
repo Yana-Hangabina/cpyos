@@ -202,7 +202,9 @@ void HomeActivity::onEnter() {
   Activity::onEnter();
 
   hasOpdsServers = OPDS_STORE.hasServers();
-  hasPlugins = anyPluginInstalled();
+  // The global Plugin System switch hides the Plugins entry entirely; a
+  // disabled system must not advertise plugin-only menu slots.
+  hasPlugins = SETTINGS.pluginsEnabled != 0 && anyPluginInstalled();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
