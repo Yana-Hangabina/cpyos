@@ -4,11 +4,11 @@
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
-#include <PanelInsets.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <PanelInsets.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -1160,6 +1160,13 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Upstream 01f09e0e clamps with max(margin, corner) instead; that pushes a
   // 30 px-radius panel's whole cluster 25 px inward for a defect at most 10 px
   // deep, so this takes the actual cut.
+  //
+  // ★ This replaces the EEGO A4's old 28 px hardcode with its own profile data
+  // (cornerRadius 24 / bottomCornerRadius 40), which the design flagged as
+  // needing a re-check: at that panel's row depth the cut is smaller than 28,
+  // so the clusters sit a few px closer to the edge than the eego template's
+  // SAFE_AREA. CPYOS builds neither that panel nor any other with a nonzero
+  // radius, so nothing shipped changes; re-measure before enabling it.
   const int statusRowDepth = std::max(0, screenHeight - (textY + renderer.getTextHeight(textFontId)));
   const int statusCornerCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), statusRowDepth);
   int leftClusterX = std::max(metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, statusCornerCut);
