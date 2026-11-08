@@ -76,7 +76,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PLATFORMIO_CORE_DIR }}/.cache
-          key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_pioarduino_cache.py') }}
           restore-keys: pio-cache-${{ runner.os }}-
 
       - name: Install cppcheck runtime dependency
@@ -124,7 +124,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PLATFORMIO_CORE_DIR }}/.cache
-          key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pio-cache-${{ runner.os }}-${{ hashFiles('platformio.ini', 'scripts/patch_pioarduino_cache.py') }}
           restore-keys: pio-cache-${{ runner.os }}-
 
       - name: Build X4 and X4 Pro firmware
