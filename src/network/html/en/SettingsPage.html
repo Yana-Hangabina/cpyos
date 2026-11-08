@@ -329,13 +329,21 @@
       .replaceAll("'", "&#039;");
   }
 
+  // One handle for the auto-dismiss timer. An unheld setTimeout per call means a
+  // second message is hidden when the FIRST timer fires, i.e. after whatever was
+  // left of the previous 4 s instead of a full one.
+  let messageTimeout;
+
   function showMessage(text, isError) {
     const msg = document.getElementById('message');
+    clearTimeout(messageTimeout);
     msg.textContent = text;
     msg.className = 'message ' + (isError ? 'error' : 'success');
     msg.style.display = 'block';
-    setTimeout(function() { msg.style.display = 'none'; }, 4000);
+    messageTimeout = setTimeout(function() { msg.style.display = 'none'; }, 4000);
   }
+
+  window.addEventListener('pagehide', function() { clearTimeout(messageTimeout); });
 
   function renderControl(setting) {
     const id = 'setting-' + setting.key;
