@@ -23,12 +23,13 @@ inline constexpr int PLUGIN_API_VERSION = 1;
 
 // Everything this firmware actually implements. Never advertise a capability
 // before the behavior ships: catalogs use this list to hide entries the device
-// cannot render.
+// cannot render. `catalog.compatibility` (item-level filtering) is deliberately
+// absent until the catalog applies filtersCompatibility() to rows; a list that
+// requires it stays hidden rather than exposing incompatible items.
 inline constexpr std::string_view CAPABILITIES =
     "catalog.lists,"
     "catalog.bundle_install,"
     "catalog.version_tracking,"
-    "catalog.compatibility,"
     "catalog.encoded_item_fields,"
     "catalog.list_index_mapping,"
     "catalog.list_requirements";

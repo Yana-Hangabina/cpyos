@@ -24,6 +24,7 @@ TEST(FirmwareIdentity, AdvertisesOnlyImplementedCapabilities) {
   // Documented upstream capabilities CPYOS does not implement stay unadvertised.
   EXPECT_FALSE(csvHasToken(firmwareidentity::CAPABILITIES, "catalog.notices"));
   EXPECT_FALSE(csvHasToken(firmwareidentity::CAPABILITIES, "catalog.item_details"));
+  EXPECT_FALSE(csvHasToken(firmwareidentity::CAPABILITIES, "catalog.compatibility"));
   EXPECT_FALSE(csvHasToken(firmwareidentity::CAPABILITIES, ""));
 }
 
