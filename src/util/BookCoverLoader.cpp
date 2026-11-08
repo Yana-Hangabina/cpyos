@@ -12,6 +12,8 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include <cstdint>
+
 namespace BookCoverLoader {
 namespace {
 
@@ -27,11 +29,12 @@ CachedCoverState inspectCachedCover(const std::string& path, const bool emptyIsT
 
     Bitmap bitmap(file);
     if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
-      // Header-only stubs (e.g. 62-byte 1bpp BMP) parse cleanly but have no pixels.
-      // Reject anything shorter than a full image payload so ensure*() regenerates.
-      const size_t fileBytes = file.fileSize();
-      const size_t pixelBytes = static_cast<size_t>(bitmap.getRowBytes()) * static_cast<size_t>(bitmap.getHeight());
-      if (fileBytes > 62 && fileBytes >= pixelBytes + 62) {
+      // Ready only when every pixel row fits between the data offset and end of file.
+      // Header-only stubs (e.g. 62-byte 1bpp BMP) parse cleanly but have no pixels,
+      // so they must be regenerated instead of accepted forever.
+      const uint64_t pixelBytes =
+          static_cast<uint64_t>(bitmap.getRowBytes()) * static_cast<uint64_t>(bitmap.getHeight());
+      if (bitmap.getPixelDataOffset() + pixelBytes <= file.fileSize()) {
         return CachedCoverState::Ready;
       }
     }
