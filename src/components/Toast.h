@@ -1,6 +1,7 @@
 #pragma once
 
 #include <GfxRenderer.h>
+#include <PanelInsets.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -31,8 +32,16 @@ class Toast : public ToastQueue {
     const int textH = renderer.getLineHeight(fontId);
     constexpr int kPillH = 56;
     const int pillW = std::min(safe.width - 48, textW + 56);
-    const int pillX = safe.x + (safe.width - pillW) / 2;
     const int pillY = safe.y + safe.height - kPillH - bottomInset;
+    // The capsule's bottom edge is the row that can reach the panel's rounded
+    // corners; keep its ends out of that arc. A centred pill of at most
+    // safe.width - 48 already clears a 24 px cut, and radius 0 gives cut 0, so
+    // the clamp never moves a square panel's toast.
+    const int pillDepth = std::max(0, safe.y + safe.height - (pillY + kPillH));
+    const int pillCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), pillDepth);
+    const int minPillX = safe.x + pillCut;
+    const int maxPillX = safe.x + safe.width - pillW - pillCut;
+    const int pillX = std::clamp(safe.x + (safe.width - pillW) / 2, minPillX, std::max(minPillX, maxPillX));
     renderer.fillRoundedRect(pillX, pillY, pillW, kPillH, kPillH / 2, Color::Black);
     renderer.drawText(fontId, pillX + (pillW - textW) / 2, pillY + (kPillH - textH) / 2, shown.c_str(), false);
   }

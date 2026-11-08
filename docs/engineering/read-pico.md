@@ -227,6 +227,43 @@ portrait top, counterclockwise landscape right. These are layout insets, not
 measured bezel dimensions. Reader text and existing safe-area consumers adopt
 them; the reader progress bar retains its fill-to-screen-edge behavior.
 
+#### Panel inner corner (aperture radius) — 2026-11-08
+
+What can clip corner-resident chrome is the **inner corner of the aperture**: the
+seam between the white printed frame and the grey panel, not the body's outer
+outline. A user photo of the running device shows that seam is visibly rounded —
+a clean arc tens of pixels across at each corner — so the status line's side
+clusters, the reader footer and the tab-bar ends sit inside `viewableInsets` and
+are *still* partly covered, because an inset is a rectangle and the aperture is
+not.
+
+`cornerRadius` / `bottomCornerRadius` in the profile stay **0 for Read Pico**
+until that radius is measured on the glass at 1:1. A circle fit on a photo of the
+repo's device (`artifacts/photo_gate/`) gives `r ≈ 30` panel px, bracketed 20–45
+by where the aperture leaves its straight edges; that is an **estimate, not a
+value to enter** (the photo is oblique, ≈2.6 photo px per panel px, and the fit
+residual is 25 px). At `r = 30` the cut is ≈10 px on the rows 8 px above the
+bottom edge and 0 above ≈30 px — small enough to have gone unnoticed, large
+enough to shave a glyph.
+
+The code is inert until a number exists, by construction:
+`panel_insets::cornerCut()` (`lib/GfxRenderer/PanelInsets.h`) returns 0 at
+radius 0, `UITheme::getCornerRadius()` / `getBottomCornerRadius()` expose the
+profile's value, and every consumer (`BaseTheme::drawStatusBar`,
+`readerChromeMetrics`, the CPY mast/tab bar, the library position readout,
+`Toast`) is written as `max(existing, cornerCut(...))`. So setting the radius is
+the whole change; the layout is identical at 0 and cannot silently shift.
+
+To measure: draw a 1 px frame at each of `0, 2, 4, … 32` px inset plus a
+diagonal ruler in every corner, full-refresh, and photograph the **glass** with
+the camera square to the panel (a screenshot cannot show the bezel). Then set
+`cornerRadius` (and `bottomCornerRadius` if the bottom pair differs) in the
+`READ_PICO` profile — that is a `freeink-sdk` working-tree edit, so it belongs in
+the local patch with its own idempotence guard. If the measured radius is ≤ 8 px,
+record it and stop: the cut is under 1 px, below the panel's own edge tolerance.
+Device photos are not committed — keep them in `artifacts/` or the ignored photo
+directory, like every other capture.
+
 INX home derives its tabs, five book layouts, empty state and battery from
 `UITheme::getInstance().getScreenSafeArea(renderer, false, false)`, with theme
 padding inside that area. All five INX main pages (recent, files, apps, settings and statistics) share
@@ -1570,7 +1607,7 @@ Sources **not** reachable in this round (so nothing depends on them):
 
 | # | Blocker | Concrete next action |
 |---|---|---|
-| **B1** | Panel mount transform, bezel insets, `uiScale`, `linePadding` are unknown; the frozen profile uses placeholders | Build and flash once the layout is installed, then render a known asymmetric test pattern and read the `rotation`/`NO_FLIP` combination off the glass; measure the CNC bezel overlap for `viewableInsets`; only then tune `linePadding` against ghosting |
+| **B1** | Panel mount transform, bezel insets, `uiScale`, `linePadding` are unknown; the frozen profile uses placeholders | Build and flash once the layout is installed, then render a known asymmetric test pattern and read the `rotation`/`NO_FLIP` combination off the glass; measure the CNC bezel overlap for `viewableInsets` and the aperture's inner corner radius for `cornerRadius` (see "Panel inner corner" above); only then tune `linePadding` against ghosting |
 | **B2** | `pinOe` and `pinPwr` have no GPIO on this board, but LovyanGFX calls `pinMode()` on both at `Bus_EPD::init()`; passing −1 is unverified, and the pinout claims every usable S3 GPIO | First, confirm `lgfx::pinMode(-1, …)` behaviour in the pinned M5GFX; if −1 is safe, pass `PIN_UNASSIGNED` and the problem disappears. If it is not safe, find a pin with no board function from the schematic — **do not** assume one exists: GPIO26–37 are flash/octal PSRAM, GPIO19/20 are the native USB pair, GPIO1–18/21/38–48 are all claimed (§1.1), and the only unaccounted number is **GPIO0**, which is a boot strapping pin. Freeze the result as `READPICO_EP_LGX_DUMMY_PIN`, remembering `pin_pwr` also doubles as the i80 DC line |
 | **B3** | The LUT conversion is unproven: epdiy is a 16 × 16 (from → to) matrix (64 B/frame), LovyanGFX is a 16-entry per-level vector (4 B/frame) | Diff the pinned `m5stack/M5GFX @ 0.2.20` vendored LovyanGFX against the `master` sources cited in §2.5 (`Panel_EPD.cpp:276-283`, `LUT_MAKE`, `Bus_EPD.h` `config_t`). Then implement the explicit conversion and A/B GC16/GL16/DU/gray8 against the reference firmware on the same unit before trusting any waveform |
 | **B4** | The Lgfx path cannot express the vendor line timing (L_SL/L_BL/L_EL, CKV high width, the 11 090 µs frame target); XSTL is driven as an i80 CS rather than a DE signal | First try `busHz = 18 MHz` + `linePadding` tuning and judge on hardware. If contrast/ghosting shows the line timing matters — or if the panel rejects the CS-form start pulse — design an SDK-side extension of `Bus_EPD`/`Panel_EPD` (a config field or virtual) instead of a board-side workaround. Record the outcome here |

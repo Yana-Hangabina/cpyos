@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
+#include <PanelInsets.h>
 
 #include <algorithm>
 #include <cmath>
@@ -580,6 +581,12 @@ void CpyTheme::drawOptionPopup(const GfxRenderer& renderer, const char* title, c
 void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, const MainTab selected) const {
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
 
+  // The bar's own top row is its outermost ink, so only that row's corner cut
+  // applies. On a square aperture the cut is 0 and both ends below span the
+  // bar exactly as before.
+  const int barDepth = std::max(0, renderer.getScreenHeight() - rect.y);
+  const int barCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), barDepth);
+
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   // Pond baseline: a shallow wave instead of a straight hairline. The active
   // item gets three ripple arcs behind its icon and a small duck on the top
@@ -588,11 +595,11 @@ void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
   const auto waveY = [rect](const int x) {
     return rect.y + static_cast<int>(std::lround(2.0f * std::sin(static_cast<float>(x) * kTwoPi / 28.0f)));
   };
-  for (int x = 0; x + 1 < rect.width; ++x) {
+  for (int x = barCut; x + 1 < rect.width - barCut; ++x) {
     renderer.drawLine(rect.x + x, waveY(x), rect.x + x + 1, waveY(x + 1), true);
   }
 #else
-  renderer.drawLine(rect.x, rect.y, rect.x + rect.width - 1, rect.y, true);
+  renderer.drawLine(rect.x + barCut, rect.y, rect.x + rect.width - 1 - barCut, rect.y, true);
 #endif
 
   const int labelFont = SMALL_FONT_ID;
@@ -979,12 +986,17 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
   constexpr int labelFont = UI_10_FONT_ID;
   constexpr int duckSize = 26;
   const int centerY = rect.y + (rect.height - 1) / 2;
-  int textX = rect.x + kRowPadding;
+  // The mast is the topmost ink on the page, so its ends are the rows that can
+  // reach the viewable aperture's corner arc. sideClearance falls back to the
+  // row padding, and the cut is 0 on a square panel, so nothing moves there.
+  const int mastDepth = std::max(0, centerY);
+  const int mastSide = panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
+  int textX = rect.x + mastSide;
   if (title != nullptr) {
     cpy_duck::draw(renderer, cpy_duck_stand_36, textX, centerY - duckSize / 2);
     textX += duckSize + 14;
   }
-  const int right = rect.x + rect.width - kRowPadding;
+  const int right = rect.x + rect.width - mastSide;
   const int pillLeft = right - CpyMetrics::values.batteryWidth;
   const int pillTop = centerY - CpyMetrics::values.batteryHeight / 2;
   drawBatteryPill(renderer, right, pillTop, batteryPercentageVisible());
@@ -1061,7 +1073,6 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
     titleTop = rect.y + stripH;
   }
 
-  int textX = rect.x + kRowPadding;
   // 页标题 = 宋体特黑 (design doc line 42). ReadPico embeds a real Song serif
   // at the mockups' ~48px (Noto Serif SC subset, main.cpp registration);
   // C3 keeps the legacy reader face because the subset does not fit its
@@ -1079,13 +1090,18 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
   const int titleHeight = renderer.getLineHeight(titleFont);
   const int rowHeight = rect.height - (titleTop - rect.y);
   const int centerY = titleTop + (rowHeight - 1) / 2;
+  // Same corner rule as the mast above: the band's centre row is its outermost
+  // ink, and the cut is 0 on every profile that ships this path today.
+  const int mastDepth = std::max(0, centerY);
+  const int mastSide = panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
+  int textX = rect.x + mastSide;
   if (title != nullptr) {
     constexpr int duckSize = 36;
     const int duckY = centerY - duckSize / 2;
     cpy_duck::draw(renderer, cpy_duck_stand_36, textX, duckY);
     textX += duckSize + 16;
   }
-  const int titleRight = rect.x + rect.width - kRowPadding;
+  const int titleRight = rect.x + rect.width - mastSide;
   if (title == nullptr || *title == '\0') return;
 
   const std::string shown =

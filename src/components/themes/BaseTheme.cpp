@@ -8,6 +8,7 @@
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <PanelInsets.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -635,6 +636,24 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   drawHeaderWithStyle(renderer, rect, title, subtitle, backButton, false);
 }
 
+void BaseTheme::applyStatusCornerClearance(freeink::ui::HeaderProps& props, const int statusDepthPx) {
+  // Straight-edge clearance is already in the inset (the theme's own padding);
+  // what an inset cannot express is the arc, because the width it steals
+  // depends on the row. The status line's topmost ink row is the binding one,
+  // so its depth from the panel's top edge is what we measure.
+  const int cut = panel_insets::cornerCut(UITheme::getInstance().getCornerRadius(), std::max(0, statusDepthPx));
+  props.status.edgeInset = static_cast<int16_t>(props.status.edgeInset + cut);
+}
+
+Rect BaseTheme::headerBand(const Rect rect, freeink::ui::HeaderProps& props) {
+  // The band is the caller's rect. CPYOS activities compute their header rect
+  // from UITheme::getScreenSafeArea (already inside the board's viewable
+  // insets), so re-insetting here would double the margin; upstream's band does
+  // that because its callers pass full-width rects.
+  applyStatusCornerClearance(props, rect.y);
+  return rect;
+}
+
 void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                                     const bool backButton, const bool upstreamStyle) {
   // Every activity header renders through the FreeInkUI header + battery
@@ -656,8 +675,6 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   // subtitles.
   ui.target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
   ui.target.setFont(fui::GfxRendererTarget::FONT_LABEL, SMALL_FONT_ID);
-  const fui::Rect band{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y), static_cast<int16_t>(rect.width),
-                       static_cast<int16_t>(rect.height)};
 
   fui::HeaderProps props;
   props.title = title;
@@ -665,6 +682,11 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   // Battery + clock chrome and their title reserves live in the FreeInkUI
   // header component; this only fills the values from settings and metrics.
   applyHeaderStatus(renderer, props, upstreamStyle);
+  // One source for the drawn band: the theme's own rect (already inside the
+  // viewable insets) plus the aperture's corner clearance for the status line.
+  const Rect bandRect = headerBand(rect, props);
+  const fui::Rect band{static_cast<int16_t>(bandRect.x), static_cast<int16_t>(bandRect.y),
+                       static_cast<int16_t>(bandRect.width), static_cast<int16_t>(bandRect.height)};
   if (rect.height < uiThemeMetrics(upstreamStyle).headerHeight) {
     // Short bands (home) are not split into strip + content row: the title
     // centers on the band, clear of the band's bottom edge.
@@ -1122,20 +1144,34 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 #if !FREEINK_DEVICE_READPICO
   textY -= 4;
 #endif
-
-  int leftClusterX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
-  int rightClusterX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;
 #if FREEINK_DEVICE_EEGO_A4
-  // The EEGO A4 panel has physically rounded corners; the status bar text must
-  // stay inside the 28 px UI content inset (eego-a4-template-firmware
-  // SAFE_AREA spec), so clamp the left/right text clusters out of the corner
-  // cutouts. The bottom ~4 px of the bar is covered by the bezel, so the whole
-  // cluster is also lifted by that amount (measured on device).
-  constexpr int kEegoStatusBarSafeInset = 28;
-  leftClusterX = std::max(leftClusterX, kEegoStatusBarSafeInset);
-  rightClusterX = std::min(rightClusterX, renderer.getScreenWidth() - kEegoStatusBarSafeInset);
+  // The A4's bottom ~4 px of bar is covered by the bezel (measured on device),
+  // so its text lane is lifted by that much on top of the shared lift. This is
+  // board hardware, not a corner rule: no profile field carries it today
+  // (statusBarOffsetY moves the line *toward* the edge, the other direction).
   textY -= 4;
 #endif
+
+  // The side clusters are the only status chrome that sits in the panel's
+  // bottom corners, so each end clears the viewable aperture's arc at the row
+  // depth it occupies. Board data drives it (cornerRadius / bottomCornerRadius;
+  // 0 on every profile CPYOS ships), and at radius 0 the cut is 0, so both
+  // ends land exactly where the straight-edge margins put them.
+  // Upstream 01f09e0e clamps with max(margin, corner) instead; that pushes a
+  // 30 px-radius panel's whole cluster 25 px inward for a defect at most 10 px
+  // deep, so this takes the actual cut.
+  //
+  // ★ This replaces the EEGO A4's old 28 px hardcode with its own profile data
+  // (cornerRadius 24 / bottomCornerRadius 40), which the design flagged as
+  // needing a re-check: at that panel's row depth the cut is smaller than 28,
+  // so the clusters sit a few px closer to the edge than the eego template's
+  // SAFE_AREA. CPYOS builds neither that panel nor any other with a nonzero
+  // radius, so nothing shipped changes; re-measure before enabling it.
+  const int statusRowDepth = std::max(0, screenHeight - (textY + renderer.getTextHeight(textFontId)));
+  const int statusCornerCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), statusRowDepth);
+  int leftClusterX = std::max(metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, statusCornerCut);
+  int rightClusterX = std::min(renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight,
+                               renderer.getScreenWidth() - statusCornerCut);
   int leftClusterWidth = 0;
   int rightClusterWidth = 0;
 

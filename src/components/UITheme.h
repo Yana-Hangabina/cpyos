@@ -46,6 +46,15 @@ class UITheme {
   static int getStatusBarHeight();
   static int getStatusBarTextTopPadding(const GfxRenderer& renderer);
   static int getProgressBarHeight();
+  // Radius of the panel's *viewable* corners, i.e. the arc of the aperture the
+  // printed bezel leaves open (not the body outline). 0 on a square aperture,
+  // which every X3/X4/Read Pico profile declares today. The number is board
+  // truth (`BoardConfig::ACTIVE.cornerRadius`) and app code reads it here only
+  // so consumer sites never include BoardConfig themselves.
+  int getCornerRadius() const;
+  // Same for the bottom pair; a board that leaves `bottomCornerRadius` at 0
+  // inherits the top radius.
+  int getBottomCornerRadius() const;
 
  private:
   BaseTheme fallbackTheme;

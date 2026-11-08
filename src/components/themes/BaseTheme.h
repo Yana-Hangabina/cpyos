@@ -410,6 +410,20 @@ class BaseTheme {
   // per call (headers draw on the single render task).
   static void applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::HeaderProps& props,
                                 bool upstreamStyle = false);
+  // Widens the header status line's edge inset by the width a rounded panel
+  // aperture cuts at `statusDepthPx` px from the top edge — the status line is
+  // the one lane that sits up in a top corner. A square panel cuts 0 and the
+  // inset is unchanged. Call after applyHeaderStatus(); callers that draw their
+  // own fui header band (CatalogScreens, the CPY book grid) pass the band top.
+  static void applyStatusCornerClearance(freeink::ui::HeaderProps& props, int statusDepthPx);
+  // The band header chrome is drawn into — the single place that turns a
+  // caller's header rect into the drawn band. CPYOS callers already pass a
+  // safe-area rect, so unlike upstream 01f09e0e's headerBand() this neither
+  // insets the sides again nor bleeds the fill/rule back out (`props.bleed`);
+  // both belong to full-width callers, which CPYOS does not have. What it does
+  // add is the aperture's clearance for the status line. Call after
+  // applyHeaderStatus().
+  static Rect headerBand(Rect rect, freeink::ui::HeaderProps& props);
   // Edge inset drawHeader uses for the clock/battery status line (detached
   // layouts hug the corner with a legacy 12px inset instead of the padding).
   static int headerStatusInset(bool upstreamStyle = false);
