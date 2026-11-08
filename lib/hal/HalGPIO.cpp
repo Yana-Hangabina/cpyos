@@ -7,7 +7,7 @@
 #endif
 #include <BatteryMonitor.h>
 #include <HalGPIO.h>
-#include <HapticFeedback.h>
+#include <HapticManager.h>
 #include <Logging.h>
 #include <PowerManager.h>
 #include <Preferences.h>
@@ -261,7 +261,8 @@ void HalGPIO::begin() {
   }
 #endif
 #if FREEINK_CAP_HAPTIC
-  if (!freeink::haptic::begin()) LOG_ERR("HW", "Haptic initialization failed; feedback disabled");
+  if (!freeink::HapticManager::getInstance().begin())
+    LOG_ERR("HW", "Haptic initialization failed; feedback disabled");
 #endif
   inputMgr.begin();
   inputBegun = true;
@@ -317,13 +318,15 @@ uint8_t HalGPIO::physicalPressedMask() const { return inputMgr.physicalPressedMa
 #if FREEINK_CAP_HAPTIC
 bool HalGPIO::wasTouchContactPressed() const { return inputMgr.wasTouchContactPressed(); }
 void HalGPIO::updateHapticFeedback(uint8_t level) {
-  const uint16_t duration = freeink::haptic::pulseDuration(level);
+  // Same calibrated durations as the old board helper: off / light / default / strong.
+  static constexpr uint16_t kPulseMs[] = {0, 20, 35, 60};
+  const uint16_t duration = kPulseMs[level < 4 ? level : 2];
   if (duration == 0)
     stopHapticFeedback();
   else if (wasTouchContactPressed())
-    freeink::haptic::pulse(duration);
+    freeink::HapticManager::getInstance().pulse(duration);
 }
-void HalGPIO::stopHapticFeedback() { freeink::haptic::stop(); }
+void HalGPIO::stopHapticFeedback() { freeink::HapticManager::getInstance().stop(); }
 #endif
 
 bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
@@ -388,7 +391,10 @@ void HalGPIO::clearTouchTapEvent() { inputMgr.clearTouchTapEvent(); }
 
 void HalGPIO::prepareForDeepSleep() {
 #if FREEINK_CAP_HAPTIC
-  freeink::haptic::prepareForSleep();
+  // Stop playback and release the PWM channel so the motor pad is left inactive.
+  auto& haptic = freeink::HapticManager::getInstance();
+  haptic.stop();
+  haptic.end();
 #endif
   inputMgr.prepareForDeepSleep();
 }

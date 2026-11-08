@@ -269,7 +269,7 @@
     }
 
     function cpfontFilesOnly(fileList) {
-      return Array.from(fileList).filter(f => /\.cpfont$/i.test(f.name));
+      return Array.from(fileList).filter(f => (/\.cpfont$/i).test(f.name));
     }
 
     document.getElementById('fontFiles').addEventListener('change', function() {
