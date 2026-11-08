@@ -1,3 +1,6 @@
+> **已被取代**：本文的“维持拒绝”结论以 [`2026-11-08-upstream-absorption-roadmap.md`](2026-11-08-upstream-absorption-roadmap.md) 为准；
+> 本文保留为逐项原始记录（按功能面分组），不再作为决策依据。
+
 # 维持拒绝项审阅（按改动点重组）
 
 范围：桶 3 复审后仍判 `KEEP_REJECTED` 的 **70 项**。本文不做逐 commit 摘录，而是先把它们归并成
