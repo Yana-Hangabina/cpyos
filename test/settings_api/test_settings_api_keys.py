@@ -1,5 +1,27 @@
 #!/usr/bin/env python3
-"""Keep base settings keys unique and reserved capacity equal to the entry count."""
+"""Check the base settings table: unique keys, exact reservation, small batches.
+
+`getBaseSettingsList()` reserves its vector before appending the rows, because a
+reallocation would double the capacity of the one copy of the table that stays
+resident for the whole session (a second ~16 KB block on the ESP32-C3) and the
+firmware is built with -fno-exceptions, so a failed allocation aborts. Nothing in
+the header can prove that reservation at compile time: SettingInfo holds
+std::function/vector members, so the rows are not constant expressions and
+`entryCount` cannot be a static_assert over them.
+
+This test closes that gap. For every capability combination found in the guards of
+the header itself it re-preprocesses the base list, then
+
+  * rejects duplicate Web Settings API keys,
+  * requires every row to sit inside one of the append batches,
+  * requires every batch to hold at most MAX_SETTINGS_BATCH_ROWS rows (four
+    SettingInfo temporaries is the most the C3 stack may hold at once),
+  * compiles `static_assert(entryCount == <counted rows>)` for that combination.
+
+The guard names are discovered from the source, never hardcoded, and two mutation
+controls keep the checker honest: a fifth row in a batch must be rejected and a row
+added without moving `entryCount` must fail the generated static_assert.
+"""
 
 from collections import Counter
 from itertools import product
@@ -10,6 +32,109 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS_LIST = ROOT / "src/SettingsList.h"
+
+# Mirrors kMaxSettingsBatchRows in src/SettingsList.h.
+MAX_SETTINGS_BATCH_ROWS = 4
+
+# Only these preprocessor forms may appear inside the base list; anything else
+# would make the row count below unreliable, so it is a hard error.
+GUARD_DIRECTIVES = ("#if", "#elif", "#else", "#endif")
+
+GUARD_TOKEN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+SUPPORTED_EXPRESSION_TOKENS = re.compile(r"^[\sA-Za-z0-9_!&|()]+$")
+GUARD_LEXEME = re.compile(r"\s*(defined|[A-Za-z_][A-Za-z0-9_]*|&&|\|\||!|\(|\))")
+
+BATCH_OPENER = "v.insert(v.end(), {"
+
+
+class GuardError(ValueError):
+    """A base-list guard this checker does not model."""
+
+
+def tokenize_expression(expression):
+    tokens = []
+    position = 0
+    while position < len(expression):
+        match = GUARD_LEXEME.match(expression, position)
+        if match is None:
+            if expression[position].isspace():
+                position += 1
+                continue
+            raise GuardError(f"unsupported guard token near {expression[position:]!r}")
+        tokens.append(match.group(1))
+        position = match.end()
+    return tokens
+
+
+class GuardParser:
+    """Recursive-descent evaluator for `!`, `&&`, `||`, `defined`, identifiers."""
+
+    def __init__(self, expression, capabilities):
+        self.expression = expression
+        self.capabilities = capabilities
+        self.tokens = tokenize_expression(expression)
+        self.position = 0
+
+    def evaluate(self):
+        value = self.parse_or()
+        if self.position != len(self.tokens):
+            raise GuardError(f"trailing tokens in base-list guard {self.expression!r}")
+        return value
+
+    def peek(self):
+        return self.tokens[self.position] if self.position < len(self.tokens) else None
+
+    def take(self, expected=None):
+        token = self.peek()
+        if token is None or (expected is not None and token != expected):
+            raise GuardError(f"expected {expected or 'a token'} in base-list guard {self.expression!r}")
+        self.position += 1
+        return token
+
+    def parse_or(self):
+        value = self.parse_and()
+        while self.peek() == "||":
+            self.take("||")
+            right = self.parse_and()
+            value = value or right
+        return value
+
+    def parse_and(self):
+        value = self.parse_unary()
+        while self.peek() == "&&":
+            self.take("&&")
+            right = self.parse_unary()
+            value = value and right
+        return value
+
+    def parse_unary(self):
+        if self.peek() == "!":
+            self.take("!")
+            return not self.parse_unary()
+        return self.parse_atom()
+
+    def parse_atom(self):
+        token = self.take()
+        if token == "(":
+            value = self.parse_or()
+            self.take(")")
+            return value
+        if token == "defined":
+            if self.peek() == "(":
+                self.take("(")
+                name = self.take()
+                self.take(")")
+            else:
+                name = self.take()
+            return self.capability(name)
+        return self.capability(token)
+
+    def capability(self, name):
+        if name in ("0", "1"):
+            return name == "1"
+        if name not in self.capabilities:
+            raise GuardError(f"base-list guard {self.expression!r} references unknown capability {name}")
+        return self.capabilities[name]
 
 
 def matching_delimiter(source, opening, opening_char, closing_char):
@@ -75,32 +200,64 @@ def base_list_source(source):
     return source[start + 1 : end]
 
 
+def capability_names(body):
+    """Discover the capability macros the base list's guards reference."""
+    names = set()
+    for line in body.splitlines():
+        directive = line.strip()
+        if not directive.startswith("#"):
+            continue
+        keyword = directive.split()[0]
+        if keyword not in GUARD_DIRECTIVES:
+            raise ValueError(f"unsupported preprocessor directive in the base list: {directive}")
+        if keyword in ("#else", "#endif"):
+            continue
+        expression = directive[len(keyword) :].strip()
+        if not SUPPORTED_EXPRESSION_TOKENS.match(expression):
+            raise ValueError(f"unsupported guard expression in the base list: {directive}")
+        for token in GUARD_TOKEN.findall(expression):
+            if token != "defined":
+                names.add(token)
+    if not names:
+        raise ValueError("the base list has no capability guards; the table shape changed")
+    return sorted(names)
+
+
+def evaluate_expression(expression, capabilities):
+    """Evaluate a preprocessor guard against one capability assignment."""
+    return GuardParser(expression, capabilities).evaluate()
+
+
 def preprocess_capability_guards(source, capabilities):
-    """Keep the active branch for the simple feature guards in the base list."""
+    """Keep the active branch for the guards the base list actually uses."""
     result = []
     active = True
     branches = []
     for line in source.splitlines(keepends=True):
         directive = line.strip()
         if directive.startswith("#if "):
-            capability = directive.removeprefix("#if ").strip()
-            if capability not in capabilities:
-                raise ValueError(f"unexpected base-list capability guard: {capability}")
-            branches.append((active, capabilities[capability]))
-            active = active and capabilities[capability]
+            condition = evaluate_expression(directive[len("#if ") :].strip(), capabilities)
+            branches.append((active, condition))
+            active = active and condition
+        elif directive.startswith("#elif "):
+            parent_active, matched = branches[-1]
+            condition = evaluate_expression(directive[len("#elif ") :].strip(), capabilities)
+            branches[-1] = (parent_active, matched or condition)
+            active = parent_active and not matched and condition
         elif directive == "#else":
-            parent_active, condition = branches[-1]
-            active = parent_active and not condition
+            parent_active, matched = branches[-1]
+            branches[-1] = (parent_active, True)
+            active = parent_active and not matched
         elif directive == "#endif":
             active = branches.pop()[0]
         elif active:
             result.append(line)
-    if branches:
-        raise ValueError("unclosed base-list capability guard")
+    assert not branches, "unclosed base-list capability guard"
     return "".join(result)
 
 
-def setting_keys(source, capabilities):
+def setting_keys(list_source):
+    """Web Settings API keys in table order, for an already preprocessed list."""
     key_argument_index = {
         "Toggle": 2,
         "Enum": 3,
@@ -112,7 +269,6 @@ def setting_keys(source, capabilities):
         "DynamicString": 3,
     }
     keys = []
-    list_source = preprocess_capability_guards(base_list_source(source), capabilities)
     position = 0
     while True:
         start = list_source.find("SettingInfo::", position)
@@ -130,46 +286,116 @@ def setting_keys(source, capabilities):
             keys.append(argument[1:-1])
 
 
+def row_count(source):
+    return len(re.findall(r"SettingInfo::\w+\(", source))
+
+
+def batch_sizes(source):
+    """Row count of every append batch, in source order."""
+    sizes = []
+    for batch in re.finditer(re.escape(BATCH_OPENER), source):
+        opening = batch.end() - 1
+        closing = matching_delimiter(source, opening, "{", "}")
+        sizes.append(row_count(source[opening:closing]))
+    return sizes
+
+
+def entry_count_declaration(source):
+    match = re.search(r"constexpr size_t entryCount = [^;]+;", source)
+    assert match, "the base list has no constexpr entryCount declaration"
+    return match.group()
+
+
+def entry_count_value(declaration):
+    """Sum the constant terms of an already preprocessed `98 + 1 + ...` declaration."""
+    expression = declaration.split("=", 1)[1].rstrip(";").replace("\n", " ")
+    terms = [term.strip() for term in expression.split("+")]
+    assert all(term.isdigit() for term in terms), f"entryCount is not a constant sum: {declaration}"
+    return sum(int(term) for term in terms)
+
+
+def check_combination(source, capabilities):
+    """Every invariant one capability assignment must satisfy; returns the declaration."""
+    keys = setting_keys(source)
+    duplicates = sorted(key for key, count in Counter(keys).items() if count > 1)
+    assert not duplicates, f"duplicate Web Settings API keys for {capabilities}: {', '.join(duplicates)}"
+
+    rows = row_count(source)
+    sizes = batch_sizes(source)
+    assert sizes and max(sizes) <= MAX_SETTINGS_BATCH_ROWS, f"oversized settings batch for {capabilities}: {sizes}"
+    assert sum(sizes) == rows, f"settings outside insert batches for {capabilities}"
+
+    declaration = entry_count_declaration(source)
+    assert entry_count_value(declaration) == rows, (
+        f"entryCount reserves {entry_count_value(declaration)} rows but {rows} are appended for {capabilities}; "
+        "move the count with the row"
+    )
+    return declaration
+
+
+def compile_snippet(snippet):
+    return subprocess.run(
+        ["c++", "-std=c++20", "-x", "c++", "-fsyntax-only", "-"],
+        input=snippet,
+        text=True,
+        capture_output=True,
+    )
+
+
+def add_row_to_batch(body, batch_index, row):
+    """Insert one row before the closing brace of the given append batch."""
+    batches = list(re.finditer(re.escape(BATCH_OPENER), body))
+    assert batch_index < len(batches), "mutation target batch missing"
+    opening = batches[batch_index].end() - 1
+    closing = matching_delimiter(body, opening, "{", "}")
+    return body[:closing] + row + body[closing:]
+
+
 def main():
     source = SETTINGS_LIST.read_text()
+    body = base_list_source(source)
+    names = capability_names(body)
+
     capacity_checks = ["#include <cstddef>"]
-    capability_names = (
-        "FREEINK_CAP_FRONTLIGHT",
-        "FREEINK_CAP_TOUCH",
-        "CROSSPOINT_CAP_SOUND_FEEDBACK",
-        "FREEINK_CAP_HAPTIC",
-        "FREEINK_CAP_WARMLIGHT",
-        "FREEINK_DEVICE_READPICO",
-        "CROSSPOINT_CAP_BUZZER_FEEDBACK",
-    )
-    for values in product((False, True), repeat=len(capability_names)):
-        capabilities = dict(zip(capability_names, values))
-        keys = setting_keys(source, capabilities)
-        duplicates = sorted(key for key, count in Counter(keys).items() if count > 1)
-        assert not duplicates, (
-            f"duplicate Web Settings API keys for {capabilities}: {', '.join(duplicates)}"
-        )
-        entries = preprocess_capability_guards(base_list_source(source), capabilities)
-        entry_count = len(re.findall(r"SettingInfo::\w+\(", entries))
-        batch_sizes = []
-        for batch in re.finditer(r"v\.insert\(v\.end\(\), \{", entries):
-            opening = batch.end() - 1
-            closing = matching_delimiter(entries, opening, "{", "}")
-            batch_sizes.append(len(re.findall(r"SettingInfo::\w+\(", entries[opening:closing])))
-        assert sum(batch_sizes) == entry_count, f"settings outside insert batches for {capabilities}"
-        assert batch_sizes and max(batch_sizes) <= 4, f"oversized settings batch for {capabilities}: {batch_sizes}"
-        declaration = re.search(r"constexpr size_t entryCount = [^;]+;", entries).group()
+    for values in product((False, True), repeat=len(names)):
+        capabilities = dict(zip(names, values))
+        list_source = preprocess_capability_guards(body, capabilities)
+        declaration = check_combination(list_source, capabilities)
+        rows = row_count(list_source)
         capacity_checks.append(
             f"namespace combination_{len(capacity_checks)} {{ {declaration} "
-            f"static_assert(entryCount == {entry_count}); }}"
+            f"static_assert(entryCount == {rows}); }}"
         )
-    subprocess.run(
-        ["c++", "-std=c++20", "-x", "c++", "-fsyntax-only", "-"],
-        input="\n".join(capacity_checks), text=True, check=True,
+
+    compiled = compile_snippet("\n".join(capacity_checks))
+    assert compiled.returncode == 0, f"capacity static_asserts do not compile:\n{compiled.stderr}"
+
+    # Mutation control 1: a fifth row in a batch must be rejected. The first batch
+    # is unconditional, so the violation shows up in every capability combination.
+    probe_row = 'SettingInfo::Toggle(StrId::STR_SLEEP_STATE_BADGE, nullptr, "batchProbe", StrId::STR_CAT_DISPLAY),\n'
+    mutated_body = add_row_to_batch(body, 0, probe_row)
+    for values in product((False, True), repeat=len(names)):
+        capabilities = dict(zip(names, values))
+        mutated = preprocess_capability_guards(mutated_body, capabilities)
+        if max(batch_sizes(mutated)) > MAX_SETTINGS_BATCH_ROWS:
+            break
+    else:
+        raise AssertionError("a five-row batch was not rejected; the batch cap check is dead")
+
+    # Mutation control 2: adding a row without moving entryCount must fail the
+    # generated static_assert (this is the exact drift the check exists for).
+    capabilities = dict(zip(names, (True,) * len(names)))
+    list_source = preprocess_capability_guards(body, capabilities)
+    declaration = check_combination(list_source, capabilities)
+    drifted_source = preprocess_capability_guards(add_row_to_batch(body, 0, probe_row), capabilities)
+    drifted = compile_snippet(
+        f"#include <cstddef>\n{declaration}\nstatic_assert(entryCount == {row_count(drifted_source)});"
     )
-    print(f"Web Settings API keys are unique across {2 ** len(capability_names)} capability combinations")
-    print("Base settings capacity matches every capability combination without vector growth")
-    print("Every settings initializer batch has at most four entries")
+    assert drifted.returncode != 0, "an un-moved entryCount was accepted; the capacity check is dead"
+
+    print(f"Web Settings API keys are unique across {2 ** len(names)} capability combinations")
+    print(f"Base settings capacity matches every combination ({', '.join(names)}) without vector growth")
+    print(f"Every settings initializer batch has at most {MAX_SETTINGS_BATCH_ROWS} entries")
 
 
 if __name__ == "__main__":
