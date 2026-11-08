@@ -161,6 +161,10 @@ jobs:
             -e readpico_nightly | tee pio.log
 
       - name: Check ReadPico display and input
+        # Interactive simulator self-test: if the wake/orientation driver hangs it
+        # waits for the job's six-hour default, so bound it here. The full
+        # four-orientation plus wake/relaunch run takes a few seconds.
+        timeout-minutes: 5
         run: xvfb-run -a bash .pio/libdeps/simulator_readpico/simulator/tests/run_readpico_self_test.sh "$PWD"
 
       - name: Record firmware stats
