@@ -536,10 +536,6 @@ void DictionaryDefinitionActivity::loop() {
   });
 }
 
-// Draws the current page: a styled Page when the HTML layout succeeded,
-// otherwise the wrapped line spans (copied into a stack buffer for NUL
-// termination). Called twice per render: once in font-cache scan mode, once
-// for the real paint.
 // One line above the body; drawn inside both prewarm passes so its glyphs come
 // from the same batched SD read as the definition itself.
 void DictionaryDefinitionActivity::drawHintLine(const int fontId, const int x, const int y) const {
@@ -547,6 +543,10 @@ void DictionaryDefinitionActivity::drawHintLine(const int fontId, const int x, c
   renderer.drawText(fontId, x, y, hint.c_str(), true);
 }
 
+// Draws the current page: a styled Page when the HTML layout succeeded,
+// otherwise the wrapped line spans (copied into a stack buffer for NUL
+// termination). Called twice per render: once in font-cache scan mode, once
+// for the real paint.
 void DictionaryDefinitionActivity::drawBody(const int fontId, const int x, const int startY,
                                            const int currentPage) const {
   const auto& pages = content.pages;
