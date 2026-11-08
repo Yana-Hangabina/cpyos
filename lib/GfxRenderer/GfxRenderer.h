@@ -91,6 +91,7 @@ class GfxRenderer {
   std::atomic<bool> fadingFix;
   mutable uint8_t syntheticBoldPixels = 0;
   uint8_t* frameBuffer = nullptr;
+  uint32_t frameBufferLoans = 0;
   // Band-update snapshot: the framebuffer as last pushed to the panel.
   bool bandUpdates_ = false;
   uint8_t* bandSnapshot_ = nullptr;
@@ -820,6 +821,9 @@ class GfxRenderer {
   void releaseFrameBufferForBuild();
   bool restoreFrameBufferAfterBuild();
   bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+  // Bumped by every loan. A loan returns the buffer white, so a caller that ran code which may lend
+  // (e.g. a background chapter-build step) compares this to know the page it drew is gone.
+  uint32_t frameBufferLoanCount() const { return frameBufferLoans; }
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

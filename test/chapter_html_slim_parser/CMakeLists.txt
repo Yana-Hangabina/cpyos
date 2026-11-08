@@ -4,6 +4,7 @@ add_executable(ChapterHtmlSlimParserTest
   ${REPO_ROOT}/lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/css/CssParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/CjkBreaks.cpp
   ${REPO_ROOT}/lib/Epub/Epub/Section.cpp
   ${REPO_ROOT}/lib/Epub/Epub/WordStore.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
@@ -45,6 +46,7 @@ add_executable(UpstreamParserTest
   ${REPO_ROOT}/lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/css/CssParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/CjkBreaks.cpp
   ${REPO_ROOT}/lib/Epub/Epub/WordStore.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp

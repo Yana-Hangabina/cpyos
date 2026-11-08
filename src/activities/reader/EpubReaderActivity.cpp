@@ -328,12 +328,20 @@ bool EpubReaderActivity::updateChapterBuild() {
   // persist a partial cache and release the parser to bound its lifetime.
   const int buildWindow = BUILD_WINDOW_AHEAD + (suspendForBluetooth ? PARTIAL_REBUILD_START_MARGIN : 0);
   const bool pendingReposition = cachedVisibleTextOffset.has_value() || cachedChapterTotalPageCount != 0;
+  // Not under an open toolbar/panel: those repaint straight onto the page in the framebuffer.
   if (((!suspendForBluetooth && section->isPartial()) || (suspendForBluetooth && pendingReposition) ||
        static_cast<int>(section->pageCount) < section->currentPage + buildWindow) &&
-      buildTickHeapGate()) {
+      overlay == Overlay::None && buildTickHeapGate()) {
+    // A build step can lend the framebuffer (image probes), which hands it back white while the
+    // panel still shows the page; redraw so nothing is later painted over the blank buffer.
+    const uint32_t loansBefore = renderer.frameBufferLoanCount();
     if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
       if (!handleBuildFailure("background build", section->buildError())) requestUpdate();
       return false;
+    }
+    if (renderer.frameBufferLoanCount() != loansBefore) {
+      pageBufferStale = true;
+      requestUpdate();
     }
     if (section->isBuildComplete() && applyDeferredReposition()) requestUpdate();
   }
@@ -3536,7 +3544,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
 bool EpubReaderActivity::skipLoopDelay() {
   // The main loop holds the render lock while querying this hint.
-  return !buildHeapPaused && backgroundBuildWanted();
+  return overlay == Overlay::None && !buildHeapPaused && backgroundBuildWanted();
 }
 
 void EpubReaderActivity::renderBook() {
@@ -3853,6 +3861,7 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_CHAPTER), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    pageBufferStale = false;
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
@@ -3863,6 +3872,7 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    pageBufferStale = false;
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
@@ -3912,6 +3922,9 @@ void EpubReaderActivity::renderBook() {
     // needs that slot, then snapshot the newly rendered page below.
     discardOverlayPage();
 
+    // renderContents() puts the page back into the framebuffer: a loan taken by an
+    // earlier background build step is no longer a reason to distrust it.
+    pageBufferStale = false;
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
@@ -6148,7 +6161,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
   // chrome straight onto it and push one refresh. requestUpdate() would
   // re-render the whole page first: slow, and visibly wrong, since that repaint
   // lands before the overlay does.
-  if (section) {
+  if (section && !pageBufferStale) {
     // Serialize against the render task: renderBook may be mid-page (status
     // bar included) in the shared framebuffer, and painting the chrome from
     // the loop task at the same time interleaves the two frames.
@@ -6183,7 +6196,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     // a line-queue underrun at prefill+queue depth).
     pushOverlayRefresh();
   } else {
-    requestUpdate();  // no page yet: renderBook() draws the overlay once it is
+    requestUpdate();  // no page in the framebuffer: renderBook() draws the overlay once it is
   }
 }
 

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <climits>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -141,9 +142,11 @@ class ChapterHtmlSlimParser {
   };
   std::vector<ListContext> listStack;
 
-  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
+  // Anchor-to-page mapping: tracks which page each HTML id attribute lands on. A deque grows in
+  // small chunks, so a long chapter never needs one large free block (a vector doubling past 512
+  // anchors needs ~28 KB contiguous, and a failed allocation aborts).
   int completedPageCount = 0;
-  std::vector<std::pair<std::string, uint16_t>> anchorData;
+  std::deque<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;  // deferred until after previous text block is flushed
   bool txtChapterBoundaries = false;
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
@@ -288,7 +291,7 @@ class ChapterHtmlSlimParser {
   void abortParse();   // tear down without flushing (error / abandon)
 
   bool addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleOffset);
-  const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  const std::deque<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 
   // Emit the current page through completePageFn. `doBottomAlign` redistributes
   // a text-only page so the first line stays at the top and the last one reaches
