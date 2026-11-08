@@ -39,7 +39,8 @@ struct MappedInputManager {
 };
 fui::InputSnapshot touchSnapshotFrom(const MappedInputManager& i){return i.snap;}
 struct OptionPopup {
- bool upstreamStyle=false,active=true,ignoreInitialTouchContact=false,ignoreInitialConfirmRelease=false,uiReady=true;
+ bool upstreamStyle=false,active=true,ignoreInitialTouchContact=false,ignoreInitialConfirmRelease=false;
+ bool confirmBarrierPending=false,uiReady=true;
  int selectedIndex=0;std::atomic<int> visibleOptionRows{1};
  static constexpr int MAX_OPTIONS=24;
  static constexpr fui::ActionId ACTION_OPTION=1,ACTION_CHROME=2;
@@ -101,6 +102,81 @@ int main(){
   logical.handleInput(input,update);
   assert(!logical.ignoreInitialConfirmRelease);
   assert(!logical.active&&logicalCalls==1&&logicalPicked==3);
+  // --- the deferred barrier (finishShow leaves it pending) ---------------
+  // A fresh Confirm after a touch-opened popup: the first pass sees the press
+  // edge, so the popup owns the press and its release must select.
+  {
+   OptionPopup fresh;int picked=-1,freshCalls=0;
+   fresh.confirmBarrierPending=true;fresh.ignoreInitialConfirmRelease=false;
+   fresh.onSelectCallback=[&](int i){++freshCalls;picked=i;};
+   input={};input.pressed=int(MappedInputManager::Button::Confirm);input.held=input.pressed;
+   fresh.handleInput(input,update);
+   assert(!fresh.confirmBarrierPending&&!fresh.ignoreInitialConfirmRelease);
+   assert(fresh.active&&freshCalls==0);
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   fresh.handleInput(input,update);
+   assert(!fresh.active&&freshCalls==1&&picked==0);
+  }
+  // A Confirm already held when the popup opens (no press edge) is the opening
+  // gesture's contact: own it through release so it can neither select nor dismiss.
+  {
+   OptionPopup inherited;int inheritedCalls=0;
+   inherited.confirmBarrierPending=true;
+   inherited.onSelectCallback=[&](int){++inheritedCalls;};
+   input={};input.held=int(MappedInputManager::Button::Confirm);
+   inherited.handleInput(input,update);
+   assert(!inherited.confirmBarrierPending&&inherited.ignoreInitialConfirmRelease);
+   assert(inherited.active&&inheritedCalls==0);
+   input={};input.held=int(MappedInputManager::Button::Confirm);
+   inherited.handleInput(input,update);
+   assert(inherited.active&&inheritedCalls==0);
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   inherited.handleInput(input,update);
+   assert(inherited.active&&inheritedCalls==0&&!inherited.ignoreInitialConfirmRelease);
+   input={};input.pressed=int(MappedInputManager::Button::Confirm);input.held=input.pressed;
+   inherited.handleInput(input,update);
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   inherited.handleInput(input,update);
+   assert(!inherited.active&&inheritedCalls==1);
+  }
+  // The render handoff can deliver only the release of the opening contact
+  // (wasPressed and isPressed both false); it must not confirm the popup.
+  {
+   OptionPopup early;int earlyCalls=0;
+   early.confirmBarrierPending=true;
+   early.onSelectCallback=[&](int){++earlyCalls;};
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   early.handleInput(input,update);
+   assert(!early.confirmBarrierPending&&early.active&&earlyCalls==0);
+   input={};input.pressed=int(MappedInputManager::Button::Confirm);input.held=input.pressed;
+   early.handleInput(input,update);
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   early.handleInput(input,update);
+   assert(!early.active&&earlyCalls==1);
+  }
+  // Opened with no button down: nothing is pending after the first idle pass.
+  {
+   OptionPopup idle;int idleCalls=0;
+   idle.confirmBarrierPending=true;
+   idle.onSelectCallback=[&](int){++idleCalls;};
+   input={};
+   idle.handleInput(input,update);
+   assert(!idle.confirmBarrierPending&&!idle.ignoreInitialConfirmRelease);
+   input={};input.pressed=int(MappedInputManager::Button::Confirm);input.held=input.pressed;
+   idle.handleInput(input,update);
+   input={};input.released=int(MappedInputManager::Button::Confirm);
+   idle.handleInput(input,update);
+   assert(!idle.active&&idleCalls==1);
+  }
+  // A fresh logical Confirm still passes the barrier in the same pass.
+  {
+   OptionPopup logicalFresh;int logicalFreshCalls=0,logicalFreshPicked=-1;
+   logicalFresh.confirmBarrierPending=true;logicalFresh.selectedIndex=2;
+   logicalFresh.onSelectCallback=[&](int i){++logicalFreshCalls;logicalFreshPicked=i;};
+   input={};input.pressed=int(MappedInputManager::Button::Confirm);input.released=input.pressed;
+   logicalFresh.handleInput(input,update);
+   assert(!logicalFresh.active&&logicalFreshCalls==1&&logicalFreshPicked==2);
+  }
   ++scenes;
  }
 }
