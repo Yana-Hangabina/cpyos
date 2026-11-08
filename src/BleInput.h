@@ -11,7 +11,9 @@ class GfxRenderer;
 namespace bleinput {
 
 enum class StartContext : uint8_t { Reader, Explicit };
-enum class StartResult : uint8_t { Started, AlreadyRunning, LowMemory, Unavailable, Failed };
+// `Stopping` is a teardown still in flight (BleHid.isStopping()): the host refuses
+// begin() meanwhile, but the caller should retry without treating it as a refusal.
+enum class StartResult : uint8_t { Started, AlreadyRunning, Stopping, LowMemory, Unavailable, Failed };
 
 #if FREEINK_DEVICE_READPICO
 // Read Pico holds a large block of CONTIGUOUS INTERNAL DMA for its panel (epdiy's
@@ -46,6 +48,16 @@ void describeKey(uint8_t kind, uint8_t value, char* out, size_t outLen);
 // showed that no remote is bonded (see BleRemotePolicy.h). Pages that own BLE
 // explicitly — Bluetooth settings, key mapping — are not gated by this.
 bool readerRadioAllowed();
+
+// Reader idle-off (upstream fecee610). A radio nobody connects to keeps the CPU at
+// full speed, so a bonded remote that is switched off or left at home must not hold
+// it for the whole session. armIdleClock() starts a fresh window; tickIdle() stops
+// the radio once 30 s pass with nothing linked and no scan/connect in flight and
+// returns true when it did so; idleStopped() stays true for the rest of the visit so
+// the automatic start does not undo that decision.
+void armIdleClock();
+bool tickIdle();
+bool idleStopped();
 
 #if FREEINK_CAP_BLE_HID_HOST
 inline bool isRunning() { return BleHid.isRunning(); }

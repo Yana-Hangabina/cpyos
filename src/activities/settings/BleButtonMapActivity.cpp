@@ -30,7 +30,8 @@ void BleButtonMapActivity::onEnter() {
   RenderLock lock;
   const auto result = bleinput::ensureStarted(renderer, bleinput::StartContext::Explicit);
   if (result == bleinput::StartResult::LowMemory) unavailable = tr(STR_BT_LOW_MEMORY);
-  if (result == bleinput::StartResult::Unavailable || result == bleinput::StartResult::Failed) {
+  if (result == bleinput::StartResult::Unavailable || result == bleinput::StartResult::Failed ||
+      result == bleinput::StartResult::Stopping) {
     unavailable = tr(STR_BT_UNAVAILABLE);
   }
 }
