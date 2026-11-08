@@ -580,7 +580,7 @@ void HomeActivity::render(RenderLock&&) {
   }
 
   renderer.clearScreen();
-  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+  bool bufferRestored = coverRendered && coverBufferStored && restoreCoverBuffer();
 
   if (isCarousel) {
     drawHeader();
