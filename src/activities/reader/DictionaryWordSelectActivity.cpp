@@ -48,8 +48,9 @@ void DictionaryWordSelectActivity::onEnter() {
   fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
   if (phraseMode) {
-    // No page and no picker: performLookup() runs on the next loop tick, which
-    // paints the busy card through requestUpdateAndWait() before blocking on SD.
+    // No page and no picker: performPhraseLookup() runs on the next loop tick,
+    // which paints the busy card through requestUpdateAndWait() before blocking
+    // on SD.
     lookupPending = true;
     popup = Popup::Busy;
     popupMsg = StrId::STR_DICT_LOOKING_UP;
