@@ -42,7 +42,7 @@ not committed because it is a deterministic wrapper.
 
 ### Locale letters (`chars_extra.txt`)
 
-The Han subset has no Latin-1 Supplementary or Latin Extended-A letters, so the
+The Han subset has no Latin-1 Supplement, Latin Extended-A or Latin Extended-B letters, so the
 Azerbaijani UI (`az`) and the pre-existing Turkish UI (`tr`) were missing
 `Ə/ə ÇÖÜçöğİıŞş`. One absent codepoint sends the whole line to the 8pt
 emergency face, so these are real letterforms, not a cosmetic gap.
