@@ -193,17 +193,23 @@ void UiListActivity::loop() {
 }
 
 void UiListActivity::navigateButtons() {
-  const int count = listCount();
-  auto& n = activeNav();
-  buttonNavigator.onNextPress([this, count, &n] { moveSelectionTo(ButtonNavigator::nextIndex(n.selected, count)); });
+  // Read the live navigation state and row count when the key fires instead of
+  // capturing them: they change as the list grows and the capture would both
+  // allocate per button and act on a stale count.
+  buttonNavigator.onNextPress(
+      [this] { moveSelectionTo(ButtonNavigator::nextIndex(activeNav().selected, listCount())); });
   buttonNavigator.onPreviousPress(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousIndex(n.selected, count)); });
+      [this] { moveSelectionTo(ButtonNavigator::previousIndex(activeNav().selected, listCount())); });
   // Use the rows the last build actually drew: wrapped labels can make the
   // fixed-height visibleRows estimate larger than the rendered page.
-  buttonNavigator.onNextContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, count, n.inputPageRows())); });
-  buttonNavigator.onPreviousContinuous(
-      [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.inputPageRows())); });
+  buttonNavigator.onNextContinuous([this] {
+    const auto& n = activeNav();
+    moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, listCount(), n.inputPageRows()));
+  });
+  buttonNavigator.onPreviousContinuous([this] {
+    const auto& n = activeNav();
+    moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, listCount(), n.inputPageRows()));
+  });
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const int selectionOffset) {
