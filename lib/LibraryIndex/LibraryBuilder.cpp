@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <string_view>
 
 #include "LibraryIndexFile.h"
 #include "LibraryText.h"
@@ -196,10 +197,11 @@ bool isBookName(const std::string& name) {
       ;
 }
 
-// macOS AppleDouble sidecars and hidden entries. The file browser already hides
-// these (FileBrowserActivity isMacOSMetadataEntry); the shelf must agree, or a
-// card written on a Mac shows every book twice.
-bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
+// macOS AppleDouble sidecars, hidden entries and OS-owned folders. The file
+// browser already hides these (FileBrowserActivity isMacOSMetadataEntry); the
+// shelf must agree, or a card written on a Mac shows every book twice and a
+// FAT "System Volume Information" or XTC "XTCache" folder gets indexed.
+bool isHiddenOrSidecar(const std::string_view name) { return FsHelpers::isProtectedPathComponent(name); }
 
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');

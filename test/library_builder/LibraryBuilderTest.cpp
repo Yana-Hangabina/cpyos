@@ -99,6 +99,25 @@ TEST_F(LibraryBuilderTest, DirectoryEntriesAreEnumeratedOnce) {
   EXPECT_EQ(fake::directoryEntriesByPath["/folder/c.txt"], 1u);
 }
 
+TEST_F(LibraryBuilderTest, SkipsSystemFolderContents) {
+  fake::add("/XTCache/fontPos.txt");
+  fake::add("/XTCache/epub/book/language.txt");
+  fake::add("/System Volume Information/notes.txt");
+  fake::add("/fontPos.txt");
+  fake::add("/language.txt");
+  fake::add("/XTCacheArchive/book.txt");
+
+  initial();
+
+  EXPECT_EQ(stats.books, 5);
+  EXPECT_EQ(fake::directoryEntriesByPath["/XTCache/fontPos.txt"], 0u);
+  EXPECT_EQ(fake::directoryEntriesByPath["/XTCache/epub"], 0u);
+  EXPECT_EQ(fake::directoryEntriesByPath["/System Volume Information/notes.txt"], 0u);
+  EXPECT_EQ(fake::directoryEntriesByPath["/fontPos.txt"], 1u);
+  EXPECT_EQ(fake::directoryEntriesByPath["/XTCacheArchive/book.txt"], 1u);
+}
+
+
 TEST_F(LibraryBuilderTest, DirectoryResumeFailureRetainsPreviousIndex) {
   initial();
   const auto old = fake::files[INDEX]->bytes;
