@@ -59,7 +59,14 @@ struct MappedInputManager {
   bool isPressed(Button) const { return held; }
 };
 struct SdCardFontFileInfo { std::string path = "Sans_18.cpfont"; };
-struct Family { bool vector = false; };
+struct SdCardFontFamilyInfo { static constexpr size_t PATH_BUFFER_SIZE = 160; };
+struct Family {
+  bool vector = false;
+  bool filePath(const SdCardFontFileInfo& file, char* out, size_t outSize) const {
+    snprintf(out, outSize, "%s", file.path.c_str());
+    return true;
+  }
+};
 struct Registry {
   Family family;
   const Family* findFamily(const char*) const { return &family; }
