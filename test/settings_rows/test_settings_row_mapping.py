@@ -183,10 +183,13 @@ assert "if (row < 0 || row >= static_cast<int>(rowSettingIndex_.size())) return 
 )
 
 list_h = read("freeink-sdk/libs/ui/FreeInkUI/include/components/lists/list.h")
-header_hit_guard = list_h.index("if (item.isHeader) {")
+row_hit = list_h.index("frame.hit(hit, props.action, item.actionValue, props.inputMask, hitState);")
+# The SDK has two isHeader blocks: the height measurement (no continue) and the
+# layout block that draws the header and skips the row body before any hit is
+# registered. Assert on the one that precedes the hit call.
+header_hit_guard = list_h.rindex("if (item.isHeader) {", 0, row_hit)
 header_hit_end = find_matching(list_h, list_h.index("{", header_hit_guard))
 assert "continue;" in list_h[header_hit_guard:header_hit_end], "header rows must skip the row body"
-row_hit = list_h.index("frame.hit(hit, props.action, item.actionValue, props.inputMask, hitState);")
 assert header_hit_guard < row_hit, "header rows must not register a touch hit"
 
 
