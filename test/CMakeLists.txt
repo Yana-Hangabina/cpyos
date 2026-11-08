@@ -204,6 +204,7 @@ add_test(NAME ArduinoBootstrapLto COMMAND ${Python3_EXECUTABLE} -m unittest disc
 add_subdirectory(reader_session)
 add_subdirectory(opds_feed_error)
 add_subdirectory(plugin_catalog_paging)
+add_subdirectory(plugin_catalog_stack)
 add_subdirectory(plugin_manifest_classification)
 add_subdirectory(plugin_picker_layout)
 add_subdirectory(protected_paths)
