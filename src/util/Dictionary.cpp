@@ -67,9 +67,8 @@ uint32_t readBe32(const uint8_t* p) {
 // continuation/lead byte, so accented words keep their edges.
 bool isWordByte(unsigned char c) { return c >= 0x80 || std::isalnum(c) != 0; }
 
-// Facts read from the .ifo at open time. Only the first 2KB is scanned — .ifo
-// .ifo headers are tiny; the whole file is scanned so a sametypesequence that
-// follows a long book title is still seen.
+// Facts read from the .ifo at open time. The whole file is scanned: .ifo headers
+// are tiny, and a sametypesequence after a long book title must still be seen.
 struct IfoFacts {
   bool offsets64 = false;        // idxoffsetbits=64 (unsupported)
   bool htmlDefinitions = false;  // sametypesequence=h or x (HTML or XDXF)
