@@ -29,7 +29,7 @@ void TextBlock::bindArenaPointers() {
   xposArr = reinterpret_cast<const int16_t*>(base + wc * 2);
   size_t off = wc * 4;
   if (focusPresent) {
-    focusSuffixXArr = reinterpret_cast<const uint16_t*>(base + off);
+    focusSplitXArr = reinterpret_cast<const uint16_t*>(base + off);
     off += wc * 2;
   }
   stylesArr = base + off;
@@ -43,7 +43,7 @@ void TextBlock::bindArenaPointers() {
 
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
-                     const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle,
+                     const std::vector<uint16_t>& focusSplitX, const BlockStyle& blockStyle,
                      std::vector<std::string> rubyTexts, std::vector<LinkSpan> linkSpans)
     : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {
   // Same invariant as deserialize(): a block never holds an all-empty rubyTexts, so a
@@ -58,11 +58,11 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   // When present, they must be sized in lockstep with words[].
   const bool hasFocus = !focusBoundary.empty();
   if (words.size() != wordXpos.size() || words.size() != wordStyles.size() || words.size() > 10000 ||
-      (hasFocus && (words.size() != focusBoundary.size() || words.size() != focusSuffixX.size()))) {
-    LOG_ERR("TXB", "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u)",
+      (hasFocus && (words.size() != focusBoundary.size() || words.size() != focusSplitX.size()))) {
+    LOG_ERR("TXB", "Construction failed: size mismatch (words=%u, xpos=%u, styles=%u, boundary=%u, splitX=%u)",
             static_cast<uint32_t>(words.size()), static_cast<uint32_t>(wordXpos.size()),
             static_cast<uint32_t>(wordStyles.size()), static_cast<uint32_t>(focusBoundary.size()),
-            static_cast<uint32_t>(focusSuffixX.size()));
+            static_cast<uint32_t>(focusSplitX.size()));
     isValid = false;
     return;
   }
@@ -119,10 +119,10 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
     text[off++] = '\0';
   }
   if (focusPresent) {
-    auto* suffixX = const_cast<uint16_t*>(focusSuffixXArr);
+    auto* splitX = const_cast<uint16_t*>(focusSplitXArr);
     auto* boundary = const_cast<uint8_t*>(focusBoundaryArr);
     for (uint16_t i = 0; i < numWords; i++) {
-      suffixX[i] = focusSuffixX[i];
+      splitX[i] = focusSplitX[i];
       boundary[i] = focusBoundary[i];
     }
   }
@@ -329,10 +329,10 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     const int drawX = wordX;
 
     if (boundary > 0) {
-      // Focus split: draw bold prefix, then the regular suffix at a pre-computed x offset.
+      // Place the logical prefix on the right for RTL words. Each run is reordered by drawText.
       // The bold prefix is bounded to 9 codepoints by the clamp on targetBoldChars in
       // ParsedText::addWord; 9 UTF-8 codepoints occupy at most 9 * 4 = 36 bytes, +1 for null = 37.
-      // suffixX is computed at cache-creation time to avoid font metric lookups at render time.
+      // The split offset is computed at cache-creation time to avoid font metric lookups at render.
       static constexpr size_t MAX_FOCUS_PREFIX_BYTES = 9 * 4 + 1;
       char boldBuf[40];
       static_assert(sizeof(boldBuf) >= MAX_FOCUS_PREFIX_BYTES,
@@ -342,8 +342,11 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
           std::min<size_t>({static_cast<size_t>(boundary), static_cast<size_t>(wordTextLen(i)), sizeof(boldBuf) - 1});
       memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(fontId, drawX, wordY, boldBuf, true, boldStyle, baseDir, tracking);
-      const int suffixX = drawX + focusSuffixXArr[i];
+      // Numeric runs keep LTR order even inside an RTL paragraph. Match layout.
+      const bool rtl = BidiUtils::startsWithRtl(word);
+      const int prefixX = drawX + (rtl ? focusSplitXArr[i] : 0);
+      const int suffixX = drawX + (rtl ? 0 : focusSplitXArr[i]);
+      renderer.drawText(fontId, prefixX, wordY, boldBuf, true, boldStyle, baseDir, tracking);
       renderer.drawText(fontId, suffixX, wordY, word + boldLen, true, currentStyle, baseDir, tracking);
     } else {
       renderer.drawText(fontId, drawX, wordY, word, true, currentStyle, baseDir, tracking);
