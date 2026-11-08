@@ -94,7 +94,7 @@ bool listRequirementsMet(JsonVariantConst requirements) {
   if (requirements.isNull()) return true;  // absent member = no requirements
   JsonArrayConst required = requirements.as<JsonArrayConst>();
   if (required.isNull() || required.size() > firmwareidentity::MAX_LIST_REQUIREMENTS) return false;
-  const std::string_view names[firmwareidentity::MAX_LIST_REQUIREMENTS] = {};
+  std::string_view names[firmwareidentity::MAX_LIST_REQUIREMENTS] = {};
   size_t count = 0;
   for (JsonVariantConst v : required) {
     const char* name = v.as<const char*>();
