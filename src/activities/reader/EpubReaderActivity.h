@@ -393,6 +393,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool imageScalingDirty = false;
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+  // Row the classic list menu reopens on, remembered for this reading session.
+  // Closing the book drops it with the activity.
+  EpubReaderMenuActivity::MenuAction selectedMenuAction = EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER;
 
   // Footnote support
   FootnoteList currentPageFootnotes;
@@ -614,6 +617,15 @@ class EpubReaderActivity final : public ReaderActivity {
   void handleOverlayInput();
   void renderOverlay();
   int currentTocIndex() const;
+  // Index of the chapter being read: the TOC index for TXT/MD (whose named
+  // chapters are anchors inside one spine) and the spine index otherwise.
+  int currentChapterIndex() const;
+  // Chapter navigation shared by the toolbar and the tap zones. TXT/MD books
+  // keep every named chapter in one spine, so a spine step would clamp back to
+  // the same offset and do nothing; this routes them through the TOC anchor
+  // instead. Returns whether the chapter actually changed, so a no-op tap can
+  // skip the repaint.
+  bool gotoChapterIndex(int target);
   std::string currentChapterTitle() const;
   // Text panel cells (Pond v5 frame 05, strict 2x4 grid): font, size, line
   // spacing, paragraph spacing, page margin, fast page turn, water ripple,

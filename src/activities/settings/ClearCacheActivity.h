@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
@@ -25,6 +26,8 @@ class ClearCacheActivity final : public Activity {
 
   int clearedCount = 0;
   int failedCount = 0;
+  // Owned for the dialog's lifetime: showMessage() keeps the pointer.
+  std::string warningMessage;
   OptionPopup confirmPopup;
   void beginClear();
   void clearCache();

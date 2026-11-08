@@ -25,5 +25,12 @@ class SleepActivity final : public Activity {
   void renderTransparentCustomSleepScreen() const;
   void renderBlankSleepScreen() const;
 
+  // The bitmap the transparent overlay is composited onto while the overlay
+  // renderers run (Cover + Transparent); null for the plain Current Screen path.
+  // overlayGrayCover is the same bitmap when it carries gray levels the plane
+  // passes have to redraw, so a cover keeps its grays under the overlay.
+  mutable const Bitmap* overlayCover = nullptr;
+  mutable const Bitmap* overlayGrayCover = nullptr;
+
   bool fromTimeout = false;
 };

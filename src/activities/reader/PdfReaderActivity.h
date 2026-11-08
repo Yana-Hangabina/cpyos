@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "EpubReaderMenuActivity.h"
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "Epub/AnnotationStore.h"
@@ -22,6 +23,8 @@ class PdfReaderActivity final : public ReaderActivity {
   bool fullCacheComplete_ = false;
   bool fullCacheActive_ = false;
   int currentPage = 0;
+  // Row the classic list menu reopens on; owned here so it survives the menu.
+  EpubReaderMenuActivity::MenuAction selectedMenuAction = EpubReaderMenuActivity::MenuAction::ROTATE_SCREEN;
   std::vector<int> bookmarks_;
   std::vector<annotations::Annotation> pageNotes_;
 

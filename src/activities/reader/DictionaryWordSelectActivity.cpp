@@ -184,18 +184,19 @@ void DictionaryWordSelectActivity::performLookup() {
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  DictLocation location;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result, &location);
+  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result);
 
   if (found) {
     popup = Popup::None;
-    // Construct first so the recursive viewer can be armed with the exact
-    // entry location before it enters; the dictionary outlives it because this
-    // activity stays underneath on the stack.
+    // Construct first so the recursive viewer can be armed with the query
+    // before it enters; the dictionary outlives it because this activity stays
+    // underneath on the stack. The query, not the headword, is what a re-lookup
+    // replays: the displayed headword may be a stem or a synonym target.
+    const std::string query = words[selected].text;
     auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
                                                                     std::move(definition),
                                                                     dict.definitionsAreHtml());
-    if (!activity || !activity->enableLookup(dict, location)) {
+    if (!activity || !activity->enableLookup(dict, std::string{query})) {
       LOG_ERR("DICT", "OOM: definition activity");
       popup = Popup::Error;
       popupMsg = StrId::STR_DICT_LOW_MEMORY;

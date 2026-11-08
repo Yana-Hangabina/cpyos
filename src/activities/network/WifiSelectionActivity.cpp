@@ -2021,15 +2021,15 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     const int titleLine = renderer.getLineHeight(UI_12_FONT_ID);
     const int titleLines = static_cast<int>(renderer.wrappedText(UI_12_FONT_ID, title, columnWidth, 2).size());
     const bool showSsid = acknowledged || state != WifiSelectionState::SCANNING;
-    // Keep the original 26-byte "to SSID" line (the host test pins its UTF-8
-    // ellipsis); the acknowledgement gets its own wider line for SSID + IP.
-    char ssidInfo[26] = {};
+    // Truncate by rendered width, not by bytes: a byte budget cut CJK SSIDs far
+    // earlier than the line could hold and left a third of the column empty.
+    // The acknowledgement gets its own wider line for SSID + IP.
+    char ssidInfo[128] = {};
+    std::string ssidLine;
     char ackInfo[64] = {};
     if (showSsid && !acknowledged) {
-      if (snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str()) > 25) {
-        const int length = utf8SafeTruncateBuffer(ssidInfo, 22);
-        snprintf(ssidInfo + length, sizeof(ssidInfo) - length, "...");
-      }
+      snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str());
+      ssidLine = renderer.truncatedText(UI_10_FONT_ID, ssidInfo, columnWidth);
     } else if (acknowledged) {
       snprintf(ackInfo, sizeof(ackInfo), "%s  %s", selectedSSID.c_str(), connectedIP.c_str());
       const int length = utf8SafeTruncateBuffer(ackInfo, sizeof(ackInfo) - 1);
@@ -2046,7 +2046,7 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     if (showSsid) {
       y += 10;
       UITheme::drawCenteredText(renderer, Rect{screen->x, y, screen->width, detailLine}, UI_10_FONT_ID, y,
-                                acknowledged ? ackInfo : ssidInfo);
+                                acknowledged ? ackInfo : ssidLine.c_str());
     }
     if (!acknowledged && autoConnecting && !mappedInput.hasTouch()) {
       const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_SHOW_NETWORKS), "", "");
@@ -2068,20 +2068,23 @@ void WifiSelectionActivity::renderConnecting(const Rect* screen, const ThemeMetr
     UITheme::drawCenteredWrappedText(renderer, statusBounds, UI_12_FONT_ID, statusText, MAX_STATUS_LINES, true,
                                      EpdFontFamily::BOLD, UITheme::TextVerticalAlignment::BOTTOM);
 
-    char ssidInfo[26] = {};
+    char ssidInfo[128] = {};
+    std::string ssidLine;
     char ackInfo[64] = {};
     if (acknowledged) {
       snprintf(ackInfo, sizeof(ackInfo), "%s  %s", selectedSSID.c_str(), connectedIP.c_str());
       const int length = utf8SafeTruncateBuffer(ackInfo, sizeof(ackInfo) - 1);
       ackInfo[length] = '\0';
-    } else if (snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str()) > 25) {
-      const int length = utf8SafeTruncateBuffer(ssidInfo, 22);
-      snprintf(ssidInfo + length, sizeof(ssidInfo) - length, "...");
+    } else {
+      snprintf(ssidInfo, sizeof(ssidInfo), "%s%s", tr(STR_TO_PREFIX), selectedSSID.c_str());
+      // Width, not bytes: the line is clipped to the content column, so a byte
+      // budget both cut CJK early and needed the ClipScope below.
+      ssidLine = renderer.truncatedText(UI_10_FONT_ID, ssidInfo, statusWidth);
     }
     const Rect ssidBounds{statusX, top, statusWidth, height};
     {
       const GfxRenderer::ClipScope clip(renderer, ssidBounds.x, ssidBounds.y, ssidBounds.width, ssidBounds.height);
-      UITheme::drawCenteredText(renderer, ssidBounds, UI_10_FONT_ID, top, acknowledged ? ackInfo : ssidInfo);
+      UITheme::drawCenteredText(renderer, ssidBounds, UI_10_FONT_ID, top, acknowledged ? ackInfo : ssidLine.c_str());
     }
   }
   if (state != WifiSelectionState::CONNECTED && autoConnecting && !mappedInput.hasTouch()) {

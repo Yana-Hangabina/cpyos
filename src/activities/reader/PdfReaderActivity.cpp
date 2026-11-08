@@ -958,7 +958,7 @@ void PdfReaderActivity::openReaderMenu() {
         }
       },
       getBookTitle(), currentPage + 1, pdf->pageCount(), progressPercent(), SETTINGS.orientation, false, false,
-      false, true);
+      false, selectedMenuAction, true);
 }
 
 void PdfReaderActivity::onReaderMenuConfirm(const int action) {

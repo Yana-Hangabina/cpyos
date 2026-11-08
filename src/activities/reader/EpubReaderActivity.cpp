@@ -763,7 +763,7 @@ void EpubReaderActivity::openReaderMenu() {
         }
       },
       epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
-      !currentPageFootnotes.empty(), !cachedBookmarks.empty(), isJjwxc);
+      !currentPageFootnotes.empty(), !cachedBookmarks.empty(), isJjwxc, selectedMenuAction);
 }
 
 ReaderRenderSpec EpubReaderActivity::effectiveRenderSpec(const uint16_t width, const uint16_t height) const {
@@ -2847,17 +2847,10 @@ bool EpubReaderActivity::openZoneMenu() {
 }
 
 void EpubReaderActivity::gotoNextZoneChapter() {
-  if (!epub) return;
-  const int count = epub->getSpineItemsCount();
-  if (count <= 0 || currentSpineIndex + 1 >= count) return;
-  {
-    RenderLock lock;
-    clearDeferredReposition();
-    nextPageNumber = 0;
-    currentSpineIndex += 1;
-    section.reset();
-  }
-  lastPageTurnTime = millis();
+  // Route through the same navigation the toolbar uses. TXT/MD store their named
+  // chapters as anchors inside a single spine, so stepping currentSpineIndex
+  // would clamp back to the same chapter and the configured zone would look dead.
+  if (gotoChapterIndex(currentChapterIndex() + 1)) lastPageTurnTime = millis();
 }
 
 bool EpubReaderActivity::handleZoneShortAction(const uint8_t action) {
@@ -3205,7 +3198,18 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
 }
 
 bool EpubReaderActivity::launchKOReaderSync() {
-  if (!KOREADER_STORE.hasCredentials()) return false;
+  flushReaderSession();
+
+  // Without a KOReader server the sync activity only brings the device online
+  // and drains the reader-session outbox; a failed join exits back to the
+  // reader with the events still queued. The epub is not released here because
+  // that path never maps progress (no framebuffer loan) and the activity is
+  // destroyed by the replace a moment later.
+  if (!KOREADER_STORE.hasCredentials()) {
+    return activityManager.replaceActivityWith<KOReaderSyncActivity>(
+        epub->getSourcePath(), getCurrentPosition(), SavedProgressPosition{}, std::string{},
+        /*pluginEventsOnly=*/true);
+  }
 
   RenderLock renderLock;
 
@@ -4712,6 +4716,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   auto* fcm = renderer.getFontCacheManager();
   const bool pageHasImages = page->hasImages();
+  // Black & White images: the page is laid out exactly like Display, but the
+  // images are drawn as a B/W dither in the base pass, so it turns like a text
+  // page (no extra grayscale refresh). Decode/logging above still see the real
+  // page; only the grayscale decisions switch on this flag.
+  const bool imageGrayscalePage = pageHasImages && SETTINGS.imageRendering != CrossPointSettings::IMAGES_DISPLAY_BW;
+  // The images themselves dither in the base pass. Scoped so every return path
+  // (cache hit, error) restores the renderer for the next screen.
+  struct DitherScope {
+    GfxRenderer& renderer;
+    ~DitherScope() { renderer.setDitherImagesInBw(false); }
+  } ditherScope{renderer};
+  renderer.setDitherImagesInBw(pageHasImages && !imageGrayscalePage);
   const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   if (pageHasImagesNeedingDecode) {
     // Lend the fixed framebuffer to the large JPEG/PNG decoder while it streams
@@ -4790,7 +4806,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Fast page turn: B/W only, pushed with the single-phase DU waveform. Text pages
   // skip the two gray-plane passes and the AA waveform; image pages keep their own
   // grayscale path.
-  const bool fastPageTurn = SETTINGS.fastPageTurn != 0 && !pageHasImages;
+  const bool fastPageTurn = SETTINGS.fastPageTurn != 0 && !imageGrayscalePage;
   // Fast turn is the one reader path that remains 1-bit. Restore its old 25%
   // weight (the owner preferred it to the 50% UI threshold); normal pages use
   // 16-level AA and never read these thresholds.
@@ -4811,8 +4827,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // plain BW. On a 16-level page a white plate only writes the base plane, so a
   // card drawn over grayscale text came out as a black slab with invisible text.
   const bool hasModalChrome = selectionMenuActive || annotationCardActive || footnoteCardActive;
+  // A Black & White image page is presented as a plain B/W frame: its images are
+  // dithered in that pass, so a gray pass would drive the panel a second time and
+  // repaint them as gray. Text on such a page keeps the B/W weight, not AA.
+  const bool imageBwPage = pageHasImages && !imageGrayscalePage;
   const bool needsTextGrayscale =
-      !hasModalChrome && grayscaleEnabled && SETTINGS.textAntiAliasing && !fastPageTurn;
+      !hasModalChrome && grayscaleEnabled && SETTINGS.textAntiAliasing && !fastPageTurn && !imageBwPage;
   // The 16-level path needs a 4-bit glyph cache. Embedded fonts and the system
   // pack both load 4-bit on a 16-level panel, but readerFaceIsFourBit() only
   // knows about SD families. Resolve the live reader id instead of guessing.
@@ -4834,6 +4854,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // Synthetic bold no longer rules 16-level text out: the glyph renderer applies
   // the bold offset to the same 4-bit coverage the 16-level path consumes, so a
   // reader no longer has to choose between bold and 16 gray levels.
+  // Images write their pixels into the 2-bit planes too, so a page with images
+  // never goes through the 16-level text commit; the B/W dither is a 1-bit
+  // operation by definition.
   const bool use16LevelText = needsTextGrayscale && !pageHasImages && renderer.getGrayscaleLevels() == 16 &&
                               readerFaceFourBit && !SETTINGS.readingBackgroundEnabled;
   if (!loggedReaderFaceMode_) {
@@ -4854,9 +4877,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const bool needsAnyGrayscale = grayscaleEnabled && SETTINGS.textAntiAliasing;
 #else
   // needsTextGrayscale already excludes fast page turns; images keep their own path.
-  const bool needsAnyGrayscale = grayscaleEnabled && (needsTextGrayscale || pageHasImages);
+  const bool needsAnyGrayscale = grayscaleEnabled && (needsTextGrayscale || imageGrayscalePage);
 #endif
-  const bool absoluteImageGrayscale = grayscaleEnabled && pageHasImages && !gpio.deviceIsX3() &&
+  const bool absoluteImageGrayscale = grayscaleEnabled && imageGrayscalePage && !gpio.deviceIsX3() &&
                                       display.getController() == HalDisplay::Controller::UC8279 &&
                                       renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Absolute).supported();
   const auto grayscale = renderer.grayscaleCapabilities(absoluteImageGrayscale ? HalDisplay::GrayscaleMode::Absolute
@@ -4880,11 +4903,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // from it either way and the panel is still driven exactly once.
       needsAnyGrayscale && !SETTINGS.readingBackgroundEnabled && renderer.supportsTextOnlyCombinedBase();
 #else
-      tiledGrayscale && !pageHasImages && !SETTINGS.readingBackgroundEnabled && renderer.supportsTextOnlyCombinedBase();
+      tiledGrayscale && !imageGrayscalePage && !SETTINGS.readingBackgroundEnabled && renderer.supportsTextOnlyCombinedBase();
 #endif
 #if FREEINK_DEVICE_EEGO_A4
   const bool overlapRefresh =
-      tiledGrayscale && renderer.supportsAsyncRefresh() && !pageHasImages && !needsTextGrayscale;
+      tiledGrayscale && renderer.supportsAsyncRefresh() && !imageGrayscalePage && !needsTextGrayscale;
 #elif FREEINK_DEVICE_READPICO
   // Read Pico 没有 strip upload（tiledGrayscale 为假），但 epdiy 驱动在
   // displayStart() 返回前就把帧缓冲拷进自己的 4bpp 差分缓冲，扫描期间宿主可以
@@ -4893,9 +4916,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // driver copies the frame into its own 4 bpp difference buffer before
   // displayStart() returns, so the host may redraw while the panel scans. Every
   // plain page turn therefore overlaps the ~415 ms scan with the next layout.
-  const bool overlapRefresh = renderer.supportsAsyncRefresh() && !pageHasImages;
+  const bool overlapRefresh = renderer.supportsAsyncRefresh() && !imageGrayscalePage;
 #else
-  const bool overlapRefresh = tiledGrayscale && renderer.supportsAsyncRefresh() && !pageHasImages;
+  const bool overlapRefresh = tiledGrayscale && renderer.supportsAsyncRefresh() && !imageGrayscalePage;
 #endif
   const auto drawGuideLines = [&] {
     if (!SETTINGS.readingGuideLineEnabled) return;
@@ -5037,7 +5060,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // grayscale image pages and due cleans keep the existing path. The display layer
   // consumes the request on its next frame push (pushFrame gates on mode==Full as a
   // second check); clearing it here keeps reflows and font changes unanimated.
-  const bool waterTurnOk = waterTurnDirection != 0 && !absoluteImageGrayscale && !pageHasImages &&
+  const bool waterTurnOk = waterTurnDirection != 0 && !absoluteImageGrayscale && !imageGrayscalePage &&
                            !cleanImageBasePending;
   renderer.setPageTurnDirection(waterTurnOk ? waterTurnDirection : 0);
   waterTurnDirection = 0;
@@ -5060,7 +5083,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // so ghosting is still cleared.
   } else if (combinedGrayscaleBase) {
     ReaderUtils::displayBaseWithRefreshCycle(renderer, pagesUntilFullRefresh, manualRefreshPending);
-  } else if (pageHasImages) {
+  } else if (imageGrayscalePage) {
     // Image pages use one base refresh before the grayscale pass. FAST leaves
     // the panel receptive to the gray waveform; pending cleanup still honors
     // the scheduled/manual HALF refresh.
@@ -5675,6 +5698,35 @@ int EpubReaderActivity::currentTocIndex() const {
   tocMemoPage = page;
   tocMemoValue = index;
   return index;
+}
+
+int EpubReaderActivity::currentChapterIndex() const {
+  if (!epub) return 0;
+  return Txt::isTxtOrMd(epub->getSourcePath()) ? std::max(0, currentTocIndex()) : currentSpineIndex;
+}
+
+bool EpubReaderActivity::gotoChapterIndex(const int target) {
+  if (!epub) return false;
+  const bool textBook = Txt::isTxtOrMd(epub->getSourcePath());
+  const int chapterCount = textBook ? epub->getTocItemsCount() : epub->getSpineItemsCount();
+  // A TXT whose headings were never detected has no TOC at all; clamp() with an
+  // empty range is undefined, so there is nothing to step to.
+  if (chapterCount <= 0) return false;
+  const int chapterIndex = currentChapterIndex();
+  const int clamped = std::clamp(target, 0, chapterCount - 1);
+  if (clamped == chapterIndex) return false;
+  RenderLock lock;
+  clearDeferredReposition();
+  nextPageNumber = 0;
+  if (textBook) {
+    const auto item = epub->getTocItem(clamped);
+    currentSpineIndex = item.spineIndex;
+    pendingAnchor = item.anchor;
+  } else {
+    currentSpineIndex = clamped;
+  }
+  section.reset();
+  return true;
 }
 
 std::string EpubReaderActivity::currentChapterTitle() const {
@@ -6441,22 +6493,11 @@ void EpubReaderActivity::handleOverlayInput() {
 
   const bool textBook = Txt::isTxtOrMd(epub->getSourcePath());
   const int chapterCount = textBook ? epub->getTocItemsCount() : epub->getSpineItemsCount();
-  const int chapterIndex = textBook ? std::max(0, currentTocIndex()) : currentSpineIndex;
-  const auto gotoChapter = [this, textBook, chapterCount, chapterIndex](int target) {
-    target = std::clamp(target, 0, chapterCount - 1);
-    if (target != chapterIndex) {
-      RenderLock lock;
-      clearDeferredReposition();
-      nextPageNumber = 0;
-      if (textBook) {
-        const auto item = epub->getTocItem(target);
-        currentSpineIndex = item.spineIndex;
-        pendingAnchor = item.anchor;
-      } else {
-        currentSpineIndex = target;
-      }
-      section.reset();
-    }
+  const int chapterIndex = currentChapterIndex();
+  const auto gotoChapter = [this](int target) {
+    // Shared with the tap zones (gotoChapterIndex): TXT/MD chapters are anchors
+    // inside one spine, so they cannot be reached by stepping the spine.
+    gotoChapterIndex(target);
     requestUpdate();
   };
   const auto toolOverlay = [](int tool) {
@@ -7463,17 +7504,23 @@ ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {
     snprintf(info.title, sizeof(info.title), "%s", epub->getTitle().c_str());
     info.spineIndex = currentSpineIndex;
   }
-  if (section) {
-    info.currentPage = section->currentPage + 1;
-    info.totalPages = section->estimatedTotalPages();
-    if (epub && epub->getBookSize() > 0 && info.totalPages > 0) {
-      const float chapterProgress = static_cast<float>(section->currentPage) / static_cast<float>(info.totalPages);
-      int pct = static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f + 0.5f);
-      if (pct < 0) pct = 0;
-      if (pct > 100) pct = 100;
-      info.progressPercent = pct;
+  // With the section released (reader left from the chapter list), the cached position stands in.
+  const ChapterPosition position = chapterPosition();
+  if (section || position.hasTotal()) {
+    info.currentPage = position.displayPage();
+    info.totalPages = position.totalPages;
+    if (epub && epub->getBookSize() > 0 && position.hasTotal()) {
+      info.progressPercent = bookPercentFor(position);
+      // 100 only on the last page of a fully laid-out chapter: rounding must not
+      // report a long book finished early. Without the section that is unknown.
+      const bool lastPage = section && currentSpineIndex == epub->getSpineItemsCount() - 1 && !section->isBuilding() &&
+                            !section->isPartial() && position.displayPage() >= position.totalPages;
+      const float chapterEnd = static_cast<float>(position.displayPage()) / static_cast<float>(position.totalPages);
+      const int endPct = static_cast<int>(epub->calculateProgress(currentSpineIndex, chapterEnd) * 100.0f);
+      info.endProgressPercent = lastPage ? 100 : std::clamp(endPct, 0, 99);
     }
   }
+  if (isAtEndOfBook()) info.endProgressPercent = 100;
   return info;
 }
 

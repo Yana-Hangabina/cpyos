@@ -54,11 +54,16 @@ class EpubReaderMenuActivity final : public UiListActivity {
   static void buildMenuItems(std::vector<MenuItem>& items, bool hasFootnotes, bool hasBookmarks, bool isJjwxc,
                              bool isPdf = false);
 
+  // `rememberedAction` is owned by the reader: the menu opens on that row and
+  // writes the row it closes on back, so reopening the menu in the same reading
+  // session lands where the reader left it.
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes, bool hasBookmarks,
-                                  bool isJjwxc, bool isPdf = false);
+                                  bool isJjwxc, MenuAction& rememberedAction, bool isPdf = false);
 
+  void onEnter() override;
+  void onExit() override;
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
 
@@ -88,6 +93,8 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   // Fixed menu layout
   std::vector<MenuItem> menuItems;
+  // Row the menu reopens on; see the constructor comment.
+  MenuAction& rememberedAction;
 
   OptionPopup optionPopup{true};
   std::string title = "Reader Menu";

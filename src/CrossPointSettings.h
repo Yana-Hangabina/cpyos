@@ -90,6 +90,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     DEEP_SLEEP_QUICK_RESUME = 3,
     DEEP_SLEEP_TRANSPARENT = 4,
     DEEP_SLEEP_BLANK = 5,
+    // The book cover with the transparent sleep overlay composited on top, so a
+    // contact banner ("if found, please return") sits on the cover the reader
+    // was reading. Overlay files and lookup order are the Current Screen ones.
+    DEEP_SLEEP_COVER_TRANSPARENT = 6,
     DEEP_SLEEP_STYLE_COUNT
   };
   enum SLEEP_STATE_BADGE { SLEEP_BADGE_OFF = 0, SLEEP_BADGE_ON = 1, SLEEP_STATE_BADGE_COUNT };
@@ -316,7 +320,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum INX_TAB_POSITION { INX_TAB_TOP = 0, INX_TAB_BOTTOM = 1, INX_TAB_POSITION_COUNT };
 
   // Image rendering in EPUB reader
-  enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
+  // Image rendering in EPUB reader. IMAGES_DISPLAY_BW lays images out like
+  // IMAGES_DISPLAY and keeps the same section cache, but draws them as a B/W
+  // dither in the base pass, so an image page turns like a text page instead of
+  // paying the extra grayscale refresh.
+  enum IMAGE_RENDERING {
+    IMAGES_DISPLAY = 0,
+    IMAGES_PLACEHOLDER = 1,
+    IMAGES_SUPPRESS = 2,
+    IMAGES_DISPLAY_BW = 3,
+    IMAGE_RENDERING_COUNT
+  };
 
   // How Select opens the reader menu: the classic full-screen list, or a toolbar
   // overlay (top/bottom bars with Contents / Text / More bottom-sheet panels)

@@ -19,7 +19,7 @@
 // page renders spans of the original string, so no per-line copies are held.
 //
 // Recursive lookup: when armed with enableLookup() (the word-select screen
-// passes the entry's DictLocation), Confirm or a long press selects a word in
+// passes the query word), Confirm or a long press selects a word in
 // the displayed definition and looks it up without leaving this activity.
 // Definitions are replaced one at a time — the current payload is released
 // before the next entry is read — and a fixed-size back stack keeps the
@@ -34,9 +34,10 @@ class DictionaryDefinitionActivity final : public Activity {
         htmlDefinition(htmlDefinition) {}
 
   // Arm recursive lookup. The dictionary must outlive this activity (it is the
-  // parent word-select screen's member) and location must address the entry
-  // this activity was constructed with.
-  bool enableLookup(Dictionary& dictionary, DictLocation location);
+  // parent word-select screen's member). The query is the word this activity was
+  // constructed from: an entry is addressed by word, not by location, because
+  // one word can map to several .idx entries.
+  bool enableLookup(Dictionary& dictionary, std::string&& query);
 
   void onEnter() override;
   void onExit() override;
@@ -81,11 +82,10 @@ class DictionaryDefinitionActivity final : public Activity {
   };
 
   // Navigation metadata kept while a definition's payload is released. The
-  // entry is re-read from the SD card on Back, which is why only the location
+  // entry is re-read from the SD card on Back, which is why only the query
   // (not the text) is stored.
   struct HistoryEntry {
-    std::string headword;
-    DictLocation location;
+    std::string query;
     int page = 0;
     bool styled = false;
   };
@@ -93,9 +93,9 @@ class DictionaryDefinitionActivity final : public Activity {
   static constexpr size_t MAX_HISTORY = 16;
 
   struct LookupState {
-    LookupState(Dictionary& dictionary, DictLocation location) : dictionary(dictionary), location(location) {}
+    explicit LookupState(Dictionary& dictionary) : dictionary(dictionary) {}
     Dictionary& dictionary;  // owned by the retained DictionaryWordSelectActivity parent
-    DictLocation location;   // exact entry currently displayed
+    std::string query;       // word currently displayed (replayed to re-read it)
     std::array<HistoryEntry, MAX_HISTORY> history;
     size_t depth = 0;
     std::string pendingWord;

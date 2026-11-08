@@ -7,10 +7,12 @@
 #include <array>
 
 #include "CrossPointSettings.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "components/UITheme.h"
 #include "components/themes/upstream/UpstreamStyleTheme.h"
+#include "util/PluginEvents.h"
 
 namespace fui = freeink::ui;
 
@@ -18,8 +20,9 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
                                                const bool hasFootnotes, const bool hasBookmarks, const bool isJjwxc,
-                                               const bool isPdf)
+                                               MenuAction& rememberedAction, const bool isPdf)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput, false, true),
+      rememberedAction(rememberedAction),
       title(title),
       pendingOrientation(currentOrientation),
       currentPage(currentPage),
@@ -27,6 +30,31 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       bookProgressPercent(bookProgressPercent) {
   buildMenuItems(menuItems, hasFootnotes, hasBookmarks, isJjwxc, isPdf);
   buildMenuRowItems();
+}
+
+void EpubReaderMenuActivity::onEnter() {
+  // The base resets the selection to the first row; reopen on the row this
+  // reading session last closed from instead.
+  UiListActivity::onEnter();
+  const int count = listCount();
+  for (int i = 0; i < count; ++i) {
+    if (menuItems[i].action == rememberedAction) {
+      nav.reset(i);
+      break;
+    }
+  }
+}
+
+void EpubReaderMenuActivity::onExit() {
+  // The row set can change between openings (footnotes/authentication/…), so a
+  // remembered row that no longer exists falls back to the first one.
+  const int selected = nav.selected;
+  if (selected >= 0 && selected < listCount()) {
+    rememberedAction = menuItems[selected].action;
+  } else {
+    rememberedAction = MenuAction::SELECT_CHAPTER;
+  }
+  UiListActivity::onExit();
 }
 
 // Populates menuRowItems's labels/actionValue from menuItems. Called once
@@ -86,7 +114,14 @@ void EpubReaderMenuActivity::buildMenuItems(std::vector<MenuItem>& items, bool h
   if (isJjwxc) {
     items.push_back({MenuAction::JJWXC_CLOUD_PROGRESS, StrId::STR_JJWXC_CLOUD_PROGRESS});
   } else {
-    items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
+    // Without a server the row would only connect and drain the plugin outbox;
+    // offer it exactly when that has something to deliver (a saved server, or a
+    // plugin subscribed to any event).
+    bool canSync = KOREADER_STORE.hasCredentials();
+    for (size_t event = 0; !canSync && event < static_cast<size_t>(pluginevents::Event::COUNT); ++event) {
+      canSync = pluginevents::anySubscriber(static_cast<pluginevents::Event>(event));
+    }
+    if (canSync) items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
   }
   // JJWXC maintenance lives in the toolbar Contents panel (a fixed strip above
   // the chapter list), but THIS activity is the classic list menu -- the
