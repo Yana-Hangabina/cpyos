@@ -7,6 +7,10 @@
 #include <string>
 #include <vector>
 
+// Marks a plain-text headword label line (the plain-text counterpart of <h2>).
+// A control byte, so text scanning skips it and the viewer can bold that line.
+inline constexpr char DICTIONARY_PLAIN_HEADWORD_MARKER = '\x01';
+
 // Result of an index search — file location of a definition without reading it.
 struct DictLocation {
   uint32_t offset = 0;  // byte offset in .dict data

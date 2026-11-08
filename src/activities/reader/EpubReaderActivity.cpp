@@ -6957,7 +6957,6 @@ void EpubReaderActivity::applyReaderTextSettings() {
     section.reset();  // force re-pagination with the new settings
   }
   SETTINGS.saveToFile();
-  RenderLock lock;
   // (Re)load or unload the selected SD-card font for the current family/size.
   // The reader otherwise only loads SD fonts on book open, so without this an
   // in-reader font change wouldn't take effect until re-opening the book.
@@ -6975,8 +6974,10 @@ void EpubReaderActivity::finishFontPreview() {
   const auto* family = sdFontSystem.registry().findFamily(SETTINGS.sdFontFamilyName);
   const auto* file = family ? family->findNearestSize(SETTINGS.fontPointSize) : nullptr;
   const bool supportsPreload = !family || !family->vector;
+  char fontPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  const bool havePath = file && family && family->filePath(*file, fontPath, sizeof(fontPath));
   const auto check =
-      file && supportsPreload ? SdCardFontCache::preflight(file->path.c_str()) : SdCardFontCache::Result::InvalidFont;
+      havePath && supportsPreload ? SdCardFontCache::preflight(fontPath) : SdCardFontCache::Result::InvalidFont;
   const auto decision = fontPreview.finish(SETTINGS.sdFontFamilyName, SETTINGS.fontPointSize,
                                            check == SdCardFontCache::Result::AlreadyCached, supportsPreload);
   switch (decision) {

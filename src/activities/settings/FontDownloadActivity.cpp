@@ -338,7 +338,6 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // Rescan installed families before any TLS or JSON buffers exist. The rescan
   // frees and reallocates every registry entry, which fragments the heap if it
   // runs while the manifest DOM and the catalog arena are live.
-  clearManifest();
   fontInstaller_.refreshRegistry();
 
   // Download manifest to a temp file on SD card to avoid holding both
@@ -423,9 +422,8 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   scriptGroupLabels_.clear();
   filteredIndices_.clear();
   // The registry was already rescanned at the top of this function, before the
-  // TLS and JSON buffers existed; rescaling it here split the heap right before
-  // the catalog arena and tables were allocated.
-  downloadUrl_.reserve(baseUrl_.size() + 128);
+  // TLS and JSON buffers existed; rescanning it here would split the heap right
+  // before the catalog arena and tables are allocated.
 
   JsonArray groupsArr = doc["scriptGroups"].as<JsonArray>();
   const size_t groupCount = std::min(groupsArr.size(), MAX_SCRIPT_GROUPS);

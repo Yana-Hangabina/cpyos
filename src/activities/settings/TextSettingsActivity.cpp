@@ -1082,6 +1082,9 @@ const SdCardFontFileInfo* TextSettingsActivity::fontFileForFamily(const int list
 }
 
 SdCardFontCache::Result TextSettingsActivity::preloadFont(const SdCardFontFileInfo& file, const char* familyName) {
+  const auto* family = registry_ ? registry_->findFamily(familyName) : nullptr;
+  char fontPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  if (!family || !family->filePath(file, fontPath, sizeof(fontPath))) return SdCardFontCache::Result::InvalidFont;
   NetworkStartup::logMemory("font preload begin");
   {
     RenderLock lock(*this);
@@ -1097,7 +1100,7 @@ SdCardFontCache::Result TextSettingsActivity::preloadFont(const SdCardFontFileIn
   requestUpdateAndWait();
 
   const auto result = SdCardFontCache::preload(
-      file.path.c_str(),
+      fontPath,
       [](size_t completed, size_t total, void* context) {
         auto* self = static_cast<TextSettingsActivity*>(context);
         bool refresh = false;
@@ -1180,7 +1183,9 @@ void TextSettingsActivity::finishFinalFont(const bool accepted) {
     return;
   }
   const auto* file = fontFileForFamily(currentFamilyIndex_, SETTINGS.fontPointSize);
-  const auto check = file ? SdCardFontCache::preflight(file->path.c_str()) : SdCardFontCache::Result::InvalidFont;
+  char fontPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  const bool havePath = file && family && family->filePath(*file, fontPath, sizeof(fontPath));
+  const auto check = havePath ? SdCardFontCache::preflight(fontPath) : SdCardFontCache::Result::InvalidFont;
   if (check != SdCardFontCache::Result::Ok && check != SdCardFontCache::Result::AlreadyCached) {
     showPreloadFailure(check);
     return;

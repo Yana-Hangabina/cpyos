@@ -55,7 +55,9 @@ void BootActivity::runPostOta() {
   const auto* family = sdFontSystem.registry().findFamily(SETTINGS.sdFontFamilyName);
   const auto* file = family ? family->findNearestSize(SETTINGS.fontPointSize) : nullptr;
   if (!file || family->vector) return;
-  auto result = SdCardFontCache::preflight(file->path.c_str());
+  char fontPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  if (!family->filePath(*file, fontPath, sizeof(fontPath))) return;
+  auto result = SdCardFontCache::preflight(fontPath);
   if (result == SdCardFontCache::Result::AlreadyCached) return;
 
   if (result == SdCardFontCache::Result::Ok) {
@@ -71,7 +73,7 @@ void BootActivity::runPostOta() {
     requestUpdateAndWait();
 
     result = SdCardFontCache::preload(
-        file->path.c_str(),
+        fontPath,
         [](size_t completed, size_t total, void* context) {
           auto* self = static_cast<BootActivity*>(context);
           bool refresh = false;
@@ -139,7 +141,7 @@ void BootActivity::runPostOta() {
     }
   }
 
-  LOG_INF("SDFCACHE", "Post-OTA preload for %s: %s", file->path.c_str(), SdCardFontCache::resultName(result));
+  LOG_INF("SDFCACHE", "Post-OTA preload for %s: %s", fontPath, SdCardFontCache::resultName(result));
   requestUpdateAndWait();
   if (result == SdCardFontCache::Result::TooLarge) delay(fontpreload::NOTICE_DURATION_MS);
 }

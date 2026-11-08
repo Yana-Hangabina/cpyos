@@ -30,7 +30,7 @@ freeink::SecureHttpClient* openClient(freeink::SecureHttpClient* session, freein
   http.setTimeout(30000);
   // A template filled with raw item text can contain a space or a non-ASCII
   // byte, which the request line cannot carry; existing escapes are kept.
-  if (!http.begin(escapeUrl(url))) return nullptr;
+  if (!http.begin(pluginhttp::escapeUrl(url))) return nullptr;
   for (const auto& h : headers) http.addHeader(h.first, h.second);
   return &http;
 }

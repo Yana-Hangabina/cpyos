@@ -4062,15 +4062,10 @@ int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::St
       // is rarely present in the page text, so it missed the cache, measured 0,
       // and fell back to a bogus 2×"M" column width that spread ideographs far
       // apart. See SdCardFont::getAdvanceOrLoad.
-      // A missing full-block/black-square measures by its synthetic rectangle, not
-      // by the generic replacement advance.
-      if (syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style)) {
-        EpdGlyph solidFallback;
-        const EpdGlyph* solid = font.getGlyphMetrics(cp, solidFallback, style);
-        prevAdvanceFP = solid ? static_cast<int32_t>(solid->advanceX) : 0;
-      } else {
-        prevAdvanceFP = static_cast<int32_t>(sdIt->second->getAdvanceOrLoad(cp, styleIdx));
-      }
+      // SD fonts draw solid blocks through their own glyph/advance path (there is
+      // no EpdFontFamily here to synthesize one), so measure the same advance the
+      // renderer will consume.
+      prevAdvanceFP = static_cast<int32_t>(sdIt->second->getAdvanceOrLoad(cp, styleIdx));
       // SUP/SUB glyphs render at 50% scale (renderCharScaled), so halve the advance
       // to keep measurement consistent with drawText and the builtin-font path below.
       if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;

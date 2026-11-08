@@ -1327,7 +1327,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
                                    : "Failed to replace the existing file";
           if (keepStaged) {
             clearBookCache(dest.c_str());
-            if (isLibraryBookFile(state.fileName)) library::markLibraryIndexDirty();
+            if (library::isLibraryBookFile(state.fileName.c_str())) library::markLibraryIndexDirty();
           }
         }
       }

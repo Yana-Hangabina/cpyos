@@ -12,6 +12,7 @@
 #include "DictZip.h"
 #include "DictionaryRegistry.h"
 #include "StringUtils.h"
+#include "TxtToHtml.h"
 
 namespace {
 
@@ -960,7 +961,7 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
     constexpr char kHtmlLabelClose[] = "</h2>";
     constexpr char kPlainSeparator[] = "\n\n";
     constexpr size_t kHtmlLabelFixed = sizeof(kHtmlLabelOpen) - 1 + sizeof(kHtmlLabelClose) - 1;
-    constexpr size_t kPlainLabelFixed = 1;  // the newline after the headword
+    constexpr size_t kPlainLabelFixed = 2;  // marker + the newline after the headword
 
     // Budget the combined text. An entry that does not fit is dropped and the
     // rest are still shown: a word with many definitions opens on what fits
@@ -1009,6 +1010,7 @@ bool Dictionary::lookup(const char* word, std::string& definitionOut, std::strin
         appendDictLabelEscaped(definitionOut, group.at(i).headword.get());
         definitionOut += kHtmlLabelClose;
       } else {
+        definitionOut.push_back(DICTIONARY_PLAIN_HEADWORD_MARKER);
         definitionOut += group.at(i).headword.get();
         definitionOut.push_back('\n');
       }

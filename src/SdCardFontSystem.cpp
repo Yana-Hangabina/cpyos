@@ -913,9 +913,14 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
     if (regular == nullptr) regular = &family->files.front();
     // Supplements are rare-glyph faces, not page text: a 512 KB resident cap and
     // a 256 KB stream prefix keep several script packs inside one PSRAM budget.
-    if (!openTtfSourceInto(set->sources, 0, regular->path, 512 * 1024, 2 * 1024 * 1024, 256 * 1024,
+    char regularPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+    if (!family->filePath(*regular, regularPath, sizeof(regularPath))) {
+      LOG_ERR("SDFS", "font supplement %s: path does not fit", name.c_str());
+      continue;
+    }
+    if (!openTtfSourceInto(set->sources, 0, regularPath, 512 * 1024, 2 * 1024 * 1024, 256 * 1024,
                            512 * 1024)) {
-      LOG_ERR("SDFS", "font supplement %s: cannot open %s", name.c_str(), regular->path.c_str());
+      LOG_ERR("SDFS", "font supplement %s: cannot open %s", name.c_str(), regularPath);
       continue;
     }
 
