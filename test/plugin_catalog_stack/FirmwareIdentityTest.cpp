@@ -82,4 +82,3 @@ TEST(FirmwareIdentity, ListRequirementsAreBoundedAndAllOf) {
   many.push_back("catalog.lists");
   EXPECT_FALSE(listRequirementsMet(many.data(), many.size()));
 }
-
