@@ -185,3 +185,22 @@
 - `ad08729e`（`wifiMaxTxPower`）、`9ba67ea5`（`SecureHttpClient::connect()`）、`6b5566c8`（X3 power API）
 - `60d3c8bb`（封面放大 + `BmpToBmpConverter` + gitlink）、`e54c0087`（Metalio 睡眠的 SDK 半）、`ce781eb8`、`f0dfe5fc`
 - 这些在 SDK fork + 重移植（`d9a1304c`）完成后作为 Tier 3 处理。
+
+## 进度（2026-11-08）
+
+- 8 条区域分支全部合入 `work/upstream-sync`：renderer / fonts / storage / misc / network / ui-a / ui-b / build。
+- 113 项中 **111 项落地**：`f47a218b`（KOSync profiles，约 500 行）未做；`60d3c8bb` 受 SDK 阻塞。
+- 集成期的语义合并（不是选边）：
+  - `book.bin`：32 项累计大小窗口 + linear 位（版本 12 不变）。
+  - `Dictionary`：ui-b 的多词条组模型 + storage 的 `inlineTypes` 扫描/解码 + headword 标记。
+  - relay：network 的流式转发（64 KB 上限），保留 `Host` 头与字体页 `vectorFonts`。
+  - i18n 按键并集；测试 CMake 并集；TXT 封面复制保留"检查读 + 字节数校验"。
+- 构建适配（`37b821ba`）：SD 字体测量去掉不存在的 `font` 分支；字体路径改用 `filePath()`；
+  词典 `TxtToHtml` 包含与标记；`library::` / `pluginhttp::` 限定；清理上游残留。
+- 构建：`readpico` SUCCESS；`readpico_nosource` SUCCESS；`default`(C3) 见下。
+- 宿主回归：settings icons 7/7、system font pack、font extras 6/6、font preload 2/2、
+  webbrowser（含变异）PASS、dictionary selection ALL PASS、section LUT PASS、
+  font-preview flow PASS、wifi font recovery PASS。
+  预存失败（基线同样失败，非本轮引入）：`test_ui_font_fallback.py`、`test_builtin_font_shrink.py`、
+  `test_settings_translations.py`（`STR_THEME_CPY`）。
+- 待办：C3 构建结果、真机 `refresh_soak` 与关键功能冒烟、最终上游合并（清零 behind）。
