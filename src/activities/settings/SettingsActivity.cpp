@@ -57,13 +57,13 @@
 #include "Typography.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
-#include "activities/plugins/PluginCatalogActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
+#include "util/PluginEvents.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/ReadingBackground.h"
@@ -1101,9 +1101,24 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::About:
         startActivityForResultWith<AboutActivity>(resultHandler);
         break;
-      case SettingAction::Plugins:
-        startActivityForResultWith<PluginCatalogActivity>(resultHandler);
-        break;
+      case SettingAction::Plugins: {
+        // The Plugins row is the global on/off switch for the SD plugin
+        // system; the catalog itself is opened from the home menu once
+        // enabled.
+        static constexpr StrId OPTIONS[] = {StrId::STR_ENABLED, StrId::STR_DISABLED, StrId::STR_CANCEL};
+        optionPopup.show(StrId::STR_PLUGINS, OPTIONS, static_cast<int>(std::size(OPTIONS)),
+                         SETTINGS.pluginsEnabled ? 0 : 1, [this](const int idx) {
+                           if (idx == 2) return;
+                           SETTINGS.pluginsEnabled = idx == 0 ? 1 : 0;
+                           SETTINGS.saveToFile();
+                           // Applies to event delivery now, not after a reboot.
+                           pluginevents::refreshSubscriptions();
+                           rebuildSettingsLists();
+                           requestUpdate();
+                         });
+        requestUpdate();
+        return;
+      }
       case SettingAction::KeyboardLayouts:
         if (auto activity = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {
           startActivityForResult(std::move(activity), nullptr);
@@ -1334,6 +1349,7 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return SETTINGS.readingBackgroundEnabled ? tr(STR_CUSTOM_IMAGE) : tr(STR_STATE_OFF);
   }
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
+  if (setting.action == SettingAction::Plugins) return SETTINGS.pluginsEnabled ? tr(STR_ENABLED) : tr(STR_DISABLED);
   if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     // Guard like the valueGetter branch below: a corrupt/migrated settings
     // byte must not index past the enum table.

@@ -118,19 +118,19 @@ bool HttpDownloader::hasMemoryForTls() {
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
-                              const std::string& password, const int timeoutMs) {
+                              const std::string& password, const std::vector<Header>& headers, const int timeoutMs) {
   return fetchUrl(
       url, [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; }, username,
-      password, timeoutMs);
+      password, headers, timeoutMs);
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
-                              const std::string& password, const int timeoutMs, const bool* cancelFlag,
-                              DownloadError* error) {
+                              const std::string& password, const std::vector<Header>& headers, const int timeoutMs,
+                              const bool* cancelFlag, DownloadError* error) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   freeink::FetchSink sink;
   sink.write = onData;
-  const DownloadError result = runGetSecure(url, username, password, {}, sink, cancelFlag, nullptr, false,
+  const DownloadError result = runGetSecure(url, username, password, headers, sink, cancelFlag, nullptr, false,
                                             timeoutMs > 0 ? timeoutMs : HTTP_TIMEOUT_MS);
   if (error != nullptr) *error = result;
   return result == OK;

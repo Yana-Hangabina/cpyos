@@ -19,6 +19,7 @@
 #include "SettingsList.h"
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
+#include "util/PluginLocations.h"
 
 // Resolved here (not in the header) so I18nKeys.h — auto-generated and
 // changed on every translation edit — doesn't pull a recompile of every
@@ -390,6 +391,14 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
 #endif
+
+  // Plugin System did not exist in older settings files. Preserve the behavior
+  // of users who already have SD plugins installed, while keeping the new
+  // default disabled on clean installs.
+  if (doc["pluginsEnabled"].isNull()) {
+    pluginsEnabled = PluginLocations::anyPluginInstalledOnDisk() ? 1 : 0;
+    needsResave = true;
+  }
 
   // Legacy migration: motion page turn used to be two entries (tiltPageTurn,
   // briefly joined by shakePageTurn). Map either onto the merged setting.

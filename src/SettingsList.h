@@ -236,7 +236,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
-    constexpr size_t entryCount = 93
+    constexpr size_t entryCount = 98
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -711,6 +711,48 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // on next WiFi connect, which is useful when crossing time zones.
         SettingInfo::Toggle(StrId::STR_CLOCK_SYNCED, &CrossPointSettings::clockHasBeenSynced, "clockHasBeenSynced",
                             StrId::STR_CUSTOMISE_STATUS_BAR),
+    });
+    v.insert(v.end(), {
+        // Master Plugin System switch. Category-less: the System -> Plugins row
+        // owns the popup, and the generic web API must not toggle it behind a
+        // running plugin session.
+        SettingInfo::Toggle(StrId::STR_PLUGINS, &CrossPointSettings::pluginsEnabled, "pluginsEnabled").withWebHidden(),
+    });
+    v.insert(v.end(), {
+        // KOReader sync custom headers. Category-less: edited on the device's
+        // KOReader Sync screen and, for the generic API, as plain rows.
+        SettingInfo::DynamicString(
+            StrId::STR_KOREADER_CUSTOM_HEADER_1_NAME, [] { return KOREADER_STORE.getCustomHeaders()[0].name; },
+            [](const std::string& v) {
+              KOREADER_STORE.setCustomHeader(0, v, KOREADER_STORE.getCustomHeaders()[0].value);
+              KOREADER_STORE.saveToFile();
+            },
+            "koHeader1Name", StrId::STR_KOREADER_SYNC),
+        SettingInfo::DynamicString(
+            StrId::STR_KOREADER_CUSTOM_HEADER_1_VALUE, [] { return KOREADER_STORE.getCustomHeaders()[0].value; },
+            [](const std::string& v) {
+              KOREADER_STORE.setCustomHeader(0, KOREADER_STORE.getCustomHeaders()[0].name, v);
+              KOREADER_STORE.saveToFile();
+            },
+            "koHeader1Value", StrId::STR_KOREADER_SYNC)
+            .withObfuscated(),
+    });
+    v.insert(v.end(), {
+        SettingInfo::DynamicString(
+            StrId::STR_KOREADER_CUSTOM_HEADER_2_NAME, [] { return KOREADER_STORE.getCustomHeaders()[1].name; },
+            [](const std::string& v) {
+              KOREADER_STORE.setCustomHeader(1, v, KOREADER_STORE.getCustomHeaders()[1].value);
+              KOREADER_STORE.saveToFile();
+            },
+            "koHeader2Name", StrId::STR_KOREADER_SYNC),
+        SettingInfo::DynamicString(
+            StrId::STR_KOREADER_CUSTOM_HEADER_2_VALUE, [] { return KOREADER_STORE.getCustomHeaders()[1].value; },
+            [](const std::string& v) {
+              KOREADER_STORE.setCustomHeader(1, KOREADER_STORE.getCustomHeaders()[1].name, v);
+              KOREADER_STORE.saveToFile();
+            },
+            "koHeader2Value", StrId::STR_KOREADER_SYNC)
+            .withObfuscated(),
     });
     // clang-format on
     // Erasing keeps the list at its initial allocation; inserting into a full

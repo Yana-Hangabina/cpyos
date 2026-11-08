@@ -159,6 +159,9 @@ class CrossPointWebServer {
   // Missing or malformed JSON sends a 400 response and returns false.
   bool readJsonBody(JsonDocument& out) const;
   void sendJson(const JsonDocument& doc) const;
+  // 403 when the global Plugin System switch is off; every plugin-facing route
+  // goes through this so disabling the system really disables the endpoints.
+  bool rejectIfPluginsDisabled() const;
   void handlePluginList() const;  // GET  /api/plugins   -> discovered plugins
   void handlePluginFile() const;  // GET  /plugin?name&file -> serve SD file
   void handleRelay();             // POST /api/relay     -> device makes an HTTP(S) call

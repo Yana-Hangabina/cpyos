@@ -328,7 +328,7 @@ bool fetchManifest(std::vector<Pack>& packs, bool& fromCache, std::string& error
             if (progress) progress(networkText.size(), 0);
             return true;
           },
-          "", "", candidate.timeoutMs, cancelFlag, &result);
+          "", "", {}, candidate.timeoutMs, cancelFlag, &result);
       const bool timedOut = millis() - attemptStarted >= static_cast<uint32_t>(candidate.timeoutMs) - 500;
       networkFailure = classifyHttp(result, timedOut);
       if (cancelFlag != nullptr && *cancelFlag) {

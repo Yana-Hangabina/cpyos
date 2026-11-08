@@ -48,6 +48,15 @@ constexpr uint32_t MIN_BLOCK_FOR_TLS = 20000;
 
 // Apply the shared KOSync auth headers after begin(). x-auth-* is the native
 // KOSync scheme; Basic auth is added for Calibre-Web-Automated compatibility.
+// Caller-configured headers (e.g. a Cloudflare Access service token) applied
+// on top of the KOSync auth scheme, including on createUser() which has no
+// KOSync credentials yet.
+void applyCustomHeaders(freeink::SecureHttpClient& http) {
+  for (const auto& header : KOREADER_STORE.getCustomHeaders()) {
+    if (!header.name.empty()) http.addHeader(header.name, header.value);
+  }
+}
+
 void applyAuthHeaders(freeink::SecureHttpClient& http) {
   http.addHeader("Accept", "application/vnd.koreader.v1+json");
   http.addHeader("x-auth-user", KOREADER_STORE.getUsername());
@@ -87,6 +96,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
     LOG_ERR("KOSync", "Bad URL: %s", url.c_str());
     return NETWORK_ERROR;
   }
+  applyCustomHeaders(http);
   applyAuthHeaders(http);
   const int httpCode = http.GET();
   http.end();
@@ -123,6 +133,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
     LOG_ERR("KOSync", "Bad URL: %s", url.c_str());
     return NETWORK_ERROR;
   }
+  applyCustomHeaders(http);
   http.addHeader("Accept", "application/vnd.koreader.v1+json");
   http.addHeader("Content-Type", "application/json");
   const int httpCode = http.sendRequest("POST", body);
@@ -156,6 +167,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     LOG_ERR("KOSync", "Bad URL: %s", url.c_str());
     return NETWORK_ERROR;
   }
+  applyCustomHeaders(http);
   applyAuthHeaders(http);
   const int httpCode = http.GET();
   lastHttpCode = httpCode;
@@ -278,6 +290,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
     LOG_ERR("KOSync", "Bad URL: %s", url.c_str());
     return NETWORK_ERROR;
   }
+  applyCustomHeaders(http);
   applyAuthHeaders(http);
   http.addHeader("Content-Type", "application/json");
   const int httpCode = http.sendRequest("PUT", body);

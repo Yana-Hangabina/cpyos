@@ -1,6 +1,7 @@
 #include "KOReaderSettingsActivity.h"
 
 #include <GfxRenderer.h>
+#include <HttpHeader.h>
 #include <I18n.h>
 
 #include <memory>
@@ -15,9 +16,12 @@
 namespace fui = freeink::ui;
 
 namespace {
+// New rows are appended so the existing indices (and what users have learned)
+// stay put.
 const StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
-    StrId::STR_USERNAME,      StrId::STR_PASSWORD,      StrId::STR_SYNC_SERVER_URL, StrId::STR_DOCUMENT_MATCHING,
-    StrId::STR_SEND_METADATA, StrId::STR_SYNC_BEHAVIOR, StrId::STR_SIGN_UP,         StrId::STR_AUTHENTICATE};
+    StrId::STR_USERNAME,        StrId::STR_PASSWORD,       StrId::STR_SYNC_SERVER_URL,   StrId::STR_DOCUMENT_MATCHING,
+    StrId::STR_SEND_METADATA,   StrId::STR_SYNC_BEHAVIOR,  StrId::STR_SIGN_UP,           StrId::STR_AUTHENTICATE,
+    StrId::STR_CUSTOM_HEADER_1, StrId::STR_CUSTOM_HEADER_2};
 }  // namespace
 
 KOReaderSettingsActivity::KOReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -108,6 +112,23 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
       return;
     }
     startActivityForResultWith<KOReaderAuthActivity>([](const ActivityResult&) {});
+  } else if (index == 8 || index == 9) {
+    // Custom Header 1 or 2 - a single "Name: Value" line, parsed on save.
+    const size_t slot = static_cast<size_t>(index == 8 ? 0 : 1);
+    const StrId label = index == 8 ? StrId::STR_CUSTOM_HEADER_1 : StrId::STR_CUSTOM_HEADER_2;
+    const std::string prefill = formatHttpHeaderLine(KOREADER_STORE.getCustomHeaders()[slot]);
+    startActivityForResultWith<KeyboardEntryActivity>(
+        [this, slot](const ActivityResult& result) {
+          if (!result.isCancelled) {
+            const auto& kb = std::get<KeyboardResult>(result.data);
+            HttpHeader header;
+            parseHttpHeaderLine(kb.text, header);
+            KOREADER_STORE.setCustomHeader(slot, header.name, header.value);
+            KOREADER_STORE.saveToFile();
+            requestUpdate();
+          }
+        },
+        I18N.get(label), prefill, 160, InputType::Text);
   }
 }
 
@@ -147,6 +168,10 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
     } else if (i == 5) {
       rowValues_[i] =
           KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART ? tr(STR_SMART_SYNC) : tr(STR_ASK_EVERY_TIME);
+    } else if (i == 8 || i == 9) {
+      const size_t slot = static_cast<size_t>(i == 8 ? 0 : 1);
+      rowValues_[i] = formatHttpHeaderLine(KOREADER_STORE.getCustomHeaders()[slot], true);
+      if (rowValues_[i].empty()) rowValues_[i] = tr(STR_NOT_SET);
     } else {
       rowValues_[i] = KOREADER_STORE.hasCredentials() ? "" : std::string("[") + tr(STR_SET_CREDENTIALS_FIRST) + "]";
     }

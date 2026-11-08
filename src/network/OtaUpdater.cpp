@@ -365,7 +365,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedCh
     ok = HttpDownloader::fetchUrl(candidate.url, [&releaseParser](const uint8_t* data, size_t len) {
       releaseParser->feed(reinterpret_cast<const char*>(data), len);
       return true;
-    }, "", "", candidate.timeoutMs);
+    }, "", "", {}, candidate.timeoutMs);
     if (ok && releaseParser->foundTag() && releaseParser->foundFirmware()) {
       manifestUrl = candidate.url;
       LOG_INF("OTA", "Release manifest via %s in %u ms", candidate.label,
@@ -551,7 +551,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::loadPackManifest() {
       std::memcpy(body.get() + bodyLen, data, len);
       bodyLen += len;
       return true;
-    }, "", "", candidate.timeoutMs);
+    }, "", "", {}, candidate.timeoutMs);
     if (fetchOk) {
       LOG_INF("OTA", "pack manifest via %s in %u ms", candidate.url.c_str(),
               static_cast<unsigned>(millis() - started));

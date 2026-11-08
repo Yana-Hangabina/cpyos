@@ -66,12 +66,25 @@ struct Entry {
   bool hasManifest = false;  // web UI card metadata (manifest.json)
 };
 
-// Scans every root. The earliest root containing a folder name claims it —
+// Raw on-disk scan. Ignores the global Plugin System switch so the settings
+// migration can still detect a pre-existing plugin setup.
+std::vector<Entry> scanPluginsOnDisk();
+
+// True when any root holds a plugin folder with a marker file. Ignores the
+// global switch (used by the settings migration only).
+bool anyPluginInstalledOnDisk();
+
+// Scans every root while the global Plugin System is enabled; returns an empty
+// list when it is off. The earliest root containing a folder name claims it —
 // matching findPluginDir, which serves that folder's files — and folders with
 // none of the marker files are omitted. This is the single definition of
 // "what is a plugin"; callers filter by the markers they need.
 std::vector<Entry> scanPlugins();
 
-// Directory of the named plugin ("<root>/<name>"), or "" when absent.
+// Directory of the named plugin ("<root>/<name>"), raw on-disk lookup.
+std::string findPluginDirOnDisk(const char* name);
+
+// Directory of the named plugin ("<root>/<name>"), or "" when absent or the
+// global Plugin System is disabled.
 std::string findPluginDir(const char* name);
 }  // namespace PluginLocations

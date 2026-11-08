@@ -616,6 +616,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t sdFontFlashPreload = 0;
   // Dictionary folder name under /dictionaries (empty = no dictionary)
   char dictionaryName[32] = "";
+  // Master switch for SD-card plugin discovery/execution. Clean installs keep
+  // it disabled; the settings migration enables it once for users who already
+  // have plugin folders on the card so a firmware update never silently
+  // disables an existing setup.
+  uint8_t pluginsEnabled = 0;
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)
   uint8_t showHiddenFiles = 0;
   // Physical-button audio feedback level. Surfaced only by capable builds.
