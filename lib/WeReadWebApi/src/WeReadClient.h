@@ -360,6 +360,9 @@ class Operation {
   Event finishWholeBook(const std::string& source);
   bool persistCoverOverride();
   Event cancelNow();
+  // Polled by the transport during a request, so cancel() no longer waits for
+  // the whole reply to arrive.
+  static bool checkCancellation(void* context);
   Error prepareImageWork(WeReadStore::WorkCallback callback, void* callbackContext);
   Event downloadNextImage();
   Error requestImage(WeReadStore::ImageRecord& image, WeReadStore::ImageWorkState& state, uint8_t& attempts,

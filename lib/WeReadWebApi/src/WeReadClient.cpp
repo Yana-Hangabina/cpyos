@@ -302,10 +302,19 @@ bool absorbSetCookie(WeReadStore::Session* session, const char* headerName, cons
   return true;
 }
 
+// An authenticated endpoint rejects both 401 and 403 before the body is read.
+bool acceptAuthenticatedStatus(const int status) { return status != 401 && status != 403; }
+
+// A chapter/reader 403 can mean a purchase restriction rather than an expired
+// session, so only a 401 ends the session there.
+bool acceptChapterStatus(const int status) { return status != 401; }
+
 Error requestOnce(const char* method, const char* path, const uint8_t* body, const size_t bodySize,
                   WeReadStore::Session* session, const char* referer, ResponseSink& sink, int& status, char* cookie,
                   const size_t cookieSize, char* url, const size_t urlSize, uint8_t* readBuffer,
-                  const size_t readBufferSize, WeReadHttpClient::Session* reusableSession = nullptr) {
+                  const size_t readBufferSize, WeReadHttpClient::Session* reusableSession = nullptr,
+                  bool (*shouldAbort)(void*) = nullptr, void* abortContext = nullptr,
+                  bool (*acceptStatus)(int) = acceptAuthenticatedStatus) {
   if (!method || !path || !cookie || cookieSize == 0 || !url || urlSize == 0 || !readBuffer || readBufferSize == 0) {
     return Error::Protocol;
   }
@@ -328,6 +337,9 @@ Error requestOnce(const char* method, const char* path, const uint8_t* body, con
   options.timeoutMs = kRequestTimeoutMs;
   options.readBuffer = readBuffer;
   options.readBufferSize = readBufferSize;
+  options.acceptStatus = acceptStatus;
+  options.shouldAbort = shouldAbort;
+  options.abortContext = abortContext;
 
   if (!sink.reset(sink.ctx)) return Error::SdCard;
   const int urlLength = snprintf(url, urlSize, "%s%s", kHost, path);
@@ -340,6 +352,9 @@ Error requestOnce(const char* method, const char* path, const uint8_t* body, con
   const auto result = reusableSession
                           ? WeReadHttpClient::request(*reusableSession, url, options, onData, onHeader, status)
                           : WeReadHttpClient::request(url, options, onData, onHeader, status);
+  if (result == WeReadHttpClient::Result::Cancelled) return Error::Cancelled;
+  // Refused by its status before the body: the session is gone, not the request.
+  if (status >= 0 && !acceptStatus(status)) return Error::SessionExpired;
   if (result == WeReadHttpClient::Result::Ok) {
     if (!sink.finish(sink.ctx)) return sink.writeError;
     return cookiesOk ? Error::Ok : Error::Protocol;
@@ -2117,6 +2132,10 @@ void Operation::cancel() {
   if (active()) cancelRequested_ = true;
 }
 
+bool Operation::checkCancellation(void* context) {
+  return context && static_cast<Operation*>(context)->cancelRequested_;
+}
+
 Operation::Event Operation::cancelNow() {
   bookSession_.reset();
   abortBrowseCache();
@@ -2823,7 +2842,7 @@ Error Operation::fetchTocOnce() {
   if (bodySize <= 0 || static_cast<size_t>(bodySize) >= sizeof(ioBuffer_)) return Error::Protocol;
   const Error error = requestOnce("POST", "/web/book/chapterInfos", ioBuffer_, static_cast<size_t>(bodySize), &session_,
                                   kDefaultReferer, sink, responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_),
-                                  ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+                                  ioBuffer_, sizeof(ioBuffer_), &bookSession_, checkCancellation, this);
   if (error != Error::Ok) {
     context.writer.abort();
     return error;
@@ -2858,13 +2877,11 @@ Error Operation::fetchProgressOnce(const bool bypassCache) {
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(suffix)) return Error::Protocol;
     referer_ += suffix;
   }
-  const Error error =
-      requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink, responseStatus_, cookie_,
-                  sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  const Error error = requestOnce("GET", referer_.c_str(), nullptr, 0, &session_, kDefaultReferer, sink,
+                                  responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_,
+                                  sizeof(ioBuffer_), &bookSession_, checkCancellation, this);
   if (error != Error::Ok) return error;
-  if (responseStatus_ == 401 || responseStatus_ == 403 || parser->errorCode() == -2012) {
-    return Error::SessionExpired;
-  }
+  if (parser->errorCode() == -2012) return Error::SessionExpired;
   if (responseStatus_ != 200 || parser->errorCode() != 0 || !parser->complete()) {
     return Error::Protocol;
   }
@@ -2968,11 +2985,10 @@ Error Operation::fetchProgressReaderOnce() {
   // Image downloads and login are inactive here; reuse their fixed scratch buffers.
   ReaderContextSink context(psvts_, sizeof(psvts_), imageHost_, sizeof(imageHost_), previousVid_, sizeof(previousVid_));
   ResponseSink sink{&context, resetReaderContext, extractReaderContext, noOpFinish, Error::Protocol};
-  const Error error =
-      requestOnce("GET", referer_.c_str() + hostLength, nullptr, 0, &session_, referer_.c_str(), sink, responseStatus_,
-                  cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  const Error error = requestOnce("GET", referer_.c_str() + hostLength, nullptr, 0, &session_, referer_.c_str(), sink,
+                                  responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_,
+                                  sizeof(ioBuffer_), &bookSession_, checkCancellation, this, acceptChapterStatus);
   if (error != Error::Ok) return error;
-  if (responseStatus_ == 401 || responseStatus_ == 403) return Error::SessionExpired;
   if (responseStatus_ != 200 || !context.psvts.complete() || !isSafeProtocolToken(psvts_)) return Error::Protocol;
   if (imageHost_[0] && !isSafeProtocolToken(imageHost_)) imageHost_[0] = '\0';
   if (previousVid_[0] && !isSafeProtocolToken(previousVid_)) previousVid_[0] = '\0';
@@ -2995,13 +3011,11 @@ Error Operation::sendProgressOnce(const bool report) {
   }
   context.parser = parser.get();
   ResponseSink sink{&context, resetSimple, feedSimple, noOpFinish, Error::Protocol};
-  const Error error =
-      requestOnce("POST", "/web/book/read", ioBuffer_, bodySize, &session_, referer_.c_str(), sink, responseStatus_,
-                  cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  const Error error = requestOnce("POST", "/web/book/read", ioBuffer_, bodySize, &session_, referer_.c_str(), sink,
+                                  responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_,
+                                  sizeof(ioBuffer_), &bookSession_, checkCancellation, this, acceptChapterStatus);
   if (error != Error::Ok) return error;
-  if (responseStatus_ == 401 || responseStatus_ == 403 || context.errorCode == -2012) {
-    return Error::SessionExpired;
-  }
+  if (context.errorCode == -2012) return Error::SessionExpired;
   const bool emptyBody = context.bytesReceived == 0;
   if (responseStatus_ != 200 || context.errorCode != 0 || parser->hasError() ||
       (!emptyBody && (!context.rootClosed || (!context.succeed && !context.hasSyncKey)))) {
@@ -3016,9 +3030,9 @@ Error Operation::fetchReaderOnce() {
   WeReadProtocol::PsvtsExtractor context(psvts_, sizeof(psvts_));
   ResponseSink sink{&context, resetPsvts, extractPsvts, noOpFinish, Error::Protocol};
   const unsigned long startedAt = millis();
-  const Error error =
-      requestOnce("GET", referer_.c_str() + hostLength, nullptr, 0, &session_, referer_.c_str(), sink, responseStatus_,
-                  cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  const Error error = requestOnce("GET", referer_.c_str() + hostLength, nullptr, 0, &session_, referer_.c_str(), sink,
+                                  responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_,
+                                  sizeof(ioBuffer_), &bookSession_, checkCancellation, this, acceptChapterStatus);
   chapterTransferMs_ += millis() - startedAt;
   if (error != Error::Ok) return error;
   if (responseStatus_ == 401) return Error::SessionExpired;
@@ -3037,9 +3051,9 @@ Error Operation::fetchShardOnce(const char* endpoint, const std::string& destina
   context.path = &destination;
   ResponseSink sink{&context, resetFile, writeFile, finishFile, Error::SdCard};
   const unsigned long startedAt = millis();
-  const Error error =
-      requestOnce("POST", endpoint, ioBuffer_, bodySize, &session_, referer_.c_str(), sink, responseStatus_, cookie_,
-                  sizeof(cookie_), url_, sizeof(url_), ioBuffer_, sizeof(ioBuffer_), &bookSession_);
+  const Error error = requestOnce("POST", endpoint, ioBuffer_, bodySize, &session_, referer_.c_str(), sink,
+                                  responseStatus_, cookie_, sizeof(cookie_), url_, sizeof(url_), ioBuffer_,
+                                  sizeof(ioBuffer_), &bookSession_, checkCancellation, this, acceptChapterStatus);
   chapterTransferMs_ += millis() - startedAt;
   shardBytes_ += context.size;
   return error;
@@ -3251,6 +3265,9 @@ Error Operation::requestImage(WeReadStore::ImageRecord& image, WeReadStore::Imag
   options.timeoutMs = kRequestTimeoutMs;
   options.readBuffer = ioBuffer_;
   options.readBufferSize = sizeof(ioBuffer_);
+  // An image can be hundreds of KB: cancel() must not wait for it to finish.
+  options.shouldAbort = checkCancellation;
+  options.abortContext = this;
 
   bool hasLocation = false;
   bool locationValid = true;
@@ -3313,6 +3330,11 @@ Error Operation::requestImage(WeReadStore::ImageRecord& image, WeReadStore::Imag
       ++progressCompleted_;
     }
   };
+
+  if (result == WeReadHttpClient::Result::Cancelled) {
+    if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+    return Error::Cancelled;
+  }
 
   if (result != WeReadHttpClient::Result::Ok || file.failure == FileSink::Failure::TooLarge) {
     recoverableFailure(true);
