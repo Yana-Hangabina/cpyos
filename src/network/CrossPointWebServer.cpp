@@ -33,6 +33,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <new>
 #ifndef SIMULATOR
@@ -1961,12 +1962,32 @@ void CrossPointWebServer::handleGetOpdsServers() const {
     doc["username"] = servers[i].username;
     // Never expose passwords over the API — only indicate whether one is set
     doc["hasPassword"] = !servers[i].password.empty();
+    JsonArray headersArr = doc["headers"].to<JsonArray>();
+    for (const auto& header : servers[i].customHeaders) {
+      JsonObject h = headersArr.add<JsonObject>();
+      h["name"] = header.name;
+      h["hasValue"] = !header.value.empty();
+    }
 
-    const size_t written = serializeJson(doc, output, outputSize);
-    if (written >= outputSize) continue;
+    const char* json = output;
+    // A server with two long custom-header names no longer fits the stack
+    // buffer; only such an entry pays for a heap copy (same pattern as the
+    // settings API). Skipping it would silently drop the server from the list.
+    std::unique_ptr<char[]> large;
+    size_t len = serializeJson(doc, output, outputSize);
+    if (len >= outputSize) {
+      len = measureJson(doc);
+      large.reset(new (std::nothrow) char[len + 1]);
+      if (!large) {
+        LOG_ERR("WEB", "OOM: OPDS server JSON (%zu bytes)", len);
+        continue;
+      }
+      serializeJson(doc, large.get(), len + 1);
+      json = large.get();
+    }
 
     if (i > 0) reply.write(",");
-    reply.write(output);
+    reply.write(reinterpret_cast<const uint8_t*>(json), len);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
@@ -2000,22 +2021,63 @@ void CrossPointWebServer::handlePostOpdsServer() {
   bool hasPasswordField = doc["password"].is<const char*>() || doc["password"].is<std::string>();
   std::string password = doc["password"] | std::string("");
 
+  // Custom headers: the "headers" array is optional and, when present, is
+  // expected to have one entry per slot. A slot's "value" is optional the same
+  // way "password" is: absent means preserve the existing value on update.
+  const bool hasHeadersField = doc["headers"].is<JsonArrayConst>();
+  std::array<std::string, OpdsServer::MAX_CUSTOM_HEADERS> headerNames;
+  std::array<bool, OpdsServer::MAX_CUSTOM_HEADERS> headerValueProvided{};
+  std::array<std::string, OpdsServer::MAX_CUSTOM_HEADERS> headerValues;
+  if (hasHeadersField) {
+    size_t i = 0;
+    for (JsonObjectConst h : doc["headers"].as<JsonArrayConst>()) {
+      if (i >= OpdsServer::MAX_CUSTOM_HEADERS) break;
+      headerNames[i] = h["name"] | std::string("");
+      headerValueProvided[i] = h["value"].is<const char*>() || h["value"].is<std::string>();
+      headerValues[i] = h["value"] | std::string("");
+      i++;
+    }
+  }
+
   if (doc["index"].is<int>()) {
     int idx = doc["index"].as<int>();
     if (idx < 0 || idx >= static_cast<int>(OPDS_STORE.getCount())) {
       server->send(400, "text/plain", "Invalid server index");
       return;
     }
+    const auto* existing = OPDS_STORE.getServer(static_cast<size_t>(idx));
     // Preserve existing password if not explicitly provided
-    if (!hasPasswordField) {
-      const auto* existing = OPDS_STORE.getServer(static_cast<size_t>(idx));
-      if (existing) password = existing->password;
-    }
+    if (!hasPasswordField && existing) password = existing->password;
     opdsServer.password = password;
+
+    for (size_t i = 0; i < OpdsServer::MAX_CUSTOM_HEADERS; i++) {
+      if (hasHeadersField) {
+        opdsServer.customHeaders[i].name = headerNames[i];
+        if (headerNames[i].empty()) {
+          // An empty name clears the slot outright: never leave a stale value
+          // paired with no name, even if the payload omitted "value".
+          opdsServer.customHeaders[i].value.clear();
+        } else {
+          opdsServer.customHeaders[i].value =
+              headerValueProvided[i] ? headerValues[i] : (existing ? existing->customHeaders[i].value : std::string());
+        }
+      } else if (existing) {
+        opdsServer.customHeaders[i] = existing->customHeaders[i];
+      }
+    }
+
     OPDS_STORE.updateServer(static_cast<size_t>(idx), opdsServer);
     LOG_DBG("WEB", "Updated OPDS server at index %d", idx);
   } else {
     opdsServer.password = password;
+
+    if (hasHeadersField) {
+      for (size_t i = 0; i < OpdsServer::MAX_CUSTOM_HEADERS; i++) {
+        opdsServer.customHeaders[i].name = headerNames[i];
+        opdsServer.customHeaders[i].value = headerValues[i];
+      }
+    }
+
     if (!OPDS_STORE.addServer(opdsServer)) {
       server->send(400, "text/plain", "Cannot add server (limit reached)");
       return;

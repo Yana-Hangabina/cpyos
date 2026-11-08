@@ -62,11 +62,15 @@ class HttpDownloader {
   };
   static ProbeResult probeUrl(const std::string& url, size_t maxBytes = 32768, int timeoutMs = 8000);
 
+  using Header = std::pair<std::string, std::string>;
+
   /**
-   * Fetch text content from a URL with optional credentials.
+   * Fetch text content from a URL with optional credentials. `headers` are
+   * added to the request, as for downloadToFile().
    */
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
-                       const std::string& password = "", int timeoutMs = 0);
+                       const std::string& password = "", const std::vector<Header>& headers = {},
+                       int timeoutMs = 0);
 
   /**
    * Stream the response body to onData as it arrives, without buffering it.
@@ -75,10 +79,8 @@ class HttpDownloader {
    * timeout expires.
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
-                       const std::string& password = "", int timeoutMs = 0, const bool* cancelFlag = nullptr,
-                       DownloadError* error = nullptr);
-
-  using Header = std::pair<std::string, std::string>;
+                       const std::string& password = "", const std::vector<Header>& headers = {},
+                       int timeoutMs = 0, const bool* cancelFlag = nullptr, DownloadError* error = nullptr);
 
   /**
    * Download a file to the SD card with optional credentials. `headers` are
