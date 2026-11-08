@@ -10,7 +10,8 @@
 #include <cstdio>
 #include <cstring>
 
-#include "../../lib/Epub/Epub/CjkBreaks.h"
+#include <Epub/CjkBreaks.h>
+
 #include "DictZip.h"
 #include "DictionaryRegistry.h"
 #include "StringUtils.h"
