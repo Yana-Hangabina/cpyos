@@ -25,6 +25,9 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "TextWhitespace.h"
+
+using textws::isWhitespace;
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
@@ -49,41 +52,15 @@ constexpr uint8_t TABLE_ROW_SEPARATOR_THICKNESS = 1;
 constexpr int16_t TABLE_MIN_CELL_WIDTH_LINE_HEIGHTS = 3;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
-constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "ul", "ol"};
+constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "ul", "ol", "pre"};
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
 constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr const char* LINETHROUGH_TAGS[] = {"del", "s", "strike"};
 constexpr const char* IMAGE_TAGS[] = {"img", "image"};
-bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
 
-std::string trimAndNormalize(const std::string& str) {
-  if (str.empty()) return "";
-  size_t start = 0;
-  while (start < str.size() && isWhitespace(str[start])) {
-    start++;
-  }
-  if (start == str.size()) return "";
-  size_t end = str.size() - 1;
-  while (end > start && isWhitespace(str[end])) {
-    end--;
-  }
-  std::string result;
-  result.reserve(end - start + 1);
-  bool inSpace = false;
-  for (size_t i = start; i <= end; i++) {
-    if (isWhitespace(str[i])) {
-      if (!inSpace) {
-        result.push_back(' ');
-        inSpace = true;
-      }
-    } else {
-      result.push_back(str[i]);
-      inSpace = false;
-    }
-  }
-  return result;
-}
+// Kept for call sites that only have a collapsed form to work with (ruby annotations).
+std::string trimAndNormalize(const std::string& str) { return textws::normalizeWhitespace(str, false); }
 
 bool matches(const char* tag_name, const char* const* possible_tags, size_t count) {
   for (size_t i = 0; i < count; i++) {
@@ -392,6 +369,35 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+}
+
+// Emit a preserved-whitespace run as one word token that attaches on both sides. Because the
+// token carries literal space glyphs and `attachToPrevious` suppresses the inter-word gap, the
+// run measures exactly as many spaces as the source wrote (no Page/TextBlock change needed).
+void ChapterHtmlSlimParser::flushPreservedRun() {
+  if (partWordBufferIndex == 0) return;
+  nextWordContinues = true;
+  flushPartWordBuffer();
+  if (hasFailed()) return;
+  // Keep the following text attached to the run, so `   word` stays one unbroken visual unit.
+  nextWordContinues = true;
+}
+
+// A newline inside preserved whitespace ends the line. `white-space: pre` does not wrap, so the
+// following text starts a fresh block with the container's vertical margins stripped, exactly
+// like <br>.
+void ChapterHtmlSlimParser::breakPreservedLine() {
+  if (hasFailed()) return;
+  // Flush the pending run with its natural attach flag: text before the newline must keep
+  // whatever spacing it already had.
+  if (partWordBufferIndex > 0) {
+    flushPartWordBuffer();
+    if (hasFailed()) return;
+  }
+  BlockStyle style = blockStyleStack.empty() ? BlockStyle() : blockStyleStack.back().withoutTop().withoutBottom();
+  style.fromBrElement = true;
+  nextWordContinues = false;
+  startNewTextBlock(style);
 }
 
 // start a new text block if needed
@@ -771,6 +777,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   std::string classAttr;
   std::string styleAttr;
   std::string dirAttr;
+  std::string idAttr;
   bool hasHiddenAttr = false;
   if (atts != nullptr) {
     for (int i = 0; atts[i]; i += 2) {
@@ -779,6 +786,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       } else if (self->cssParser && strcmp(atts[i], "style") == 0) {
         styleAttr = atts[i + 1];
       } else if (strcmp(atts[i], "id") == 0) {
+        idAttr = atts[i + 1];
         // Defer both anchor recording and TOC page breaks until startNewTextBlock,
         // after the previous block is flushed to pages via makePages().
         //
@@ -818,10 +826,56 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    // Ancestors are the open elements above this one: entry [depth] belongs to this element,
+    // so [0, depth) is exactly the ancestor chain (outermost first). Deeper than the fixed
+    // stack the lookup runs without context, which keeps descendant rules conservative instead
+    // of matching against a truncated (wrong) prefix.
+    const auto elementDepth = static_cast<size_t>(self->depth);
+    const size_t ancestorCount = elementDepth < MAX_CSS_ANCESTORS ? elementDepth : 0;
+    cssStyle = self->cssParser->resolveStyle(name, classAttr, idAttr, self->cssAncestors.data(), ancestorCount);
+    if (elementDepth < MAX_CSS_ANCESTORS) {
+      self->cssAncestors[elementDepth] = CssParser::makeAncestor(name, classAttr, idAttr);
+    }
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
+    }
+  }
+
+  // ::first-letter is stored by the parser and resolved here only when the stylesheet has such
+  // rules; applying it needs the drop-cap layout of a later milestone. Resetting per block keeps
+  // the value tied to the block that owns it.
+  if (isHeaderOrBlock(name)) {
+    const auto elementDepth = static_cast<size_t>(self->depth);
+    const size_t ancestorCount = elementDepth < MAX_CSS_ANCESTORS ? elementDepth : 0;
+    if (self->cssParser && self->cssParser->hasFirstLetterRules()) {
+      self->firstLetterStyle =
+          self->cssParser->resolveStyle(name, classAttr, idAttr, self->cssAncestors.data(), ancestorCount, true);
+    } else {
+      self->firstLetterStyle = CssStyle{};
+    }
+  }
+
+  // white-space: the HTML <pre> element implies preservation unless CSS overrides it, and the
+  // value inherits. Only effective changes are pushed so the bounded stack tracks boundaries.
+  {
+    const bool inherited = self->effectivePreserveWhitespace;
+    bool preserve = inherited;
+    if (cssStyle.hasPreserveWhitespace()) {
+      preserve = cssStyle.preserveWhitespace;
+    } else if (strcmp(name, "pre") == 0) {
+      preserve = true;
+      cssStyle.preserveWhitespace = true;
+      cssStyle.defined.preserveWhitespace = 1;
+    }
+    if (preserve != inherited) {
+      if (self->whitespaceStackSize < MAX_WHITESPACE_FRAMES) {
+        self->whitespaceStack[self->whitespaceStackSize++] = {self->depth, preserve};
+        self->effectivePreserveWhitespace = preserve;
+      } else {
+        // Pathologically deep nesting: keep the parent's value rather than leaking this one.
+        LOG_DBG("EHP", "white-space stack full at depth %d; ignoring change", self->depth);
+      }
     }
   }
 
@@ -1448,8 +1502,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   }
 
   const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
-  const auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(
+  auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(
       cssStyle, emSize, static_cast<CssTextAlign>(self->paragraphAlignment), self->viewportWidth);
+  if (cssStyle.hasPreserveWhitespace() && cssStyle.preserveWhitespace) {
+    // A preserved block carries its own indentation; a first-line indent would shift it.
+    userAlignmentBlockStyle.textIndentDefined = true;
+    userAlignmentBlockStyle.textIndent = 0;
+  }
 
   if (strcmp(name, "hr") == 0) {
     auto hrBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, CssTextAlign::Left, self->viewportWidth);
@@ -1779,6 +1838,27 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     }
 
     if (isWhitespace(s[i])) {
+      if (self->effectivePreserveWhitespace) {
+        // white-space: pre keeps the run verbatim; '\n' ends the line and spaces keep their
+        // exact width (the run becomes one attached word token, see flushPreservedRun()).
+        if (s[i] == '\r') continue;
+        if (s[i] == '\n') {
+          self->breakPreservedLine();
+          if (self->hasFailed()) return;
+          continue;
+        }
+        // No tab-stop model: XML/HTML conventionally expand a tab to four spaces.
+        const int spaces = s[i] == '\t' ? 4 : 1;
+        if (self->partWordBufferIndex + spaces >= MAX_WORD_SIZE) {
+          self->flushPreservedRun();
+          if (self->hasFailed()) return;
+        }
+        if (self->partWordBufferIndex == 0) self->partWordVisibleOffset = codepointOffset;
+        for (int space = 0; space < spaces; ++space) {
+          self->partWordBuffer[self->partWordBufferIndex++] = ' ';
+        }
+        continue;
+      }
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1955,6 +2035,18 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
   if (!self->checkMemory()) return;
+
+  // Leave the white-space state this element pushed (startElement). Done before every early
+  // return so a skipped subtree cannot leave the parser stuck in preserved mode. `depth` is
+  // still the child-depth here (startElement already incremented it), so this element's own
+  // index is depth - 1.
+  if (self->whitespaceStackSize > 0 &&
+      self->whitespaceStack[self->whitespaceStackSize - 1].depth == self->depth - 1) {
+    --self->whitespaceStackSize;
+    self->effectivePreserveWhitespace =
+        self->whitespaceStackSize > 0 ? self->whitespaceStack[self->whitespaceStackSize - 1].preserve : false;
+  }
+
   if (strcmp(name, "p") == 0) self->activeParagraphIndex = 0xFFFF;
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
@@ -2223,6 +2315,11 @@ bool ChapterHtmlSlimParser::beginParse() {
   ioFailed_ = false;
   if (!checkMemory()) return false;
   htmlEnded_ = false;
+  // Per-parse CSS context: no ancestors are open yet and no element has changed white-space.
+  cssAncestors = {};
+  whitespaceStackSize = 0;
+  effectivePreserveWhitespace = false;
+  firstLetterStyle = CssStyle{};
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
   // text-align inherit it correctly through getCombinedBlockStyle.
