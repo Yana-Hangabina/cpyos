@@ -16,8 +16,9 @@ namespace fui = freeink::ui;
 
 namespace {
 const StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
-    StrId::STR_USERNAME,      StrId::STR_PASSWORD,      StrId::STR_SYNC_SERVER_URL, StrId::STR_DOCUMENT_MATCHING,
-    StrId::STR_SEND_METADATA, StrId::STR_SYNC_BEHAVIOR, StrId::STR_SIGN_UP,         StrId::STR_AUTHENTICATE};
+    StrId::STR_USERNAME,      StrId::STR_PASSWORD,          StrId::STR_SYNC_SERVER_URL,
+    StrId::STR_SERVER_TYPE,   StrId::STR_DOCUMENT_MATCHING, StrId::STR_SEND_METADATA,
+    StrId::STR_SYNC_BEHAVIOR, StrId::STR_SIGN_UP,           StrId::STR_AUTHENTICATE};
 }  // namespace
 
 KOReaderSettingsActivity::KOReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -75,6 +76,19 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
         },
         tr(STR_SYNC_SERVER_URL), prefillUrl, 128, InputType::Url);
   } else if (index == 3) {
+    // Server Type - cycle CrossPoint -> KOSync -> Other. The profile decides
+    // whether the rich position and the extended metadata are transmitted.
+    const auto current = KOREADER_STORE.getServerType();
+    KOReaderServerType next = KOReaderServerType::CROSSPOINT;
+    if (current == KOReaderServerType::CROSSPOINT) {
+      next = KOReaderServerType::KOSYNC;
+    } else if (current == KOReaderServerType::KOSYNC) {
+      next = KOReaderServerType::OTHER;
+    }
+    KOREADER_STORE.setServerType(next);
+    KOREADER_STORE.saveToFile();
+    requestUpdate();
+  } else if (index == 4) {
     // Document Matching - toggle between Filename and Binary
     const auto current = KOREADER_STORE.getMatchMethod();
     const auto newMethod =
@@ -82,12 +96,12 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
     KOREADER_STORE.setMatchMethod(newMethod);
     KOREADER_STORE.saveToFile();
     requestUpdate();
-  } else if (index == 4) {
+  } else if (index == 5) {
     // Send Metadata - toggle on/off
     KOREADER_STORE.setSendMetadata(!KOREADER_STORE.getSendMetadata());
     KOREADER_STORE.saveToFile();
     requestUpdate();
-  } else if (index == 5) {
+  } else if (index == 6) {
     // Sync behavior - toggle between Ask and Smart
     const auto current = KOREADER_STORE.getSyncBehavior();
     const auto newBehavior = (current == KOReaderSyncBehavior::ASK_EVERY_TIME) ? KOReaderSyncBehavior::SMART
@@ -95,13 +109,13 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
     KOREADER_STORE.setSyncBehavior(newBehavior);
     KOREADER_STORE.saveToFile();
     requestUpdate();
-  } else if (index == 6) {
+  } else if (index == 7) {
     // Sign Up - create a new account on the sync server with the entered credentials
     if (!KOREADER_STORE.hasCredentials()) {
       return;
     }
     startActivityForResultWith<KOReaderAuthActivity>([](const ActivityResult&) {}, KOReaderAuthActivity::Mode::SIGN_UP);
-  } else if (index == 7) {
+  } else if (index == 8) {
     // Authenticate
     if (!KOREADER_STORE.hasCredentials()) {
       // Can't authenticate without credentials - just show message briefly
@@ -140,11 +154,16 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
         rowValues_[i] = std::string(tr(STR_DEFAULT_VALUE)) + ": " + defaultUrl;
       }
     } else if (i == 3) {
+      const auto type = KOREADER_STORE.getServerType();
+      rowValues_[i] = type == KOReaderServerType::CROSSPOINT ? tr(STR_SERVER_TYPE_CROSSPOINT)
+                      : type == KOReaderServerType::KOSYNC   ? tr(STR_SERVER_TYPE_KOSYNC)
+                                                             : tr(STR_SERVER_TYPE_OTHER);
+    } else if (i == 4) {
       rowValues_[i] =
           KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME ? tr(STR_FILENAME) : tr(STR_BINARY);
-    } else if (i == 4) {
-      rowValues_[i].clear();
     } else if (i == 5) {
+      rowValues_[i].clear();
+    } else if (i == 6) {
       rowValues_[i] =
           KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART ? tr(STR_SMART_SYNC) : tr(STR_ASK_EVERY_TIME);
     } else {
@@ -152,7 +171,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
     }
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
-  GUI.setCheckboxRow(rowItems_[4], KOREADER_STORE.getSendMetadata());
+  GUI.setCheckboxRow(rowItems_[5], KOREADER_STORE.getSendMetadata());
 
   fui::ListProps props;
   props.items = rowItems_;
