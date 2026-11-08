@@ -46,6 +46,9 @@ struct OptionPopup {
  std::vector<std::string> ownedStrings=std::vector<std::string>(12,"option");
  fui::InteractionBuffer<24> interactions;
  std::function<void(int)> onSelectCallback;
+ void finishShow(int currentIndex, std::function<void(int)> onSelect){
+  selectedIndex=currentIndex;onSelectCallback=std::move(onSelect);
+  ignoreInitialConfirmRelease=true;ignoreInitialTouchContact=true;active=true;}
  @HANDLER@
  void publish(Rect safe){
   const auto layout=InxOptionGeometry::layout(safe,12,selectedIndex);
@@ -87,10 +90,16 @@ int main(){
   p.handleInput(input,update);assert(p.selectedIndex==0);
   input.snap.touchPressed=false;input.snap.touchReleased=true;p.handleInput(input,update);
   assert(!p.active&&calls==1&&chosen==layout.first+1);assert(!p.handleInput(input,update));
-  // A confirm held across entry must not activate on its inherited release.
-  OptionPopup q;q.ignoreInitialConfirmRelease=true;q.onSelectCallback=[&](int){++calls;};
+  // A confirm held across entry must not activate on its inherited release;
+  // then it closes and fires once, on the release of a fresh press.
+  OptionPopup q;q.finishShow(0,[&](int){++calls;});
+  input={};input.held=int(MappedInputManager::Button::Confirm);q.handleInput(input,update);
   input={};input.released=int(MappedInputManager::Button::Confirm);q.handleInput(input,update);
-  assert(q.active&&calls==1);q.handleInput(input,update);assert(!q.active&&calls==2);
+  assert(q.active&&calls==1);
+  input={};input.pressed=int(MappedInputManager::Button::Confirm);
+  input.held=int(MappedInputManager::Button::Confirm);q.handleInput(input,update);
+  input={};input.released=int(MappedInputManager::Button::Confirm);q.handleInput(input,update);
+  assert(!q.active&&calls==2);
   // A fresh logical Confirm arrives pressed and released in the same pass (a
   // home-button action or a short power press); it carries its own press edge,
   // so the entry barrier must not swallow it and it has to select.
