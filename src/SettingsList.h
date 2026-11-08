@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BoardConfig.h>
+#include <HalClock.h>
 #include <HalFrontlight.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
@@ -840,6 +841,28 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 inline bool isSettingAvailableOnBoard(const SettingInfo& setting) {
   if (!BoardConfig::hasTouch() && setting.nameId == StrId::STR_TOUCH_READER_CONTROLS) return false;
   if (!BoardConfig::hasHomeKey() && setting.nameId == StrId::STR_SHOW_READER_MENU) return false;
+  // The Home key carries the remaining reading shortcuts on this board, so the
+  // long-press menu picker would be a dead row. UI-only: the value stays
+  // persisted (and reachable from the web API) for other boards.
+  if (BoardConfig::hasHomeKey() && setting.valuePtr == &CrossPointSettings::longPressMenuFunction) return false;
+  // Clock rows need the RTC, exactly like ClockSettingsActivity. UI-only: the
+  // saved offset/format/timezone survive a board (or a boot) without one.
+  if (!halClock.isAvailable()) {
+    switch (setting.nameId) {
+      case StrId::STR_CLOCK:
+      case StrId::STR_CLOCK_UPDATE:
+      case StrId::STR_CLOCK_UTC_OFFSET:
+      case StrId::STR_CLOCK_FORMAT:
+      case StrId::STR_AUTO_TIME:
+      case StrId::STR_TIMEZONE:
+      case StrId::STR_CLOCK_DST:
+      case StrId::STR_CLOCK_IN_HEADER:
+      case StrId::STR_CLOCK_SYNCED:
+        return false;
+      default:
+        break;
+    }
+  }
   const bool frontlightSetting = setting.valuePtr == &CrossPointSettings::frontlightBrightness ||
                                  setting.valuePtr == &CrossPointSettings::frontlightOn ||
                                  setting.valuePtr == &CrossPointSettings::frontlightRestoreOnWake

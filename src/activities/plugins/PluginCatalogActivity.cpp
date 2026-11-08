@@ -53,6 +53,11 @@ constexpr size_t MAX_API_RESPONSE = 48 * 1024;
 constexpr char BROWSE_TMP_PATH[] = "/.pcat_tmp.json";
 constexpr size_t MAX_BROWSE_RESPONSE = 1024 * 1024;
 constexpr int MAX_PAGE_SIZE = 16;
+// The manifest is a remote 8 KiB document; a hostile or broken one could
+// declare an arbitrary `lists` array. Each entry costs five strings, so the
+// count is bounded here as well as the reserve below (no header/mapping
+// changes yet).
+constexpr size_t kMaxBrowseLists = 64;
 // Holding Confirm this long on a picker row asks whether to uninstall it.
 constexpr unsigned long PLUGIN_UNINSTALL_HOLD_MS = 1000;
 
@@ -197,8 +202,9 @@ bool PluginCatalogActivity::loadManifest() {
   manifest.pageSize = browse["page_size"] | 8;
   // Documented bounds: each row costs an Item (strings) and a screen slot.
   manifest.pageSize = std::clamp(manifest.pageSize, 1, MAX_PAGE_SIZE);
-  manifest.browseLists.reserve(browse["lists"].size());
+  manifest.browseLists.reserve(std::min<size_t>(browse["lists"].size(), kMaxBrowseLists));
   for (JsonVariantConst l : browse["lists"].as<JsonArrayConst>()) {
+    if (manifest.browseLists.size() >= kMaxBrowseLists) break;
     Manifest::BrowseList entry;
     entry.title = l["title"] | "";
     entry.url = l["url"] | "";

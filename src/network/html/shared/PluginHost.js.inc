@@ -143,11 +143,31 @@
     }
   };
 
-  async function loadPlugins(mount) {
+  // Returns false when /api/plugins could not be read (network error, a
+  // non-2xx reply such as the 503 {"error":"out of memory"}, or a non-array
+  // body). A host page that shows an empty state can then say why instead of
+  // looking like "no plugins installed".
+  async function loadPlugins(mount, errorText) {
     const host = document.getElementById('plugin-container');
-    if (!host) return;
+    if (!host) return false;
+    const fail = () => {
+      if (!errorText) return false;
+      const msg = document.createElement('p');
+      msg.className = 'plugin-error';
+      msg.style.color = '#c0392b';
+      msg.textContent = errorText;
+      host.replaceChildren(msg);
+      return false;
+    };
     let list;
-    try { list = await (await fetch('/api/plugins')).json(); } catch (e) { return; }
+    try {
+      const response = await fetch('/api/plugins');
+      if (!response.ok) return fail();
+      list = await response.json();
+    } catch (e) {
+      return fail();
+    }
+    if (!Array.isArray(list)) return fail();  // e.g. {"error":"out of memory"}
     for (const p of list) {
       // A null mount loads everything: the headless runner page hosts all
       // plugins so any registered action can execute there.
@@ -185,4 +205,5 @@
         container.replaceChildren(h, msg);
       }
     }
+    return true;
   }
