@@ -857,7 +857,8 @@
     await loadSettings();
     await loadWifiNetworks();
     await loadOpdsServers();
-    await loadPlugins('settings');
+    // Say why the card area is empty instead of leaving it blank.
+    await loadPlugins('settings', 'Could not load plugins. Reload the page.');
   })();
 </script>
 </body>
