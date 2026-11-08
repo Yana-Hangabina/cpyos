@@ -63,6 +63,8 @@ On the very first lookup with a dictionary (and again if the dictionary file cha
 
 When a word is found, the definition screen shows the matched headword at the top and the definition text below, with a page counter for long definitions.
 
+Definitions are drawn in your reading font. Many dictionaries include IPA symbols (`ˈ ː ɹ ɪ ʊ`…) as a pronunciation guide, and the built-in fonts do not carry IPA glyphs, so those characters appear as `�`. To see them, install an [SD card font](./sd-card-fonts.md) that covers IPA and select it as the reading font.
+
 - **Left/Right** or side **Up/Down** — previous / next page
 - **Back** — return to word selection
 ## Where to find dictionaries
