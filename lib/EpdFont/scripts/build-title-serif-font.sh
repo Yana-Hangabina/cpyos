@@ -31,4 +31,4 @@ tmp="${OUT}.tmp"
   > "$tmp"
 [ -s "$tmp" ] || { rm -f "$tmp"; echo "Error: empty output" >&2; exit 1; }
 mv "$tmp" "$OUT"
-echo "Done: $OUT ($(wc -c < "$OUT") bytes). Re-run build-font-ids.sh to refresh NOTOSERIF_TITLE_FONT_ID."
+echo "Done: $OUT ($(wc -c < "$OUT") bytes). Re-run ../../../scripts/build_font_ids.py to refresh NOTOSERIF_TITLE_FONT_ID."

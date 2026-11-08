@@ -5,6 +5,8 @@
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
 
+#include "fontIds.h"
+
 #if CROSSPOINT_VECTOR_FONTS
 #include <FontPsram.h>  // PsramVector for resident TTF bytes
 #endif
@@ -18,12 +20,9 @@
 class GfxRenderer;
 class TtfEpdFont;
 
-// Shared by built-in registration and SD UI fallback setup.
-inline constexpr int CJK_UI_8_FONT_ID = 0x434A4B08;
-inline constexpr int CJK_UI_10_FONT_ID = 0x434A4B0A;
-inline constexpr int CJK_UI_12_FONT_ID = 0x434A4B0C;
-inline constexpr int CJK_UI_14_FONT_ID = 0x434A4B0E;
-inline constexpr int CJK_UI_16_FONT_ID = 0x434A4B10;
+// The CJK_UI_* role ids and the reader size ids live in the generated
+// src/fontIds.h (scripts/build_font_ids.py); this header only adds the footer
+// slots, which are local to the reader's chrome.
 
 // Reader footer slots keep their original sizes when Read Pico enlarges the UI.
 inline constexpr int READER_STATUS_FONT_ID = 0x52534208;
