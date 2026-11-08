@@ -56,6 +56,64 @@ inline uint16_t readU16(const uint8_t* p) { return p[0] | (p[1] << 8); }
 inline int16_t readI16(const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); }
 inline uint32_t readU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24); }
 
+// Collects distinct codepoints into a caller-owned buffer of `limit` entries
+// (plus reserved slots, see addReserved). Once full, a smaller codepoint
+// replaces the largest held, so the buffer ends as the `limit` lowest
+// codepoints offered: the only new entries a lowest-first merge capped at
+// `limit` entries could keep. Deduplication is O(n²), as before.
+class LowestCodepoints {
+ public:
+  LowestCodepoints(uint32_t* buffer, const uint32_t limit) : codepoints_(buffer), limit_(limit) {}
+
+  void add(const uint32_t cp) {
+    // Once full, nothing at or above the largest held can enter, duplicate or
+    // not, so reject it before the linear duplicate search.
+    if (count_ == limit_ && cp >= codepoints_[largestAt_]) return;
+    if (contains(cp)) return;
+    if (count_ < limit_) {
+      codepoints_[count_++] = cp;
+      if (count_ == limit_) findLargest();
+      return;
+    }
+    codepoints_[largestAt_] = cp;
+    findLargest();
+  }
+
+  // For the injected space, hyphen and CJK reference ideograph, which bypass
+  // the limit as before.
+  void addReserved(const uint32_t cp) {
+    if (!contains(cp)) codepoints_[count_++] = cp;
+  }
+
+  uint32_t* data() const { return codepoints_; }
+  uint32_t size() const { return count_; }
+
+ private:
+  bool contains(const uint32_t cp) const {
+    return std::find(codepoints_, codepoints_ + count_, cp) != codepoints_ + count_;
+  }
+  void findLargest() {
+    largestAt_ = static_cast<uint32_t>(std::max_element(codepoints_, codepoints_ + limit_) - codepoints_);
+  }
+
+  uint32_t* codepoints_;
+  uint32_t limit_;
+  uint32_t count_ = 0;
+  uint32_t largestAt_ = 0;
+};
+
+// Walks a null-terminated UTF-8 string, offering every codepoint `wanted`
+// accepts to the collector.
+template <typename Wanted>
+void collectCodepoints(const char* text, LowestCodepoints& collected, Wanted wanted) {
+  const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
+  while (*p) {
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    if (wanted(cp)) collected.add(cp);
+  }
+}
+
 // Walks a null-terminated UTF-8 string and inserts each unique codepoint into
 // codepoints[0..cpCount-1] in ascending order. Returns true when the cap is hit.
 bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount) {
@@ -1896,52 +1954,83 @@ int SdCardFont::buildAdvanceTablePacked(const char* const* segments, const size_
     }
   }
 
-  // +2 reserved slots for space and hyphen injected after the main scan.
-  static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  auto codepoints = makeUniqueNoThrow<uint32_t[]>(MAX_UNIQUE_CODEPOINTS + 2);
-  if (!codepoints) {
-    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)",
-            (MAX_UNIQUE_CODEPOINTS + 3) * sizeof(uint32_t));
-    return -1;
-  }
-  uint32_t cpCount = 0;
-  bool hitCap = false;
-
-  // Each segment holds consecutive NUL-terminated words; walk word by word.
-  for (size_t seg = 0; seg < segmentCount && !hitCap; ++seg) {
-    const char* p = segments[seg];
-    const char* const end = p + segmentLens[seg];
-    while (p < end && !hitCap) {
-      hitCap = collectUniqueCodepoints(p, codepoints.get(), cpCount, MAX_UNIQUE_CODEPOINTS);
-      p += strlen(p) + 1;
+  // A full table takes no more entries (mergeIntoAdvanceTable), so once every
+  // requested style is full there is nothing to collect. The table is only
+  // cleared on unload, so on CJK text this is most layout passes.
+  uint8_t openStyles = 0;
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if ((styleMask & (1 << si)) && hasStyle(si) && advanceTableSize_[si] < ADVANCE_CACHE_LIMIT) {
+      openStyles |= static_cast<uint8_t>(1 << si);
     }
   }
-  if (extraText && !hitCap) {
-    hitCap = collectUniqueCodepoints(extraText, codepoints.get(), cpCount, MAX_UNIQUE_CODEPOINTS);
+  if (openStyles == 0) {
+    stats_.prewarmTotalMs = millis() - startMs;
+    return 0;
   }
 
-  if (includeSpace)
-    sd_card_font_algorithms::insertSortedUnique(' ', codepoints.get(), cpCount, MAX_UNIQUE_CODEPOINTS + 3);
-  if (includeHyphen)
-    sd_card_font_algorithms::insertSortedUnique('-', codepoints.get(), cpCount, MAX_UNIQUE_CODEPOINTS + 3);
+  // The merge keeps the lowest ADVANCE_CACHE_LIMIT codepoints of the table and
+  // the new entries, so it can never keep more new entries than that, and only
+  // the lowest of them: collecting those is enough to build the same table.
+  // Byte counts also bound the codepoints, so short table words need no heap.
+  size_t limit = extraText ? strlen(extraText) : 0;
+  for (size_t seg = 0; seg < segmentCount; ++seg) limit += segmentLens[seg];
+  limit = std::min<size_t>(limit, ADVANCE_CACHE_LIMIT);
+  // Space, hyphen and the CJK reference ideograph bypass the limit.
+  static constexpr size_t INLINE_CODEPOINTS = 32;
+  static constexpr size_t RESERVED_CODEPOINTS = 3;
+  uint32_t inlineCodepoints[INLINE_CODEPOINTS + RESERVED_CODEPOINTS];
+  std::unique_ptr<uint32_t[]> heapCodepoints;
+  uint32_t* scratch = inlineCodepoints;
+  if (limit > INLINE_CODEPOINTS) {
+    heapCodepoints = makeUniqueNoThrow<uint32_t[]>(limit + RESERVED_CODEPOINTS);
+    if (!heapCodepoints) {
+      LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)",
+              static_cast<unsigned>((limit + RESERVED_CODEPOINTS) * sizeof(uint32_t)));
+      return -1;
+    }
+    scratch = heapCodepoints.get();
+  }
+
+  // One pass per style: each skips the codepoints its own table already holds,
+  // so the lowest-entries bound above holds per style.
+  int totalMissed = 0;
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if (!(openStyles & (1 << si))) continue;
+    const auto wanted = [this, si](const uint32_t cp) { return !advanceTableLookup(si, cp, nullptr); };
+    LowestCodepoints collected(scratch, static_cast<uint32_t>(limit));
+    // Each segment holds consecutive NUL-terminated words; walk word by word.
+    for (size_t seg = 0; seg < segmentCount; ++seg) {
+      const char* p = segments[seg];
+      const char* const end = p + segmentLens[seg];
+      while (p < end) {
+        collectCodepoints(p, collected, wanted);
+        p += strlen(p) + 1;
+      }
+    }
+    if (extraText) collectCodepoints(extraText, collected, wanted);
+    if (includeSpace && wanted(' ')) collected.addReserved(' ');
+    if (includeHyphen && wanted('-')) collected.addReserved('-');
 
 #ifdef ENABLE_CHINESE_VERSION
-  // Inject the Han column-reference ideograph "我" (U+6211). ParsedText sizes every
-  // CJK column from getTextAdvanceX("我") (see cjkReferenceAdvance), but "我" is often
-  // absent from the page text, so it misses the persistent advance cache and forces an
-  // on-demand SD glyph read (getAdvanceOrLoad) on every paragraph during first-load
-  // pagination. Reading it here piggybacks the file open this function already does, so
-  // it costs one extra 16-byte glyph read once; thereafter it's cached and the per-
-  // paragraph probe hits the table with no SD I/O. Pure speedup — the resolved advance
-  // is identical to what getAdvanceOrLoad would read, so layout geometry is unchanged.
-  static constexpr uint32_t CJK_REFERENCE_CP = 0x6211;  // 我
-  sd_card_font_algorithms::insertSortedUnique(CJK_REFERENCE_CP, codepoints.get(), cpCount, MAX_UNIQUE_CODEPOINTS + 3);
+    // Inject the Han column-reference ideograph "我" (U+6211). ParsedText sizes
+    // every CJK column from getTextAdvanceX("我") (see cjkReferenceAdvance), but
+    // "我" is often absent from the page text, so it misses the persistent
+    // advance cache and forces an on-demand SD glyph read (getAdvanceOrLoad) on
+    // every paragraph during first-load pagination. Reading it here piggybacks
+    // the file open this function already does, so it costs one extra 16-byte
+    // glyph read once; thereafter it's cached and the per-paragraph probe hits
+    // the table with no SD I/O. Pure speedup — the resolved advance is identical
+    // to what getAdvanceOrLoad would read, so layout geometry is unchanged.
+    static constexpr uint32_t CJK_REFERENCE_CP = 0x6211;  // 我
+    if (wanted(CJK_REFERENCE_CP)) collected.addReserved(CJK_REFERENCE_CP);
 #endif
 
-  if (hitCap) {
-    LOG_DBG("SDCF", "Advance cache collection cap (%u) hit; remaining glyphs load on demand", MAX_UNIQUE_CODEPOINTS);
+    std::sort(collected.data(), collected.data() + collected.size());
+    const int missedForStyle = fetchAdvancesForCodepoints(collected.data(), collected.size(), static_cast<uint8_t>(1 << si));
+    if (missedForStyle < 0) return missedForStyle;
+    totalMissed += missedForStyle;
   }
-  int totalMissed = fetchAdvancesForCodepoints(codepoints.get(), cpCount, styleMask);
+
   stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
