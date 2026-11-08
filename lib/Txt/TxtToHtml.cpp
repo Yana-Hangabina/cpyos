@@ -9,6 +9,18 @@
 #include <cstring>
 #include <limits>
 
+size_t TxtToHtml::escapedHtmlSize(const std::string_view text) {
+  size_t size = 0;
+  for (const char c : text) {
+    size += c == '&' ? 5 : (c == '<' || c == '>') ? 4 : 1;
+  }
+  return size;
+}
+
+void TxtToHtml::appendEscapedHtml(std::string& out, const std::string_view text) {
+  TxtToHtml::streamEscapedHtml([&out](std::string_view fragment) { out.append(fragment); }, text);
+}
+
 const char* TxtToHtml::cacheVersionTag(std::string_view filename) {
   return FsHelpers::hasMarkdownExtension(filename) ? "<!-- MD_CACHE_VERSION: 2 -->" : "<!-- TXT_CACHE_VERSION: 2 -->";
 }

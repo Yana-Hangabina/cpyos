@@ -106,13 +106,6 @@ void releaseRequestArguments(WebServer* server) {
 // Note: Items starting with "." are automatically hidden
 constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 
-// Formats the library index tracks (LibraryIndex isBookName): an upload of any
-// of these must mark the index dirty so the next Library entry rebuilds it.
-bool isLibraryBookFile(const String& filename) {
-  return FsHelpers::checkFileExtension(filename, ".epub") || FsHelpers::checkFileExtension(filename, ".txt") ||
-         FsHelpers::checkFileExtension(filename, ".md") || FsHelpers::checkFileExtension(filename, ".xtc") ||
-         FsHelpers::checkFileExtension(filename, ".cbz") || FsHelpers::checkFileExtension(filename, ".fb2");
-}
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 constexpr size_t FILE_LIST_BATCH_CAPACITY = 1400;
@@ -1179,7 +1172,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += state.fileName;
         clearBookCache(filePath.c_str());
-        if (isLibraryBookFile(state.fileName)) library::markLibraryIndexDirty();
+        if (library::isLibraryBookFile(filePath.c_str())) library::markLibraryIndexDirty();
       }
     }
     state.buffer.reset();
@@ -2140,13 +2133,19 @@ void CrossPointWebServer::handleRelay() {
   // subscribed to the task WDT for the whole web-server session, so feed it
   // while a slow peer keeps the request waiting.
   static constexpr size_t RELAY_BODY_LIMIT = 32 * 1024;
+  // Heap kept free while the body is buffered. TLS already holds ~25 KB, and an
+  // exhausted heap stops Wi-Fi from receiving the ACKs that free the server's
+  // send buffers: the whole web server then stalls until the device is reset.
+  static constexpr size_t RELAY_HEAP_RESERVE = 16 * 1024;
   String respBody;
   pluginhttp::Headers respHeaders;
-  const int status =
-      pluginhttp::request(nullptr, url, method, body, headers, respBody, RELAY_BODY_LIMIT, &respHeaders, [] {
+  const int status = pluginhttp::request(
+      nullptr, url, method, body, headers, respBody, RELAY_BODY_LIMIT, &respHeaders,
+      [] {
         resetTaskWatchdogIfSubscribed();
         return false;  // never aborts; only feeds
-      });
+      },
+      RELAY_HEAP_RESERVE);
   // Transport failure, a truncated body, or one over the cap / out of memory
   // (the reason is logged by pluginhttp).
   if (status < 0) {
@@ -2544,6 +2543,8 @@ void CrossPointWebServer::handleFetch() {
     Storage.remove(part.c_str());
     complete = false;
     resp["error"] = "sd write failed";
+  } else if (complete && library::isLibraryBookFile(dest)) {
+    library::markLibraryIndexDirty();
   }
   resp["status"] = status;
   resp["bytes"] = written;
@@ -2622,6 +2623,8 @@ void CrossPointWebServer::handlePluginFsUpload() {
         fail(400, "empty body");
       } else if (!Storage.replaceFile(st.tmp.c_str(), st.path.c_str())) {
         fail(500, "sd write failed");
+      } else if (library::isLibraryBookFile(st.path)) {
+        library::markLibraryIndexDirty();
       }
       return;
     case UPLOAD_FILE_ABORTED:
@@ -2911,7 +2914,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
             wsLastCompleteAt = millis();
             LOG_DBG("WS", "Zero-byte upload complete: %s", filePath.c_str());
             clearBookCache(filePath.c_str());
-            if (isLibraryBookFile(wsUploadFileName)) library::markLibraryIndexDirty();
+            if (library::isLibraryBookFile(filePath.c_str())) library::markLibraryIndexDirty();
             wsServer->sendTXT(num, "DONE");
             wsLastProgressSent = 0;
             break;
@@ -2981,7 +2984,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += wsUploadFileName;
         clearBookCache(filePath.c_str());
-        if (isLibraryBookFile(wsUploadFileName)) library::markLibraryIndexDirty();
+        if (library::isLibraryBookFile(filePath.c_str())) library::markLibraryIndexDirty();
 
         wsServer->sendTXT(num, "DONE");
         wsLastProgressSent = 0;

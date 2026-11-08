@@ -12,12 +12,11 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+#include <cstdint>
+
 namespace BookCoverLoader {
-namespace {
 
-enum class CachedCoverState { Missing, Ready, Terminal };
-
-CachedCoverState inspectCachedCover(const std::string& path, const bool emptyIsTerminal) {
+CachedCoverState checkCachedCover(const std::string& path, const bool emptyIsTerminal) {
   if (!Storage.exists(path.c_str())) return CachedCoverState::Missing;
 
   {
@@ -27,10 +26,18 @@ CachedCoverState inspectCachedCover(const std::string& path, const bool emptyIsT
 
     Bitmap bitmap(file);
     if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
-      return CachedCoverState::Ready;
+      // Ready only when every pixel row fits between the data offset and end of file.
+      // Header-only stubs (e.g. 62-byte 1bpp BMP) parse cleanly but have no pixels,
+      // so they must be regenerated instead of accepted forever.
+      const uint64_t pixelBytes =
+          static_cast<uint64_t>(bitmap.getRowBytes()) * static_cast<uint64_t>(bitmap.getHeight());
+      if (bitmap.getPixelDataOffset() + pixelBytes <= file.fileSize()) {
+        return CachedCoverState::Ready;
+      }
     }
   }
 
+  LOG_ERR("COVER", "Removing invalid cached cover: %s", path.c_str());
   if (!Storage.remove(path.c_str())) {
     LOG_ERR("COVER", "Failed to remove invalid cover: %s", path.c_str());
     return CachedCoverState::Terminal;
@@ -38,11 +45,13 @@ CachedCoverState inspectCachedCover(const std::string& path, const bool emptyIsT
   return CachedCoverState::Missing;
 }
 
+namespace {
+
 template <typename Generate>
 std::string ensureCachedCover(const std::string& path, const bool emptyIsTerminal, bool* generated,
                               Generate&& generate) {
   if (generated) *generated = false;
-  const CachedCoverState state = inspectCachedCover(path, emptyIsTerminal);
+  const CachedCoverState state = checkCachedCover(path, emptyIsTerminal);
   if (state == CachedCoverState::Ready) return path;
   if (state == CachedCoverState::Terminal) return "";
   // Generation parses the container's cover and writes a thumbnail; on a slow
@@ -50,7 +59,7 @@ std::string ensureCachedCover(const std::string& path, const bool emptyIsTermina
   // be tied to a specific book instead of guesswork.
   const uint32_t started = millis();
   const bool ok = generate();
-  const bool ready = ok && inspectCachedCover(path, emptyIsTerminal) == CachedCoverState::Ready;
+  const bool ready = ok && checkCachedCover(path, emptyIsTerminal) == CachedCoverState::Ready;
   LOG_INF("COVER", "thumbnail %s in %ums: %s", ready ? "generated" : "FAILED",
           static_cast<unsigned>(millis() - started), path.c_str());
   if (!ready) return "";
@@ -233,7 +242,7 @@ std::string cachedThumbnail(const std::string& bookPath, const int height) {
   if (height <= 0 || !Storage.exists(bookPath.c_str())) return "";
   const std::string path = thumbPathFor(bookPath, height);
   if (path.empty()) return "";
-  return inspectCachedCover(path, false) == CachedCoverState::Ready ? path : "";
+  return checkCachedCover(path, false) == CachedCoverState::Ready ? path : "";
 }
 
 std::string ensureFullCover(const std::string& bookPath, std::string* title, std::string* author, bool* generated) {

@@ -1,7 +1,6 @@
 #include "HomeActivity.h"
 #include "components/StatusCards.h"
 
-#include <Bitmap.h>
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -166,31 +165,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     if (book.coverBmpPath.empty()) continue;
 
     const std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-    if (Storage.exists(coverPath.c_str())) {
-      bool invalidCache = false;
-      {
-        HalFile cachedCover;
-        if (!Storage.openFileForRead("HOME", coverPath, cachedCover)) {
-          LOG_ERR("HOME", "Failed to open cached cover: %s", coverPath.c_str());
-          continue;
-        }
-        if (cachedCover.fileSize() == 0) {
-          // EPUB uses an empty thumbnail as a persistent "no supported cover" marker.
-          if (isEpub && !useFullCover) continue;
-          invalidCache = true;
-        } else {
-          Bitmap bitmap(cachedCover);
-          invalidCache =
-              bitmap.parseHeaders() != BmpReaderError::Ok || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0;
-        }
-      }
-      if (!invalidCache) continue;
-      LOG_ERR("HOME", "Removing invalid cached cover: %s", coverPath.c_str());
-      if (!Storage.remove(coverPath.c_str())) {
-        LOG_ERR("HOME", "Failed to remove invalid cached cover: %s", coverPath.c_str());
-        continue;
-      }
-    }
+    // EPUB thumbnails keep an empty file as the persistent "no supported cover" marker.
+    if (BookCoverLoader::checkCachedCover(coverPath, isEpub && !useFullCover) !=
+        BookCoverLoader::CachedCoverState::Missing)
+      continue;
 
     status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr,
                           10 * (10 + currentProgress * (90 / recentBooks.size())), false, millis());

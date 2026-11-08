@@ -199,6 +199,7 @@ add_test(NAME FileBrowserImages
 add_test(NAME ArduinoBootstrapLto COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${REPO_ROOT}/scripts/tests -p test_pioarduino_cache.py)
 add_subdirectory(reader_session)
 add_subdirectory(plugin_manifest_classification)
+add_subdirectory(plugin_picker_layout)
 add_subdirectory(protected_paths)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -233,3 +234,9 @@ add_test(NAME RealImageDecoderCancellation
 
 add_test(NAME TextSettingsFontExit
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_text_settings_font_exit.py)
+
+# Standalone UI regressions that drive the header-only layout helpers. Only the
+# scripts this fork carries are registered: upstream also lists selection_buttons
+# and the two clipping suites, which CPYOS does not have (AnnotationStore instead).
+add_test(NAME list_viewport
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_list_viewport.py)

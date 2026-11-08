@@ -186,19 +186,10 @@ void clearLibraryIndexDirty() {
   }
 }
 
-bool isBookName(const std::string& name) {
-  return FsHelpers::checkFileExtension(name, ".epub") || FsHelpers::checkFileExtension(name, ".txt") ||
-         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc") ||
-         FsHelpers::checkFileExtension(name, ".cbz") || FsHelpers::checkFileExtension(name, ".fb2")
-#if defined(CROSSPOINT_MUPDF)
-         || FsHelpers::checkFileExtension(name, ".pdf")
-#endif
-      ;
-}
-
 // macOS AppleDouble sidecars and hidden entries. The file browser already hides
 // these (FileBrowserActivity isMacOSMetadataEntry); the shelf must agree, or a
-// card written on a Mac shows every book twice.
+// card written on a Mac shows every book twice. isLibraryBookFile() applies the
+// same rule to whole paths.
 bool isHiddenOrSidecar(const char* name) { return name[0] == '.'; }
 
 std::string stemOf(const std::string& name) {
@@ -501,7 +492,7 @@ void walk(WalkState& st, const std::string& path, const int depth) {
       }
       continue;
     }
-    if (!isBookName(name)) continue;
+    if (!isLibraryBookFile(name)) continue;
 
     // A zero-length book is a dangling directory entry: the name enumerates but
     // the contents do not exist. Counted rather than silently dropped.
@@ -1056,6 +1047,26 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 }  // namespace
 
 const char* libraryIndexPath() { return INDEX_PATH; }
+
+bool isLibraryBookFile(const std::string_view path) {
+  // The walk skips hidden (dot-prefixed) names, so it never lists a file inside
+  // a hidden folder. A lone "." names the folder itself.
+  size_t start = 0;
+  while (start < path.size()) {
+    const size_t slash = path.find('/', start);
+    const std::string_view name = path.substr(start, slash - start);
+    if (name.size() > 1 && name.front() == '.') return false;
+    if (slash == std::string_view::npos) break;
+    start = slash + 1;
+  }
+  return FsHelpers::checkFileExtension(path, ".epub") || FsHelpers::checkFileExtension(path, ".txt") ||
+         FsHelpers::checkFileExtension(path, ".md") || FsHelpers::checkFileExtension(path, ".xtc") ||
+         FsHelpers::checkFileExtension(path, ".cbz") || FsHelpers::checkFileExtension(path, ".fb2")
+#if defined(CROSSPOINT_MUPDF)
+         || FsHelpers::checkFileExtension(path, ".pdf")
+#endif
+      ;
+}
 
 bool markLibraryIndexDirty() {
   if (Storage.exists(DIRTY_PATH)) return true;

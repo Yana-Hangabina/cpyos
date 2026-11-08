@@ -27,6 +27,7 @@
 #include <VectorFontSupport.h>
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <time.h>
 #include <XteinkDetect.h>
 #if FREEINK_CAP_TOUCH
 #include <esp_sntp.h>
@@ -1210,7 +1211,9 @@ void setup() {
   // click-to-wake is a setting, and an X4 battery power-off cuts all power, so
   // only SD state survives to the next boot.
 #if !FREEINK_DEVICE_EEGO_A4
-  const bool wakeHoldVerified = wakeupReason != HalGPIO::WakeupReason::PowerButton || gpio.verifyPowerButtonWakeup();
+  // The Metalio boots after the button is released, so it skips the check.
+  const bool wakeHoldVerified = wakeupReason != HalGPIO::WakeupReason::PowerButton || BoardConfig::isMetalioEInk4() ||
+                                gpio.verifyPowerButtonWakeup();
 #endif
 
   // IMU bring-up on every target. Read Pico's SC7A20H is an accelerometer with no
@@ -1318,6 +1321,18 @@ void setup() {
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   pluginevents::refreshSubscriptions();
+  // Seed the system clock from the battery-backed RTC: on RTC boards it is the
+  // only real clock across power-off, and time() is what plugin event
+  // timestamps, TLS and file dates read. Placed before trustedtime::init(),
+  // whose floor restore vetoes a lagging RTC and restores the floor instead.
+  struct tm rtcLocal;
+  if (halClock.localTime(rtcLocal)) {
+    // localTime() renders the RTC's UTC epoch under the TZ rule applied above,
+    // so mktime() inverts it exactly (tm_isdst included).
+    trustedtime::adopt(static_cast<int64_t>(mktime(&rtcLocal)));
+    LOG_INF("CLK", "RTC clock read: %04d-%02d-%02d %02d:%02d", rtcLocal.tm_year + 1900, rtcLocal.tm_mon + 1,
+            rtcLocal.tm_mday, rtcLocal.tm_hour, rtcLocal.tm_min);
+  }
   // Restore the monotonic clock floor before anything reads time() (event
   // timestamps, loan-expiry checks).
   trustedtime::init();

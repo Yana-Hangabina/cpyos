@@ -14,6 +14,11 @@ struct PlainTextToken {
   size_t len;
 };
 
+// The dictionary's plain-text headword label byte ('\x01', see
+// DICTIONARY_PLAIN_HEADWORD_MARKER) is a control byte, not text: it starts no
+// token and never ends up inside a selected word.
+inline bool isPlainTextSeparator(const char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\x01'; }
+
 // Split a plain-text line into selectable tokens: whitespace separates words,
 // and Han/Kana break per codepoint so a Chinese definition offers single
 // characters instead of the whole unspaced run. Hangul stays word-whole and a
@@ -27,7 +32,7 @@ inline void tokenizePlainTextLine(const char* text, const size_t length, std::ve
   size_t i = 0;
   while (i < length) {
     const char c = text[i];
-    if (c == ' ' || c == '\t' || c == '\r') {
+    if (isPlainTextSeparator(c)) {
       i++;
       continue;
     }
@@ -36,7 +41,7 @@ inline void tokenizePlainTextLine(const char* text, const size_t length, std::ve
     uint32_t previous = utf8NextCodepoint(&ptr);
     i = static_cast<size_t>(ptr - reinterpret_cast<const unsigned char*>(text));
     while (i < length) {
-      if (text[i] == ' ' || text[i] == '\t' || text[i] == '\r') break;
+      if (isPlainTextSeparator(text[i])) break;
       ptr = reinterpret_cast<const unsigned char*>(text + i);
       const uint32_t cp = utf8NextCodepoint(&ptr);
       if (!utf8IsHangul(previous) && !utf8IsHangul(cp) && (utf8IsCjkBreakable(previous) || utf8IsCjkBreakable(cp)) &&

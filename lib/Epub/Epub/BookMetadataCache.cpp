@@ -8,6 +8,7 @@
 #include <ZipFile.h>
 
 #include <deque>
+#include <mutex>
 #include <optional>
 
 #include "FsHelpers.h"
@@ -27,6 +28,9 @@ constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
 // Buffer size for the buildBookBin streams. 3 buffers x 4KB, transient (freed on
 // return); 4KB = 8 SD sectors per transfer, enough to stop the sector-cache thrash.
 constexpr size_t BUILD_IO_BUFFER_SIZE = 4096;
+// The render task (progress bar) and the main loop both ask for sizes, and the
+// window is shared state, so decode it under a lock.
+std::mutex sizeWindowLock;
 
 // Entry (de)serializers, templated so they run over HalFile and the Buffered*
 // wrappers alike (two instantiations each -- a few hundred bytes of flash, in
@@ -562,31 +566,36 @@ bool BookMetadataCache::load() {
     return false;
   }
 
-  // Cache cumulative spine sizes in RAM. The progress bar (every render) and percent
-  // jumps otherwise pay 2 seeks + a heap-allocating SpineEntry read per access. Spine
-  // entries are stored contiguously in index order immediately after the LUTs, so read
-  // them in a single sequential pass.
-  std::unique_ptr<uint32_t[]> nextCumulativeSizes;
-  uint16_t nextCumulativeSizeCount = 0;
-  if (nextSpineCount > 0 && nextSpineCount <= MAX_CUMULATIVE_SIZE_CACHE_ITEMS) {
-    auto sizes = makeUniqueNoThrow<uint32_t[]>(nextSpineCount);
-    if (sizes) {
+  // Spine entries follow the LUTs in index order, so a single sequential pass keeps
+  // the total before every SIZE_WINDOW-th item. The progress bar (every render) and
+  // percent jumps then pay at most one window read instead of 2 seeks + a
+  // heap-allocating SpineEntry read per access.
+  std::unique_ptr<uint32_t[]> nextWindowStarts;
+  uint16_t nextWindowStartCount = 0;
+  uint32_t nextBookSize = 0;
+  if (nextSpineCount > 0) {
+    const int slots = (nextSpineCount + SIZE_WINDOW - 1) / SIZE_WINDOW;
+    auto starts = makeUniqueNoThrow<uint32_t[]>(slots);
+    if (starts) {
       if (!bookFile.seek(nextLutOffset + lutSize)) {
         LOG_ERR("BMC", "Could not seek to cache spine data");
         invalidateCorruptCache();
         return false;
       }
       for (uint16_t i = 0; i < nextSpineCount; i++) {
-        if (!readSpineCumulativeSize(bookFile, sizes[i])) {
+        if (i % SIZE_WINDOW == 0) starts[i / SIZE_WINDOW] = nextBookSize;
+        uint32_t cumulative = 0;
+        if (!readSpineCumulativeSize(bookFile, cumulative)) {
           LOG_ERR("BMC", "Cache spine entry %u is truncated", i);
           invalidateCorruptCache();
           return false;
         }
+        nextBookSize = cumulative;
       }
-      nextCumulativeSizeCount = nextSpineCount;
-      nextCumulativeSizes = std::move(sizes);
+      nextWindowStartCount = static_cast<uint16_t>(slots);
+      nextWindowStarts = std::move(starts);
     } else {
-      LOG_ERR("BMC", "OOM caching %u cumulative spine sizes", nextSpineCount);
+      LOG_ERR("BMC", "OOM caching %d spine size windows", slots);
     }
   }
 
@@ -594,17 +603,77 @@ bool BookMetadataCache::load() {
   spineCount = nextSpineCount;
   tocCount = nextTocCount;
   coreMetadata = std::move(nextMetadata);
-  cumulativeSizes = std::move(nextCumulativeSizes);
-  cumulativeSizeCount = nextCumulativeSizeCount;
+  windowStarts = std::move(nextWindowStarts);
+  windowStartCount = nextWindowStartCount;
+  bookSize = nextBookSize;
+  windowFirst = -1;
   loaded = true;
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);
   return true;
 }
 
 bool BookMetadataCache::getCumulativeSize(const int index, uint32_t& size) const {
-  if (!cumulativeSizes || index < 0 || index >= cumulativeSizeCount) return false;
-  size = cumulativeSizes[index];
+  if (!loaded || !windowStarts || index < 0 || index >= static_cast<int>(spineCount)) return false;
+  if (index == spineCount - 1) {
+    size = bookSize;
+    return true;
+  }
+  const int first = index / SIZE_WINDOW * SIZE_WINDOW;
+  // Window edges are in RAM, so an item at a window's last slot needs no read.
+  if (index - first == SIZE_WINDOW - 1) {
+    const int nextSlot = index / SIZE_WINDOW + 1;
+    if (nextSlot >= static_cast<int>(windowStartCount)) return false;
+    size = windowStarts[nextSlot];
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(sizeWindowLock);
+  if (windowFirst != first && !fillWindow(first)) return false;
+  size = window[index - first];
   return true;
+}
+
+bool BookMetadataCache::fillWindow(const int first) const {
+  windowFirst = -1;
+  // Own handle: getSpineEntry() moves bookFile.
+  HalFile file;
+  if (!Storage.openFileForRead("BMC", cachePath + bookBinFile, file)) return false;
+  // The spine LUT holds each entry's offset; jump straight to the window's first.
+  uint32_t entryPos = 0;
+  if (!file.seek(lutOffset + sizeof(uint32_t) * first) || !serialization::readPod(file, entryPos) ||
+      entryPos >= file.size() || !file.seek(entryPos)) {
+    return false;
+  }
+  for (int i = 0; first + i < spineCount && i < SIZE_WINDOW; i++) {
+    if (!readSpineCumulativeSize(file, window[i])) return false;
+  }
+  windowFirst = first;
+  return true;
+}
+
+int BookMetadataCache::getSpineIndexForSize(const uint32_t size) const {
+  if (!loaded || !windowStarts || spineCount == 0 || size > bookSize) return -1;
+  if (size == 0) return 0;
+  // windowStarts[w] is the total before item w * SIZE_WINDOW, so the answer lies in the
+  // last window that starts below `size`: the next window's first item already reaches it.
+  int lo = 0;
+  int hi = static_cast<int>(windowStartCount) - 1;
+  while (lo < hi) {
+    const int mid = (lo + hi + 1) / 2;
+    if (windowStarts[mid] < size) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const int first = lo * SIZE_WINDOW;
+  const int last = std::min<int>(spineCount, first + SIZE_WINDOW) - 1;
+  std::lock_guard<std::mutex> lock(sizeWindowLock);
+  // A failed read reports -1 so the caller can fall back to the exact per-item read.
+  if (windowFirst != first && !fillWindow(first)) return -1;
+  for (int i = first; i < last; i++) {
+    if (window[i - first] >= size) return i;
+  }
+  return last;
 }
 
 BookMetadataCache::SpineEntry BookMetadataCache::getSpineEntry(const int index) {
@@ -672,7 +741,9 @@ bool BookMetadataCache::readTocEntry(HalFile& file, TocEntry& entry) const { ret
 void BookMetadataCache::invalidateCorruptCache() {
   bookFile.close();
   loaded = false;
-  cumulativeSizes.reset();
-  cumulativeSizeCount = 0;
+  windowStarts.reset();
+  windowStartCount = 0;
+  bookSize = 0;
+  windowFirst = -1;
   Storage.remove((cachePath + bookBinFile).c_str());
 }

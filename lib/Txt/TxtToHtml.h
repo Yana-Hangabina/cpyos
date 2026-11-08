@@ -2,7 +2,9 @@
 
 #include <Print.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 #include "TxtEncoding.h"
@@ -17,7 +19,32 @@ class TxtToHtml {
     bool (*nextChapter)(void*) = nullptr;
   };
 
+  // HTML escaping shared by the builder and the dictionary's inline-text path,
+  // so a decoded field is escaped exactly like a TXT line.
+  template <typename Append>
+  static void streamEscapedHtml(Append&& append, std::string_view text) {
+    for (const char c : text) {
+      switch (c) {
+        case '&':
+          append("&amp;");
+          break;
+        case '<':
+          append("&lt;");
+          break;
+        case '>':
+          append("&gt;");
+          break;
+        default:
+          append(std::string_view(&c, 1));
+          break;
+      }
+    }
+  }
+
   static const char* cacheVersionTag(std::string_view filename);
+  // Escaped length/append without an intermediate Print.
+  static size_t escapedHtmlSize(std::string_view text);
+  static void appendEscapedHtml(std::string& out, std::string_view text);
   static bool stream(std::string_view filename, void* readerCtx, int (*readFn)(void*, uint8_t*, size_t), Print& out);
   static bool stream(std::string_view filename, void* readerCtx, int (*readFn)(void*, uint8_t*, size_t), Print& out,
                      const Options& options);
