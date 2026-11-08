@@ -139,3 +139,40 @@ SDK_DEFER 8 项另见 §3（其中 3 条结论被修正）。
 - 共享 PlatformIO 包只在必要时按 §6 配方改（本次已按配方修过 C3 ROM-libc sdkconfig）。
 - 数据分区五个 blob 的偏移以 `build/data_manifest.txt` 为准，不写死。
 - 上游合并与 SDK 重移植都不要在脏工作树/并发构建时做（§38）。
+
+
+## 执行结果（2026-11-08 晚）
+
+### Phase A — 已完成
+- 14 项 PARTIAL 全部落地：`0727f9f0`（16 级页面刷新晋升）、`6b863e48`、`f0dfe5fc`、
+  `58d9c776`、`e529cadb`、`65e3f9d0`、`cb2a4c78`（section 版本 87/88）、`057e16a4`、
+  `136c2655`、`5789260c`、`919ec426`、`a66d76f4`、`7dc84ed6`、`c8175b1f`。
+- 残项：`6b5566c8`（X3 电源，现已移植）、`60d3c8bb`（封面放大，app 侧已做）、
+  `d5b6c74d`（CPYOS 自有 BLE 策略）、`5a51bf32`（simulator pin，待 sim 构建）、
+  `f47a218b`（KOSync server profiles + series/ISBN，已实现，待设备验证）。
+
+### Phase B — 已完成（选择“上游 SHA + 补丁”，不做 fork）
+- gitlink `96de1be → d9a1304c`；新补丁 `patches/freeink-sdk/d9a1304c-local.patch`
+  （37 文件；12 个失败 hunk 已重写）；`patches/freeink-sdk-cff/` 删除（上游 CFF 更好）。
+- 适配：`HapticFeedback` → `freeink::HapticManager`（含库依赖）。
+- 构建：`readpico` / `readpico_nosource` / `default`(C3) 全部 SUCCESS；
+  `readpico` 7,113,936 B；C3 RAM 69,120 B / Flash 89.6%。
+
+### Phase C — 已完成（behind 归零）
+- 采用 `-s ours` 合并 `upstream/main`（`237fc040`）：**只记录祖先关系，树与合并前逐字节相同**。
+  理由：所有“非拒绝”项已在桶 1–3 逐条移植；真实的三方合并会重新引入已否决的上游子系统
+  （2.0.0 渲染、clippings、BLE、未发布板卡）并带进 254 个新文件，风险大于收益。
+- 推送 `fork/cpyos`：`834e6207..237fc040`。GitHub compare 实测：
+  **`behind_by 0`，`ahead_by 211`，merge_base `a6fd569f`**。
+
+### 真机验证
+- 刷入新构建（app0+app1+五个数据包；i18n **1811 键**，web pack **123,682 B**）。
+- 启动 `0.7.0-cpyos`，`pack: 33 languages, 1811 keys ... ready`，无 ERR。
+- `exp/refresh_soak.py` **36/36**（首跑 1 项为开机抖动，复跑全绿）。
+- 仍需设备点验：X3 电量/USB 状态、封面放大、BLE 无配对时射频关闭、
+  `0727f9f0` 的“刷新屏幕”、KOSync `Other` 配置上传、SDK 显示栈（水波纹/列带/掉轨/分钟时钟）。
+- 仍需 sim 构建：`simulator` / `simulator_readpico`（`5a51bf32` 的 pin 变更）。
+
+### 未做
+- Phase D（发版 tag/Release/Pages）未执行；本次只完成“代码与清零”。
+- 维持拒绝项的详细复审见 `2026-11-08-upstream-kept-rejected-review.md`。
