@@ -754,7 +754,7 @@ void EpubReaderActivity::openReaderMenu() {
         }
       },
       epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
-      !currentPageFootnotes.empty(), !cachedBookmarks.empty(), isJjwxc);
+      !currentPageFootnotes.empty(), !cachedBookmarks.empty(), isJjwxc, selectedMenuAction);
 }
 
 ReaderRenderSpec EpubReaderActivity::effectiveRenderSpec(const uint16_t width, const uint16_t height) const {

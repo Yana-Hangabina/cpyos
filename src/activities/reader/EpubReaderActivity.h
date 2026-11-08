@@ -384,6 +384,9 @@ class EpubReaderActivity final : public ReaderActivity {
   bool imageScalingDirty = false;
   int autoTurnOption = 0;  // current auto page-turn rate index (More panel)
   std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
+  // Row the classic list menu reopens on, remembered for this reading session.
+  // Closing the book drops it with the activity.
+  EpubReaderMenuActivity::MenuAction selectedMenuAction = EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER;
 
   // Footnote support
   FootnoteList currentPageFootnotes;
