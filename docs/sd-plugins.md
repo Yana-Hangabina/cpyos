@@ -134,10 +134,17 @@ Every string field is a template. Available substitutions:
 | `{page}` | current 1-based page | browse |
 | `{limit}` | `page_size + 1` (the extra row detects "more pages"); `page_size` when the URL also uses `{page}` | browse |
 | `{offset}` | 0-based index of the first row on this page (`(page-1) * page_size`) | browse |
-| `{id}` `{title}` `{author}` `{url}` | fields of the selected item | download, sidecar |
+| `{id}` `{title}` `{author}` `{url}` | fields of the selected item, as the catalog sent them | download, sidecar |
+| `{id_enc}` `{title_enc}` `{author_enc}` `{url_enc}` | the same fields percent-encoded (letters, digits and `-_.~` kept) for a query value or a single path segment | download, sidecar |
 | `{md5}` | MD5 hex of the destination file path | sidecar |
 | `{dest}` | sanitized on-SD path of the downloaded file | sidecar |
 | `{device_code}` | from the auth request response | auth poll |
+
+Templates are filled with the catalog's raw text. Request URLs are made valid
+before they are sent: a space, a control character or a non-ASCII byte becomes
+`%XX`, while everything else (including an existing `%XX` escape) is kept. That
+is enough for a path segment, but a value inside a query string must be encoded
+whole, so use the `_enc` forms there: `?q={title_enc}`, not `?q={title}`.
 
 Two browse formats:
 - **`"json"`** (default) — a paged JSON list, using `items`/`fields` below.
