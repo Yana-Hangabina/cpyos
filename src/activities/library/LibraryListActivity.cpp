@@ -1395,6 +1395,9 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
   props.itemsWindowCount = static_cast<uint16_t>(winItems.size());
   configureSwipeDelete(screen, props);
   screen.list(props);
+  // Pagination diagnostics only: keeping them behind the debug-log switch stops
+  // release builds from preparing (and warning about) values they never print.
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
   const int next = nav.drawnRows;
   const auto body = screen.body();
   LOG_DBG("LIB", "page tab=%d top=%d full=%d loaded=%d body=%d..%d next=%d title=%s", activeTabIndex, windowStart,
@@ -1403,6 +1406,7 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
           next < rows ? winItems[static_cast<size_t>(next)].label : "<none>");
   LOG_DBG("LIB", "page first=%d title=%s", rows > 0 ? winItems[0].actionValue : -1,
           rows > 0 ? winItems[0].label : "<none>");
+#endif
 }
 
 void LibraryListActivity::formatInitialHeading(uint32_t initial, std::string& out) {
