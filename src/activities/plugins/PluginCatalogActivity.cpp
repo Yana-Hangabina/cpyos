@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 #include "MappedInputManager.h"
 #include "activities/reader/DictionaryDefinitionActivity.h"  // plain-text README viewer
@@ -26,6 +27,7 @@
 #include "network/HttpDownloader.h"
 #include "network/ProtectedPaths.h"
 #include "util/BookCacheUtils.h"
+#include "util/FirmwareIdentity.h"
 #include "util/PluginEvents.h"
 #include "util/PluginHttp.h"
 #include "util/PluginListIndex.h"
@@ -83,6 +85,23 @@ std::string md5Hex(const std::string& text) {
 // Returns `override` unless it's empty, in which case `fallback` applies.
 const std::string& pick(const std::string& override, const std::string& fallback) {
   return override.empty() ? fallback : override;
+}
+
+// A browse list's optional `requires` array. Absent means public; a malformed
+// or oversized array (or any unadvertised name) hides the list. The names are
+// copied into a fixed stack array so a hostile index cannot make this allocate.
+bool listRequirementsMet(JsonVariantConst requirements) {
+  if (requirements.isNull()) return true;  // absent member = no requirements
+  JsonArrayConst required = requirements.as<JsonArrayConst>();
+  if (required.isNull() || required.size() > firmwareidentity::MAX_LIST_REQUIREMENTS) return false;
+  const std::string_view names[firmwareidentity::MAX_LIST_REQUIREMENTS] = {};
+  size_t count = 0;
+  for (JsonVariantConst v : required) {
+    const char* name = v.as<const char*>();
+    if (!name || !*name) return false;
+    names[count++] = name;
+  }
+  return firmwareidentity::listRequirementsMet(names, count);
 }
 
 // Plugin folder name from its "<root>/<name>/device.json" manifest path.
@@ -214,9 +233,11 @@ bool PluginCatalogActivity::loadManifest() {
   manifest.listsTitlePath = listFields["title"] | "title";
   manifest.listsUrlPath = listFields["url"] | "url";
   manifest.listsIdPath = listFields["id"] | "id";
+  manifest.listsRequiresPath = listFields["requires"] | "requires";
   manifest.browseLists.reserve(std::min<size_t>(browse["lists"].size(), kMaxBrowseLists));
   for (JsonVariantConst l : browse["lists"].as<JsonArrayConst>()) {
     if (manifest.browseLists.size() >= kMaxBrowseLists) break;
+    if (!listRequirementsMet(l["requires"])) continue;
     Manifest::BrowseList entry;
     entry.title = l["title"] | "";
     entry.url = l["url"] | "";
@@ -315,6 +336,7 @@ bool PluginCatalogActivity::loadBrowseListIndex(int& status) {
       LOG_ERR("PCAT", "browse list index truncated to %u lists", static_cast<unsigned>(kMaxBrowseLists));
       break;
     }
+    if (!listRequirementsMet(resolvePath(l, manifest.listsRequiresPath))) continue;
     Manifest::BrowseList entry;
     entry.title = variantToString(resolvePath(l, manifest.listsTitlePath));
     entry.url = variantToString(resolvePath(l, manifest.listsUrlPath));

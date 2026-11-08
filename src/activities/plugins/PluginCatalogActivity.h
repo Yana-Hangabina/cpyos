@@ -75,7 +75,8 @@ class PluginCatalogActivity final : public CatalogActivity {
     // Fetched once per catalog visit (bounded, see pluginlistindex).
     std::string browseListsUrl;
     pluginhttp::Headers listsHeaders;
-    std::string listsItemsPath = "lists", listsTitlePath = "title", listsUrlPath = "url", listsIdPath = "id";
+    std::string listsItemsPath = "lists", listsTitlePath = "title", listsUrlPath = "url", listsIdPath = "id",
+                listsRequiresPath = "requires";
     size_t fixedListCount = 0;  // leading browseLists entries from the manifest
     // JSON search overrides URL/body independently; empty fields reuse browse.
     std::string searchUrl, searchBody;
