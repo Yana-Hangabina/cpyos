@@ -3217,7 +3217,18 @@ unsigned long EpubReaderActivity::confirmLongPressThreshold() const {
 }
 
 bool EpubReaderActivity::launchKOReaderSync() {
-  if (!KOREADER_STORE.hasCredentials()) return false;
+  flushReaderSession();
+
+  // Without a KOReader server the sync activity only brings the device online
+  // and drains the reader-session outbox; a failed join exits back to the
+  // reader with the events still queued. The epub is not released here because
+  // that path never maps progress (no framebuffer loan) and the activity is
+  // destroyed by the replace a moment later.
+  if (!KOREADER_STORE.hasCredentials()) {
+    return activityManager.replaceActivityWith<KOReaderSyncActivity>(
+        epub->getSourcePath(), getCurrentPosition(), SavedProgressPosition{}, std::string{},
+        /*pluginEventsOnly=*/true);
+  }
 
   RenderLock renderLock;
 
