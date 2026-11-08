@@ -374,6 +374,20 @@ void KOReaderSyncActivity::performUpload() {
     if (epub) {
       meta.title = epub->getTitle();
       meta.authors = epub->getAuthor();
+      // Series / ISBN / ASIN are only sent to servers whose profile accepts the
+      // extended metadata; reading them costs one extra OPF parse, so it stays
+      // off the default (CrossPoint / strict KOSync) paths.
+      if (KOREADER_STORE.supportsExtendedMetadata()) {
+        Epub::SyncMetadata syncMetadata;
+        if (epub->loadSyncMetadata(syncMetadata)) {
+          meta.isbn = std::move(syncMetadata.isbn);
+          meta.asin = std::move(syncMetadata.asin);
+          meta.series = std::move(syncMetadata.series);
+          meta.seriesIndex = syncMetadata.seriesIndex;
+        } else {
+          LOG_DBG("KOSync", "Could not read extended EPUB metadata; sending core metadata only");
+        }
+      }
     } else {
       LOG_ERR("KOSync", "Epub unavailable for metadata; sending filename only");
     }
