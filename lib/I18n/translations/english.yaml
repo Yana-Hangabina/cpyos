@@ -1809,3 +1809,7 @@ STR_PACKS_RETRY_HINT: "The last data-pack update did not finish; some text falls
 STR_PLUGIN_UNINSTALL: "Uninstall"
 STR_PLUGIN_UNINSTALL_TITLE: "Uninstall plugin"
 STR_PLUGIN_UNINSTALL_CONFIRM: "Uninstall %s and delete all of its files?"
+STR_FEED_UNAUTHORIZED: "Check username and password"
+STR_FEED_REDIRECTED: "Server redirected. Try its https:// URL"
+STR_FEED_SERVER_ERROR: "Server error, try again later"
+STR_FEED_UNREACHABLE: "Can't reach server"

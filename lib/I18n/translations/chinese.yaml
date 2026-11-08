@@ -1791,3 +1791,7 @@ STR_PACKS_RETRY_HINT: "上次数据包更新未完成，部分文字已回退英
 STR_PLUGIN_UNINSTALL: "卸载"
 STR_PLUGIN_UNINSTALL_TITLE: "卸载插件"
 STR_PLUGIN_UNINSTALL_CONFIRM: "卸载 %s 并删除它的全部文件？"
+STR_FEED_UNAUTHORIZED: "请检查用户名和密码"
+STR_FEED_REDIRECTED: "服务器已重定向，请改用它的 https:// 地址"
+STR_FEED_SERVER_ERROR: "服务器出错，请稍后再试"
+STR_FEED_UNREACHABLE: "无法连接到服务器"
