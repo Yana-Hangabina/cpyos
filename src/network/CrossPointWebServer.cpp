@@ -16,6 +16,7 @@
 #include <Memory.h>
 #include <ResumableFetch.h>
 #include <SecureHttpClient.h>
+#include <Utf8.h>
 #include <Util.h>
 #include <WiFi.h>
 #include <WolfsslCrypto.h>
@@ -2420,8 +2421,8 @@ void CrossPointWebServer::handleCrypto() {
   sendJson(resp);
 }
 
-// POST /api/fetch {plugin, url, dest, headers?, offset?, maxBytes?}
-//   -> {status, bytes, complete, total?}
+// POST /api/fetch {plugin, url, dest, headers?, offset?, maxBytes?, method?, body?}
+//   -> {status, bytes, complete, total?, error?, body?}
 // Device downloads a URL straight to SD, so a large body never passes through
 // the browser.
 void CrossPointWebServer::handleFetch() {
@@ -2435,6 +2436,42 @@ void CrossPointWebServer::handleFetch() {
   if (segmentLimit > FETCH_MAX_SEGMENT_SIZE) segmentLimit = FETCH_MAX_SEGMENT_SIZE;
   if (url.empty() || !protectedpaths::isPluginPath(dest)) {
     server->send(400, "application/json", "{\"error\":\"bad url/dest\"}");
+    return;
+  }
+  const JsonVariantConst methodField = req["method"];
+  if (!methodField.isNull() && !methodField.is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"method must be a string\"}");
+    return;
+  }
+  std::string method = methodField | "GET";
+  std::transform(method.begin(), method.end(), method.begin(),
+                 [](unsigned char c) { return static_cast<char>(toupper(c)); });
+  // HEAD would wait for a body that never comes; the others are not downloads.
+  if (method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE") {
+    server->send(400, "application/json", "{\"error\":\"unsupported method\"}");
+    return;
+  }
+  // The body stays in DRAM and goes out as one TLS record while the session
+  // needs its heap: keep it small, and check the size before copying it.
+  static constexpr size_t FETCH_MAX_REQUEST_BODY = 4 * 1024;
+  const JsonVariantConst bodyField = req["body"];
+  if (!bodyField.isNull() && !bodyField.is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"body must be a string\"}");
+    return;
+  }
+  // JsonString keeps the decoded length, so a \u0000 inside the body is sent too.
+  const JsonString rawBody = bodyField.as<JsonString>();
+  if (rawBody.size() > FETCH_MAX_REQUEST_BODY) {
+    server->send(400, "application/json", "{\"error\":\"body over 4KB\"}");
+    return;
+  }
+  const std::string requestBody = rawBody.isNull() ? std::string() : std::string(rawBody.c_str(), rawBody.size());
+  // Only a GET without a body resumes and follows redirects. Any other request
+  // is sent once: replaying it could repeat its effect, and its headers must
+  // not follow a redirect.
+  const bool resumable = method == "GET" && requestBody.empty();
+  if (!resumable && (requestedOffset != 0 || segmentLimit != 0)) {
+    server->send(400, "application/json", "{\"error\":\"offset and maxBytes need a GET without a body\"}");
     return;
   }
 
@@ -2551,32 +2588,73 @@ void CrossPointWebServer::handleFetch() {
     written = 0;
     return Storage.openFileForWrite("PLG", part, file);
   };
-  const freeink::FetchResult result = freeink::fetchResumable(
-      url, options,
-      [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
-        http.setUserAgent("CrossPoint");
-        // The SecureNet transport ships no CA bundle, so peer verification always
-        // fails (wolfSSL -188); skip it like HttpDownloader does. Traffic stays
-        // TLS-encrypted, just unauthenticated — matching the prior library-lending flow.
-        http.setInsecure();
-        // Some delivery servers assemble books on the fly and can stall mid-body
-        // while packaging; the default 15s no-data timeout truncates those downloads.
-        http.setTimeout(60000);
-        // The plugin's headers (typically its Authorization) stay with the
-        // starting origin; a redirect to another server gets none of them.
-        if (sameOrigin) {
-          for (const auto& header : requestHeaders) http.addHeader(header.first, header.second);
-        }
-      },
-      sink,
-      // The write callback only runs when bytes arrive; with the 60s no-data
-      // timeout a server stall would starve this task's WDT subscription.
-      // shouldAbort is polled in every wait loop.
-      [&] {
-        resetTaskWatchdogIfSubscribed();
-        keepBrowserAlive();
-        return false;  // never aborts; only feeds
-      });
+  const auto configureClient = [](freeink::SecureHttpClient& http) {
+    http.setUserAgent("CrossPoint");
+    // The SecureNet transport ships no CA bundle, so peer verification always
+    // fails (wolfSSL -188); skip it like HttpDownloader does. Traffic stays
+    // TLS-encrypted, just unauthenticated — matching the prior library-lending flow.
+    http.setInsecure();
+    // Some delivery servers assemble books on the fly and can stall mid-body
+    // while packaging; the default 15s no-data timeout truncates those downloads.
+    http.setTimeout(60000);
+  };
+  // The write callback only runs when bytes arrive; with the 60s no-data
+  // timeout a server stall would starve this task's WDT subscription.
+  // shouldAbort is polled in every wait loop.
+  const auto feedWatchdog = [&] {
+    resetTaskWatchdogIfSubscribed();
+    keepBrowserAlive();
+    return false;  // never aborts; only feeds
+  };
+  // A failed single request's first bytes, so the plugin can say why. The
+  // resumable GET's transport discards error bodies, so this only has one here.
+  static constexpr size_t FETCH_ERROR_BODY_LIMIT = 512;
+  std::string errorBody;
+  freeink::FetchResult result;
+  if (resumable) {
+    result = freeink::fetchResumable(
+        url, options,
+        [&](freeink::SecureHttpClient& http, const bool sameOrigin) {
+          configureClient(http);
+          // The plugin's headers (typically its Authorization) stay with the
+          // starting origin; a redirect to another server gets none of them.
+          if (sameOrigin) {
+            for (const auto& header : requestHeaders) http.addHeader(header.first, header.second);
+          }
+        },
+        sink, feedWatchdog);
+  } else {
+    // One request, redirects not followed (SDK default): a side-effecting verb
+    // must not be replayed elsewhere. The first bytes of the reply are kept so
+    // a 4xx/5xx body can reach the plugin; a 2xx body went to the file.
+    freeink::SecureHttpClient http;
+    configureClient(http);
+    uint8_t errorSample[FETCH_ERROR_BODY_LIMIT];
+    size_t errorSampleLen = 0;
+    if (http.begin(url)) {
+      for (const auto& header : requestHeaders) http.addHeader(header.first, header.second);
+      result.status = http.sendRequest(
+          method.c_str(), reinterpret_cast<const uint8_t*>(requestBody.data()), requestBody.size(),
+          [&](const uint8_t* data, size_t len) {
+            if (errorSampleLen < sizeof(errorSample)) {
+              const size_t take = std::min(len, sizeof(errorSample) - errorSampleLen);
+              memcpy(errorSample + errorSampleLen, data, take);
+              errorSampleLen += take;
+            }
+            return sink.write(data, len);
+          },
+          feedWatchdog);
+      result.bytes = written;
+      result.stopped = sdFull;
+      const bool got2xx = result.status >= 200 && result.status < 300;
+      result.complete = got2xx && http.responseComplete() && !sdFull;
+      if (!got2xx && errorSampleLen > 0) {
+        errorBody.assign(reinterpret_cast<const char*>(errorSample), errorSampleLen);
+      }
+    } else {
+      result.status = -1;
+    }
+  }
   if (file.isOpen()) {
     file.flush();
     file.close();
@@ -2608,6 +2686,9 @@ void CrossPointWebServer::handleFetch() {
   if (!ok2xx) {
     Storage.remove(part.c_str());
     resp["error"] = status < 0 ? "transport failure" : "http status";
+    // The cap may have cut a UTF-8 character: drop its partial tail.
+    errorBody.resize(static_cast<size_t>(utf8SafeTruncateBuffer(errorBody.data(), static_cast<int>(errorBody.size()))));
+    if (!errorBody.empty()) resp["body"] = errorBody;
   } else if (complete && !Storage.replaceFile(part.c_str(), dest.c_str())) {
     Storage.remove(part.c_str());
     complete = false;

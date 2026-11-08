@@ -628,8 +628,13 @@ be edited. The reader enforces `expires` when the book opens.
 ### `POST /api/fetch`
 
 Downloads a URL straight to SD, so a large body never passes through the
-browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...},"offset":0,"maxBytes":0}`.
+browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...},"offset":0,"maxBytes":0,"method":"GET","body":""}`.
 
+- `method` is one of `GET` (default), `POST`, `PUT`, `PATCH`, `DELETE`.
+  `body` is at most 4KB and is sent verbatim (it may contain NUL bytes).
+- Only a `GET` **without** a body resumes, follows redirects, or accepts
+  `offset`/`maxBytes`: any other request is sent once, without redirects, so a
+  side-effecting verb is never replayed or replayed at another origin.
 - `dest` must be absolute with no `..`; missing parent folders are created.
 - The transfer is staged in `<dest>.part` and replaces `dest` only when the
   whole body has arrived, so a failed update keeps the previous file.
@@ -645,8 +650,12 @@ browser. Body: `{"plugin":"<name>","url":"...","dest":"/abs/path","headers":{...
   5s to keep the browser connection open; the JSON result follows at the end.
 - **Result:** `{"status":200,"bytes":N,"complete":true,"total":N}` (`total`
   when the server reported a size). `error` is set to `transport failure`,
-  `http status`, or `sd write failed` when the file was not installed.
-- **Errors:** `400 {"error":"bad url/dest"}`; `409 {"error":"offset mismatch","bytes":N}`
+  `http status`, or `sd write failed` when the file was not installed; on a
+  non-2xx single request, `body` carries the first 512 bytes of the reply so
+  the plugin can show the server's message.
+- **Errors:** `400 {"error":"bad url/dest" | "unsupported method" |
+  "body over 4KB" | "offset and maxBytes need a GET without a body"}`;
+  `409 {"error":"offset mismatch","bytes":N}`
   when `offset` does not match the `.part` size; `502 {"error":"sd write failed" |
   "range unsupported" | "download truncated","bytes":N,"complete":false}`.
 
