@@ -123,6 +123,10 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   }
   LOG_DBG("OPDS", "Feed parsed as %s", feed.isJson() ? "OPDS 2.0 JSON" : "OPDS 1.x Atom");
 
+  // Everything the render task reads (entries, rows, state) changes under the
+  // lock: a repaint started before this may still be drawing the previous feed.
+  // Taken only for the mutation, never around the fetch itself.
+  RenderLock lock;
   searchTemplate = feed.getSearchTemplate();
   const auto& nextUrl = feed.getNextPageUrl();
   const auto& prevUrl = feed.getPrevPageUrl();
@@ -144,9 +148,11 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     LOG_INF("OPDS", "Feed truncated to fit memory");
   }
 
+  // Rows first: the render task reads rowItems as soon as the state is BROWSING.
+  rebuildRowItems();
   state = entries.empty() ? State::ERROR : State::BROWSING;
   if (entries.empty()) errorMessage = tr(STR_NO_ENTRIES);
-  rebuildRowItems();
+  lock.unlock();
   requestUpdate();
 }
 
@@ -173,6 +179,9 @@ void OpdsBookBrowserActivity::rebuildRowItems() {
   }
 }
 
+// Callers outside onExit() (which already runs under the render lock) take the lock first: a repaint
+// queued before this (e.g. by the press that opened a book) may still be drawing these rows. The lock
+// is not re-entrant, so it cannot be taken here.
 void OpdsBookBrowserActivity::releaseEntries() {
   // The app's interaction table holds row indices (and hit rects) for the old
   // entries; stop routing touches against it until the next render.
@@ -187,7 +196,10 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   currentPath = UrlUtils::buildUrl(feedUrl, entry.href);
 
-  releaseEntries();
+  {
+    RenderLock lock;
+    releaseEntries();
+  }
   startBrowse();
 }
 
@@ -197,7 +209,10 @@ void OpdsBookBrowserActivity::onBackButton() {
   } else {
     currentPath = navigationHistory.back();
     navigationHistory.pop_back();
-    releaseEntries();
+    {
+      RenderLock lock;
+      releaseEntries();
+    }
     startBrowse();
   }
 }
@@ -239,7 +254,10 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   // The selected book data is now copied into the download URL, filename, and
   // status line. Reclaim the catalog while TLS owns its record buffers; reload
   // the current feed when the transfer finishes.
-  releaseEntries();
+  {
+    RenderLock lock;  // a repaint may still be drawing these rows
+    releaseEntries();
+  }
 
   // downloadFile() (CatalogActivity) releases font caches and checks the TLS heap floor.
   const auto result = downloadFile(downloadUrl, filename, server.username, server.password);
@@ -283,6 +301,9 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   navigationHistory.push_back(currentPath);
   currentPath = url;
 
-  releaseEntries();
+  {
+    RenderLock lock;
+    releaseEntries();
+  }
   startBrowse();
 }
