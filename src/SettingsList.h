@@ -215,8 +215,7 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 //  1. No append below may carry more than kMaxSettingsBatchRows entries. Four
 //     SettingInfo temporaries is the most the C3 stack may hold at once; recheck
 //     the ELF frames if SettingInfo grows. test/settings_api/test_settings_api_keys.py
-//     fails (and its generated translation unit refuses to compile) when a batch
-//     exceeds the cap.
+//     counts every batch and rejects one that is over the cap.
 //  2. entryCount below must equal the number of rows appended, capability guards
 //     included. SettingInfo holds std::function/vector members, so the rows cannot
 //     be evaluated in a constant expression and the count cannot be a
