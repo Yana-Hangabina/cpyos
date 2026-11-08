@@ -76,6 +76,7 @@ namespace {
 // For JSON POSTs, that includes the complete "plain" body. Expose a narrowly
 // scoped release operation so large request bodies do not remain resident
 // between requests, and so outbound TLS can reuse that memory immediately.
+// It also closes a client whose reply stalls.
 class CrossPointHttpServer final : public WebServer {
  public:
   explicit CrossPointHttpServer(uint16_t port) : WebServer(port) {}
@@ -97,6 +98,64 @@ class CrossPointHttpServer final : public WebServer {
     _postArgsLen = 0;
 #endif
   }
+
+ protected:
+  // NetworkClient::write gives up after ten seconds without progress and
+  // returns a short count, but WebServer ignores that and writes the next
+  // chunk, so one stalled peer blocks the single-threaded server for minutes.
+  // Close the client instead: later writes fail at once and the handler returns.
+  size_t _currentClientWrite(const char* b, const size_t l) override {
+    return checkedWrite(l, WebServer::_currentClientWrite(b, l));
+  }
+  size_t _currentClientWrite_P(PGM_P b, const size_t l) override {
+    return checkedWrite(l, WebServer::_currentClientWrite_P(b, l));
+  }
+
+ private:
+  size_t checkedWrite(const size_t wanted, const size_t sent) {
+    if (sent < wanted && client().connected()) {
+      LOG_ERR("WEB", "Client stalled after %u of %u bytes, closing it", static_cast<unsigned>(sent),
+              static_cast<unsigned>(wanted));
+      client().stop();
+    }
+    return sent;
+  }
+};
+
+// Collects a streamed reply into ~1 KB chunks. Each sendContent() is three
+// socket writes, so hundreds of tiny writes fill lwIP's send queue (errno 11)
+// and stall the single-threaded server while other requests wait.
+// A Print, so serializeJson() writes straight into the chunk buffer.
+class ChunkedReply final : public Print {
+ public:
+  explicit ChunkedReply(WebServer& server) : server_(server) {}
+  using Print::write;
+  size_t write(uint8_t c) override { return write(&c, 1); }
+  size_t write(const uint8_t* data, size_t len) override {
+    if (used_ + len > sizeof(buffer_)) flush();
+    if (len >= sizeof(buffer_)) {
+      server_.sendContent(reinterpret_cast<const char*>(data), len);
+      return len;
+    }
+    memcpy(buffer_ + used_, data, len);
+    used_ += len;
+    return len;
+  }
+  void flush() override {
+    if (used_ == 0) return;
+    server_.sendContent(buffer_, used_);
+    used_ = 0;
+  }
+  // Ends the chunked stream after the buffered data.
+  void end() {
+    flush();
+    server_.sendContent("");
+  }
+
+ private:
+  WebServer& server_;
+  char buffer_[1024];
+  size_t used_ = 0;
 };
 
 void releaseRequestArguments(WebServer* server) {
@@ -1619,14 +1678,15 @@ void CrossPointWebServer::handleSettingsPage() const {
 void CrossPointWebServer::handleGetSettings() const {
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
-  server->sendContent("[");
+  ChunkedReply reply(*server);
+  reply.write("[");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   bool seenFirst = false;
   JsonDocument doc;
 
-  forEachSettingsListEntry(&sdFontSystem.registry(), [this, &doc, &output, &seenFirst](const SettingInfo& s) {
+  forEachSettingsListEntry(&sdFontSystem.registry(), [this, &doc, &output, &seenFirst, &reply](const SettingInfo& s) {
     if (!s.key) return;  // Skip ACTION-only entries
 
     doc.clear();
@@ -1711,17 +1771,17 @@ void CrossPointWebServer::handleGetSettings() const {
     }
 
     if (seenFirst) {
-      server->sendContent(",");
+      reply.write(",");
     } else {
       seenFirst = true;
     }
-    server->sendContent(json, len);
+    reply.write(reinterpret_cast<const uint8_t*>(json), len);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   });
 
-  server->sendContent("]");
-  server->sendContent("");
+  reply.write("]");
+  reply.end();
   LOG_DBG("WEB", "Served settings API");
 }
 
@@ -1813,7 +1873,8 @@ void CrossPointWebServer::handleGetOpdsServers() const {
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
-  server->sendContent("[");
+  ChunkedReply reply(*server);
+  reply.write("[");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
@@ -1831,14 +1892,14 @@ void CrossPointWebServer::handleGetOpdsServers() const {
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
-    if (i > 0) server->sendContent(",");
-    server->sendContent(output);
+    if (i > 0) reply.write(",");
+    reply.write(output);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
-  server->sendContent("]");
-  server->sendContent("");
+  reply.write("]");
+  reply.end();
   LOG_DBG("WEB", "Served OPDS servers API (%zu servers)", servers.size());
 }
 
@@ -1931,7 +1992,8 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
-  server->sendContent("[");
+  ChunkedReply reply(*server);
+  reply.write("[");
 
   char output[320];
   constexpr size_t outputSize = sizeof(output);
@@ -1948,14 +2010,14 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
-    if (i > 0) server->sendContent(",");
-    server->sendContent(output);
+    if (i > 0) reply.write(",");
+    reply.write(output);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
-  server->sendContent("]");
-  server->sendContent("");
+  reply.write("]");
+  reply.end();
   LOG_DBG("WEB", "Served Wi-Fi credentials API (%zu network(s))", credentials.size());
 }
 
