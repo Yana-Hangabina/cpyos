@@ -4,6 +4,7 @@
 #include <HalFrontlight.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <SdCardFontRegistry.h>
 
 #include <algorithm>
@@ -203,6 +204,30 @@ inline std::vector<StrId> buildLongPressMenuValues() {
 // Shared settings list used by both the device settings UI and the web settings API.
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
+//
+// --- Table invariants (upstream c7996b9f / 35dccb87 / e9635421) ---------------
+// This is the one copy of the table that stays resident for the whole session, so
+// the vector below is reserved exactly: growing it would reallocate at double
+// capacity (a second ~16 KB block on the ESP32-C3, where SettingInfo is 144 B and
+// usable RAM is ~380 KB) and, because the firmware is built with -fno-exceptions,
+// an allocation failure there calls abort().
+//
+//  1. No append below may carry more than kMaxSettingsBatchRows entries. Four
+//     SettingInfo temporaries is the most the C3 stack may hold at once; recheck
+//     the ELF frames if SettingInfo grows. test/settings_api/test_settings_api_keys.py
+//     counts every batch and rejects one that is over the cap.
+//  2. entryCount below must equal the number of rows appended, capability guards
+//     included. SettingInfo holds std::function/vector members, so the rows cannot
+//     be evaluated in a constant expression and the count cannot be a
+//     static_assert over the rows themselves. It is pinned in two places instead:
+//     the SettingsApiKeys host test re-preprocesses this file for every capability
+//     combination and compiles static_assert(entryCount == <counted rows>), and the
+//     exactness tripwire after the last batch turns a mismatch into a boot-time
+//     error on any board the test matrix does not model. Add a row => move the
+//     count in the same edit, and say in the guard why the number moved.
+// -----------------------------------------------------------------------------
+inline constexpr size_t kMaxSettingsBatchRows = 4;
+
 inline const std::vector<SettingInfo>& getBaseSettingsList() {
   static const std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
@@ -236,8 +261,20 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     statusBarClockValues[CrossPointSettings::STATUS_BAR_CLOCK_LEFT] = StrId::STR_DIR_LEFT;
 
     std::vector<SettingInfo> v;
+    // Rows appended by the batches below (see invariant 2 above the function).
+    // 98 is every unconditional row; each guard adds one row per row it enables:
+    //   FREEINK_CAP_FRONTLIGHT          restore light on wake
+    //   CROSSPOINT_FONT_PACK_EMBEDDED   UI font scale
+    //   CROSSPOINT_CAP_SOUND_FEEDBACK   sound feedback
+    //   FREEINK_CAP_HAPTIC              haptic feedback
+    //   FREEINK_CAP_WARMLIGHT           frontlight warmth
+    //   FREEINK_DEVICE_READPICO         page turn effect + fast page turn
+    //   CROSSPOINT_CAP_BUZZER_FEEDBACK  buzzer source + pitch + strength
     constexpr size_t entryCount = 98
 #if FREEINK_CAP_FRONTLIGHT
+                                  + 1
+#endif
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
                                   + 1
 #endif
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
@@ -256,7 +293,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                                   + 3
 #endif
         ;
-    // ponytail: Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
+    // Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
     v.reserve(entryCount);
     // clang-format off
     v.insert(v.end(), {
@@ -555,7 +592,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                            StrId::STR_SOUND_FEEDBACK_HIGH},
                           "hapticFeedbackLevel", StrId::STR_CAT_SYSTEM),
 #endif
+    });
+    // Separate batch: with all three capabilities enabled this group plus the one
+    // above was a single seven-row append, over kMaxSettingsBatchRows.
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
+    v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_BUZZER_FEEDBACK, &CrossPointSettings::buzzerFeedbackSource,
                           {StrId::STR_STATE_OFF, StrId::STR_BUZZER_SOURCE_KEYS, StrId::STR_BUZZER_SOURCE_SCREEN,
                            StrId::STR_BUZZER_SOURCE_BOTH},
@@ -565,8 +606,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           "buzzerPitch", StrId::STR_CAT_SYSTEM),
         SettingInfo::Value(StrId::STR_BUZZER_STRENGTH, &CrossPointSettings::buzzerStrength, {0, 100, 1},
                            "buzzerStrength", StrId::STR_CAT_SYSTEM),
-#endif
     });
+#endif
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_LIBRARY_USE_METADATA, &CrossPointSettings::libraryUseMetadata,
                             "libraryUseMetadata", StrId::STR_CAT_SYSTEM),
@@ -677,6 +718,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Enum(StrId::STR_CLOCK_UPDATE, &CrossPointSettings::statusBarClockUpdate,
                           {StrId::STR_CLOCK_UPDATE_PAGE_TURN, StrId::STR_CLOCK_UPDATE_MINUTE}, "statusBarClockUpdate",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
+    });
+    v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
                             "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
@@ -766,6 +809,16 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             .withObfuscated(),
     });
     // clang-format on
+    // Exactness tripwire for invariant 2 above: reserve() was exact, so a matching
+    // row count leaves capacity == size here. A mismatch means a row was added or
+    // removed without moving entryCount — the vector then either grew (double
+    // capacity) or carries slack. Log it rather than fail: the reservation is a
+    // memory optimization, and the compile-time half of the check in
+    // test/settings_api/test_settings_api_keys.py is what keeps CI green.
+    if (v.size() != entryCount) {
+      LOG_ERR("SETTINGS", "base settings has %u rows but entryCount reserves %u", static_cast<unsigned>(v.size()),
+              static_cast<unsigned>(entryCount));
+    }
     // Erasing keeps the list at its initial allocation; inserting into a full
     // vector would reallocate it at double capacity for the process lifetime.
     const auto eraseEntry = [&v](const StrId nameId) {
