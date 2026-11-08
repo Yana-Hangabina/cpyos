@@ -98,9 +98,10 @@ class Dictionary {
   // and, if outResult is given, sets it to the specific reason (Decompress /
   // LowMemory / ReadError).
   // `append` keeps `out` and appends the entry, so synonym definitions can be
-  // merged into one text.
+  // merged into one text. *exceedsLimit (if given) reports that the merged text
+  // hit MAX_DEFINITION_BYTES rather than failing for another reason.
   bool readDefinition(const DictLocation& location, std::string& out, LookupResult* outResult = nullptr,
-                      bool append = false);
+                      bool append = false, bool* exceedsLimit = nullptr);
 
   static std::string cleanWord(const char* word);
 
@@ -206,6 +207,8 @@ class Dictionary {
   bool hasPlainDict = false;
   bool hasSyn = false;  // a <stem>.syn synonym index exists next to the .idx
   bool htmlDefinitions = false;
+  // .ifo had no sametypesequence: every entry carries its own inline field types.
+  bool inlineTypes = false;
 
   // Shared scan buffer: lookups are single-threaded and this avoids a
   // 256-byte array on the stack of every locate() call.

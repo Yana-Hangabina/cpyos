@@ -65,6 +65,10 @@ When a word is found, the definition screen shows the matched headword at the to
 
 HTML dictionaries (`sametypesequence=h`) and XDXF dictionaries (`sametypesequence=x`) use the EPUB text-layout engine for supported formatting such as headings, bold, italics, lists, and line breaks. Unrecognized tags keep their text without special formatting. Images and CSS styling are ignored. Definitions that are too large or cannot be parsed or laid out within the available memory fall back to plain text.
 
+A readable `.ifo` file with a missing or empty `sametypesequence` enables the type stored in each entry field. HTML (`h`) and XDXF (`x`) fields use the same formatting support. Text fields are shown as text; binary fields, such as images and sounds, are skipped. Missing, empty, or unreadable `.ifo` files retain plain-text handling.
+
+Inline entries with only empty or binary fields are skipped. If all matching entries are empty, the lookup reports no match.
+
 - **Left/Right** or side **Up/Down** — previous / next page
 - **Back** — return to word selection
 ## Where to find dictionaries
