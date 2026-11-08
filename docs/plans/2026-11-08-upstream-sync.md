@@ -197,7 +197,10 @@
   - i18n 按键并集；测试 CMake 并集；TXT 封面复制保留"检查读 + 字节数校验"。
 - 构建适配（`37b821ba`）：SD 字体测量去掉不存在的 `font` 分支；字体路径改用 `filePath()`；
   词典 `TxtToHtml` 包含与标记；`library::` / `pluginhttp::` 限定；清理上游残留。
-- 构建：`readpico` SUCCESS；`readpico_nosource` SUCCESS；`default`(C3) 见下。
+- 构建：`readpico` SUCCESS（RAM 88,264 B / 26.9%，Flash 7,102,878 / 7,536,640 = 94.2%）；
+  `readpico_nosource` SUCCESS（RAM 88,240 B，Flash 7,029,018 = 93.3%，`JjwxcActivity` 符号 0）；
+  `default`(C3) SUCCESS（RAM 68,944 B / 21.0%，Flash 5,906,259 / 6,553,600 = 90.1%）。
+  C3 首次构建被 ROM-libc 守卫拦下，按 §6 配方 `cp sdkconfig.default <pkg>/esp32c3/sdkconfig` 后通过。
 - 宿主回归：settings icons 7/7、system font pack、font extras 6/6、font preload 2/2、
   webbrowser（含变异）PASS、dictionary selection ALL PASS、section LUT PASS、
   font-preview flow PASS、wifi font recovery PASS。
