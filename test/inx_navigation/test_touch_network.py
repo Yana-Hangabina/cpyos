@@ -191,6 +191,8 @@ with tempfile.TemporaryDirectory(prefix='touch-network-') as directory:
         subprocess.run(command,check=True);subprocess.run([str(binary)],check=True)
 
 wifi=(ROOT/'src/activities/network/WifiSelectionActivity.cpp').read_text()
+gfxl=ROOT/'lib/GfxRenderer/GfxRenderer.cpp'
+truncated=method(gfxl.read_text(),'std::string GfxRenderer::truncatedText').replace('GfxRenderer::truncatedText','truncatedText')
 handlers='\n'.join(method(wifi,'WifiSelectionActivity::'+name) for name in ('onScanEvent','onCancelEvent','onReturnEvent','returnFromFailure'))
 trace=(ROOT/'test/inx_navigation/InxStyleParity.cpp').read_text().split('#ifdef UPSTREAM_THEME_PARITY')[0]
 code=trace+r'''
@@ -290,6 +292,7 @@ struct GfxRenderer {
   }
   return result;
  }
+ @TRUNCATED@
  struct ClipScope {ClipScope(const GfxRenderer&,int,int,int,int){}};
 };
 struct ThemeMetrics {int topPadding,headerHeight,tabBarHeight,verticalSpacing,contentSidePadding;};
@@ -392,8 +395,17 @@ int main() {
     assert(title.font==UI_12_FONT_ID && title.style==EpdFontFamily::BOLD);
     assert(title.rect.y+title.rect.height+theme.verticalSpacing<=last.rect.y);
    }
-   if(std::strlen(ssid)+std::strlen(tr(STR_TO_PREFIX))>25)assert(last.text.ends_with("...") && last.text.size()<=25);
-   if(std::string(ssid).starts_with("中文"))assert(last.text==std::string(tr(STR_TO_PREFIX))+"中文网络中文...");
+   // The SSID line is truncated by rendered width, so a CJK SSID is no longer
+   // cut at 22 bytes and a short one keeps every character.
+   const std::string ssidFull=std::string(tr(STR_TO_PREFIX))+ssid;
+   const int ssidMaxW=body.width-2*theme.contentSidePadding;
+   const int ssidFullW=a.renderer.getTextWidth(UI_10_FONT_ID,ssidFull.c_str());
+   if(ssidFullW>ssidMaxW) {
+    assert(last.text.ends_with("\xe2\x80\xa6"));
+    assert(a.renderer.getTextWidth(UI_10_FONT_ID,last.text.c_str())<=ssidMaxW);
+   } else {
+    assert(last.text==ssidFull);
+   }
   }
   if(hits.count()==2)assert(hits.data()[1].rect.x-hits.data()[0].rect.right()>=6);
   a.mappedInput.touch=false;a.renderer.draws.clear();GUI.hints=0;
@@ -412,6 +424,7 @@ code=code.replace('EpdFontFamily::Style style=EpdFontFamily::REGULAR) {', 'EpdFo
 code=code.replace('static void drawCenteredText(GfxRenderer&', 'static void drawCenteredText(const GfxRenderer&')
 code=code.replace('static void drawCenteredWrappedText(GfxRenderer&', 'static void drawCenteredWrappedText(const GfxRenderer&')
 code=code.replace('void drawButtonHints(GfxRenderer&', 'void drawButtonHints(const GfxRenderer&')
+code=code.replace('@TRUNCATED@',truncated)
 code=code.replace('@UTF8_HEADER@',str(ROOT/'lib/Utf8/Utf8.h'))
 code=code.replace('@UTF8_METHOD@',method(utf8,'utf8CodepointLen')+'\n'+method(utf8,'utf8SafeTruncateBuffer'))
 code=code.replace('@TEXT_METHODS@',text_methods)
