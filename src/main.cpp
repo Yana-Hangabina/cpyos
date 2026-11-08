@@ -1360,7 +1360,11 @@ void setup() {
 
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
-#if FREEINK_DEVICE_EEGO_A4
+      // The two-argument verifyPowerButtonWakeup() is an EEGO-only HAL method, and
+      // the simulator's EEGO profile no longer declares it (the HAL contracts the
+      // simulator restores dropped it). Simulated EEGO therefore takes the generic
+      // path; every real target keeps its own branch untouched.
+#if FREEINK_DEVICE_EEGO_A4 && !defined(SIMULATOR)
       LOG_DBG("MAIN", "Verifying power button press duration");
       if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
