@@ -41,7 +41,11 @@ HalDisplay::GrayscaleMode sleepGrayscaleMode(const GfxRenderer& renderer) {
              : HalDisplay::GrayscaleMode::Absolute;
 }
 
-// Kept separate from /sleep.bmp and /.sleep so alpha-overlay art does not mix with full-screen wallpapers.
+// Both spellings of the full-screen wallpaper pool are one logical pool; a file in either directory is a candidate.
+constexpr char STANDARD_SLEEP_DIR[] = "/.sleep";
+constexpr char STANDARD_SLEEP_LEGACY_DIR[] = "/sleep";
+
+// Kept separate from the full-screen wallpaper pools (and /sleep.bmp) so alpha-overlay art does not mix with them.
 constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
 constexpr char TRANSPARENT_SLEEP_DIR[] = "/.sleep-overlay";
@@ -428,18 +432,31 @@ bool findNextValidSleepImage(HalFile& dir, const SleepRecentKind recentKind, cha
   return false;
 }
 
-bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind, std::string& selectedPath) {
-  auto dir = Storage.open(dirPath);
-  if (!dir || !dir.isDirectory()) return false;
-
+// Both directory spellings form a single candidate pool: an image in the second directory stays visible when the
+// first one is populated too. Only two uint16_t counts are kept, never a list of paths.
+bool selectRandomSleepFile(const char* firstDirPath, const char* secondDirPath, const SleepRecentKind recentKind,
+                           std::string& selectedPath) {
   auto name = makeUniqueNoThrow<char[]>(MAX_SLEEP_FILE_NAME_LEN);
   if (!name) {
     LOG_ERR("SLP", "OOM: sleep filename buffer");
     return false;
   }
 
+  constexpr size_t DIRECTORY_COUNT = 2;
+  const char* dirPaths[DIRECTORY_COUNT] = {firstDirPath, secondDirPath};
+  uint16_t directoryCounts[DIRECTORY_COUNT] = {};
   uint16_t fileCount = 0;
-  while (fileCount < UINT16_MAX && findNextValidSleepImage(dir, recentKind, name.get())) ++fileCount;
+  for (size_t i = 0; i < DIRECTORY_COUNT; i++) {
+    auto dir = Storage.open(dirPaths[i]);
+    if (!dir || !dir.isDirectory()) continue;
+
+    const auto remainingCapacity = static_cast<uint16_t>(UINT16_MAX - fileCount);
+    while (directoryCounts[i] < remainingCapacity && findNextValidSleepImage(dir, recentKind, name.get())) {
+      directoryCounts[i]++;
+    }
+    fileCount = static_cast<uint16_t>(fileCount + directoryCounts[i]);
+  }
+
   if (fileCount == 0) return false;
 
   // Pick a random wallpaper, excluding recently shown ones.
@@ -452,13 +469,25 @@ bool selectRandomSleepFile(const char* dirPath, const SleepRecentKind recentKind
     randomFileIndex = static_cast<uint16_t>(random(fileCount));
   }
 
-  dir.rewindDirectory();
-  for (uint16_t index = 0; index <= randomFileIndex; ++index) {
+  size_t directoryIndex = 0;
+  uint16_t localIndex = randomFileIndex;
+  if (randomFileIndex >= directoryCounts[0]) {
+    directoryIndex = 1;
+    localIndex = static_cast<uint16_t>(randomFileIndex - directoryCounts[0]);
+  }
+
+  auto dir = Storage.open(dirPaths[directoryIndex]);
+  if (!dir || !dir.isDirectory()) {
+    LOG_ERR("SLP", "Failed to open selected sleep image directory: %s", dirPaths[directoryIndex]);
+    return false;
+  }
+  for (uint16_t index = 0; index <= localIndex; ++index) {
     if (!findNextValidSleepImage(dir, recentKind, name.get())) return false;
   }
 
-  selectedPath.reserve(strlen(dirPath) + 1 + strlen(name.get()));
-  selectedPath = dirPath;
+  const char* selectedDirPath = dirPaths[directoryIndex];
+  selectedPath.reserve(strlen(selectedDirPath) + 1 + strlen(name.get()));
+  selectedPath = selectedDirPath;
   selectedPath += "/";
   selectedPath += name.get();
   pushRecentSleepIndex(recentKind, randomFileIndex);
@@ -637,7 +666,7 @@ void SleepActivity::renderCustomSleepScreen() const {
                       SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
   // Look for sleep.bmp on the root of the sd card to determine if we should
   // render a custom sleep screen instead of the default.
-  // This takes priority over the /sleep folder.
+  // This takes priority over both custom sleep directories.
   HalFile file;
   if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
     Bitmap bitmap(file, !native,
@@ -654,9 +683,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   }
 
   std::string selectedPath;
-  if (!selectRandomSleepFile("/.sleep", SleepRecentKind::Standard, selectedPath)) {
-    selectRandomSleepFile("/sleep", SleepRecentKind::Standard, selectedPath);
-  }
+  selectRandomSleepFile(STANDARD_SLEEP_DIR, STANDARD_SLEEP_LEGACY_DIR, SleepRecentKind::Standard, selectedPath);
 
   if (!selectedPath.empty()) {
     HalFile randFile;
@@ -893,9 +920,7 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
   if (renderSleepOverlayPath(TRANSPARENT_SLEEP_ROOT_PNG)) return;
 
   std::string selectedPath;
-  if (!selectRandomSleepFile(TRANSPARENT_SLEEP_DIR, SleepRecentKind::Overlay, selectedPath)) {
-    selectRandomSleepFile(TRANSPARENT_SLEEP_LEGACY_DIR, SleepRecentKind::Overlay, selectedPath);
-  }
+  selectRandomSleepFile(TRANSPARENT_SLEEP_DIR, TRANSPARENT_SLEEP_LEGACY_DIR, SleepRecentKind::Overlay, selectedPath);
 
   if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) return;
 
