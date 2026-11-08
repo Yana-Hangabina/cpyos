@@ -227,6 +227,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         StrId::STR_QUICK_RESUME,
         StrId::STR_TRANSPARENT,
         StrId::STR_NONE_OPT,
+        StrId::STR_COVER_TRANSPARENT,
     };
 
     std::vector<StrId> statusBarClockValues(CrossPointSettings::STATUS_BAR_CLOCK_MODE_COUNT);

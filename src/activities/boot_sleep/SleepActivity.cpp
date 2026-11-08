@@ -311,6 +311,24 @@ bool renderTransparentOverlayPass(HalFile& file, const OverlayBmpInfo& info, con
   return true;
 }
 
+// Starts a gray plane under an overlay. Absolute planes keep the B/W base; other
+// gray planes carry only the overlay's gray. A gray cover (absolute planes only)
+// is redrawn into the plane so its gray levels survive under the overlay.
+bool beginOverlayGrayPlane(GfxRenderer& renderer, const Bitmap* grayCover, const GfxRenderer::RenderMode plane,
+                           const bool absolute) {
+  if (grayCover) {
+    if (grayCover->rewindToData() != BmpReaderError::Ok) return false;
+    renderer.clearScreen();
+  } else if (!absolute) {
+    renderer.clearScreen(0x00);
+  }
+  renderer.setRenderMode(plane);
+  if (!grayCover) return true;
+  const auto placement = calculateBitmapPlacement(grayCover->getWidth(), grayCover->getHeight(), renderer);
+  return renderer.drawBitmap(*grayCover, placement.x, placement.y, renderer.getScreenWidth(),
+                             renderer.getScreenHeight(), placement.cropX, placement.cropY);
+}
+
 enum class AlphaOverlayResult : uint8_t { Rendered, NotAlphaOverlay, Error };
 enum class AlphaScanResult : uint8_t { Useful, NotUseful, Error };
 
@@ -339,7 +357,8 @@ AlphaScanResult scanForUsefulAlpha(HalFile& file, const OverlayBmpInfo& info, ui
   return AlphaScanResult::NotUseful;
 }
 
-AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog) {
+AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& renderer, const char* pathForLog,
+                                                  const Bitmap* grayCover) {
   OverlayBmpInfo info;
   if (!parseOverlayBmpHeader(file, info, false)) return AlphaOverlayResult::NotAlphaOverlay;
 
@@ -366,9 +385,8 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
   }
 
   // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleLsb)) {
+  if (!beginOverlayGrayPlane(renderer, grayCover, GfxRenderer::GRAYSCALE_LSB, absolute) ||
+      !renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleLsb)) {
     renderer.setRenderMode(GfxRenderer::BW);
     // Keep the current display instead of trying another overlay with a
     // framebuffer that now contains an incomplete gray plane.
@@ -376,9 +394,8 @@ AlphaOverlayResult tryRenderTransparentOverlayBmp(HalFile& file, GfxRenderer& re
   }
   renderer.copyGrayscaleLsbBuffers();
 
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleMsb)) {
+  if (!beginOverlayGrayPlane(renderer, grayCover, GfxRenderer::GRAYSCALE_MSB, absolute) ||
+      !renderTransparentOverlayPass(file, info, placement, renderer, row.get(), TransparentOverlayPass::GrayscaleMsb)) {
     renderer.setRenderMode(GfxRenderer::BW);
     return AlphaOverlayResult::Rendered;
   }
@@ -655,6 +672,7 @@ void SleepActivity::onEnter() {
     case (CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE):
       return renderCustomSleepScreen();
     case (CrossPointSettings::DEEP_SLEEP_COVER):
+    case (CrossPointSettings::DEEP_SLEEP_COVER_TRANSPARENT):
       return renderCoverSleepScreen();
     default:
       return renderDefaultSleepScreen();
@@ -753,9 +771,11 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
   if (!preserveBackground) renderer.clearScreen();
 
+  // Cover + Transparent: the cover's own gray levels still need their planes even
+  // though the overlay content is drawn on top of it.
   const bool hasGreyscale =
-      bitmap.hasGreyscale() && (preserveBackground || SETTINGS.sleepScreenCoverFilter ==
-                                                          CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
+      (bitmap.hasGreyscale() || (preserveBackground && overlayGrayCover != nullptr)) &&
+      (preserveBackground || SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
   // Custom artwork follows the same global dark mode as every other screen.
   // (16-level grayscale images cannot be polarity-swapped this way; they keep
   // their own values and are documented as a grayscale exception.)
@@ -790,6 +810,18 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
     renderer.invertScreen();
   }
 
+  // Cover + Transparent: the B/W cover is the overlay's background and the
+  // overlay renderers redraw its gray planes, so the whole thing (cover grays
+  // included) still reaches the panel in one sequence.
+  if (overlayCover == &bitmap) {
+    if (hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported()) {
+      overlayGrayCover = &bitmap;
+    }
+    renderTransparentCustomSleepScreen();
+    overlayGrayCover = nullptr;
+    return;
+  }
+
   const bool absolute = hasGreyscale && renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported();
   if (absolute) {
     if (!renderer.displayGrayscaleBase(sleepGrayscaleMode(renderer))) return;
@@ -810,8 +842,15 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
         ready = false;
         break;
       }
-      if (!absolute || !preserveBackground) renderer.clearScreen(absolute ? 0xFF : 0x00);
-      renderer.setRenderMode(plane);
+      if (preserveBackground) {
+        if (!beginOverlayGrayPlane(renderer, overlayGrayCover, plane, absolute)) {
+          ready = false;
+          break;
+        }
+      } else {
+        renderer.clearScreen(absolute ? 0xFF : 0x00);
+        renderer.setRenderMode(plane);
+      }
       if (!renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, preserveBackground)) {
         ready = false;
         break;
@@ -830,7 +869,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const bool pre
 }
 
 bool SleepActivity::renderSleepOverlayFile(HalFile& file, const char* pathForLog) const {
-  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog);
+  const auto alphaResult = tryRenderTransparentOverlayBmp(file, renderer, pathForLog, overlayGrayCover);
   if (alphaResult == AlphaOverlayResult::Rendered) return true;
   if (alphaResult == AlphaOverlayResult::Error) return false;
 
@@ -874,17 +913,15 @@ bool SleepActivity::renderTransparentOverlayPng(const std::string& path) const {
   }
 
   // Absolute planes retain B/W background bits; each visible overlay pixel is rewritten in both passes.
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-  if (!converter.decodeToFramebuffer(path, renderer, config)) {
+  if (!beginOverlayGrayPlane(renderer, overlayGrayCover, GfxRenderer::GRAYSCALE_LSB, absolute) ||
+      !converter.decodeToFramebuffer(path, renderer, config)) {
     renderer.setRenderMode(GfxRenderer::BW);
     return true;
   }
   renderer.copyGrayscaleLsbBuffers();
 
-  if (!absolute) renderer.clearScreen(0x00);
-  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-  if (!converter.decodeToFramebuffer(path, renderer, config)) {
+  if (!beginOverlayGrayPlane(renderer, overlayGrayCover, GfxRenderer::GRAYSCALE_MSB, absolute) ||
+      !converter.decodeToFramebuffer(path, renderer, config)) {
     renderer.setRenderMode(GfxRenderer::BW);
     return true;
   }
@@ -925,13 +962,23 @@ void SleepActivity::renderTransparentCustomSleepScreen() const {
   if (!selectedPath.empty() && renderSleepOverlayPath(selectedPath)) return;
 
   LOG_ERR("SLP", "No valid transparent sleep overlay found");
+  if (overlayCover) {
+    // Cover + Transparent without an overlay image: show the plain cover rather
+    // than the night scene, which is what the reader selected.
+    const Bitmap& cover = *overlayCover;
+    overlayCover = nullptr;
+    if (cover.rewindToData() == BmpReaderError::Ok) return renderBitmapSleepScreen(cover);
+  }
   renderDefaultSleepScreen();
 }
 
 void SleepActivity::renderCoverSleepScreen() const {
-  // A missing cover falls back to the built-in night scene. There is no
-  // COVER_CUSTOM hybrid any more: one style, one fallback.
-  void (SleepActivity::*renderNoCoverSleepScreen)() const = &SleepActivity::renderDefaultSleepScreen;
+  // A missing cover falls back to the built-in night scene -- or, in Cover +
+  // Transparent, to the overlay over whatever is on the glass, so the contact
+  // banner the reader set up still shows.
+  const bool withOverlay = SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_COVER_TRANSPARENT;
+  void (SleepActivity::*renderNoCoverSleepScreen)() const =
+      withOverlay ? &SleepActivity::renderTransparentCustomSleepScreen : &SleepActivity::renderDefaultSleepScreen;
 
   if (APP_STATE.openEpubPath.empty()) {
     return (this->*renderNoCoverSleepScreen)();
@@ -1006,7 +1053,9 @@ void SleepActivity::renderCoverSleepScreen() const {
     Bitmap bitmap(file);
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       LOG_DBG("SLP", "Rendering sleep cover: %s", coverBmpPath.c_str());
+      if (withOverlay) overlayCover = &bitmap;
       renderBitmapSleepScreen(bitmap);
+      overlayCover = nullptr;
       return;
     }
   }

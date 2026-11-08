@@ -90,6 +90,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     DEEP_SLEEP_QUICK_RESUME = 3,
     DEEP_SLEEP_TRANSPARENT = 4,
     DEEP_SLEEP_BLANK = 5,
+    // The book cover with the transparent sleep overlay composited on top, so a
+    // contact banner ("if found, please return") sits on the cover the reader
+    // was reading. Overlay files and lookup order are the Current Screen ones.
+    DEEP_SLEEP_COVER_TRANSPARENT = 6,
     DEEP_SLEEP_STYLE_COUNT
   };
   enum SLEEP_STATE_BADGE { SLEEP_BADGE_OFF = 0, SLEEP_BADGE_ON = 1, SLEEP_STATE_BADGE_COUNT };
