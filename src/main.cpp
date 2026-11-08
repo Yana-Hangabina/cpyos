@@ -38,6 +38,7 @@
 
 #include "AchievementsStore.h"
 #include "BleInput.h"
+#include "BleRemotePolicy.h"
 #include "BootTimings.h"
 #include "BackgroundWork.h"
 #include "CrossPointSettings.h"
@@ -297,7 +298,18 @@ static_assert(HalGPIO::BTN_BACK == SoundFeedback::BUTTON_BACK &&
 
 void updateBluetoothLifecycle() {
 #if FREEINK_CAP_BLE_HID_HOST
-  static unsigned long nextStartAttemptAt = 0;
+  // Reader visit state: each visit gets its own start budget and idle window, so a
+  // starved visit stops asking instead of dropping its SD font caches every pass for
+  // the whole session (upstream fecee610: 5 s apart, six per visit).
+  static bool readerVisit = false;
+  static bleinput::ReaderStartBudget readerStartBudget;
+  const bool inReader = activityManager.isReaderActivity();
+  if (inReader != readerVisit) {
+    readerVisit = inReader;
+    readerStartBudget.reset();
+    if (inReader) bleinput::armIdleClock();
+  }
+
   const auto wanted = [] {
     return SETTINGS.bluetoothEnabled && activityManager.keepsBluetoothAlive() &&
            !activityManager.requiresExclusiveStorageLoop() && WiFi.getMode() == WIFI_MODE_NULL;
@@ -315,12 +327,22 @@ void updateBluetoothLifecycle() {
     bleinput::stop();
     return;
   }
+  // A bonded remote that is switched off or left at home must not hold the radio (and
+  // the CPU at full speed) for the reading session: 30 s with no link stops it, and
+  // that decision holds until the reader is re-entered. Only readers are covered; the
+  // pages that own BLE explicitly keep their radio.
+  if (inReader && bleinput::isRunning() && bleinput::tickIdle()) return;
   // Preparation blocks new starts; C3 and PSRAM readers keep existing links
   // through chapter construction and book indexing.
-  if (bleinput::isRunning() || activityManager.deferBluetoothStart() || millis() < nextStartAttemptAt) return;
+  if (bleinput::isRunning() || activityManager.deferBluetoothStart() ||
+      !readerStartBudget.allowed(static_cast<uint32_t>(millis()))) {
+    return;
+  }
   // Non-reader pages that keep an existing link alive own their explicit start
   // attempts; only readers use the automatic reader-memory gate and retry loop.
-  if (!activityManager.isReaderActivity()) return;
+  if (!inReader) return;
+  // Stopped for idleness in this visit: do not undo the decision automatically.
+  if (bleinput::idleStopped()) return;
   RenderLock lock(RenderLock::Mode::Try);
   if (!lock.ownsLock()) return;
   // Rendering may have started a chapter build while we were acquiring the lock.
@@ -328,8 +350,29 @@ void updateBluetoothLifecycle() {
       bleinput::isRunning())
     return;
   const auto result = bleinput::ensureStarted(renderer, bleinput::StartContext::Reader);
-  if (result == bleinput::StartResult::LowMemory || result == bleinput::StartResult::Failed) {
-    nextStartAttemptAt = millis() + 2000;
+  switch (result) {
+    case bleinput::StartResult::Started:
+    case bleinput::StartResult::AlreadyRunning:
+      readerStartBudget.reset();
+      break;
+    case bleinput::StartResult::Stopping: {
+      // A teardown that did not finish: end() is resumable, so nudge it — but at most
+      // once a second, because it waits for the connection task and must not stall the
+      // UI on every pass — and do not spend the start budget on it.
+      static uint32_t nextStopNudgeAt = 0;
+      const uint32_t now = static_cast<uint32_t>(millis());
+      if (now - nextStopNudgeAt >= 1000) {
+        nextStopNudgeAt = now + 1000;
+        bleinput::stop();
+      }
+      break;
+    }
+    case bleinput::StartResult::LowMemory:
+    case bleinput::StartResult::Failed:
+      readerStartBudget.refusedAt(static_cast<uint32_t>(millis()));
+      break;
+    case bleinput::StartResult::Unavailable:
+      break;
   }
 #endif
 }

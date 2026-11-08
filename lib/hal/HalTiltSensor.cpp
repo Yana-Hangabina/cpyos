@@ -1,6 +1,5 @@
 #include "HalTiltSensor.h"
 
-#include <BoardConfig.h>
 #include <Logging.h>
 
 HalTiltSensor halTiltSensor;  // Singleton instance
@@ -66,25 +65,26 @@ void HalTiltSensor::begin() {
     return;
   }
 
-  // The SC7A20H (Read Pico) is a 3-axis accelerometer with no gyroscope: read() fills
-  // ax/ay/az but reports gx = gy = gz = 0, so the angular-rate gesture below could never
-  // fire. The same flick is still measurable -- see RATE_THRESHOLD_GPS in the header --
-  // by differentiating the gravity component, so the part is brought up like any other
-  // and update() takes the accelerometer path. isAvailable() then reports true, which is
-  // the gate SettingsList uses to offer "Tilt page turn".
-#if FREEINK_DEVICE_READPICO
-  _accelOnly = BoardConfig::ACTIVE.sensors.imuType == BoardConfig::ImuType::Sc7a20h;
-#else
-  _accelOnly = false;
-#endif
-
-  _initMs = millis();
-  _lastPollMs = millis();
   // begin() leaves the sensors sampling; stand them by until tilt page turn actually
-  // wakes them, so a disabled IMU doesn't drain the battery.
+  // wakes them, so a disabled IMU doesn't drain the battery. Done before the capability
+  // query so an accelerometer-only part is put to standby too (upstream 8fc2b661 moves
+  // the sleep() ahead of its capability decision for exactly this reason).
   if (!_sdkImu.sleep()) {
     LOG_ERR("GYR", "IMU standby failed");
   }
+
+  // Ask the driver what the active part can do instead of naming one board or reading a
+  // part table behind a board macro. Boards whose IMU has no gyroscope (SC7A20H on Read
+  // Pico) still report ax/ay/az and report gx = gy = gz = 0, so the angular-rate gesture
+  // below could never fire on them. The same flick is measurable -- see
+  // RATE_THRESHOLD_GPS in the header -- by differentiating the gravity component, so
+  // such a part is brought up like any other and update() takes the accelerometer path.
+  // _available deliberately stays "begin() succeeded": an accelerometer-only part is a
+  // usable motion source, which is the gate SettingsList uses to offer motion page turn.
+  _accelOnly = !_sdkImu.hasGyroscope();
+
+  _initMs = millis();
+  _lastPollMs = millis();
   LOG_INF("GYR", "SDK IMU initialized (%s)", _accelOnly ? "accelerometer only, gravity rate" : "gyroscope rate");
 }
 

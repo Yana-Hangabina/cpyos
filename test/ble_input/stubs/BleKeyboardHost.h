@@ -58,9 +58,14 @@ struct TestBleHost {
   }
   bool running = false;
   bool beginResult = true;
+  bool connecting = false;
+  bool stopping = false;
   int begins = 0, ends = 0;
   bool isRunning() const { return running; }
   bool isConnected() const { return running; }
+  bool isConnecting() const { return connecting; }
+  // Mirrors the SDK: a failed end() leaves the host stopping until one completes.
+  bool isStopping() const { return stopping; }
   bool begin(const char*) {
     startUnderLock = renderLockDepth == 1;
     ++begins;
@@ -70,6 +75,7 @@ struct TestBleHost {
   void end() {
     ++ends;
     running = false;
+    stopping = false;
   }
 };
 inline TestBleHost BleHid;

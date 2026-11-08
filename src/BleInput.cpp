@@ -6,6 +6,7 @@
 #include <I18n.h>
 #include <Logging.h>
 
+#include <Arduino.h>
 #include <cstdio>
 #include <cstring>
 
@@ -127,6 +128,12 @@ StartContext lastGateContext = StartContext::Reader;
 // "is a remote paired". Cleared only by a reboot.
 BondState bondState;
 
+// Reader idle-off bookkeeping (see armIdleClock()/tickIdle()). Millis-based, so it
+// is reset by every start and by every reader entry rather than carried across.
+uint32_t idleSinceMs = 0;
+bool idleClockRunning = false;
+bool idleStopLatched = false;
+
 GateFailure gateFailure(const MemorySnapshot& memory, const StartContext context) {
   const size_t minFree = context == StartContext::Reader ? kReaderMinFreeInternal : kExplicitMinFreeInternal;
   const size_t minLargest = context == StartContext::Reader ? kReaderMinLargestInternal : kExplicitMinLargestInternal;
@@ -178,6 +185,10 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
   return StartResult::Unavailable;
 #else
   if (BleHid.isRunning()) return StartResult::AlreadyRunning;
+  // A teardown that did not finish keeps begin() refused inside the host; report it
+  // as its own state so the caller retries instead of counting a refusal (which would
+  // also have spent a memory-gate pass and a log line on it).
+  if (BleHid.isStopping()) return StartResult::Stopping;
 
   const auto before = readMemory();
   auto memory = before;
@@ -226,6 +237,10 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
   // there is a remote worth keeping the radio up for (see readerRadioAllowed()).
   bondState.known = true;
   bondState.hasRemote = BleHid.pairedCount() > 0;
+  // A fresh radio gets a fresh idle window and must be able to be stopped by idleness
+  // again, even if the previous visit ended that way.
+  idleClockRunning = false;
+  idleStopLatched = false;
   LOG_INF("BLE", "bonded remotes: %u", static_cast<unsigned>(BleHid.pairedCount()));
   lastGateFailure = GateFailure::None;
   LOG_INF("BLE", "BLE HID host started");
@@ -236,11 +251,69 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
 
 void stop() {
 #if FREEINK_CAP_BLE_HID_HOST
-  if (!BleHid.isRunning()) return;
+  // Any stop ends the idle episode: a later start (settings page, reconnect) must not
+  // inherit "stopped for idleness" from the visit that ended.
+  idleClockRunning = false;
+  idleStopLatched = false;
+  // A failed end() leaves the host "stopping" with the stack half down; a later end()
+  // carries on from there, so a stop request must not be dropped just because the host
+  // no longer reports itself running.
+  if (!BleHid.isRunning() && !BleHid.isStopping()) return;
   HalPowerManager::Lock powerLock;
   logDiagnostics("before stop");
   BleHid.end();
   logDiagnostics("after stop");
+#endif
+}
+
+void armIdleClock() {
+#if FREEINK_CAP_BLE_HID_HOST
+  idleClockRunning = false;
+  idleStopLatched = false;
+#endif
+}
+
+bool tickIdle() {
+#if !FREEINK_CAP_BLE_HID_HOST
+  return false;
+#else
+  if (!BleHid.isRunning()) {
+    idleClockRunning = false;
+    return false;
+  }
+  if (idleStopLatched) return false;
+
+  const uint32_t now = static_cast<uint32_t>(millis());
+  if (!idleClockRunning) {
+    idleSinceMs = now;
+    idleClockRunning = true;
+    return false;
+  }
+  // A linked remote sits quiet between two presses for a long time; a scan or a
+  // connect attempt is activity in its own right. Both restart the window, so a peer
+  // that is being discovered right now is not cut off at the boundary.
+  const bool linked = BleHid.isConnected();
+  const bool busy = BleHid.isConnecting() || BleHid.isScanning();
+  if (linked || busy) {
+    idleSinceMs = now;
+    return false;
+  }
+  const uint32_t idleMs = now - idleSinceMs;
+  if (!radioIdleExpired(linked, busy, idleMs)) return false;
+
+  LOG_INF("BLE", "radio idle for %ums with no link; stopping", static_cast<unsigned>(idleMs));
+  stop();
+  // stop() cleared the flag; this visit must not restart the radio on its own.
+  idleStopLatched = true;
+  return true;
+#endif
+}
+
+bool idleStopped() {
+#if FREEINK_CAP_BLE_HID_HOST
+  return idleStopLatched;
+#else
+  return false;
 #endif
 }
 

@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "Activity.h"
+#include "BleInput.h"
 #include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -363,6 +364,11 @@ void ActivityManager::loop() {
         }
         break;
       }
+      // The incoming screen is about to allocate for real (Home cover scan, library
+      // index, page build). A page that does not keep Bluetooth alive gets the radio's
+      // tens of KB back first: end() is idempotent and bounded, and stopping here is
+      // the only point that runs before onEnter() allocates (upstream fecee610).
+      if (!pendingActivity->keepsBluetoothAlive()) bleinput::stop();
       RenderLock lock;
 
       if (pendingAction.load() == PendingAction::Replace) {
@@ -715,6 +721,9 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
+  // The sleep screen allocates before it is queued; drop the BLE host first so its
+  // tens of KB are available for that allocation (upstream fecee610's beforeSleep()).
+  bleinput::stop();
   if (!replaceActivityWith<SleepActivity>(fromTimeout)) return;
   // replaceActivity() queues the switch; loop() normally applies it in one
   // pass. It can defer while the render task holds the lock (or return early on
