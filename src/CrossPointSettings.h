@@ -316,7 +316,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   enum INX_TAB_POSITION { INX_TAB_TOP = 0, INX_TAB_BOTTOM = 1, INX_TAB_POSITION_COUNT };
 
   // Image rendering in EPUB reader
-  enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
+  // Image rendering in EPUB reader. IMAGES_DISPLAY_BW lays images out like
+  // IMAGES_DISPLAY and keeps the same section cache, but draws them as a B/W
+  // dither in the base pass, so an image page turns like a text page instead of
+  // paying the extra grayscale refresh.
+  enum IMAGE_RENDERING {
+    IMAGES_DISPLAY = 0,
+    IMAGES_PLACEHOLDER = 1,
+    IMAGES_SUPPRESS = 2,
+    IMAGES_DISPLAY_BW = 3,
+    IMAGE_RENDERING_COUNT
+  };
 
   // How Select opens the reader menu: the classic full-screen list, or a toolbar
   // overlay (top/bottom bars with Contents / Text / More bottom-sheet panels)

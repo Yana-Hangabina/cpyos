@@ -86,6 +86,7 @@ class GfxRenderer {
   mutable uint8_t* grayscale16Buffer = nullptr;
   RenderMode renderMode;
   mutable bool absoluteGrayPlanes = false;
+  bool ditherImagesInBw = false;
   Orientation orientation;
   // The loop updates this flag while the render task reads refresh policy.
   std::atomic<bool> fadingFix;
@@ -777,6 +778,12 @@ class GfxRenderer {
   void displayGrayBuffer() const;
   // Active input encoding, used when drawing monochrome overlays into planes.
   bool grayPlanesAreAbsolute() const { return absoluteGrayPlanes; }
+  // BW pass: draw 2-bit image pixels as a 2x2 ordered dither instead of "any ink
+  // is black". Only for pages that get no image grayscale pass (the reader's
+  // Black & White image mode), because the gray planes expect every gray image
+  // pixel black in the base.
+  void setDitherImagesInBw(const bool enabled) { ditherImagesInBw = enabled; }
+  bool imagesDitheredInBw() const { return ditherImagesInBw; }
 
   // Tiled grayscale (X4): stream one band of a plane straight to controller RAM
   // from `scratch` (panelWidthBytes * numRows, physical rows [yStart, yStart+

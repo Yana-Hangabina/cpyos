@@ -451,7 +451,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
-                          {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
+                          {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS,
+                           StrId::STR_IMAGES_DISPLAY_BW},
                           "imageRendering", StrId::STR_CAT_READER),
         SettingInfo::Enum(StrId::STR_IMAGE_SCALING, &CrossPointSettings::imageScaling,
                           {StrId::STR_IMAGE_SCALING_NEAREST, StrId::STR_IMAGE_SCALING_BILINEAR}, "imageScaling",
