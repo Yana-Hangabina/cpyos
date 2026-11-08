@@ -151,6 +151,22 @@ jobs:
           path: .pio/build/default/firmware.bin
           if-no-files-found: error
 
+      # The other two envs are built above already; publish them too so the PR
+      # comment can link a download per device instead of only X3/X4.
+      - name: Upload firmware-x4pro.bin artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: firmware-x4pro.bin
+          path: .pio/build/x4pro/firmware.bin
+          if-no-files-found: error
+
+      - name: Upload firmware-readpico.bin artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: firmware-readpico.bin
+          path: .pio/build/readpico/firmware.bin
+          if-no-files-found: error
+
   unit-tests:
     runs-on: ubuntu-latest
     steps:

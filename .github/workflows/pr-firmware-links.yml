@@ -60,12 +60,11 @@ jobs:
               return;
             }
 
+            // Must match the artifact names ci.yml uploads.
             const builds = [
               { name: 'firmware.bin', device: 'X3 / X4' },
-              { name: 'firmware-sticky.bin', device: 'Sticky' },
               { name: 'firmware-x4pro.bin', device: 'X4 Pro' },
-              { name: 'firmware-x4c.bin', device: 'X4 Classic' },
-              { name: 'firmware-papermono.bin', device: 'Paper Mono' },
+              { name: 'firmware-readpico.bin', device: 'Read Pico' },
             ];
             const { data: artifactResponse } =
               await github.rest.actions.listWorkflowRunArtifacts({
@@ -79,12 +78,15 @@ jobs:
                 .filter((artifact) => !artifact.expired)
                 .map((artifact) => [artifact.name, artifact]),
             );
-            const missingBuilds = builds.filter((build) => !artifacts.has(build.name));
+            // Link whichever builds exist: one flaky device env must not hide
+            // the downloads that were produced. "Not available" only when the
+            // run left no unexpired firmware artifact at all.
+            const availableBuilds = builds.filter((build) => artifacts.has(build.name));
             const shortSha = run.head_sha.slice(0, 7);
             let body = `${marker}\n### Firmware builds\n\n`;
 
-            if (missingBuilds.length === 0) {
-              const links = builds.map(({ name, device }) => {
+            if (availableBuilds.length > 0) {
+              const links = availableBuilds.map(({ name, device }) => {
                 const artifact = artifacts.get(name);
                 const url = `https://github.com/${owner}/${repo}/actions/runs/${run.id}/artifacts/${artifact.id}`;
                 return `- [${device} (\`${name}\`)](${url})`;
@@ -99,9 +101,8 @@ jobs:
                 body += `\n\n> The firmware builds succeeded, but [another CI check finished with ${run.conclusion}](${run.html_url}).`;
               }
             } else {
-              const missingNames = missingBuilds.map(({ name }) => `\`${name}\``).join(', ');
               body += `Firmware is not available for the latest commit of this PR (\`${shortSha}\`). `;
-              body += `The build did not produce ${missingNames}. [View the CI run](${run.html_url}).`;
+              body += `No unexpired firmware artifact was found. [View the CI run](${run.html_url}).`;
             }
 
             const comments = await github.paginate(github.rest.issues.listComments, {
