@@ -505,6 +505,11 @@ Error messages include:
 
 Incomplete WebSocket uploads are deleted on disconnect or error.
 
+The server accepts two WebSocket connections at a time and closes further ones
+without a reply. It also closes a connection that sends nothing for two minutes,
+which deletes an unfinished upload — a phone that sleeps or loses Wi-Fi no longer
+holds the upload slot until TCP gives up.
+
 ## WebDAV
 
 The same HTTP server registers a WebDAV-compatible handler for file manager clients.
@@ -688,7 +693,8 @@ stores opaque `{plugin, action, args}` blobs (fixed 6-slot pool; args/result
 ```bash
 curl -X POST http://crosspoint.local/api/plugin-jobs \
   -d '{"plugin":"<name>","action":"<action>","args":{"path":"/Books/somefile"}}'
-# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy)
+# -> {"id":3}         (503 {"error":"job queue full"} when all slots busy,
+#                      or {"error":"out of memory"} if the queue cannot be allocated)
 ```
 
 ### `GET /api/plugin-jobs/claim?plugin=<name>`
