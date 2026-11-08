@@ -463,18 +463,29 @@ void HomeActivity::loop() {
       metrics.homeContinueReadingInMenu ? selectorIndex : selectorIndex - recentBooks.size();
   int menuRow = -1;
   MappedInputManager::RowTouch menuTouch;
+  BaseTheme::MenuRowGeometry menuGeo{};
   if (isCarousel) {
     const int menuBottom = renderer.getScreenHeight();
     const int columnWidth = renderer.getScreenWidth() / renderedMenuCount;
     menuTouch = mappedInput.colTouch(menuRow, 0, columnWidth, renderedMenuCount, menuBottom - metrics.menuRowHeight,
                                      menuBottom, columnWidth);
   } else {
-    menuTouch = mappedInput.rowTouch(menuRow, menuTop, metrics.menuRowHeight + metrics.menuSpacing, renderedMenuCount,
-                                     0, INT32_MAX, metrics.menuRowHeight);
+    // Hit-test from the theme's drawn menu geometry, never from a fixed metrics
+    // table: themes derive the row height/origin from their own drawing (and
+    // CpyTheme pages the rows), so a Base-only assumption drifts from the
+    // visuals. Mirrors the menuRect built in render().
+    const Rect menuRect{0, menuTop, renderer.getScreenWidth(),
+                        renderer.getScreenHeight() - (metrics.headerHeight + metrics.homeTopPadding +
+                                                      metrics.verticalSpacing + metrics.homeMenuTopOffset +
+                                                      metrics.buttonHintsHeight)};
+    menuGeo = GUI.getMenuRowGeometry(renderer, menuRect, renderedMenuSelection, renderedMenuCount);
+    menuTouch = mappedInput.rowTouch(menuRow, menuGeo.firstRowY, menuGeo.rowStep, menuGeo.pageCount, menuGeo.xStart,
+                                     menuGeo.xEnd, menuGeo.rowHeight);
   }
   if (menuTouch != MappedInputManager::RowTouch::None) {
     const int touchedIndex =
-        metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
+        menuGeo.pageStart +
+        (metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size()));
     if (menuTouch == MappedInputManager::RowTouch::Down) {
       if (selectorIndex != touchedIndex) {
         selectorIndex = touchedIndex;
@@ -558,7 +569,7 @@ void HomeActivity::render(RenderLock&&) {
   }
 
   renderer.clearScreen();
-  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+  bool bufferRestored = coverRendered && coverBufferStored && restoreCoverBuffer();
 
   if (isCarousel) {
     drawHeader();

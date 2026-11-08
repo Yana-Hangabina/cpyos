@@ -34,6 +34,11 @@ class EpubReaderActivity final : public ReaderActivity {
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
+  // Memo for currentTocIndex()'s sub-chapter lookup, which reads the section's
+  // anchor map. Same key as the answer, so it can never go stale in between.
+  mutable int tocMemoSpine = -1;
+  mutable int tocMemoPage = -1;
+  mutable int tocMemoValue = -1;
   std::optional<uint16_t> pendingPageJump;
   std::string pendingAnchor;
   int cachedSpineIndex = 0;

@@ -5,6 +5,7 @@
 
 #include "MappedInputManager.h"
 #include "activities/Activity.h"
+#include "components/InlineConfirm.h"
 #include "components/OptionPopup.h"
 
 class ImageViewerActivity final : public Activity {
@@ -35,10 +36,17 @@ class ImageViewerActivity final : public Activity {
   // persists the custom-sleep mode. `prepared` is the decode/copy result.
   void commitSleepImage(bool prepared, bool transparent);
   void showSleepCoverOptions();
+  // Runs after the confirmation: the format choice (BMP/JPEG write straight
+  // through, PNG picks normal/transparent).
+  void chooseSleepCoverFormat();
 
   std::string filePath;
   std::vector<std::string> siblingImages;
   int currentImageIndex = -1;
   bool imageReady = false;
   OptionPopup sleepCoverPopup;
+  // Setting the cover overwrites the single /sleep.bmp the device sleeps with,
+  // so it is asked before anything is written.
+  InlineConfirm sleepCoverConfirm_;
+  bool sleepCoverConfirmed_ = false;
 };

@@ -92,6 +92,9 @@ class Section {
   // Read a page already laid out by the in-progress build (page < build LUT size), from
   // the partially-written tmp .bin without disturbing the build's write cursor.
   std::unique_ptr<Page> loadPageDuringBuild(int page);
+  // Open this section's cache file and position it at the anchor map; leaves the
+  // file reader ready to stream the (anchor, page) pairs.
+  bool openAnchorMap(HalFile& anchorFile, uint16_t& count) const;
 
  public:
   uint16_t pageCount = 0;
@@ -139,6 +142,14 @@ class Section {
   // Resolve an anchor from the in-progress build first, then the on-disk anchor map
   // (covers finalized sections and partials from a previous session).
   std::optional<uint16_t> findAnchor(const std::string& anchor) const;
+
+  // Which TOC entry the given page belongs to. An aggregated EPUB can place
+  // several TOC entries in one XHTML; getTocIndexForSpineIndex() then only names
+  // the first of them, so the real boundary is resolved from the page's anchor
+  // position (in-progress build first, then the on-disk anchor map). Read-only:
+  // no cache-format change. Returns the spine's first TOC index when the spine
+  // has no anchors.
+  int getTocIndexForPage(int page) const;
 
   // True if this spine's unzipped HTML is already cached, so a build won't pay the (multi-second on a
   // giant spine) zip inflation. Lets the reader skip the indexing popup on a fast reopen/rebuild.

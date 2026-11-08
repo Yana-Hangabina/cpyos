@@ -416,6 +416,19 @@ void ImageViewerActivity::commitSleepImage(const bool prepared, const bool trans
 
 void ImageViewerActivity::showSleepCoverOptions() {
   if (!imageReady) return;
+  // Overwriting /sleep.bmp is not undoable from here, so a stray Confirm tap
+  // first gets a confirmation naming the file it would use.
+  sleepCoverConfirmed_ = false;
+  const std::string heading = tr(STR_SET_SLEEP_COVER) + std::string("?");
+  const std::string subject = filePath.substr(filePath.find_last_of('/') + 1);
+  sleepCoverConfirm_.ask(heading.c_str(), subject.c_str(), tr(STR_CONFIRM), [this] {
+    sleepCoverConfirmed_ = true;
+    chooseSleepCoverFormat();
+  });
+  requestUpdate();
+}
+
+void ImageViewerActivity::chooseSleepCoverFormat() {
   if (isJpeg()) {
     doSetJpegSleepCover();
     return;
@@ -433,11 +446,22 @@ void ImageViewerActivity::showSleepCoverOptions() {
   requestUpdate();
 }
 
-void ImageViewerActivity::render(RenderLock&&) { sleepCoverPopup.processRender(renderer, mappedInput); }
+void ImageViewerActivity::render(RenderLock&&) {
+  if (sleepCoverConfirm_.processRender(renderer, mappedInput)) return;
+  sleepCoverPopup.processRender(renderer, mappedInput);
+}
 
 void ImageViewerActivity::loop() {
   // Keep CPU awake/polling so 1st click works
   Activity::loop();
+
+  if (sleepCoverConfirm_.handleInput(mappedInput, [this] { requestUpdate(); })) {
+    // A cancelled confirmation leaves the dialog's scrim on screen; repaint the
+    // page. A confirmed one either opened the PNG format popup or already wrote
+    // the cover and drew its own status card.
+    if (!sleepCoverConfirm_.active() && !sleepCoverPopup.isActive() && !sleepCoverConfirmed_) onEnter();
+    return;
+  }
 
   if (sleepCoverPopup.handleInput(mappedInput, [this] { requestUpdate(); })) {
     if (!sleepCoverPopup.isActive()) onEnter();

@@ -5652,7 +5652,29 @@ bool EpubReaderActivity::usesToolbarMenu() const {
 int EpubReaderActivity::currentTocIndex() const {
   if (!epub) return -1;
   const auto offset = section ? currentPageVisibleOffset : cachedVisibleTextOffset;
-  return getChapterTocIndex(*epub, currentSpineIndex, offset);
+  // TXT/Markdown chapters come from the visible offset; keep that path as-is.
+  if (Txt::isTxtOrMd(epub->getSourcePath())) {
+    return getChapterTocIndex(*epub, currentSpineIndex, offset);
+  }
+  // An aggregated EPUB can put several TOC entries in one XHTML, where the
+  // spine's first TOC entry is only an upper bound. Resolve the real boundary
+  // from the page's anchor position. The lookup reads the section's anchor map,
+  // so memoise it against the exact (spine, page) pair it answers for.
+  const int page = section ? section->currentPage : nextPageNumber;
+  if (tocMemoSpine == currentSpineIndex && tocMemoPage == page) return tocMemoValue;
+  int index;
+  if (section) {
+    index = section->getTocIndexForPage(page);
+  } else {
+    // Child screens may have released the section; its saved anchor map remains readable.
+    const Section cachedSection(epub, currentSpineIndex, renderer);
+    index = cachedSection.getTocIndexForPage(page);
+  }
+  if (index < 0) index = getChapterTocIndex(*epub, currentSpineIndex, offset);
+  tocMemoSpine = currentSpineIndex;
+  tocMemoPage = page;
+  tocMemoValue = index;
+  return index;
 }
 
 std::string EpubReaderActivity::currentChapterTitle() const {
