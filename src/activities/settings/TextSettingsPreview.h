@@ -40,6 +40,6 @@ struct PreviewLayout {
 
 // Draws the sample-text pane via the reader engine, reusing layout across redraws
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName);
+                   int height, const char* familyName, const char* sizeName, int leftInset = 0, int rightInset = 0);
 
 }  // namespace textsettings

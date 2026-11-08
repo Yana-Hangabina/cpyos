@@ -76,9 +76,11 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, int fontId, in
 }  // namespace
 
 void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, int previewPadding, int labelGap, int top,
-                   int height, const char* familyName, const char* sizeName) {
-  const int left = previewPadding;
-  const int width = renderer.getScreenWidth() - (previewPadding * 2);
+                   int height, const char* familyName, const char* sizeName, int leftInset, int rightInset) {
+  // Insets keep the sample inside the screen safe area (landscape reserves room
+  // for bezel / button hints).
+  const int left = previewPadding + leftInset;
+  const int width = renderer.getScreenWidth() - (previewPadding * 2) - leftInset - rightInset;
   if (width <= 0 || height <= 0) return;
 
   const int labelH = renderer.getTextHeight(UI_10_FONT_ID);
