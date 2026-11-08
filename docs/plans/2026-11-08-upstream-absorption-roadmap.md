@@ -10,6 +10,9 @@
 `8fc2b661` 陀螺仪、`fecee610` 上游 BLE 模块）。详细论证见
 [`2026-11-08-upstream-absorption-designs.md`](2026-11-08-upstream-absorption-designs.md)。
 
+**用户已定（2026-11-08）**：Phase 0 等你发令后再开始；新增阿塞拜疆语；圆角按**内圆角**处理；
+排版 **M1–M6 全做**；插件兼容性栈排入；执行顺序见 §6。
+
 ## 0. 总览
 
 | 主题 | 原拒绝数 | 新处置（概要） |
@@ -61,7 +64,7 @@
 - **M4（+5 天）**：L2 边框/底纹 + 宽表预量。所有 `TAG_PageLine` 遍历点必须跳过新标签。
 - **M5（+8 天）**：L3b 逐词字体 + L3c small caps。逐词槽位放进现有 arena（`+numWords` 字节），
   不引入第二个分配；所有度量函数（`measureWordWidth`、断行、ruby 偏移、逐行 erase）同步改。
-- **M6（+5 天，可选）**：drop caps。16 级画布用 4-bit 覆盖度重采样；竖排禁用。
+- **M6（+5 天，已确定纳入）**：drop caps。16 级画布用 4-bit 覆盖度重采样；竖排禁用。
 - **L4（5–7 天，可选）**：按 run 的 source ranges，典型 <200 B/页；当前没有任何功能依赖它。
 
 “完整渲染能力（不含 drop caps）”约 **24 开发日**；含 drop caps 约 29。
@@ -89,7 +92,7 @@
 |---|---|---|
 | **字体包内容变化后分页不失效**：reader ID 是固定字面量，换 `.def` 后 `Section` 仍按旧 `fontId` 命中 | 新增 `scripts/build_font_ids.py` 统一生成所有 ID；`CJK_PACK_SIGNATURE = crc32(CPYOSHanSansSC.ttf) & 0xFFFF` 折进 `CJK_READER_SIZE_FONT_ID(pt)` | 0 flash/RAM；首次刷机后一次性重建分页；以后换字体不再手 bump Section 版本 |
 | **稀有脚本 UI 面尺寸错误**：`loadSupplementFonts` 固定 12/14/16pt，不跟 `uiFontScale` | 按 `typography::pointsFor(scale)` 为每个活跃字号建面并挂到 UI 角色 | PSRAM +20–30 KB（装 world-scripts 时）；修复 Compact/XL 下 supplement 字过大/过小 |
-| `Ə/ə` 缺失（阿塞拜疆语） | 在系统包里合并两个轮廓（不改 `chars_8105` 的 8,105 断言），新增 `chars_extra.txt`；可选加 `az` 语言 | app0 +~1 KB、数据分区 +~10 KB；**需完整刷数据分区** |
+| `Ə/ə` 缺失（阿塞拜疆语） | 在系统包里合并两个轮廓（不改 `chars_8105` 的 8,105 断言），新增 `chars_extra.txt`；**已确定新增 `az` 语言** | app0 +~1 KB、数据分区 +~10 KB；**需完整刷数据分区** |
 | 字体 ID 三处来源、Ruby 生成器、无 `--check` | 统一到 Python 生成器 + `test_font_ids.py`；保留 `CJK_UI_*`/`CJK_READER_SIZE_FONT_ID(pt)` 宏 | 0 运行时开销；消除漂移 |
 | 行距只有 4 档 | 增加可选 `readerLineSpacingPercent`（0=off），保留按字族系数 | +1 键 ×35 语言；section 头已含 `lineCompression`，无需缓存改动 |
 | 未使用的 16 个 NotoSerif 头文件 | 删除头文件与生成器输入；保留 ID 别名（兼容旧设置与紧急回退链） | 仅仓库体积；不动用户可见行为 |
@@ -108,7 +111,7 @@
 ### 2.3 顺序
 
 - **P0（≈1.5 天）**：字体 ID 生成器 + 包 CRC；supplement 面跟随 `uiFontScale`；删死头文件/死 helper；
-  `Ə/ə`+`az`（产品确认后）。
+  `Ə/ə`+`az`（已确认新增）。
 - **P1（≈2 天）**：行距百分比覆盖；Libron 数据；C3 世界语言 UI 探针清理（仅在有需求时）。
 - **P2**：CSS `font-size`（依赖排版 L1/L3a）；TTF 预热 + 列表扫描（需先有 `TtfEpdFont::prewarmText`）。
 
@@ -160,20 +163,25 @@ CPYOS 的锚定其实**强于**上游：注解存 `spineIndex` + 章内可见码
 
 ## 4. 圆角与设备抽象：先把地基做对
 
-### 4.1 事实
+### 4.1 事实（含用户照片确认）
 
+- **用户提供的实机照片确认：需要处理的是“内圆角”** —— 即白色边框与显示区之间的开孔圆角，
+  不是机身外轮廓。内容（状态栏左右簇、页脚、Tab 端点）靠近的是这个内圆角。
 - Read Pico 的 `viewableInsets = {5,5,8,5}`，但 `cornerRadius` 从未配置（默认 0）。
-- 仓库里没有玻璃照片，但 `artifacts/photo_gate/demo0.png` 是真实设备照片；对边框开孔做圆拟合，
-  估计 **r ≈ 30 面板像素（20–45）**。换算成“切角深度”，只在最底部/最侧边 8–12 px 的行里
-  吃掉 ≤10 px —— 正好是 `01f09e0e` 修的那类问题，也解释了为什么一直没人注意。
+- 对仓库内真实设备照片的边框开孔做圆拟合，估计 **r ≈ 30 面板像素（20–45）**；
+  用户照片与之相符：内圆角可见，且只影响最底部/最侧边 8–12 px 的行（切角 ≤10 px）。
 - SDK `d9a1304c` 的 `BoardConfig` **已带** `cornerRadius`/`bottomCornerRadius`/`viewableInsets`，
   且我们的补丁不碰 `BoardConfig.h` → **无需 SDK 改动**。
+- 用户照片只作为判断依据，**不提交进仓库**（项目规则：设备截图不入库）；精确数值仍需一次
+  1:1 标尺照片，放进 `artifacts/` 并记录在 `docs/engineering/read-pico.md`。
 
 ### 4.2 抽象
 
 - `lib/GfxRenderer/PanelInsets.h`（纯函数）：`cornerCut(radius, depth)`、`sideClearance(inset, radius, depth)`。
   比上游的 `max(margin, corner)` 精确：30 px 半径不会把页脚整体推内 25 px。
 - `UITheme::getCornerRadius()/getBottomCornerRadius()` 暴露板级数值；app 不直接读 `BoardConfig`。
+- **语义是“内容区内圆角”**：clearance 作用在显示区四角（不是机身外角），上下半径可不同
+  （`bottomCornerRadius` 缺省回落到 `cornerRadius`）。
 - 消费点：`BaseTheme::drawStatusBar` 的左右簇、阅读器页脚 `readerChromeMetrics`、CPY 标题带/底栏端点、
   书架位置读数、Toast。全部写成 `max(existing, cornerCut(...))`，**radius=0 时逐字节不变**。
 - 不移植 `BaseTheme::headerBand()` 原样（它会二次内缩 CPYOS 已按安全区传入的 rect）；
@@ -223,9 +231,9 @@ CPYOS 的锚定其实**强于**上游：注解存 `spineIndex` + 章内可见码
   `c9f64d0d` 取 `loadPlugins` 的 `ok/Array.isArray` 错误态 + `PluginHost.js` 只加载一次；
   `e7b47ee5` 把 `ci.yml` 的 push 分支加上 `cpyos`；`997b4331` 把两条发布规则写进文档；
   `bb855ef9` 在 CPYOS 的 `SCOPE.md` 写 6–8 行 downstream 条款。
-- **计划后来**：插件 capability/list-index 栈（`e93f8d1f`/`861683cc`，需先有
-  `FirmwareIdentity` 词汇表）、`a722472c`（出现出版详情页时的一行规则）、
-  `414b3797`（统一测试桩的 RenderLock 生命周期）。
+- **排入 Batch 2（已确定）**：插件 capability/list-index 栈（先建 `FirmwareIdentity` 词汇表，
+  再 `d5d0bea1` 映射、`e93f8d1f` 合并行为、`861683cc` requires 过滤）。
+- **计划后来**：`a722472c`（出现出版详情页时的一行规则）、`414b3797`（统一测试桩的 RenderLock 生命周期）。
 - **真拒绝**：`55a77c2e`（CPYOS 的 select 保持原生箭头）、`18d611f2`（文件不存在且同类修复已在）、
   `35072257`/`6ec32892`/`a6db8f15`/`91ed3ef8`（README/版本/发布产物归 CPYOS）、
   `c17b80ab`（未发货硬件）、`6d2cd3a1`/`3607ea7b`/`d1f5d1ec`（上游已回退的规则树，CPYOS 已有序）。
@@ -242,25 +250,87 @@ CPYOS 的锚定其实**强于**上游：注解存 `spineIndex` + 章内可见码
 
 ---
 
-## 6. 建议实施顺序
+## 6. 已确定的执行顺序（用户 2026-11-08 拍板）
 
-| 阶段 | 内容 | 依赖 | 估时 |
-|---|---|---|---|
-| **Phase 0（低风险速赢）** | 字体 ID 生成器+包 CRC；supplement 字号；`43694c90`；`59912ea9`；`d5d0bea1` 边界；`c9f64d0d` 两个缺陷；`e7b47ee5` CI 分支；`4ef42ee1` 守卫；`cac12269`；`5407ffcd`/`b823d54b`/容量不变量；`8fc2b661`；`fecee610` 三机制；圆角 (a) | 无 | ~1.5–2 周 |
-| **Phase 1（排版 L1 + 短语查询 + 字体 P1）** | M1 CSS 选择器/white-space；短语查询 Phase A；行距百分比；`Ə/ə`+`az`（可选）；圆角 (b) 测量 | Phase 0 的缓存 bump 协调 | ~1 周 |
-| **Phase 2（排版 L2 + L3a）** | 分页/孤行/边框/宽表；块级字号；插件列表索引栈（若排期） | M1 | ~2–2.5 周 |
-| **Phase 3（排版 L3b/L3c + L4 可选）** | 逐词字体、small caps；按需 source ranges；drop caps 可选 | L1/L2 稳定 | ~2 周 |
+已确认的决定：
 
-每个阶段都带缓存版本 bump、宿主测试、`refresh_soak` 与真机截图门禁；排版改动必须先过
-“16 级 AA/竖排/底部对齐/JJWXC 气泡”四项回归。
+- **Phase 0 暂缓**，等你明确发令后再开始；
+- **新增阿塞拜疆语**（`Ə/ə` + `az`）；
+- 圆角按**内圆角**处理（内容区开孔），不是机身外角；
+- **排版 M1–M6 全做**；
+- **插件兼容性栈排入**计划。
 
-## 7. 需要你拍板的点
+在 Phase 0 发令后，按下面的依赖顺序执行（不是简单按编号）：
 
-1. **从 Phase 0 开始吗？** 其中 `Ə/ə`+`az` 需要先定“是否新增阿塞拜疆语”。
-2. **圆角**：是否安排一次 1:1 实拍（画标尺）来确定 `READ_PICO.cornerRadius`？在测出来之前默认 0。
-3. **排版优先级**：M1（CSS 级联）先做没有争议；M2 块级字号、M3 孤行/分页、M4 边框/表格，按你的书源需求排序。
-4. **短语查询**：默认查词胶囊放在第一位是否可接受？编辑已有注解时不提供查词。
-5. **插件栈**：`e529cadb` 兼容性词汇表是 `e93f8d1f`/`861683cc` 的前置，是否排进 Phase 2。
+### Gate 0 — 等你发令
+
+### Batch 0A：基础与不变量（无布局风险）
+1. 字体 ID 生成器 + `crc32(ttf)` 折入 `CJK_READER_SIZE_FONT_ID(pt)`（先做，避免与后续 Section bump 混在一起）。
+2. 设置容量自检 + 批次≤4（修 `test_settings_api_keys.py` 的既有失败）。
+3. UI/网络速赢：`43694c90`、`5407ffcd`、`b823d54b`、`cac12269`、`4ef42ee1`、
+   `8f4d035c`（仅时钟可用性）、`59912ea9`、`e7b47ee5`、`d5d0bea1`（仅边界）、`c9f64d0d`（两个缺陷）。
+4. 陀螺仪能力查询 `8fc2b661`；BLE 三机制 `fecee610`。
+5. 测试补齐：`5eb498b0`、`052d481a` 写成 CPYOS 自己的 suite。
+
+### Batch 0B：内圆角与安全区（数据 + 零 delta）
+6. `PanelInsets.h` + `UITheme` accessors + 5 个消费点；radius=0 时截图逐字节 A/B。
+7. 用 1:1 标尺照片确定内圆角（用户照片已确认“有内圆角”；数值测出前保持 0）。
+8. `headerBand`/`headerStatusHeight`（`01f09e0e`）与上述合并。
+
+### Batch 0C：短语查询
+9. `[查词][高亮][批注]` 第三胶囊、`SelectionText`、`PhraseQuery`、候选阶梯、宿主与真机测试。
+
+### Batch 0D：语言与字体数据
+10. `Ə/ə` 合并进系统包 + `az` 语言 + i18n pack 重刷（完整数据分区刷写）。
+
+### Batch 1：排版（M1→M6，串行以控制缓存版本）
+11. M1 CSS 级联/选择器/white-space（CSS 14、Section 89/88）。
+12. M2 块级字号（Section 90/89）。
+13. M3 分页/孤行寡行/keep-with-next。
+14. M4 边框/底纹/宽表预量。
+15. M5 逐词字体 + small caps（单一 arena，不引第二分配）。
+16. M6 drop caps（16 级 4-bit 覆盖度；竖排禁用）。
+17. L4 按 run 的 source ranges（**可选**，M5 稳定后再决定）。
+
+每个 M 落地都会 bump 一次 Section；开发期接受多次重建，发版只算一次。
+
+### Batch 2：插件兼容性栈（可与 Batch 1 并行、独立工作流）
+18. 兼容性词汇表：`FirmwareIdentity`、`PLUGIN_API_VERSION`、`PLUGIN_CAPABILITIES`、`filtersCompatibility`。
+19. 动态列表索引：`lists_url`/`lists_headers`/`lists_items`/`{list_id}`，`MAX_BROWSE_LISTS` 边界。
+20. 合并行为：固定列表在索引失败时仍可用、Back 不重取。
+21. `requires` 过滤（malformed → hide）。
+
+### Batch 3：字体 P1/P2 与其余计划项
+22. 行距百分比覆盖；Libron 目录数据；TTF 预热（仅在性能日志证明需要时）。
+23. 设置分组、CPY 版状态栏 overlay、前端灯图标（先量 35 语言是否溢出）、统一 clang-format 21 pass、
+   `wasTapInRect` 迁移、封面失败 RAM 备忘、`a722472c`（出现详情页时）、`414b3797`（统一测试桩）。
+
+验收门禁（每批）：三构建 + 宿主测试 + `refresh_soak` 36/36；排版改动额外过
+“16 级 AA / 竖排 / 底部对齐 / JJWXC 气泡”四项；圆角改动过截图 A/B。
+
+### 估时（单线 / 并行）
+
+| 批次 | 内容 | 开发日 |
+|---|---|---:|
+| 0A | 字体 ID/容量/UI/网络/陀螺仪/BLE 机制/测试 | 3–4 |
+| 0B | 内圆角与安全区（含 1:1 测量） | 1.5 |
+| 0C | 短语查询 Phase A | 1.5–2 |
+| 0D | `Ə/ə` + `az`（含完整刷数据分区） | 0.5 |
+| 1 | 排版 M1–M6 | 29–30 |
+| 2 | 插件兼容性栈 | 5–8 |
+| 3 | 字体 P1/P2 与其余计划项 | 5–10 |
+| 可选 | L4 按 run 的 source ranges | 5–7 |
+
+Batch 0 约 1.5–2 周；Batch 1 与 Batch 2 可由两条工作流并行，墙钟约 7–9 周（含每批构建/真机门禁）；
+全部串行则约 10–12 周。Phase 0 的时钟从你发令当天开始。
+
+## 7. 已解决的决策点
+
+1. ~~Phase 0 是否开始~~ → **暂缓，等你发令**。
+2. ~~是否新增阿塞拜疆语~~ → **新增**。
+3. ~~圆角是外角还是内角~~ → **内圆角**（内容区开孔）；数值用 1:1 标尺照片定，测出前为 0。
+4. ~~排版哪些做~~ → **M1–M6 全做**；L4 source ranges 作为可选尾项。
+5. ~~插件兼容性是否排期~~ → **排入 Batch 2**，可与排版并行。
 
 ## 8. 与旧文档的关系
 
