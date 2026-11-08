@@ -11,6 +11,7 @@
 #include <LibraryText.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <PanelInsets.h>
 #include <PinyinDb.h>
 #include <Utf8.h>
 
@@ -2225,14 +2226,21 @@ void LibraryListActivity::drawPositionReadout() const {
   // In the CPY footer band the right edge belongs to the sort entry, so the
   // readout anchors to the grid's left margin there (design footer strip).
   const bool cpyFooter = UITheme::getInstance().usesCpyLayout() && usesCoverGrid() && bookRowCount() > 0;
-  const int x = cpyFooter ? pageContentRect().x + kGridSidePad
-                          : renderer.getScreenWidth() - width - SIDE_PADDING;
+  int x = cpyFooter ? pageContentRect().x + kGridSidePad
+                    : renderer.getScreenWidth() - width - SIDE_PADDING;
   // CPY: the tab bar owns the screen bottom, so the readout moves up into
   // the line the content margins reserve above it.
   const Rect page = pageContentRect();
   const int y = UITheme::getInstance().usesCpyLayout()
                     ? page.y + page.height - renderer.getLineHeight(SMALL_FONT_ID) * 2 - metrics.verticalSpacing
                     : renderer.getScreenHeight() - metrics.buttonHintsHeight - renderer.getLineHeight(SMALL_FONT_ID);
+  // Classic mode puts this readout in the bottom-right corner, the row a
+  // rounded aperture clips; pull its right edge out of the arc. On a square
+  // panel the cut is 0 and this clamp never fires.
+  const int readoutDepth = std::max(0, renderer.getScreenHeight() - (y + renderer.getLineHeight(SMALL_FONT_ID)));
+  const int readoutCut =
+      panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), readoutDepth);
+  x = std::min(x, renderer.getScreenWidth() - width - readoutCut);
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }
 

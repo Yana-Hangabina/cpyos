@@ -4,6 +4,7 @@
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
 #include <Memory.h>
+#include <PanelInsets.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -1122,20 +1123,27 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 #if !FREEINK_DEVICE_READPICO
   textY -= 4;
 #endif
-
-  int leftClusterX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
-  int rightClusterX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;
 #if FREEINK_DEVICE_EEGO_A4
-  // The EEGO A4 panel has physically rounded corners; the status bar text must
-  // stay inside the 28 px UI content inset (eego-a4-template-firmware
-  // SAFE_AREA spec), so clamp the left/right text clusters out of the corner
-  // cutouts. The bottom ~4 px of the bar is covered by the bezel, so the whole
-  // cluster is also lifted by that amount (measured on device).
-  constexpr int kEegoStatusBarSafeInset = 28;
-  leftClusterX = std::max(leftClusterX, kEegoStatusBarSafeInset);
-  rightClusterX = std::min(rightClusterX, renderer.getScreenWidth() - kEegoStatusBarSafeInset);
+  // The A4's bottom ~4 px of bar is covered by the bezel (measured on device),
+  // so its text lane is lifted by that much on top of the shared lift. This is
+  // board hardware, not a corner rule: no profile field carries it today
+  // (statusBarOffsetY moves the line *toward* the edge, the other direction).
   textY -= 4;
 #endif
+
+  // The side clusters are the only status chrome that sits in the panel's
+  // bottom corners, so each end clears the viewable aperture's arc at the row
+  // depth it occupies. Board data drives it (cornerRadius / bottomCornerRadius;
+  // 0 on every profile CPYOS ships), and at radius 0 the cut is 0, so both
+  // ends land exactly where the straight-edge margins put them.
+  // Upstream 01f09e0e clamps with max(margin, corner) instead; that pushes a
+  // 30 px-radius panel's whole cluster 25 px inward for a defect at most 10 px
+  // deep, so this takes the actual cut.
+  const int statusRowDepth = std::max(0, screenHeight - (textY + renderer.getTextHeight(textFontId)));
+  const int statusCornerCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), statusRowDepth);
+  int leftClusterX = std::max(metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, statusCornerCut);
+  int rightClusterX = std::min(renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight,
+                               renderer.getScreenWidth() - statusCornerCut);
   int leftClusterWidth = 0;
   int rightClusterWidth = 0;
 

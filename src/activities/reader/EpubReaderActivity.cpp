@@ -52,6 +52,7 @@ extern void disarmScanWatchdog();
 #include "BleInput.h"
 #include <ChangedRegion.h>
 #include <Fb2.h>
+#include <PanelInsets.h>
 #include "BookmarkEntry.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -5407,6 +5408,15 @@ EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetrics(
   m.headerBottom = m.ruleY + 1;
   m.pageH = renderer.getLineHeight(kChromeTextFont);
   m.pageY = screenH - viewBottom - 8 - m.pageH;
+  // The footer's lowest ink row (the page numbers) is what can reach the
+  // panel's bottom corners: its depth from the bottom edge decides how much
+  // width a rounded aperture steals there. sideClearance keeps the straight
+  // edge margins when they are wider, and at radius 0 the cut is 0, so a
+  // square panel's chrome is unchanged.
+  const int footerDepth = std::max(0, screenH - (m.pageY + m.pageH));
+  const int bottomRadius = UITheme::getInstance().getBottomCornerRadius();
+  m.left = panel_insets::sideClearance(m.left, bottomRadius, footerDepth);
+  m.right = std::min(m.right, screenW - panel_insets::cornerCut(bottomRadius, footerDepth));
   m.waveH = kChromeWaveHeight;
   m.waveY = m.pageY - kChromeWaveToPages - m.waveH;
   m.footerTop = m.waveY - kChromeFooterGap;
