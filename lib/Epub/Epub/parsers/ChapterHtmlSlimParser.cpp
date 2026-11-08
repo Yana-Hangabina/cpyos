@@ -1070,7 +1070,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           ImageDimsProbe headerProbe;
           self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
           bool gotDimensions = headerProbe.getDimensions(dims);
-          const char* sniffedExtension = ImageDimsProbe::extensionForFormat(headerProbe.detectedFormat());
+          ImageDimsProbe::Format sniffedFormat = headerProbe.detectedFormat();
+
+          if (!gotDimensions) {
+            // Retry with the framebuffer lent as scratch when the heap cannot fit the
+            // inflate window: a failed probe used to fall through to extracting the whole
+            // image, which is seconds of SD work for a header we could parse in RAM.
+            GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
+            ImageDimsProbe retryProbe;
+            self->epub->readItemContentsToStream(resolvedPath, retryProbe, 1024, /*allowEarlyStop=*/true);
+            gotDimensions = retryProbe.getDimensions(dims);
+            if (gotDimensions) sniffedFormat = retryProbe.detectedFormat();
+          }
+          const char* sniffedExtension = ImageDimsProbe::extensionForFormat(sniffedFormat);
           const bool recognised = sniffedExtension != nullptr || ImageDecoderFactory::isFormatSupported(resolvedPath);
 
           if (!recognised) {
@@ -1100,7 +1112,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   self->imagePopupFired = true;
                   self->popupFn();
                 }
-                const bool extractSuccess = self->epub->extractItemToFile(resolvedPath, cachedImagePath);
+                bool extractSuccess = false;
+                {
+                  // Same 32 KB inflate window as the probe; the popup is already up, so the
+                  // buffer this may blank is not holding a page the reader still needs.
+                  GfxRenderer::FrameBufferLoan extractLoan(self->renderer);
+                  extractSuccess = self->epub->extractItemToFile(resolvedPath, cachedImagePath);
+                }
                 if (extractSuccess) {
                   // Retry to absorb SD-card sync latency on slow cards, and to close
                   // the silent-drop bug where a single getDimensions failure was fatal.
