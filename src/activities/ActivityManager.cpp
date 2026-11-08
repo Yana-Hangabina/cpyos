@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "Activity.h"
 #include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -65,6 +66,16 @@
 #include "util/UserGuide.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+ActivityManager::ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
+  assert(renderingMutex != nullptr && "Failed to create rendering mutex");
+  stackActivities.reserve(10);
+}
+
+// Out of line so unique_ptr<Activity>'s deleter is instantiated where Activity
+// is complete; main holds the single instance for the firmware's lifetime.
+ActivityManager::~ActivityManager() { assert(false); /* should never be called */ }
 
 extern HalGPIO gpio;
 
