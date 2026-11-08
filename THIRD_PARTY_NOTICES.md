@@ -35,7 +35,7 @@ Provenance, source URLs and the full short notices are in
 
 [kiikoread](https://github.com/wegooo-cell/read-pico-reader) (Apache-2.0)
 is the source of the following ported work. The port is
-carried as `patches/freeink-sdk/96de1be-local.patch` (and the reader-side code in
+carried as `patches/freeink-sdk/d9a1304c-local.patch` (and the reader-side code in
 this repository) and is licensed under Apache-2.0 where it is derived from kiikoread:
 
 - the water-ripple page-turn engine (`e0470_page_turn`), including its

@@ -41,18 +41,16 @@ git push fork cpyos
 `freeink-sdk` 是固定提交的 gitlink，本地显示 / 字体改动不在 gitlink 里，而在：
 
 ```
-patches/freeink-sdk/96de1be-local.patch
-patches/freeink-sdk-cff/cff-otf.patch
+patches/freeink-sdk/d9a1304c-local.patch
 ```
 
 执行 `git submodule update --init --recursive` 会覆盖工作树，之后必须重新应用：
 
 ```bash
 bash patches/freeink-sdk/apply.sh
-bash patches/freeink-sdk-cff/apply.sh
 ```
 
-两个补丁路径不相交，顺序无关；`apply.sh` 是幂等的。若上游更新了 gitlink，先确认补丁的基线是否仍是新提交，必要时重生成补丁并在 PR 中说明。
+只有一个补丁（基线 `d9a1304c`）；`apply.sh` 是幂等的。CFF/OTF 字体支持由上游 SDK 自带（`FREEINK_FONT_ENABLE_CFF`），原本的 `patches/freeink-sdk-cff/` 已删除。若上游更新了 gitlink，先确认补丁的基线是否仍是新提交，必要时重生成补丁并在 PR 中说明。
 
 ## 冲突处理
 

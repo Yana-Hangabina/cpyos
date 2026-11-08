@@ -89,7 +89,6 @@ cd cpyos
 git submodule update --init --recursive
 
 bash patches/freeink-sdk/apply.sh
-bash patches/freeink-sdk-cff/apply.sh
 python3 scripts/patch_pioarduino_cache.py --prepare-platform
 
 # public build without JJWXC

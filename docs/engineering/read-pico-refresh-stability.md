@@ -130,7 +130,7 @@ two feeders to start the same physical frame.
 `ckv_diag_*` block in `lcd_driver.c/h`, `epd_test_inject_error()` in
 `render.c`/`epdiy.h`, `epdiyLcdTestInjectError()` and `CMD:INJECTERR` are
 diagnostics. The atomic claim itself is the fix and should stay. Regenerate
-`patches/freeink-sdk/96de1be-local.patch` from the cleaned tree, not from the
+`patches/freeink-sdk/d9a1304c-local.patch` from the cleaned tree, not from the
 instrumented one.
 
 **Underrun and flash (same session).** The latch fix does not by itself stop the
@@ -630,7 +630,7 @@ than a reboot loop.
 - The `storeBwBuffer` guard (keep the first complete snapshot instead of
   freeing/re-storing it) is written but not flashed or committed.
 
-**freeink-sdk patch (`patches/freeink-sdk/96de1be-local.patch`):**
+**freeink-sdk patch (`patches/freeink-sdk/d9a1304c-local.patch`):**
 
 - `waveformFor(Full)` returns the default `E0470_WAVEFORM` (36-phase GC16);
   `E0470_FULL_WAVEFORM` (48 phases) is not used.
