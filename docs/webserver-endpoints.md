@@ -588,11 +588,14 @@ to CORS). Body: `{"plugin":"<name>","method":"GET","url":"https://...","headers"
   as JSON `[["name","value"], ...]` in receive order, duplicates kept (every
   `Set-Cookie`). `api.relay()` resolves to `{status, headers, body}`.
 - **Redirects** are not followed: a 3xx comes back with its `location` header.
-- **Limits:** the upstream body is capped at 32KB; larger payloads belong on
-  `/api/fetch`.
+- **Limits:** the upstream body is capped at 64KB. The device forwards the body
+  as it arrives and never stores it; larger payloads belong on `/api/fetch`.
 - **Errors:** `400 {"error":"missing plugin/url"}`; `502 {"error":"relay failed; ..."}`
-  for a transport failure, a truncated body, a body over the cap, or low memory
-  (the device log names which).
+  when the request fails before any of the body arrives, or the upstream
+  `Content-Length` is over the cap (the device log names which). If the `200`
+  has already started and the body is then cut short, or goes over the cap
+  without a `Content-Length`, the device closes the connection. `api.relay()`
+  reports that as the same 502 error.
 
 ### `POST /api/crypto`
 

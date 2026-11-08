@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +30,11 @@ freeink::SecureHttpClient* openClient(freeink::SecureHttpClient* session, freein
   if (!http.begin(url)) return nullptr;
   for (const auto& h : headers) http.addHeader(h.first, h.second);
   return &http;
+}
+
+// A chunked body's Content-Length, if any, is not its size.
+bool hasKnownLength(const freeink::SecureHttpClient& http) {
+  return http.hasContentLength() && http.getHeader("transfer-encoding").empty();
 }
 }  // namespace
 
@@ -223,6 +229,44 @@ int request(freeink::SecureHttpClient* session, const std::string& url, const st
     return -1;
   }
   return status;
+}
+
+int requestStream(freeink::SecureHttpClient* session, const std::string& url, const std::string& method,
+                  const std::string& body, const Headers& headers, const StreamStart& onStart, const StreamData& onData,
+                  bool& complete, const std::function<bool()>& shouldAbort) {
+  complete = false;
+  WifiPowerSaveGuard psGuard;
+  freeink::SecureHttpClient tmp;
+  freeink::SecureHttpClient* httpPtr = openClient(session, tmp, url, headers);
+  if (!httpPtr) return -1;
+  freeink::SecureHttpClient& http = *httpPtr;
+
+  bool started = false;
+  bool stopped = false;
+  const auto start = [&] {
+    const long length =
+        hasKnownLength(http) ? static_cast<long>(std::min<size_t>(http.getContentLength(), LONG_MAX)) : -1;
+    started = onStart(http.getStatus(), http.getHeaders(), length);
+    return started;
+  };
+  const int status = http.sendRequest(
+      method.c_str(), reinterpret_cast<const uint8_t*>(body.data()), body.size(),
+      [&](const uint8_t* data, size_t len) {
+        if ((!started && !start()) || !onData(data, len)) {
+          stopped = true;
+          return false;
+        }
+        return true;
+      },
+      shouldAbort);
+  complete = status >= 0 && !stopped && http.responseComplete();
+  // An empty body never calls the data callback, so start here.
+  if (complete && !started && !start()) complete = false;
+  if (!complete) {
+    LOG_ERR("PHTP", "Streamed request failed: status=%d started=%d stopped=%d %s", status, started, stopped,
+            url.c_str());
+  }
+  return started ? status : -1;
 }
 
 int requestToFile(freeink::SecureHttpClient* session, const std::string& url, const std::string& method,
