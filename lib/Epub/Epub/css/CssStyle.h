@@ -76,27 +76,38 @@ enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 // list-style-type — only None and Disc (bullet) are relevant for rendering
 enum class CssListStyleType : uint8_t { Disc = 0, None = 1 };
 
-// Bitmask for tracking which properties have been explicitly set
+// Bitmask for tracking which properties have been explicitly set.
+//
+// Bit budget: 24 of 32 bits are used (0..23). The cache serializes this as a uint32_t, so a
+// future property can take bits 24..31 without moving the wire format. The 33rd property
+// needs a second word, a CSS cache bump and a matching decode change, so keep the count in
+// mind before adding one.
 struct CssPropertyFlags {
-  uint16_t textAlign : 1;
-  uint16_t fontStyle : 1;
-  uint16_t fontWeight : 1;
-  uint16_t textDecoration : 1;
-  uint16_t textIndent : 1;
-  uint16_t marginTop : 1;
-  uint16_t marginBottom : 1;
-  uint16_t marginLeft : 1;
-  uint16_t marginRight : 1;
-  uint16_t paddingTop : 1;
-  uint16_t paddingBottom : 1;
-  uint16_t paddingLeft : 1;
-  uint16_t paddingRight : 1;
-  uint16_t imageHeight : 1;
-  uint16_t imageWidth : 1;
-  uint16_t display : 1;
-  uint16_t direction : 1;
-  uint16_t verticalAlign : 1;
-  uint16_t listStyleType : 1;
+  uint32_t textAlign : 1;         //  0
+  uint32_t fontStyle : 1;         //  1
+  uint32_t fontWeight : 1;        //  2
+  uint32_t textDecoration : 1;    //  3
+  uint32_t textIndent : 1;        //  4
+  uint32_t marginTop : 1;         //  5
+  uint32_t marginBottom : 1;      //  6
+  uint32_t marginLeft : 1;        //  7
+  uint32_t marginRight : 1;       //  8
+  uint32_t paddingTop : 1;        //  9
+  uint32_t paddingBottom : 1;     // 10
+  uint32_t paddingLeft : 1;       // 11
+  uint32_t paddingRight : 1;      // 12
+  uint32_t imageHeight : 1;       // 13
+  uint32_t imageWidth : 1;        // 14
+  uint32_t display : 1;           // 15
+  uint32_t direction : 1;         // 16
+  uint32_t verticalAlign : 1;     // 17
+  uint32_t listStyleType : 1;     // 18
+  // Parsed by the M1 layout milestone; applied by later milestones.
+  uint32_t fontSize : 1;          // 19
+  uint32_t smallCaps : 1;         // 20
+  uint32_t pageBreakBefore : 1;   // 21
+  uint32_t pageBreakAfter : 1;    // 22
+  uint32_t preserveWhitespace : 1;  // 23
 
   CssPropertyFlags()
       : textAlign(0),
@@ -117,12 +128,18 @@ struct CssPropertyFlags {
         display(0),
         direction(0),
         verticalAlign(0),
-        listStyleType(0) {}
+        listStyleType(0),
+        fontSize(0),
+        smallCaps(0),
+        pageBreakBefore(0),
+        pageBreakAfter(0),
+        preserveWhitespace(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign || listStyleType;
+           imageWidth || display || direction || verticalAlign || listStyleType || fontSize || smallCaps ||
+           pageBreakBefore || pageBreakAfter || preserveWhitespace;
   }
 
   void clearAll() {
@@ -130,14 +147,18 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = listStyleType = 0;
+    fontSize = smallCaps = pageBreakBefore = pageBreakAfter = preserveWhitespace = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..18.
+// Cache serializes defined flags as uint32_t with bit indices 0..23; the mask in
+// CssParser.cpp (CSS_DEFINED_BITS_MASK) must cover exactly these bits.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
-static_assert(sizeof(CssPropertyFlags) * 8 >= 19,
+static_assert(sizeof(CssPropertyFlags) * 8 >= 24,
               "CssPropertyFlags has fewer bits than properties; update bitfield widths");
+static_assert(sizeof(CssPropertyFlags) * 8 <= 32,
+              "CssPropertyFlags must stay within the uint32_t cache field");
 
 // Represents a collection of CSS style properties
 // Only stores properties relevant to e-ink text rendering
@@ -160,9 +181,19 @@ struct CssStyle {
   CssLength paddingRight;   // Padding right
   CssLength imageHeight;    // Height for img (e.g. 2em) – width derived from aspect ratio when only height set
   CssLength imageWidth;     // Width for img when both or only width set
+  // font-size relative to the parent (Em) or the reader's body size (Rem). Parsed only in the
+  // M1 layout milestone: the renderer still lays every block out at the reader's chosen size.
+  CssLength fontSize;
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
   CssListStyleType listStyleType = CssListStyleType::Disc;      // list-style-type (Disc or None)
+  // Parsed in M1, applied by later milestones (small caps in L3c, page breaks in L2).
+  bool smallCaps = false;         // font-variant(-caps): small-caps
+  bool pageBreakBefore = false;   // (page-)break-before forces a new page
+  bool pageBreakAfter = false;    // (page-)break-after forces a new page
+  // white-space: pre / pre-wrap / break-spaces, or an HTML <pre> element. The chapter parser
+  // honours this today (preserved indentation and hard line breaks); it never reaches layout.
+  bool preserveWhitespace = false;
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -245,6 +276,26 @@ struct CssStyle {
       listStyleType = base.listStyleType;
       defined.listStyleType = 1;
     }
+    if (base.hasFontSize()) {
+      fontSize = base.fontSize;
+      defined.fontSize = 1;
+    }
+    if (base.hasSmallCaps()) {
+      smallCaps = base.smallCaps;
+      defined.smallCaps = 1;
+    }
+    if (base.hasPageBreakBefore()) {
+      pageBreakBefore = base.pageBreakBefore;
+      defined.pageBreakBefore = 1;
+    }
+    if (base.hasPageBreakAfter()) {
+      pageBreakAfter = base.pageBreakAfter;
+      defined.pageBreakAfter = 1;
+    }
+    if (base.hasPreserveWhitespace()) {
+      preserveWhitespace = base.preserveWhitespace;
+      defined.preserveWhitespace = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -266,6 +317,11 @@ struct CssStyle {
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
+  [[nodiscard]] bool hasFontSize() const { return defined.fontSize; }
+  [[nodiscard]] bool hasSmallCaps() const { return defined.smallCaps; }
+  [[nodiscard]] bool hasPageBreakBefore() const { return defined.pageBreakBefore; }
+  [[nodiscard]] bool hasPageBreakAfter() const { return defined.pageBreakAfter; }
+  [[nodiscard]] bool hasPreserveWhitespace() const { return defined.preserveWhitespace; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -276,10 +332,11 @@ struct CssStyle {
     textIndent = CssLength{};
     marginTop = marginBottom = marginLeft = marginRight = CssLength{};
     paddingTop = paddingBottom = paddingLeft = paddingRight = CssLength{};
-    imageHeight = imageWidth = CssLength{};
+    imageHeight = imageWidth = fontSize = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     listStyleType = CssListStyleType::Disc;
+    smallCaps = pageBreakBefore = pageBreakAfter = preserveWhitespace = false;
     defined.clearAll();
   }
 };

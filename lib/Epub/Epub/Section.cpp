@@ -72,10 +72,12 @@ namespace {
 //   87 / 88 - hyphenated line breaks now reserve the ruby overhang at both ends of
 //             a line and let a closing sentence mark hang into the right margin,
 //             the way the non-hyphenated layout already did (upstream cb2a4c78)
+//   88 / 89 - CSS compound/id/descendant/child selectors and <pre> whitespace change
+//             which rules apply and how text is tokenized (upstream 0305aaa6, layout M1)
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 88;
+constexpr uint8_t SECTION_FILE_VERSION = 89;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 87;
+constexpr uint8_t SECTION_FILE_VERSION = 88;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /

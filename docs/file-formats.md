@@ -103,6 +103,25 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Versions 88 / 89
+
+The byte layout is unchanged; pagination is rebuilt because the CSS cascade now
+resolves compound (`p.a.b`), `#id`, descendant (`div.chapter p`) and child
+(`blockquote > p`) selectors in specificity order, and `<pre>` /
+`white-space: pre` text is tokenized with preserved indentation and hard line
+breaks (upstream `0305aaa6`, layout milestone M1). Books whose styling lives in
+those selectors paginate differently after the upgrade; books without them do
+not.
+
+The CSS rules cache (`css_rules.cache`) moves to version 14 in the same release:
+its selector keys are now the canonical subject compound plus an optional
+context part. Section caches carry no CSS version, which is why both move
+together.
+
+Version 88 is the Latin counter, 89 the CJK-capable one; the partial-build
+sentinels are derived (`0xFE - (version - 28)`), so suspended sections rebuild
+too. Progress and book metadata are untouched.
+
 ### Versions 87 / 88
 
 The byte layout is unchanged; pagination is rebuilt because hyphenated layout

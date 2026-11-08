@@ -18,7 +18,11 @@ constexpr size_t kMaxRules = 1500;
 constexpr size_t kMaxUniqueStyles = 256;
 constexpr size_t kCacheHeaderBytes = sizeof(uint8_t) * 2 + sizeof(uint16_t);
 constexpr size_t kStyleEnumPrefixBytes = 5;
-constexpr size_t kStyleLengthFieldCount = 11;
+// textIndent/margins/paddings/imageWidth/imageHeight plus font-size (layout M1).
+constexpr size_t kStyleLengthFieldCount = 12;
+// Scalar bytes after the length fields: display, vertical-align, list-style-type, small-caps,
+// page-break-before/after, preserve-whitespace.
+constexpr size_t kStyleScalarByteCount = 7;
 constexpr size_t kStyleLengthBytes = sizeof(decltype(CssLength::value)) + sizeof(uint8_t);
 
 class CssParserTest : public ::testing::Test {
@@ -247,8 +251,9 @@ TEST_F(CssParserTest, CacheHydrationRejectsInvalidStyleEnumBytes) {
   for (size_t i = 0; i < kStyleLengthFieldCount; ++i) {
     enumOffsets.push_back(kStyleEnumPrefixBytes + i * kStyleLengthBytes + sizeof(decltype(CssLength::value)));
   }
-  enumOffsets.push_back(kStyleEnumPrefixBytes + kStyleLengthFieldCount * kStyleLengthBytes);
-  enumOffsets.push_back(kStyleEnumPrefixBytes + kStyleLengthFieldCount * kStyleLengthBytes + 1);
+  for (size_t i = 0; i < kStyleScalarByteCount; ++i) {
+    enumOffsets.push_back(kStyleEnumPrefixBytes + kStyleLengthFieldCount * kStyleLengthBytes + i);
+  }
 
   for (const size_t enumOffset : enumOffsets) {
     SCOPED_TRACE(enumOffset);
