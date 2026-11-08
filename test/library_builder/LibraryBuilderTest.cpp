@@ -48,6 +48,36 @@ class LibraryBuilderTest : public ::testing::Test {
 
 }  // namespace
 
+TEST_F(LibraryBuilderTest, XtcAndXtchTitleAndAuthorComeFromTheFile) {
+  fake::add("/Comics/one.xtc");
+  fake::add("/Comics/two.xtch");
+  bookMetadata["/Comics/one.xtc"] = {"Go Problems", "Cho Chikun", true};
+  bookMetadata["/Comics/two.xtch"] = {"Sakata no Go", "Sakata Eio", true};
+  initial();
+
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  ASSERT_EQ(index.header().bookCount, 4u);
+  bool sawXtc = false;
+  bool sawXtch = false;
+  for (uint16_t ordinal = 0; ordinal < index.header().bookCount; ordinal++) {
+    ClixRecord record{};
+    std::string path;
+    std::string title;
+    std::string author;
+    ASSERT_TRUE(index.readRecord(ordinal, record));
+    ASSERT_TRUE(index.readPath(record, path));
+    if (path != "/Comics/one.xtc" && path != "/Comics/two.xtch") continue;
+    ASSERT_TRUE(index.readTitle(record, title));
+    ASSERT_TRUE(index.readAuthor(record, author));
+    EXPECT_EQ(title, bookMetadata[path].title);
+    EXPECT_EQ(author, bookMetadata[path].author);
+    (path == "/Comics/one.xtc" ? sawXtc : sawXtch) = true;
+  }
+  EXPECT_TRUE(sawXtc);
+  EXPECT_TRUE(sawXtch);
+}
+
 TEST_F(LibraryBuilderTest, UnchangedRebuildReusesMetadataAndDoesNotReplaceIndex) {
   initial();
   const auto old = fake::files[INDEX]->bytes;

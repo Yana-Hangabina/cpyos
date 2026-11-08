@@ -9,6 +9,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Utf8.h>
+#include <Xtc.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -189,7 +190,7 @@ void clearLibraryIndexDirty() {
 
 bool isBookName(const std::string& name) {
   return FsHelpers::checkFileExtension(name, ".epub") || FsHelpers::checkFileExtension(name, ".txt") ||
-         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::checkFileExtension(name, ".xtc") ||
+         FsHelpers::checkFileExtension(name, ".md") || FsHelpers::hasXtcExtension(name) ||
          FsHelpers::checkFileExtension(name, ".cbz") || FsHelpers::checkFileExtension(name, ".fb2")
 #if defined(CROSSPOINT_MUPDF)
          || FsHelpers::checkFileExtension(name, ".pdf")
@@ -315,7 +316,8 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
 
   const bool isEpubName = FsHelpers::hasEpubExtension(name);
   const bool isFb2Name = FsHelpers::hasFb2Extension(name);
-  const bool extractionExpected = st.readMetadata && (isEpubName || isFb2Name);
+  const bool isXtcName = FsHelpers::hasXtcExtension(name);
+  const bool extractionExpected = st.readMetadata && (isEpubName || isFb2Name || isXtcName);
   const uint8_t expectedStatus = extractionExpected ? CLIX_METADATA_EXTRACTED : CLIX_METADATA_NOT_ATTEMPTED;
   bool reuseMetadata = false;
   ClixRecord priorRecord{};
@@ -360,6 +362,15 @@ int findPrior(WalkState& st, const uint64_t pathHash) {
     if (isEpubName) {
       Epub epub(fullPath, CACHE_DIR);
       extracted = epub.loadMetadata(bookTitle, author);
+    } else if (isXtcName) {
+      // XTC/XTCH carry title and author in their own header block; load() reads
+      // that and the page-table header, and writes no cache.
+      Xtc xtc(fullPath, CACHE_DIR);
+      extracted = xtc.load();
+      if (extracted) {
+        bookTitle = xtc.getTitle();
+        author = xtc.getAuthor();
+      }
     } else {
       extracted = Fb2::probeMetadata(fullPath, bookTitle, author);
     }
