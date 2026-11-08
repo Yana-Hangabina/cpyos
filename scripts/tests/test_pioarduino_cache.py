@@ -30,8 +30,9 @@ class PioarduinoCacheTest(unittest.TestCase):
         self.request = self.chip / "sdkconfig.crosspoint"
         self.config.write_text("original template")
 
-    def run_script(self, requested):
+    def run_script(self, requested, components=None):
         root = self.root
+        options = {"custom_sdkconfig": requested, **(components or {})}
 
         class BuildEnv(dict):
             def Replace(self, **values):
@@ -47,7 +48,7 @@ class PioarduinoCacheTest(unittest.TestCase):
                 return str(root)
 
             def GetProjectOption(self, name, default):
-                return requested
+                return options.get(name, default)
 
             def BoardConfig(self):
                 return {"build.mcu": "esp32s3"}
@@ -92,7 +93,9 @@ class PioarduinoCacheTest(unittest.TestCase):
                 env = self.run_script(requested)
                 self.assertEqual("-flto=auto" in env["BUILD_FLAGS"], not bool(requested))
                 self.assertEqual(self.config.read_text(), "original template")
-                self.assertFalse(self.original.exists())
+                # The script self-heals a missing sdkconfig.orig as a copy of
+                # sdkconfig, so the template doubles as the reinstall marker.
+                self.assertEqual(self.original.read_text(), "original template")
                 self.assertEqual(self.request.read_text(), requested + "\n")
 
     def test_matching_custom_reuses_libraries_and_restores_marker(self):
@@ -113,7 +116,7 @@ class PioarduinoCacheTest(unittest.TestCase):
         self.assertEqual(env["BUILD_FLAGS"], ["-Os", "-DKEEP=1"])
         self.assertEqual(env["BUILD_UNFLAGS"], ["-O2"])
         self.assertEqual(self.config.read_text(), "original template")
-        self.assertFalse(self.original.exists())
+        self.assertEqual(self.original.read_text(), "original template")
         self.assertEqual(self.request.read_text(), "CONFIG_B=y\n")
 
     def test_custom_to_prebuilt_keeps_reinstall_marker(self):
@@ -125,11 +128,30 @@ class PioarduinoCacheTest(unittest.TestCase):
                 self.assertEqual(self.config.read_text(), "custom binary configuration")
                 self.assertEqual(self.request.read_text(), "\n")
 
-    def test_repeated_prebuilt_build_does_not_create_custom_marker(self):
-        self.run_script("")
-        self.run_script("")
-        self.assertFalse(self.original.exists())
+    def test_component_list_change_invalidates_the_cached_core(self):
+        self.seed_custom()
+        # Same sdkconfig request, different removed-component list: the cached
+        # "core already rebuilt" record must not be reused.
+        env = self.run_script(" CONFIG_A=y\n", {"custom_component_remove": "espressif/zboss"})
+        self.assertEqual(env["BUILD_FLAGS"], ["-Os", "-DKEEP=1"])
         self.assertEqual(self.config.read_text(), "original template")
+        self.assertEqual(self.original.read_text(), "original template")
+        self.assertIn("custom_component_remove=espressif/zboss", self.request.read_text())
+
+        # Re-running with the identical component list is cached again.
+        self.seed_custom()
+        self.request.write_text("CONFIG_A=y\ncustom_component_remove=espressif/zboss\n")
+        env = self.run_script("CONFIG_A=y", {"custom_component_remove": "espressif/zboss"})
+        self.assertIn("-flto=auto", env["BUILD_FLAGS"])
+        self.assertEqual(self.config.read_text(), "custom binary configuration")
+
+    def test_repeated_prebuilt_build_does_not_create_custom_marker(self):
+        for _ in range(2):
+            env = self.run_script("")
+            # Prebuilt runs keep the template, keep LTO and record no request.
+            self.assertEqual(self.config.read_text(), "original template")
+            self.assertIn("-flto=auto", env["BUILD_FLAGS"])
+            self.assertEqual(self.request.read_text(), "\n")
 
 
 if __name__ == "__main__":

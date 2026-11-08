@@ -220,8 +220,11 @@ Form parameters:
 | `path` | Yes, unless `paths` is provided | Single path to delete |
 | `paths` | Yes, unless `path` is provided | JSON array of paths to delete |
 
-Protected items cannot be deleted. Non-empty folders are rejected. EPUB cache
-data for deleted files is cleared.
+`System Volume Information`, `XTCache`, the saved-credential stores and the
+device's `/.crosspoint` directory (settings, caches, keys) cannot be deleted.
+Hidden items whose name starts with `.` can be deleted, as long as they are not
+inside `/.crosspoint`. Non-empty folders are rejected. EPUB cache data for
+deleted files is cleared.
 
 ## Settings API
 

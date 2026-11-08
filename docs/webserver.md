@@ -95,7 +95,8 @@ The File Manager page can:
 - Download files
 - Rename files
 - Move files into existing folders
-- Delete one or more selected files or empty folders
+- Delete one or more selected files or empty folders, hidden ones included
+  (shown when **Show Hidden Files** is on; `/.crosspoint` stays protected)
 
 Uploads do not replace a file that has the same name: the upload fails with
 "File already exists". API clients can replace a file with

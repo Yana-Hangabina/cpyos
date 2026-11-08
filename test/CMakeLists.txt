@@ -244,3 +244,6 @@ add_test(NAME TextSettingsFontExit
 # and the two clipping suites, which CPYOS does not have (AnnotationStore instead).
 add_test(NAME list_viewport
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_list_viewport.py)
+
+add_test(NAME TxtCoverCopy
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_txt_cover_copy.py)

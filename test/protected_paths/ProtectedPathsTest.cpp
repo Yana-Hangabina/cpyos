@@ -3,7 +3,9 @@
 #include "network/ProtectedPaths.h"
 
 using protectedpaths::isPluginPath;
+using protectedpaths::isPrivateDirectory;
 using protectedpaths::isSensitivePath;
+using protectedpaths::isUndeletableWebPath;
 
 TEST(ProtectedPaths, CredentialStoresAreSensitive) {
   EXPECT_TRUE(isSensitivePath("/.crosspoint/wifi.json"));
@@ -37,6 +39,37 @@ TEST(ProtectedPaths, EverythingElseStaysReachable) {
   EXPECT_FALSE(isSensitivePath("/.crosspoint/month-wallpaper.json"));
   EXPECT_FALSE(isSensitivePath("/.fonts/Noto/Noto_14.cpfont"));
   EXPECT_FALSE(isSensitivePath("/Books/wifi.json"));
+}
+
+TEST(ProtectedPaths, HiddenFilesAreDeletableButNotTheDeviceDirectory) {
+  // The File Manager may delete the dot-named leftovers users need to clear.
+  EXPECT_FALSE(isUndeletableWebPath("/.fonts/.stale"));
+  EXPECT_FALSE(isUndeletableWebPath("/.hidden-epub"));
+  EXPECT_FALSE(isUndeletableWebPath("/Books/.thumb"));
+  // Everything the device owns stays put, including the directory itself.
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/settings.json"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/jjwxc/cookies"));
+  EXPECT_TRUE(isUndeletableWebPath("/.CrossPoint/JJwxc/paykey"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/./settings.json"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/plugins/../settings.json"));
+  EXPECT_TRUE(isUndeletableWebPath("//.crosspoint//library.idx"));
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint./settings.json"));
+  EXPECT_FALSE(isUndeletableWebPath("/.crosspoint-backup/cookies"));
+  // Credential stores keep their own rule.
+  EXPECT_TRUE(isUndeletableWebPath("/.crosspoint/wifi.json"));
+  EXPECT_FALSE(isUndeletableWebPath("/Books/wifi.json"));
+}
+
+TEST(ProtectedPaths, PrivateDirectoryShapes) {
+  EXPECT_TRUE(isPrivateDirectory("/.crosspoint"));
+  EXPECT_TRUE(isPrivateDirectory("/.crosspoint/"));
+  EXPECT_TRUE(isPrivateDirectory("/.crosspoint/a"));
+  EXPECT_FALSE(isPrivateDirectory("/.crosspoint2"));
+  EXPECT_FALSE(isPrivateDirectory("/.crosspoint2/a"));
+  EXPECT_FALSE(isPrivateDirectory("/"));
+  EXPECT_FALSE(isPrivateDirectory("/Books"));
 }
 
 TEST(ProtectedPaths, PluginPathRules) {

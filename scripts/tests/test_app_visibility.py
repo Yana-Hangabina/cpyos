@@ -23,7 +23,9 @@ class AppVisibilityTest(unittest.TestCase):
         migration = '  hiddenAppsMask =' + migration.split('  buddyClaimed =', 1)[0]
         transaction = selector.split('  const uint8_t previousLanguage', 1)[1]
         transaction = '  const uint8_t previousLanguage' + transaction.split('    LOG_ERR("LANG"', 1)[0]
-        apply_timezone = selector.split('    requestUpdate();\n    return;\n  }', 1)[1].split('  {\n    RenderLock', 1)[0]
+        # rsplit: the refusal and the save-failure branches both repaint and return, so the
+        # success path is the one after the last such early return.
+        apply_timezone = selector.rsplit('    requestUpdate();\n    return;\n  }', 1)[1].split('  {\n    RenderLock', 1)[0]
         source = r'''
 #include "AppVisibility.h"
 #include <cassert>
@@ -61,6 +63,7 @@ MIGRATION
     }
 };
 Settings SETTINGS;
+bool saveFailed_ = false;
 namespace timezones {
     int calls = 0;
     uint8_t offset = 48;
