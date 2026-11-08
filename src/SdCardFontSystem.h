@@ -5,12 +5,14 @@
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
 
+#include "Typography.h"
 #include "fontIds.h"
 
 #if CROSSPOINT_VECTOR_FONTS
 #include <FontPsram.h>  // PsramVector for resident TTF bytes
 #endif
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -62,7 +64,10 @@ class SdCardFontSystem {
 
 #if CROSSPOINT_VECTOR_FONTS
   /// Load every installed Font Extras fallback pack as an additive renderer
-  /// fallback. Idempotent for the same family set and point size. Returns true
+  /// fallback. Idempotent for the same family set, reader size and UI roles.
+  /// UI faces are built at the roles `typography::uiRolePointsFor()` reports for
+  /// the current scale (the SD UI-size table when the target has no pack
+  /// bindings), so a rare-script glyph matches the row it sits in. Returns true
   /// when at least one supplement is active.
   bool loadSupplementFonts(GfxRenderer& renderer, uint8_t readerPointSize);
   void unloadSupplementFonts(GfxRenderer& renderer);
@@ -193,6 +198,10 @@ class SdCardFontSystem {
   };
   std::vector<std::unique_ptr<SupplementFamily>> supplementFamilies_;
   uint8_t supplementPointSize_ = 0;
+  // Role -> point bindings the current UI faces were built for. A uiFontScale
+  // change moves them, which is what makes loadSupplementFonts() rebuild.
+  std::array<typography::UiRolePoint, typography::kMaxUiRolePoints> supplementUiRoles_{};
+  size_t supplementUiRoleCount_ = 0;
 
   // Active TTF font (at most one reader-size vector family loaded at a time).
   std::unique_ptr<TtfEpdFont> ttf_;

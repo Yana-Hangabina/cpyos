@@ -27,6 +27,35 @@ Points pointsFor(const Scale scale) {
   }
 }
 
+std::size_t uiRolePointsFor(const Points points, UiRolePoint* out, const std::size_t capacity) {
+#if !defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+  // C3 streams a single reader face and keeps the built-in 8pt UI subset, so
+  // there are no pack role bindings for a supplement to follow.
+  (void)points;
+  (void)out;
+  (void)capacity;
+  return 0;
+#else
+  if (out == nullptr) return 0;
+  const UiRolePoint roles[] = {
+      {SMALL_FONT_ID, points.caption},
+      {UI_10_FONT_ID, points.body},
+      {UI_12_FONT_ID, points.title},
+      {CONTROL_18_FONT_ID, points.title},
+      // Large UI values (stats, games, web cards) follow the display role. The
+      // reader's 18pt selection uses CJK_UI_18 instead, so it stays 18pt.
+      {NOTOSANS_18_FONT_ID, points.display},
+      // Status/estimate are single-line chrome; the caption size is what their
+      // fixed bands were designed around.
+      {READER_STATUS_FONT_ID, points.caption},
+      {READER_ESTIMATE_FONT_ID, points.caption},
+  };
+  const std::size_t count = std::min(capacity, std::size(roles));
+  for (std::size_t i = 0; i < count; ++i) out[i] = roles[i];
+  return count;
+#endif
+}
+
 namespace {
 
 int cjkIdFor(const uint8_t pointSize) {
@@ -122,6 +151,12 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
     const int id = CJK_READER_SIZE_FONT_ID(pt);
     if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
   }
+#endif
+#if CROSSPOINT_VECTOR_FONTS
+  // Font Extras supplements follow the same scale as the roles above. Deriving
+  // them here (not at each install site) is what keeps a rare-script glyph at
+  // its row's size after the user changes uiFontScale.
+  sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
 #endif
 }
 
