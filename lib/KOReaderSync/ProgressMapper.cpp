@@ -910,10 +910,17 @@ CrossPointPosition ProgressMapper::toCrossPointImpl(const std::shared_ptr<Epub>&
     result.spineIndex = xpathSpine;
     result.hasResolvedSpineIndex = true;
   } else {
-    for (int i = 0; i < spineCount; i++) {
-      if (epub->getCumulativeSpineItemSize(i) >= targetBytes) {
-        result.spineIndex = i;
-        break;
+    // One size-window read instead of a linear walk of per-item SD reads; -1 means
+    // the window is unavailable (OOM or a bad card), so fall back to the exact walk.
+    const int found = epub->getSpineIndexForSize(targetBytes);
+    if (found >= 0) {
+      result.spineIndex = found;
+    } else {
+      for (int i = 0; i < spineCount; i++) {
+        if (epub->getCumulativeSpineItemSize(i) >= targetBytes) {
+          result.spineIndex = i;
+          break;
+        }
       }
     }
   }

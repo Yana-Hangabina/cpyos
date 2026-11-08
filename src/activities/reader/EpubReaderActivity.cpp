@@ -2815,12 +2815,20 @@ bool EpubReaderActivity::jumpToFraction(float fraction) {
   int targetSpineIndex = spineCount - 1;
   size_t prevCumulative = 0;
 
-  for (int i = 0; i < spineCount; i++) {
-    const size_t cumulative = epub->getCumulativeSpineItemSize(i);
-    if (targetSize <= cumulative) {
-      targetSpineIndex = i;
-      prevCumulative = (i > 0) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
-      break;
+  // One size-window read instead of a linear walk of per-item SD reads; -1 means
+  // the window is unavailable (OOM or a bad card), so fall back to the exact walk.
+  const int found = epub->getSpineIndexForSize(targetSize);
+  if (found >= 0) {
+    targetSpineIndex = found;
+    prevCumulative = (found > 0) ? epub->getCumulativeSpineItemSize(found - 1) : 0;
+  } else {
+    for (int i = 0; i < spineCount; i++) {
+      const size_t cumulative = epub->getCumulativeSpineItemSize(i);
+      if (targetSize <= cumulative) {
+        targetSpineIndex = i;
+        prevCumulative = (i > 0) ? epub->getCumulativeSpineItemSize(i - 1) : 0;
+        break;
+      }
     }
   }
 
