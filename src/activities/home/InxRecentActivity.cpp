@@ -242,6 +242,21 @@ InxRecentActivity::CoverCacheLoadResult InxRecentActivity::tryLoadCoverCache(Hal
 }
 #endif
 
+InxRecentActivity::CoverCacheState InxRecentActivity::probeThumbState(const std::string& thumbPath) const {
+  // A cached thumbnail is only Ready when the file holds every pixel row: a
+  // header-only or truncated stub must be regenerated, not drawn. A 0-byte file is
+  // the persistent "no supported cover" marker (EPUBs without a cover) and stays
+  // Unavailable so it is never regenerated on every repaint.
+  switch (BookCoverLoader::checkCachedCover(thumbPath, true)) {
+    case BookCoverLoader::CachedCoverState::Ready:
+      return CoverCacheState::Ready;
+    case BookCoverLoader::CachedCoverState::Terminal:
+      return CoverCacheState::Unavailable;
+    default:
+      return CoverCacheState::Missing;
+  }
+}
+
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
 bool InxRecentActivity::tryDrawBookCover(const std::string& path, const Rect& bounds, CoverCacheState& state,
                                          CoverRamCache& cache) {
@@ -250,11 +265,8 @@ bool InxRecentActivity::tryDrawBookCover(const std::string& path, const Rect& bo
 #endif
   switch (state) {
     case CoverCacheState::Unchecked:
-      if (!Storage.exists(path.c_str())) {
-        state = CoverCacheState::Missing;
-        return false;
-      }
-      state = CoverCacheState::Ready;
+      state = probeThumbState(path);
+      if (state != CoverCacheState::Ready) return false;
       break;
     case CoverCacheState::Ready:
       break;
@@ -367,10 +379,8 @@ bool InxRecentActivity::prepareNextMissingCover() {
           state = CoverCacheState::Unavailable;
           continue;
         }
-        state = Storage.exists(UITheme::getCoverThumbPath(templatePath, thumbnailHeight).c_str())
-                    ? CoverCacheState::Ready
-                    : CoverCacheState::Missing;
-        if (state == CoverCacheState::Ready) continue;
+        state = probeThumbState(UITheme::getCoverThumbPath(templatePath, thumbnailHeight));
+        if (state != CoverCacheState::Missing) continue;
         break;
       }
       case CoverCacheState::Ready:

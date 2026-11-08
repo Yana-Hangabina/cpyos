@@ -24,6 +24,13 @@ const CachedThumbFile* thumbFile(const std::string& path);
 const CachedThumbFile* cacheThumbFile(const std::string& path);
 void clearThumbFileCache();
 
+enum class CachedCoverState { Missing, Ready, Terminal };
+
+// Keeps a complete cover or an allowed empty marker; removes any other cached file and reports it Missing.
+// Fast paths (Home/Recent shortcuts) call this instead of a bare Storage.exists() so a
+// header-only or truncated thumbnail is regenerated rather than drawn forever.
+CachedCoverState checkCachedCover(const std::string& path, bool emptyIsTerminal);
+
 std::string ensureThumbnail(const std::string& bookPath, int height, bool* generated = nullptr);
 
 // Cache probe: the thumbnail path when a VALID cached BMP already exists,

@@ -64,6 +64,10 @@ class InxRecentActivity final : public Activity {
   bool tryDrawBookCover(const std::string& path, const Rect& bounds, CoverCacheState& state);
 #endif
   bool drawBookCover(int bookIndex, const Rect& bounds);
+  // Validates a cached thumbnail before it is trusted: header-only or truncated
+  // stubs come back Missing (removed, to be regenerated), a 0-byte "no cover"
+  // marker comes back Unavailable.
+  CoverCacheState probeThumbState(const std::string& thumbPath) const;
   bool prepareNextMissingCover();
   // One progress push while covers are generated, then a single final push:
   // the old code pushed a full refresh per missing cover (N covers = N scans).
