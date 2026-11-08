@@ -626,7 +626,7 @@ void LibraryListActivity::promptDeleteBook(const int entry) {
 }
 
 void LibraryListActivity::promptDeleteBookByPath(const std::string& path, const std::string& title) {
-  confirm_.ask((tr(STR_DELETE) + std::string("? ")).c_str(), title.c_str(), tr(STR_DELETE), [this, path] {
+  confirm_.ask(tr(STR_DELETE_ITEM_CONFIRM), title.c_str(), tr(STR_DELETE), [this, path] {
     swallowHeldReleases();
     // Same busy pass as promptRebuildIndex: the card rides the grid's own
     // grayscale frame instead of pushing a 1-bit card over it.
@@ -2432,7 +2432,7 @@ void LibraryListActivity::openEmptyPath(const int index) {
 }
 
 void LibraryListActivity::debugShowConfirmDemo() {
-  confirm_.ask((tr(STR_DELETE) + std::string("? ")).c_str(), "\u957f\u591c\u5c06\u660e.epub", tr(STR_DELETE), [] {});
+  confirm_.ask(tr(STR_DELETE_ITEM_CONFIRM), "\u957f\u591c\u5c06\u660e.epub", tr(STR_DELETE), [] {});
   requestUpdate();
 }
 

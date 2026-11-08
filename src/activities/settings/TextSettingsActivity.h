@@ -176,6 +176,12 @@ class TextSettingsActivity final : public UiTabListActivity {
   int bottomReserved = 0;
   int usableHeight = 0;
   int previewHeight = 0;
+  // Screen safe-area insets (landscape reserves room for button hints / bezel).
+  // Layout is measured from the safe rect, not raw screen metrics, so the page
+  // never lays content out under a reserved band.
+  int sideInset = 0;
+  int rightInset = 0;
+  int bottomInset = 0;
   // List band of the last build, used by drawFooter() to close the CPY group
   // card under the rows (the same pass/geometry contract as SettingsActivity).
   int16_t listTop_ = 0;

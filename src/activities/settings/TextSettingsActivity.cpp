@@ -126,9 +126,17 @@ void TextSettingsActivity::onEnter() {
   }
 
   metrics_ = UITheme::getInstance().getMetrics();
-  afterHeader = metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
+  // Everything below is measured from the safe rect: in landscape (or on a board
+  // that reserves a bezel/button-hint band) the raw screen metrics put the list
+  // and preview under that band, which clipped the bottom rows.
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int safeBottom = safeArea.y + safeArea.height;
+  sideInset = safeArea.x;
+  rightInset = renderer.getScreenWidth() - (safeArea.x + safeArea.width);
+  bottomInset = renderer.getScreenHeight() - safeBottom;
+  afterHeader = safeArea.y + metrics_.topPadding + metrics_.headerHeight + metrics_.verticalSpacing;
   bottomReserved = metrics_.buttonHintsHeight + metrics_.verticalSpacing;
-  usableHeight = renderer.getScreenHeight() - afterHeader - bottomReserved;
+  usableHeight = safeBottom - afterHeader - bottomReserved;
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
   fonts_.clear();
@@ -455,8 +463,12 @@ void TextSettingsActivity::buildScreen(UiScreen& screen) {
   // directly) and above the caption band + button hints.
   const int tabTop = afterHeader + previewHeight;
   const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-  screen.setContentMarginFromScreen(
-      fui::Insets{static_cast<int16_t>(tabTop), 0, static_cast<int16_t>(bottomReserved + captionHeight), 0});
+  // Keep the reserved bands out of the list: right/bottom from the safe rect (the
+  // caption band shares the bottom one), left from the safe area's x inset.
+  const int listBottomInset = std::max(bottomReserved + captionHeight, bottomInset);
+  screen.setContentMarginFromScreen(fui::Insets{static_cast<int16_t>(tabTop), static_cast<int16_t>(rightInset),
+                                                static_cast<int16_t>(listBottomInset),
+                                                static_cast<int16_t>(sideInset)});
 
   buildTabBar(screen);
 
@@ -589,9 +601,10 @@ bool TextSettingsActivity::previewUsesGrayscale() const {
 }
 
 void TextSettingsActivity::drawChrome() {
-  const auto pageWidth = renderer.getScreenWidth();
+  const Rect safeArea = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
 
-  GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
+  GUI.drawHeader(renderer, Rect{safeArea.x, safeArea.y + metrics_.topPadding, safeArea.width, metrics_.headerHeight},
+                 tr(STR_TEXT_SETTINGS));
 
   const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
                                ? fonts_[currentFamilyIndex_].name.c_str()
@@ -599,8 +612,16 @@ void TextSettingsActivity::drawChrome() {
   const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
                              ? sizes_[currentSizeIndex_].name.c_str()
                              : "";
+  // Clip to the safe rect so a wide sample line cannot draw into a reserved band.
+  const auto [savedX, savedY, savedWidth, savedHeight] = renderer.getClipRect();
+  const int clipLeft = std::max(safeArea.x, savedX);
+  const int clipTop = std::max(afterHeader, savedY);
+  const int clipRight = std::min(safeArea.x + safeArea.width, savedX + savedWidth);
+  const int clipBottom = std::min(afterHeader + previewHeight, savedY + savedHeight);
+  renderer.setClipRect(clipLeft, clipTop, std::max(0, clipRight - clipLeft), std::max(0, clipBottom - clipTop));
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, familyName, sizeName);
+                              previewHeight, familyName, sizeName, sideInset, rightInset);
+  renderer.setClipRect(savedX, savedY, savedWidth, savedHeight);
 }
 
 void TextSettingsActivity::drawFooter() {

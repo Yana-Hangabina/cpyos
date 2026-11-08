@@ -332,6 +332,15 @@ void FontDownloadActivity::finishAutomaticFlow(const ExitRoute route) {
 // --- Manifest fetching ---
 
 bool FontDownloadActivity::fetchAndParseManifest() {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+  }
+  // Rescan installed families before any TLS or JSON buffers exist. The rescan
+  // frees and reallocates every registry entry, which fragments the heap if it
+  // runs while the manifest DOM and the catalog arena are live.
+  clearManifest();
+  fontInstaller_.refreshRegistry();
+
   // Download manifest to a temp file on SD card to avoid holding both
   // TLS buffers and the full JSON string in RAM simultaneously.
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest.tmp";
@@ -342,6 +351,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
   if (!HttpDownloader::hasMemoryForTls()) {
+    LOG_ERR("FONT", "Low heap for manifest (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
     errorMessage_ = tr(STR_MEMORY_ERROR);
     return false;
   }
@@ -412,7 +422,10 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   files_.clear();
   scriptGroupLabels_.clear();
   filteredIndices_.clear();
-  fontInstaller_.refreshRegistry();
+  // The registry was already rescanned at the top of this function, before the
+  // TLS and JSON buffers existed; rescaling it here split the heap right before
+  // the catalog arena and tables were allocated.
+  downloadUrl_.reserve(baseUrl_.size() + 128);
 
   JsonArray groupsArr = doc["scriptGroups"].as<JsonArray>();
   const size_t groupCount = std::min(groupsArr.size(), MAX_SCRIPT_GROUPS);
@@ -1234,9 +1247,6 @@ void FontDownloadActivity::rebuildFamilyRowItems() {
         item.value = tr(STR_UPDATE_AVAILABLE);
       } else if (family.installed) {
         item.value = tr(STR_INSTALLED);
-        // Dimmed but still tappable (opens the delete prompt): visual-only
-        // disabled state, the row stays enabled for hit registration.
-        item.state = fui::StateDisabled;
       }
     }
     item.actionValue = static_cast<int16_t>(i);
