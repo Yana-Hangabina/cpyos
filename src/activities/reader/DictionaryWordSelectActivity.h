@@ -85,9 +85,9 @@ class DictionaryWordSelectActivity final : public Activity {
   bool phraseMiss = false;      // phrase mode: nothing matched, Confirm opens the picker
   std::unique_ptr<Page> ownedPage;  // set by the owned-page form
   Page* page = nullptr;             // owned or borrowed; null in phrase mode
-  const int marginLeft;
-  const int marginTop;
-  const bool selectOnly;
+  const int marginLeft = 0;
+  const int marginTop = 0;
+  const bool selectOnly = false;
   int fontId = 0;
   int lineHeight = 0;
 

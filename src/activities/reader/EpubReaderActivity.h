@@ -272,8 +272,7 @@ class EpubReaderActivity final : public ReaderActivity {
     uint32_t start;
     uint32_t end;
     const char* text;
-    uint16_t paragraph;  // TextBlock::getParagraphIndex(): '
-' between paragraphs
+    uint16_t paragraph;  // TextBlock::getParagraphIndex(); paragraphs are separated by newlines
     bool gapBefore;      // the source had whitespace/a line break before this word
   };
   bool selectionActive = false;
