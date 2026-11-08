@@ -123,7 +123,8 @@ Every string field is a template. Available substitutions:
 | `{token}` | contents of the token file at `token.path` | everywhere |
 | `{cfg.KEY}` | value of `KEY` in the flat JSON config file at `config.file` | everywhere |
 | `{page}` | current 1-based page | browse |
-| `{limit}` | `page_size + 1` (the extra row detects "more pages") | browse |
+| `{limit}` | `page_size + 1` (the extra row detects "more pages"); `page_size` when the URL also uses `{page}` | browse |
+| `{offset}` | 0-based index of the first row on this page (`(page-1) * page_size`) | browse |
 | `{id}` `{title}` `{author}` `{url}` | fields of the selected item | download, sidecar |
 | `{md5}` | MD5 hex of the destination file path | sidecar |
 | `{dest}` | sanitized on-SD path of the downloaded file | sidecar |
@@ -252,9 +253,16 @@ Two browse formats:
   than an error.
 - **Pagination** (json): the browse request should return up to `{limit}`
   items; the firmware displays `page_size` and uses the extra row to know
-  another page exists. Navigation matches the OPDS browser: a "Previous
-  page" row precedes the items past page 1 and a "Next page" row follows
-  them while more pages exist — tappable and button-reachable like any row.
+  another page exists. A URL using both `{page}` and `{limit}` is treated as
+  sized pages: it is asked for exactly `page_size` rows, and a full page means
+  there may be another. Neither `{page}` nor `{offset}` means the response is
+  one static list, and the firmware pages through it locally.
+  Rows without a title are not shown. When the request uses `{page}` or
+  `{offset}`, these rows still count toward the page, so a page can show
+  fewer rows and still offer "Next page".
+  Navigation matches the OPDS browser: a "Previous page" row precedes the
+  items past page 1 and a "Next page" row follows them while more pages
+  exist — tappable and button-reachable like any row.
 - **Lists** (json): with `browse.lists`, opening the catalog shows a picker
   of the named entries first; each entry browses with its own url/body
   overrides (server-side categories, shelves, sort orders). Back from the

@@ -621,7 +621,10 @@ bool PluginCatalogActivity::parseBrowseResponse() {
   plugincatalogpaging::PageWindow window(pageOffset, manifest.pageSize);
   auto append = [&](JsonListParser::Row& row) {
     const bool titled = !row.field[JsonListParser::F_TITLE].empty();
-    if (outOfMemory || !window.take(titled)) return;
+    // A server counted every row it sent, shown or not; a static list only the
+    // rows it shows. Untitled rows are never displayed either way.
+    if (outOfMemory || !window.take(plugincatalogpaging::countsTowardPage(paging, titled))) return;
+    if (!titled) return;
     size_t bytes = row.files.capacity() * sizeof(std::string);
     for (const auto& field : row.field) bytes += field.capacity() + 1;
     for (const auto& file : row.files) bytes += file.capacity() + 1;
