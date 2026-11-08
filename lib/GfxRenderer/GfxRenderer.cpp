@@ -2762,22 +2762,38 @@ void GfxRenderer::requestFullRefreshNext() const {
 
 bool GfxRenderer::commitGrayscale16(bool clean) const {
   if (!grayscale16Buffer) return false;
+  // An explicit one-shot promotion (screen repair, the tap-zone REFRESH action,
+  // the control centre's ghost clean) targets the next present. A 16-level page
+  // is such a present, but commitNativeGray() cannot see the flag, so without
+  // this the request is swallowed: the page the user asked to clean never gets a
+  // clean, and the stale flag later fires on an unrelated 1-bit frame. A FULL
+  // promotion therefore turns this commit into a GC16 clean sweep; any other
+  // promoted mode is already satisfied by the gray waveform itself, but the flag
+  // is still consumed so it cannot fire later.
+  const bool explicitPromotion = nextRefreshOverridePending && !nextRefreshOverrideFromGray;
+  const bool promotedClean = explicitPromotion && nextRefreshOverride == HalDisplay::FULL_REFRESH;
   // This frame is about to rewrite every line with a gray-capable waveform, so a
   // promotion left by the previous gray frame is already satisfied (Home ->
-  // Library, Home -> detail page). Explicit promotions (screen repair, control
-  // center) are not touched: their flag is false.
+  // Library, Home -> detail page).
   if (nextRefreshOverridePending && nextRefreshOverrideFromGray) {
     nextRefreshOverridePending = false;
   }
-  const bool committed = commitNativeGray(display, clean);
-  if (!committed) cancelNativeGray(display);
+  const bool committed = commitNativeGray(display, clean || promotedClean);
+  if (!committed) {
+    cancelNativeGray(display);
+  } else if (explicitPromotion) {
+    // Consumed on success only: a failed gray pass leaves the request armed for
+    // the caller's B/W fallback (which runs displayBuffer()).
+    nextRefreshOverridePending = false;
+  }
   grayscale16Buffer = nullptr;
-  if (committed) {
+  if (committed && !promotedClean) {
     // A 16-level frame leaves midtones on the glass. The next 1-bit page's
     // FAST/DU waveform cannot erase them, so a card, cover or anti-aliased
     // glyph turns into a ghost as soon as the user leaves the page. Promote the
     // next B/W presentation to a FULL GC16 sweep; the one-shot override is
-    // consumed by displayBuffer()/displayBufferAsync().
+    // consumed by displayBuffer()/displayBufferAsync(). Skipped when this very
+    // commit ran a clean sweep: the midtones are already gone.
     nextRefreshOverridePending = true;
     nextRefreshOverride = HalDisplay::FULL_REFRESH;
     nextRefreshOverrideFromGray = true;
@@ -4260,6 +4276,18 @@ size_t GfxRenderer::getBufferSize() const { return frameBufferSize; }
 
 void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback, DisplayRefreshContext context) const {
   absoluteGrayPlanes = false;
+  // Same one-shot contract as commitGrayscale16(): a gray base push is a present,
+  // so an explicit promotion (screen repair / tap-zone REFRESH / ghost clean)
+  // overrides the caller's fallback instead of being dropped -- otherwise the
+  // antialiased reader page the user asked to clean never gets the GC16 sweep and
+  // the flag fires later on an unrelated frame. The FromGray variant is a
+  // different promise (it only protects the 1-bit page that follows a gray one),
+  // and this gray -> gray transition already runs a gray-capable waveform, so it
+  // is dropped here just like commitGrayscale16() drops it.
+  if (nextRefreshOverridePending) {
+    if (!nextRefreshOverrideFromGray) fallback = nextRefreshOverride;
+    nextRefreshOverridePending = false;
+  }
 #ifdef SIMULATOR
   (void)context;
   display.displayGrayscaleBase(fallback, fadingFix);
@@ -4270,7 +4298,14 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback, Display
 
 bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback) const {
   absoluteGrayPlanes = false;
-  if (!display.displayGrayscaleBase(mode, fallback, fadingFix)) return false;
+  // Consume a pending one-shot promotion as above; the flag is cleared only once
+  // the base was accepted, so a refused base leaves the request for the caller's
+  // fallback path.
+  const bool explicitPromotion = nextRefreshOverridePending && !nextRefreshOverrideFromGray;
+  if (!display.displayGrayscaleBase(mode, explicitPromotion ? nextRefreshOverride : fallback, fadingFix)) {
+    return false;
+  }
+  if (nextRefreshOverridePending) nextRefreshOverridePending = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;
   return true;
 }

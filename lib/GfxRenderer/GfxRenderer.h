@@ -373,11 +373,13 @@ class GfxRenderer {
     nextRefreshOverrideFromGray = false;
   }
   void requestNextFullRefresh() const { requestNextRefresh(HalDisplay::FULL_REFRESH); }
-  // One-shot: the next displayBuffer()/displayBufferAsync() call uses `mode`
-  // instead of what its caller asked for, then the override clears itself.
-  // Lets a closing overlay (the control center's refresh tile) hand a
-  // ghost-cleanup waveform to the repaint of whatever screen is underneath,
-  // which it cannot reach directly.
+  // One-shot: the next displayBuffer(), displayBufferAsync(), displayGrayscaleBase()
+  // or commitGrayscale16() call uses `mode` instead of what its caller asked for
+  // (a gray commit turns it into a GC16 clean sweep), then the override clears
+  // itself. Lets a closing overlay (the control center's refresh tile) or a
+  // tap-zone refresh hand a ghost-cleanup waveform to the repaint of whatever
+  // screen is underneath, which it cannot reach directly -- including
+  // anti-aliased 16-level pages.
   void promoteNextRefresh(const HalDisplay::RefreshMode mode) const { requestNextRefresh(mode); }
   // Non-blocking refresh: starts the waveform and returns so CPU work (e.g.
   // grayscale strip rendering) can overlap the panel's refresh time. The
