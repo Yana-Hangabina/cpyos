@@ -1,0 +1,23 @@
+# Codepoints the system font pack must carry beyond `chars_8105.txt`.
+#
+# `chars_8105.txt` is the 2013 通用规范汉字表 and is asserted at exactly 8,105
+# entries; locale letters live here instead. Each line is one character;
+# `scripts/add_pack_codepoints.py` merges the real outline from a Latin Noto
+# Sans face (SIL OFL 1.1) - a cmap alias to a lookalike is not acceptable for
+# these, because they are letterforms, not punctuation.
+#
+# Azerbaijani (az) alphabet letters absent from the Han subset. Ten of them
+# (Ç Ö Ü ç ö ğ İ ı Ş ş) are also exactly what Turkish is missing today.
+Ç
+Ö
+Ü
+ç
+ö
+Ğ
+ğ
+İ
+ı
+Ş
+ş
+Ə
+ə

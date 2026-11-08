@@ -39,10 +39,10 @@
 
 // ---- Pack-derived reader sizes. ----
 // CJK_PACK_SIGNATURE is crc32(assets/fonts/CPYOSHanSansSC-Regular-8105.ttf)
-// & 0xFFFF (0x49D6). The point size lives in the low byte, so a
+// & 0xFFFF (0x4061). The point size lives in the low byte, so a
 // pack with different metrics re-keys the section cache and pagination
 // rebuilds exactly once - no manual SECTION_FILE_VERSION bump.
-#define CJK_PACK_SIGNATURE (0x49D6)
+#define CJK_PACK_SIGNATURE (0x4061)
 #define CJK_READER_SIZE_FONT_ID(pt) (0x43000000 | (CJK_PACK_SIGNATURE << 8) | (pt))
 
 // Font ID 0 is reserved as the "not found" sentinel.
