@@ -1496,9 +1496,11 @@ void CrossPointWebServer::handleDelete() const {
     // Security check: prevent deletion of protected items
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
-    // Hidden/system files and credential stores are protected
-    if (itemName.startsWith(".") || protectedpaths::isSensitivePath(itemPath.c_str())) {
-      failedItems += itemPath + " (hidden/system file); ";
+    // Credential stores and the device's private directory are protected.
+    // Hidden (dot-named) items can be deleted: they are the leftovers users
+    // need to clear out, and the File Manager only shows them on request.
+    if (protectedpaths::isUndeletableWebPath(itemPath.c_str())) {
+      failedItems += itemPath + " (protected file); ";
       allSuccess = false;
       continue;
     }

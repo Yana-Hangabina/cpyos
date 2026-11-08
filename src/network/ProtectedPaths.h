@@ -64,6 +64,43 @@ inline bool isSensitivePath(const char* path) {
   return false;
 }
 
+// The device's private directory: settings, caches, cookies and the book
+// content key all live here. Its contents must stay on the device, and the
+// directory itself must never be removed from the browser - deleting it would
+// take settings.json and every cache with it.
+inline bool isPrivateDirectory(const char* path) {
+  std::string canon;
+  canon.reserve(strlen(path) + 1);
+  for (const char* seg = path; *seg;) {
+    while (*seg == '/') seg++;
+    const char* end = strchr(seg, '/');
+    const size_t len = end ? static_cast<size_t>(end - seg) : strlen(seg);
+    if (len == 2 && seg[0] == '.' && seg[1] == '.') {
+      const size_t slash = canon.rfind('/');
+      canon.erase(slash == std::string::npos ? 0 : slash);
+    } else {
+      const char* first = seg;
+      const char* last = seg + len;
+      while (first < last && *first == ' ') first++;
+      while (last > first && (last[-1] == '.' || last[-1] == ' ')) last--;
+      if (first < last) {
+        canon += '/';
+        canon.append(first, static_cast<size_t>(last - first));
+      }
+    }
+    seg += len;
+  }
+  static constexpr const char* kPrivate = "/.crosspoint";
+  return strncasecmp(canon.c_str(), kPrivate, strlen(kPrivate)) == 0 &&
+         (canon.size() == strlen(kPrivate) || canon[strlen(kPrivate)] == '/');
+}
+
+// Deleting through the web UI may remove hidden files, but never anything the
+// device itself owns. Credential stores are covered by both rules.
+inline bool isUndeletableWebPath(const char* path) {
+  return isSensitivePath(path) || isPrivateDirectory(path);
+}
+
 // A plugin-supplied path (web request or device.json): absolute, no parent
 // refs, not a credential store.
 inline bool isPluginPath(const std::string& p) {
