@@ -22,6 +22,7 @@ LanguageSelectActivity::LanguageSelectActivity(GfxRenderer& renderer, MappedInpu
 
 void LanguageSelectActivity::onEnter() {
   UiListActivity::onEnter();
+  saveFailed_ = false;
 
   // Initial onboarding offers Simplified Chinese first without changing the
   // active language until the user confirms. Other entry modes keep the
@@ -34,8 +35,7 @@ void LanguageSelectActivity::onEnter() {
   nav.selected = (it != end) ? static_cast<int>(std::distance(begin, it)) : 0;
 
   // Built once here rather than every buildScreen() call: labels are static,
-  // and the "Selected" marker can't go stale mid-visit since activateIndex()
-  // finishes the activity immediately on selection.
+  // and the "Selected" marker changes only if saving the selection fails.
   for (int i = 0; i < totalItems; ++i) {
     fui::ListItem item;
     const auto language = static_cast<Language>(SORTED_LANGUAGE_INDICES[i]);
@@ -101,13 +101,19 @@ void LanguageSelectActivity::activateIndex(const int index) {
     SETTINGS.fontPointSize = previousFontPointSize;
     SETTINGS.onboardingVersion = previousOnboardingVersion;
     LOG_ERR("LANG", "Failed to save language selection");
+    saveFailed_ = true;
     for (int i = 0; i < totalItems; ++i) {
-      rowItems[i].value = SORTED_LANGUAGE_INDICES[i] == langIndex ? tr(STR_SELECTED) : nullptr;
+      if (!I18n::isLanguagePackAvailable(static_cast<Language>(SORTED_LANGUAGE_INDICES[i]))) {
+        rowItems[i].value = tr(STR_NOT_AVAILABLE);
+      } else {
+        rowItems[i].value = SORTED_LANGUAGE_INDICES[i] == previousLanguage ? tr(STR_SELECTED) : nullptr;
+      }
     }
     requestUpdate();
     return;
   }
 
+  saveFailed_ = false;
   timezones::applyToClock();
   {
     RenderLock lock(*this);
@@ -144,6 +150,17 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
       static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
       static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height)), static_cast<int16_t>(safe.x)});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (saveFailed_) {
+    // The rows below still show the language that is actually on the card, so
+    // say why the tap appeared to do nothing instead of just repainting.
+    fui::TextAreaProps notice;
+    notice.text = tr(STR_LANGUAGE_SAVE_FAILED);
+    notice.style = screen.theme().bodyText;
+    notice.style.maxLines = 3;
+    notice.showCaret = false;
+    screen.textArea(notice, screen.target().lineHeight(notice.style.font) * notice.style.maxLines);
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  }
 
   // rowItems was built once in onEnter() and is reused here on every repaint.
   fui::ListProps props;
