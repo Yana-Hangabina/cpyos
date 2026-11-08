@@ -2,7 +2,9 @@ name: CI (build)
 
 on:
   push:
-    branches: [main]
+    # cpyos is the integration/publish branch; without it, direct pushes to it
+    # run no build CI at all (concurrency.cancel-in-progress dedupes).
+    branches: [main, cpyos]
   pull_request:
   workflow_dispatch:
 
