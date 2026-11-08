@@ -68,6 +68,7 @@ namespace web_en {
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
 #include "util/TaskWatchdog.h"
+#include "util/UrlUtils.h"
 
 namespace {
 // Arduino's WebServer retains parsed request arguments until the next request.
@@ -248,6 +249,21 @@ bool CrossPointWebServer::begin() {
   // are answered in handleNotFound().
   server->enableCORS(true);
 
+  // Redirect captive-portal checks to the home page so the OS opens it (see
+  // https://en.wikipedia.org/wiki/Captive_portal#Detection). This runs before
+  // the handlers because WebDAV claims every GET. Checks are GET or HEAD; other
+  // methods are never redirected, as their body is already handled by then.
+  // Host comes from the collected headers: hostHeader() keeps the last value.
+  if (apMode) {
+    server->addMiddleware([](WebServer& s, Middleware::Callback next) {
+      const bool check = s.method() == HTTP_GET || s.method() == HTTP_HEAD;
+      if (!check || !UrlUtils::isForeignHost(s.header("Host").c_str())) return next();
+      s.sendHeader("Location", "http://" + WiFi.softAPIP().toString() + "/", true);
+      s.send(302, "text/plain", "");
+      return true;
+    });
+  }
+
   // Setup routes
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
@@ -312,10 +328,11 @@ bool CrossPointWebServer::begin() {
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
 
   // Collect WebDAV headers and register handler.
-  // If-None-Match is collected so the static-page handlers can answer conditional GETs with 304.
-  const char* collectedHeaders[] = {"Depth",      "Destination", "Overwrite",    "If",
-                                    "Lock-Token", "Timeout",     "If-None-Match"};
-  server->collectHeaders(collectedHeaders, 7);
+  // If-None-Match is collected so the static-page handlers can answer conditional GETs with 304,
+  // and Host for the captive-portal check.
+  const char* collectedHeaders[] = {"Depth",      "Destination", "Overwrite",     "If",
+                                    "Lock-Token", "Timeout",     "If-None-Match", "Host"};
+  server->collectHeaders(collectedHeaders, 8);
   // WebServer takes ownership and deletes this handler.  It must be nothrow:
   // an OOM here previously called abort() on ESP32 builds with exceptions off.
   auto* webDavHandler = new (std::nothrow) WebDAVHandler();
@@ -657,15 +674,6 @@ void CrossPointWebServer::handleNotFound() const {
   // here. The Access-Control-Allow-* headers are added by enableCORS().
   if (server->method() == HTTP_OPTIONS) {
     server->send(204, "text/plain", "");
-    return;
-  }
-
-  // in AP mode, redirect unmatched browser/captive-portal requests to "/" so the OS auto-opens the browser
-  // API requests (/api/*) still return 404 so XHR errors surface correctly
-  // see https://en.wikipedia.org/wiki/Captive_portal#Detection
-  if (apMode && !server->uri().startsWith("/api/")) {
-    server->sendHeader("Location", "/", true);
-    server->send(302, "text/plain", "");
     return;
   }
 
