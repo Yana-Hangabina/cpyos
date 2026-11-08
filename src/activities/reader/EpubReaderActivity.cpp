@@ -83,6 +83,7 @@ extern void disarmScanWatchdog();
 #include "util/HtmlToPlainText.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkFile.h"
+#include "util/DictionaryRegistry.h"
 #include "util/ReadingBackground.h"
 #include "util/ReadingGuideLine.h"
 #ifdef ENABLE_CHINESE_VERSION
@@ -837,7 +838,11 @@ void EpubReaderActivity::showBuildPopup(GfxRenderer& renderer, int& pagesUntilFu
 }
 
 void EpubReaderActivity::openDictionaryWordSelect() {
-  if (SETTINGS.dictionaryName[0] == '\0') {
+  // A configured-but-deleted dictionary keeps its name in the settings, so the
+  // empty-name check alone let the lookup open and fail on the first word. Ask
+  // the registry whether the folder still holds a usable dictionary.
+  std::string dictionaryBase;
+  if (!DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryBase)) {
     showDictionaryMessage = true;
     dictionaryMessageTime = millis();
     requestUpdate();
