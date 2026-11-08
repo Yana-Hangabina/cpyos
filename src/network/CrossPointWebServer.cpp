@@ -1770,12 +1770,18 @@ void CrossPointWebServer::handleGetSettings() const {
         break;
       }
       case SettingType::ENUM: {
-        doc["type"] = "enum";
+        // A two-label OFF/ON enum is semantically a boolean; the page renders
+        // "toggle" as a switch instead of a two-entry dropdown.
+        const auto labels = s.enumLabels();
+        const bool toggle = s.enumStringValues.empty() && labels.size() == 2 && labels[0] == StrId::STR_STATE_OFF &&
+                            labels[1] == StrId::STR_STATE_ON;
+        doc["type"] = toggle ? "toggle" : "enum";
         if (s.valuePtr) {
           doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
         } else if (s.valueGetter) {
           doc["value"] = static_cast<int>(s.valueGetter());
         }
+        if (toggle) break;
         JsonArray options = doc["options"].to<JsonArray>();
         if (!s.enumStringValues.empty()) {
           for (const auto& opt : s.enumStringValues) {
