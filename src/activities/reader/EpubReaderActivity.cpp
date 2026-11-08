@@ -2859,17 +2859,10 @@ bool EpubReaderActivity::openZoneMenu() {
 }
 
 void EpubReaderActivity::gotoNextZoneChapter() {
-  if (!epub) return;
-  const int count = epub->getSpineItemsCount();
-  if (count <= 0 || currentSpineIndex + 1 >= count) return;
-  {
-    RenderLock lock;
-    clearDeferredReposition();
-    nextPageNumber = 0;
-    currentSpineIndex += 1;
-    section.reset();
-  }
-  lastPageTurnTime = millis();
+  // Route through the same navigation the toolbar uses. TXT/MD store their named
+  // chapters as anchors inside a single spine, so stepping currentSpineIndex
+  // would clamp back to the same chapter and the configured zone would look dead.
+  if (gotoChapterIndex(currentChapterIndex() + 1)) lastPageTurnTime = millis();
 }
 
 bool EpubReaderActivity::handleZoneShortAction(const uint8_t action) {
@@ -5673,6 +5666,35 @@ int EpubReaderActivity::currentTocIndex() const {
   return getChapterTocIndex(*epub, currentSpineIndex, offset);
 }
 
+int EpubReaderActivity::currentChapterIndex() const {
+  if (!epub) return 0;
+  return Txt::isTxtOrMd(epub->getSourcePath()) ? std::max(0, currentTocIndex()) : currentSpineIndex;
+}
+
+bool EpubReaderActivity::gotoChapterIndex(const int target) {
+  if (!epub) return false;
+  const bool textBook = Txt::isTxtOrMd(epub->getSourcePath());
+  const int chapterCount = textBook ? epub->getTocItemsCount() : epub->getSpineItemsCount();
+  // A TXT whose headings were never detected has no TOC at all; clamp() with an
+  // empty range is undefined, so there is nothing to step to.
+  if (chapterCount <= 0) return false;
+  const int chapterIndex = currentChapterIndex();
+  const int clamped = std::clamp(target, 0, chapterCount - 1);
+  if (clamped == chapterIndex) return false;
+  RenderLock lock;
+  clearDeferredReposition();
+  nextPageNumber = 0;
+  if (textBook) {
+    const auto item = epub->getTocItem(clamped);
+    currentSpineIndex = item.spineIndex;
+    pendingAnchor = item.anchor;
+  } else {
+    currentSpineIndex = clamped;
+  }
+  section.reset();
+  return true;
+}
+
 std::string EpubReaderActivity::currentChapterTitle() const {
   if (!epub) return "";
   const int tocIndex = currentTocIndex();
@@ -6437,22 +6459,11 @@ void EpubReaderActivity::handleOverlayInput() {
 
   const bool textBook = Txt::isTxtOrMd(epub->getSourcePath());
   const int chapterCount = textBook ? epub->getTocItemsCount() : epub->getSpineItemsCount();
-  const int chapterIndex = textBook ? std::max(0, currentTocIndex()) : currentSpineIndex;
-  const auto gotoChapter = [this, textBook, chapterCount, chapterIndex](int target) {
-    target = std::clamp(target, 0, chapterCount - 1);
-    if (target != chapterIndex) {
-      RenderLock lock;
-      clearDeferredReposition();
-      nextPageNumber = 0;
-      if (textBook) {
-        const auto item = epub->getTocItem(target);
-        currentSpineIndex = item.spineIndex;
-        pendingAnchor = item.anchor;
-      } else {
-        currentSpineIndex = target;
-      }
-      section.reset();
-    }
+  const int chapterIndex = currentChapterIndex();
+  const auto gotoChapter = [this](int target) {
+    // Shared with the tap zones (gotoChapterIndex): TXT/MD chapters are anchors
+    // inside one spine, so they cannot be reached by stepping the spine.
+    gotoChapterIndex(target);
     requestUpdate();
   };
   const auto toolOverlay = [](int tool) {
