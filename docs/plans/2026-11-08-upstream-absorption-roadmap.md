@@ -339,3 +339,46 @@ Batch 0 约 1.5–2 周；Batch 1 与 Batch 2 可由两条工作流并行，墙�
 - 七份详细设计（排版/字体/批注/圆角/UI 重分类/网络构建重分类/剩余 4 项）见附录
   [`2026-11-08-upstream-absorption-designs.md`](2026-11-08-upstream-absorption-designs.md)。
 - 清零与 SDK 的完成状态仍以 `2026-11-08-upstream-zeroing-plan.md` 为准。
+
+
+## 8. 执行进度（2026-11-09）
+
+### 已完成并通过构建
+
+- **Batch 0A（UI/网络/设置/字体 P0/陀螺仪/BLE）**：字体 ID 生成器 + 包 CRC、supplement 字号、
+  设置容量自检与批次拆分、KOSync 弹窗、板级过滤收口、getter/setter 守卫、ActivityManager
+  生命周期外移、release 调试守卫、时钟过滤、PR 固件链接、CI 分支、browseLists 上限、
+  插件错误态、陀螺仪能力查询、BLE 空闲关射频/有界重试/切屏前停止。
+- **Batch 0B（内圆角地基）**：`PanelInsets.h` + UITheme accessors + 5 个消费点 + headerBand；
+  radius=0 时输出不变；1:1 标尺照片仍待拍。
+- **Batch 0C（短语查询）**：`SelectionText`、三胶囊 `[查词][高亮][批注]`、`PhraseQuery`、
+  候选阶梯、回退提示；真机已确认三胶囊出现（截帧），实际词典命中路径仍需触摸或后续串口钩子。
+- **Batch 0D（az）**：`Ə/ə`（含土耳其 ÇÖÜçöğİıŞş）合入系统字体包、`azerbaijani.yaml`、
+  字体 ID 重算；i18n 36 语言、pack 357,951 B。
+- **排版 M1**：复合/ID/后代选择器、specificity、`::first-letter`、`white-space`/`<pre>`；
+  CSS 缓存 14、`SECTION_FILE_VERSION` 89/88。
+- **插件兼容性栈**：`FirmwareIdentity` 词汇表、动态列表索引、固定列表存活、`requires` 过滤；
+  列表上限 64。
+
+### 构建与真机
+
+| 项 | 结果 |
+|---|---|
+| `readpico` | SUCCESS；RAM 89,048 B (27.2%)、Flash 7,192,510 / 7,536,640 (95.4%) |
+| `readpico_nosource` | SUCCESS；RAM 89,024 B、Flash 7,116,498 (94.4%) |
+| 启动 | `0.7.0-cpyos`、i18n **34 packed languages / 1812 keys**、`language pack ready` |
+| PSRAM（刷前基线） | Free 3,827,064；MaxAlloc 3,735,540 |
+| PSRAM（刷后稳态） | **Free 3,859,660（+32.6 KB）；MaxAlloc 3,801,076（+65.5 KB）** |
+| PSRAM（阅读态） | Free 2,127,684 / MaxAlloc 1,998,836（与刷前同状态 2,142,008 / 1,966,068 同量级） |
+| 首启 | 字体包换代触发一次落盘/重建，boot 11.4 s；第二次起 8.9 s，SFP 直接打开新文件 |
+| soak | 冷启动首跑 2 项抖动失败，复跑 **36/36** |
+| 其他 | 打开书正常；封面缓存按新校验重建一次；无崩溃/欠载 |
+
+### 待做
+
+- 排版 M2–M6（块级字号、分页/孤行、边框/表格、逐词字体/small caps、drop caps）。
+- 字体 P1/P2（行距百分比、Libron、TTF 预热若有性能需要）。
+- Batch 3 其余计划项（设置分组、状态栏 overlay、前端灯图标、clang-format 21、wasTapInRect 迁移、
+  封面失败备忘等）。
+- C3 构建（本轮尚未跑）、az 语言 UI 目视、短语查询实际词典命中（需触摸或补 `CMD:PHRASELOOKUP`）。
+- 内圆角 1:1 标尺照片后写入 `READ_PICO.cornerRadius`（当前 0）。
