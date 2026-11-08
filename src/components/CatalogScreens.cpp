@@ -24,6 +24,10 @@ void catalogScreenHeader(UiAppHost::UiScreen& screen, const GfxRenderer& rendere
   // Same battery/clock band as every GUI.drawHeader screen; the header
   // heights are unified across themes, so the buttons derive from the band.
   GUI.applyHeaderStatus(renderer, header);
+  // The status line hugs the top corner, so it takes the panel aperture's
+  // clearance at the band's row (BaseTheme::headerBand does the same for every
+  // GUI.drawHeader screen; 0 on a square panel).
+  GUI.applyStatusCornerClearance(header, metrics.topPadding);
   const auto frameRect = screen.frame().screen();
   // Back button on touch boards, as on every GUI.drawHeader screen: the rect
   // goes to HeaderBackTapTarget, which MappedInputManager folds into

@@ -1457,6 +1457,9 @@ void LibraryListActivity::buildHeader(UiScreen& screen) {
   // Same battery/clock band as every GUI.drawHeader screen; the header
   // heights are unified across themes, so the buttons derive from the band.
   GUI.applyHeaderStatus(renderer, header);
+  // Same corner clearance GUI.drawHeader applies (BaseTheme::headerBand); this
+  // CPY band is drawn inline, so it takes it directly. 0 on a square panel.
+  GUI.applyStatusCornerClearance(header, headerTop);
   if (mappedInput.hasTouch()) {
     header.leadingIcon = fui::bitmapFromIcon(icon_header_back_32);
     header.leadingAction = ACTION_BACK;

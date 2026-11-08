@@ -636,6 +636,24 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   drawHeaderWithStyle(renderer, rect, title, subtitle, backButton, false);
 }
 
+void BaseTheme::applyStatusCornerClearance(freeink::ui::HeaderProps& props, const int statusDepthPx) {
+  // Straight-edge clearance is already in the inset (the theme's own padding);
+  // what an inset cannot express is the arc, because the width it steals
+  // depends on the row. The status line's topmost ink row is the binding one,
+  // so its depth from the panel's top edge is what we measure.
+  const int cut = panel_insets::cornerCut(UITheme::getInstance().getCornerRadius(), std::max(0, statusDepthPx));
+  props.status.edgeInset = static_cast<int16_t>(props.status.edgeInset + cut);
+}
+
+Rect BaseTheme::headerBand(const Rect rect, freeink::ui::HeaderProps& props) {
+  // The band is the caller's rect. CPYOS activities compute their header rect
+  // from UITheme::getScreenSafeArea (already inside the board's viewable
+  // insets), so re-insetting here would double the margin; upstream's band does
+  // that because its callers pass full-width rects.
+  applyStatusCornerClearance(props, rect.y);
+  return rect;
+}
+
 void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle,
                                     const bool backButton, const bool upstreamStyle) {
   // Every activity header renders through the FreeInkUI header + battery
@@ -657,8 +675,6 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   // subtitles.
   ui.target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
   ui.target.setFont(fui::GfxRendererTarget::FONT_LABEL, SMALL_FONT_ID);
-  const fui::Rect band{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y), static_cast<int16_t>(rect.width),
-                       static_cast<int16_t>(rect.height)};
 
   fui::HeaderProps props;
   props.title = title;
@@ -666,6 +682,11 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   // Battery + clock chrome and their title reserves live in the FreeInkUI
   // header component; this only fills the values from settings and metrics.
   applyHeaderStatus(renderer, props, upstreamStyle);
+  // One source for the drawn band: the theme's own rect (already inside the
+  // viewable insets) plus the aperture's corner clearance for the status line.
+  const Rect bandRect = headerBand(rect, props);
+  const fui::Rect band{static_cast<int16_t>(bandRect.x), static_cast<int16_t>(bandRect.y),
+                       static_cast<int16_t>(bandRect.width), static_cast<int16_t>(bandRect.height)};
   if (rect.height < uiThemeMetrics(upstreamStyle).headerHeight) {
     // Short bands (home) are not split into strip + content row: the title
     // centers on the band, clear of the band's bottom edge.
