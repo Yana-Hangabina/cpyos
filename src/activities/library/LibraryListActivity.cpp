@@ -2241,8 +2241,7 @@ void LibraryListActivity::drawPositionReadout() const {
   // rounded aperture clips; pull its right edge out of the arc. On a square
   // panel the cut is 0 and this clamp never fires.
   const int readoutDepth = std::max(0, renderer.getScreenHeight() - (y + renderer.getLineHeight(SMALL_FONT_ID)));
-  const int readoutCut =
-      panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), readoutDepth);
+  const int readoutCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), readoutDepth);
   x = std::min(x, renderer.getScreenWidth() - width - readoutCut);
   renderer.drawText(SMALL_FONT_ID, x, y, buf, true);
 }

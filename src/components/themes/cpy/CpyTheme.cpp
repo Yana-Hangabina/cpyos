@@ -990,8 +990,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
   // reach the viewable aperture's corner arc. sideClearance falls back to the
   // row padding, and the cut is 0 on a square panel, so nothing moves there.
   const int mastDepth = std::max(0, centerY);
-  const int mastSide =
-      panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
+  const int mastSide = panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
   int textX = rect.x + mastSide;
   if (title != nullptr) {
     cpy_duck::draw(renderer, cpy_duck_stand_36, textX, centerY - duckSize / 2);
@@ -1094,8 +1093,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
   // Same corner rule as the mast above: the band's centre row is its outermost
   // ink, and the cut is 0 on every profile that ships this path today.
   const int mastDepth = std::max(0, centerY);
-  const int mastSide =
-      panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
+  const int mastSide = panel_insets::sideClearance(kRowPadding, UITheme::getInstance().getCornerRadius(), mastDepth);
   int textX = rect.x + mastSide;
   if (title != nullptr) {
     constexpr int duckSize = 36;
