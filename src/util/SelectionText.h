@@ -315,7 +315,9 @@ inline PhraseCandidates phraseCandidates(const std::string_view phrase, const si
   if (tokenCount >= 3) {
     const size_t first = anchorToken > 0 ? anchorToken - 1 : 0;
     const size_t last = first + 1;
-    addCandidate(out, std::string(phrase.substr(tokenStart[first], tokenStart[last] + tokenLen[last] - tokenStart[first])));
+    const size_t spanStart = tokenStart[first];
+    const size_t spanEnd = tokenStart[last] + tokenLen[last];
+    addCandidate(out, std::string(phrase.substr(spanStart, spanEnd - spanStart)));
   }
   return out;
 }

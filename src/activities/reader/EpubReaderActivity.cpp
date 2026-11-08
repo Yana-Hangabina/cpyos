@@ -1991,7 +1991,8 @@ void EpubReaderActivity::startPhraseLookup() {
   selection_text::PhraseQuery query;
   query.text = selection_text::normalizePhrase(snapshot.phrase);
   if (!selection_text::hasLookupContent(query.text)) {
-    LOG_DBG("ERS", "phrase: selection has nothing to look up (%u bytes)", static_cast<unsigned>(snapshot.phrase.size()));
+    LOG_DBG("ERS", "phrase: selection has nothing to look up (%u bytes)",
+            static_cast<unsigned>(snapshot.phrase.size()));
     toast_.show(tr(STR_NOT_AVAILABLE), millis());
     endSelection();
     return;
