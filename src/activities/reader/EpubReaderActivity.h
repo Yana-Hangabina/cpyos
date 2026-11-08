@@ -272,6 +272,9 @@ class EpubReaderActivity final : public ReaderActivity {
     uint32_t start;
     uint32_t end;
     const char* text;
+    uint16_t paragraph;  // TextBlock::getParagraphIndex(): '
+' between paragraphs
+    bool gapBefore;      // the source had whitespace/a line break before this word
   };
   bool selectionActive = false;
   // Self-timed long press + drag selection. The SDK's long-press event is gated
@@ -319,13 +322,31 @@ class EpubReaderActivity final : public ReaderActivity {
   // the shared popup: that one routes its input through the overlay path, which
   // never runs on the reading surface — the menu could be shown but not answered.
   bool selectionMenuActive = false;
-  int selectionMenuChoice = 0;  // 0 = highlight, 1 = note
-  int16_t selectionMenuHitX[2] = {0, 0};
-  int16_t selectionMenuHitY[2] = {0, 0};
-  int16_t selectionMenuHitW[2] = {0, 0};
-  int16_t selectionMenuHitH[2] = {0, 0};
+  // New selection: 0 = look up, 1 = highlight, 2 = note. Editing an existing
+  // annotation: 0 = delete, 1 = note (no lookup — the stored quote is truncated).
+  int selectionMenuChoice = 0;
+  int16_t selectionMenuHitX[3] = {0, 0, 0};
+  int16_t selectionMenuHitY[3] = {0, 0, 0};
+  int16_t selectionMenuHitW[3] = {0, 0, 0};
+  int16_t selectionMenuHitH[3] = {0, 0, 0};
   void drawSelectionMenu();
   void activateSelectionMenuChoice(int choice);
+  // The word the long press landed on. It does not slide when the range is
+  // extended, so a CJK lookup ladder can start its windows at that character.
+  uint16_t selectionAnchorLine = 0;
+  uint16_t selectionAnchorWord = 0;
+  // One pass over the page for both consumers of the selection text: the
+  // highlight quote and the dictionary phrase (src/util/SelectionText.h).
+  struct SelectionSnapshot {
+    std::unique_ptr<Page> page;    // owns the word text `phrase` was built from
+    std::string phrase;            // joined selection, not yet normalized
+    uint32_t start = 0;
+    uint32_t end = 0;
+    bool haveRange = false;
+    size_t anchorPrefixBytes = 0;  // bytes of `phrase` before the anchor word
+  };
+  bool snapshotSelection(SelectionSnapshot& out);
+  void startPhraseLookup();
   void extendSelectionTo(const AnnoWordRect& word);
   uint16_t selectionStartLine = 0;
   uint16_t selectionStartWord = 0;
@@ -727,6 +748,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // Serial soak hook: press Confirm on the focused panel cell (the Text grid
   // uses this to open its value pickers without a touch panel).
   void debugConfirm() override;
+  void debugOpenPhraseSelection() override;
   void debugDismissHint() override;
   void debugOpenJjwxcComment() override;
   void debugOpenFakeJjwxcComment() override;
