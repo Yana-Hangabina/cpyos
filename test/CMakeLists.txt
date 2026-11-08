@@ -197,6 +197,7 @@ add_test(NAME FileBrowserImages
 
 add_test(NAME ArduinoBootstrapLto COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${REPO_ROOT}/scripts/tests -p test_pioarduino_cache.py)
 add_subdirectory(reader_session)
+add_subdirectory(plugin_catalog_paging)
 add_subdirectory(plugin_manifest_classification)
 add_subdirectory(protected_paths)
 

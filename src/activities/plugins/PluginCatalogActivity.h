@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "PluginCatalogPaging.h"
 #include "activities/CatalogActivity.h"
 #include "network/HttpDownloader.h"
 #include "util/PluginHttp.h"
@@ -182,6 +183,8 @@ class PluginCatalogActivity final : public CatalogActivity {
   // Browse url/body with the selected browse list's overrides applied.
   const std::string& activeBrowseUrl() const;
   const std::string& activeBrowseBody() const;
+  // How the active browse request pages, read from the variables it uses.
+  plugincatalogpaging::Paging browsePaging() const;
   // Copies `headers` with `substituted()` applied to each value.
   pluginhttp::Headers substitutedHeaders(const pluginhttp::Headers& headers, const Item* item) const;
   void fetchPage(int newPage);

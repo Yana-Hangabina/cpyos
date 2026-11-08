@@ -277,6 +277,8 @@ std::string PluginCatalogActivity::substituted(std::string tpl, const Item* item
   substituteAll(tpl, "{page}", num);
   snprintf(num, sizeof(num), "%d", manifest.pageSize + 1);
   substituteAll(tpl, "{limit}", num);
+  snprintf(num, sizeof(num), "%d", std::max(0, page - 1) * manifest.pageSize);
+  substituteAll(tpl, "{offset}", num);
   substituteAll(tpl, "{query}", urlEncodeQuery(searchQuery));
   substituteAll(tpl, "{query_raw}", searchQuery);
   if (item) {
@@ -580,6 +582,10 @@ const std::string& PluginCatalogActivity::activeBrowseBody() const {
   if (searchActive) return pick(manifest.searchBody, manifest.browseReq.body);
   if (currentList < 0 || currentList >= static_cast<int>(manifest.browseLists.size())) return manifest.browseReq.body;
   return pick(manifest.browseLists[currentList].body, manifest.browseReq.body);
+}
+
+plugincatalogpaging::Paging PluginCatalogActivity::browsePaging() const {
+  return plugincatalogpaging::pagingOf(activeBrowseUrl(), activeBrowseBody(), manifest.browseReq.headers);
 }
 
 void PluginCatalogActivity::fetchPage(const int newPage) {
