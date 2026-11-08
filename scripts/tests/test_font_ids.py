@@ -86,6 +86,15 @@ class FontIdsTest(unittest.TestCase):
         self.assertEqual(generator.font_ids()["NOTOSERIF_12_FONT_ID"],
                          generator.FROZEN_IDS["NOTOSERIF_12_FONT_ID"])
 
+    def test_retired_serif_reader_headers_are_gone(self):
+        # Nothing compiled them and nothing registered them; the ids above are
+        # the only thing that had to survive.
+        builtin = ROOT / "lib" / "EpdFont" / "builtinFonts"
+        for size in (12, 14, 16, 18):
+            for style in ("regular", "bold", "bolditalic", "italic"):
+                self.assertFalse((builtin / f"notoserif_{size}_{style}.h").exists(), (size, style))
+        self.assertTrue((builtin / "notoserif_title_23.h").exists())
+
     def test_missing_header_fails_instead_of_emitting_an_id(self):
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(FileNotFoundError):
