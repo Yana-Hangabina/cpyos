@@ -163,6 +163,7 @@ add_subdirectory(txt_to_html)
 add_subdirectory(absolute_grayscale)
 
 add_subdirectory(sd_card_font)
+add_subdirectory(sd_font_registry)
 add_subdirectory(glyph_bitmap)
 
 add_test(NAME VectorGrayFallback
