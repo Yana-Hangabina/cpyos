@@ -24,9 +24,22 @@ import hashlib
 import os
 import re
 import struct
+import sys
 import zlib
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
+
+# Vendored Apache-2.0 minifiers (scripts/vendor/README.md records the version and
+# SHA-256). SCons pre-scripts run without __file__, so fall back to the project-
+# relative path exactly like build_html.py does.
+_VENDOR = os.path.join(
+    os.path.dirname(os.path.abspath(globals().get("__file__", os.path.join("scripts", "web_assets.py")))), "vendor"
+)
+if _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
+
+from rcssmin import cssmin  # noqa: E402
+from rjsmin import jsmin  # noqa: E402
 
 # --- pack format constants (mirror WebPackFormat.h) ------------------------
 PACK_MAGIC = b"CWP1"
@@ -81,6 +94,106 @@ def resolve_includes(html: str, base_dir: str) -> str:
             return f.read()
 
     return pattern.sub(repl, html)
+
+
+# --- JS/CSS minification ---------------------------------------------------
+# rjsmin only treats "/" as a regex literal after one of these or `return`.
+RJSMIN_REGEX_PREFIX = set("(,=:[!&|?{};\n+*-")
+# JavaScript also starts a regex (not a division) after these.
+JS_REGEX_PREFIX = RJSMIN_REGEX_PREFIX | set("%<>~^}")
+JS_REGEX_KEYWORDS = {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw",
+                     "yield", "await", "instanceof"}
+
+
+def rjsmin_hazard(js: str):
+    """Return (line, problem) for JS that rjsmin would silently corrupt, or None.
+
+    rjsmin does not support a template literal nested in another one's ${...},
+    and misreads a regex literal that does not follow RJSMIN_REGEX_PREFIX or
+    `return` (for example `x => /re/`)."""
+    i, n, mode, stack = 0, len(js), None, []
+    prev, prev_raw, word = "", "", ""  # last code char, same with "\n" kept, last word
+    # After a string, template or regex, "x" stands for an operand, so a "/" divides.
+    prev_at, dotted = 0, False  # where prev is; word follows "." (obj.in is not a keyword)
+    line = lambda pos: js.count("\n", 0, pos) + 1
+    while i < n:
+        c = js[i]
+        if mode is not None:  # inside '...', "..." or `...`
+            if c == "\\":
+                i += 2
+                continue
+            if c == mode or (c == "\n" and mode != "`"):
+                mode, prev, prev_raw, word = None, "x", "x", ""
+            elif mode == "`" and js.startswith("${", i):
+                stack.append("${")
+                mode, prev, prev_raw, word = None, "{", "{", ""
+                i += 2
+                continue
+            i += 1
+            continue
+        if js.startswith("//", i):
+            i = n if js.find("\n", i) < 0 else js.find("\n", i)
+            continue
+        if js.startswith("/*", i):
+            i = n if js.find("*/", i + 2) < 0 else js.find("*/", i + 2) + 2
+            continue
+        if c == "/" and (prev == "" or prev in JS_REGEX_PREFIX or (word in JS_REGEX_KEYWORDS and not dotted)):
+            if not (prev_raw == "" or prev_raw in RJSMIN_REGEX_PREFIX or word == "return"):
+                return line(i), "regex literal after '" + (word or prev) + "'; wrap it in parentheses"
+            in_class, j = False, i + 1
+            while j < n and js[j] != "\n":
+                if js[j] == "\\":
+                    j += 1
+                elif js[j] == "[":
+                    in_class = True
+                elif js[j] == "]":
+                    in_class = False
+                elif js[j] == "/" and not in_class:
+                    break
+                j += 1
+            i, prev, prev_raw, word = j + 1, "x", "x", ""
+            continue
+        if c in "'\"`":
+            if c == "`" and "${" in stack:
+                return line(i), "nested template literal"
+            mode = c
+        elif c == "{":
+            stack.append("{")
+        elif c == "}" and stack and stack.pop() == "${":
+            mode = "`"
+        if c.isalnum() or c in "_$":
+            if i > 0 and (js[i - 1].isalnum() or js[i - 1] in "_$"):
+                word += c
+            else:
+                word, dotted = c, prev == "." and js[prev_at - 1:prev_at] != "."  # not ...spread
+        elif not c.isspace():
+            word = ""
+        if not c.isspace():
+            prev, prev_at = c, i
+        if not c.isspace() or c == "\n":
+            prev_raw = c
+        i += 1
+    return None
+
+
+def minify_js(js: str, file_path: str) -> str:
+    hazard = rjsmin_hazard(js)
+    if hazard is not None:
+        raise SystemExit(f"{file_path}: script line {hazard[0]}: {hazard[1]}; rjsmin cannot minify it")
+    return jsmin(js)
+
+
+def minify_inline_assets(html: str, file_path: str) -> str:
+    """Minify inline <script> (without src) and <style> blocks.
+
+    Must run before minify_html(), which protects but does not rewrite those
+    blocks."""
+    def script(match):
+        return match.group(1) + minify_js(match.group(2), file_path) + match.group(3)
+
+    html = re.sub(r'(<script\b(?![^>]*\bsrc=)[^>]*>)(.*?)(</script>)', script, html, flags=re.DOTALL | re.IGNORECASE)
+    return re.sub(r'(<style\b[^>]*>)(.*?)(</style>)', lambda m: m.group(1) + cssmin(m.group(2)) + m.group(3), html,
+                  flags=re.DOTALL | re.IGNORECASE)
 
 
 def minify_html(html: str) -> str:
@@ -138,16 +251,19 @@ def header_symbol(file_path: str) -> str:
 def compress_source(file_path: str, kind: str) -> Tuple[bytes, int]:
     """Return (gzip bytes, original character count) for one source file.
 
-    HTML is include-resolved and minified first; JS is assumed pre-minified.
-    mtime=0 keeps the output reproducible across builds, and compresslevel 9 is
-    the same setting the firmware has always used.
+    HTML is include-resolved, its inline scripts/styles minified, then the
+    document whitespace/comment minifier runs. JS is minified unless the name
+    already ends in `.min.js`. mtime=0 keeps the output reproducible across
+    builds, and compresslevel 9 is the same setting the firmware has always used.
     """
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
     if kind == "html":
-        processed = minify_html(resolve_includes(content, os.path.dirname(file_path)))
-    else:
+        processed = minify_html(minify_inline_assets(resolve_includes(content, os.path.dirname(file_path)), file_path))
+    elif file_path.endswith(".min.js"):
         processed = content
+    else:
+        processed = minify_js(content, file_path)
     compressed = gzip.compress(processed.encode("utf-8"), compresslevel=9, mtime=0)
     return compressed, len(processed)
 

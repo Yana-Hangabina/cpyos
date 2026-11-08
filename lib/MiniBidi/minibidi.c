@@ -3,6 +3,7 @@
  *
  * Original author:  Ahmad Khalifa (www.arabeyes.org, MIT licence)
  * Mintty changes:   Thomas Wolff (rules N0, W7/L1/X9 fixes, isolates)
+ * Full notice and provenance: LICENSES/PROVENANCE.md.
  *
  * UAX #9: https://www.unicode.org/reports/tr9/
  */

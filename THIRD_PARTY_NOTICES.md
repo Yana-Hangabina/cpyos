@@ -12,9 +12,24 @@ components below keep their own licenses. Full license texts are in
 | [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader) | MIT | Reader, EPUB engine and interface foundation |
 | [Inx](https://github.com/obijuankenobiii/inx) | See upstream | Interface and theme work |
 | [cpr-vcodex](https://github.com/franssjz/cpr-vcodex) | See upstream | Reader/UI experiments |
-| [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader) | See upstream | Early EPUB reader inspiration |
+| [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader) | MIT | Early EPUB reader inspiration |
 
 The original MIT notice is preserved in [`LICENSE`](./LICENSE).
+
+## Vendored code and data
+
+Provenance, source URLs and the full short notices are in
+[`LICENSES/PROVENANCE.md`](./LICENSES/PROVENANCE.md).
+
+| Component | License | Where it lives |
+|---|---|---|
+| [Expat](https://github.com/libexpat/libexpat) | MIT | `lib/expat/` XML parser (notice kept in every source header) |
+| [AnimatedGIF](https://github.com/bitbank2/AnimatedGIF) | Apache-2.0 | Pinned PlatformIO dependency, patched by `scripts/patch_animatedgif.py` |
+| [MiniBidi](https://github.com/mintty/mintty/blob/master/src/minibidi.c) | MIT | `lib/MiniBidi/` Unicode bidi implementation |
+| [EPDiy](https://github.com/vroland/epdiy) tools and font layouts | MIT / LGPL-3.0 | Display conversion tools and `lib/EpdFont/EpdFontData.h` layouts |
+| [JSZip](https://github.com/Stuk/jszip) | MIT or GPL-3.0 | `src/network/html/js/jszip.min.js` |
+| Pako zlib port (inside JSZip) | Zlib | Deflate implementation served to the browser |
+| Unicode data | Unicode License V3 | Generated character tables |
 
 ## kiikoread
 
