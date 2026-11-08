@@ -338,7 +338,11 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   // guarantees that ordering).
   gpio.prepareForDeepSleep();
 #if FREEINK_DEVICE_METALIO_EINK4
-  // Keep USB diagnostics available if external power prevents the hardware cut.
+  // Deep sleep leaves the board, 4G modem and audio module powered, so cut power
+  // instead; the button cold-boots it. One attempt only: the vendor path pulses
+  // the switch chip repeatedly, but a single cut is what the button topology
+  // needs and a repeat would race the rail going down. Returns only on USB power,
+  // which keeps the diagnostics below reachable.
   freeink::metalio::shutdown();
 #else
   freeink::PowerManager::powerDownRailsForSleep();
