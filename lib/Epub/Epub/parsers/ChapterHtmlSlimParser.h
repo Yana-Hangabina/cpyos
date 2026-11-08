@@ -105,6 +105,29 @@ class ChapterHtmlSlimParser {
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
   CssStyle currentCssStyle;
+
+  // Open-element identities for descendant/child selector matching (upstream 0305aaa6).
+  // Indexed by parser depth: entry [depth] is written when that element opens, so the valid
+  // ancestors of an element are [0, depth). Nothing needs popping. 16 entries x 28 B = 448 B,
+  // inside this heap-allocated parser and never growing. Elements nested deeper than 16 are
+  // resolved without ancestors (contextual rules simply do not match), which bounds the stack.
+  static constexpr size_t MAX_CSS_ANCESTORS = 16;
+  std::array<CssAncestor, MAX_CSS_ANCESTORS> cssAncestors{};
+
+  // `white-space` inheritance. Frames are pushed only when the effective value changes, so the
+  // stack tracks boundaries rather than every element; 16 x {int, bool} is 128 B.
+  struct WhiteSpaceFrame {
+    int depth = 0;
+    bool preserve = false;
+  };
+  static constexpr size_t MAX_WHITESPACE_FRAMES = 16;
+  std::array<WhiteSpaceFrame, MAX_WHITESPACE_FRAMES> whitespaceStack{};
+  uint8_t whitespaceStackSize = 0;
+  bool effectivePreserveWhitespace = false;
+  // Resolved ::first-letter style of the innermost open block. Only filled when the stylesheet
+  // actually declares first-letter rules; later layout milestones (drop caps) consume it.
+  CssStyle firstLetterStyle;
+
   bool effectiveBold = false;
   bool effectiveItalic = false;
   CssTextDecoration effectiveTextDecoration = CssTextDecoration::None;
@@ -204,6 +227,10 @@ class ChapterHtmlSlimParser {
   void flushPendingAnchor();
   void flushPartWordBuffer();
   void softFlushTextBlock();
+  // `white-space: pre` / <pre> text: a run is emitted as one attached word token so its spaces
+  // keep their exact width, and a newline ends the current line.
+  void flushPreservedRun();
+  void breakPreservedLine();
   void fallbackTableRowToStacked();
   void closeTableCell();
   void finishTableRow();

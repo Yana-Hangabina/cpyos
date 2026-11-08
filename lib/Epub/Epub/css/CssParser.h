@@ -16,18 +16,31 @@
  * Uses a two-phase approach: first tokenizes the CSS content, then builds
  * a rule database that can be queried during HTML parsing.
  *
- * Supported selectors:
- *   - Element selectors: p, div, h1, etc.
- *   - Class selectors: .classname
- *   - Combined: element.classname
+ * Supported selectors (upstream 0305aaa6):
+ *   - Compounds of an optional element, #id and up to 4 classes: p, .a, p.a.b, #id, p#id.a
+ *   - Descendant and child combinators between compounds: div.poem p, blockquote > p
  *   - Grouped: selector1, selector2 { }
+ *   - ::first-letter / :first-letter rules, stored and resolved separately
+ * Matching rules are applied in specificity order (ids, then classes, then elements), with
+ * source order breaking ties.
  *
  * Not supported (silently ignored):
- *   - Descendant/child selectors
- *   - Pseudo-classes and pseudo-elements
+ *   - Sibling combinators (+, ~), attribute selectors, other pseudo-classes/elements
  *   - Media queries (content is skipped)
  *   - @import, @font-face, etc.
  */
+
+// Hashed identity of an open element, used to match descendant/child selectors. The chapter
+// parser keeps a fixed-size stack of these by element depth; hashing keeps it at 28 bytes per
+// ancestor and free of per-element strings.
+struct CssAncestor {
+  static constexpr uint8_t MAX_CLASSES = 4;  // classes past the fourth are not matchable
+  uint32_t tagHash = 0;
+  uint32_t idHash = 0;  // 0 when the element has no id
+  uint32_t classHashes[MAX_CLASSES] = {};
+  uint8_t classCount = 0;
+};
+
 class CssParser {
  public:
   enum class ParseResult : uint8_t {
@@ -51,7 +64,8 @@ class CssParser {
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // 13 - font-weight/font-style: inherit is preserved through the cascade (upstream 1bd323dd)
-  static constexpr uint8_t CSS_CACHE_VERSION = 13;
+  // 14 - compound/id/context selectors and ::first-letter keys (upstream 0305aaa6, layout M1)
+  static constexpr uint8_t CSS_CACHE_VERSION = 14;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -69,14 +83,26 @@ class CssParser {
   ParseResult loadFromStream(HalFile& source);
 
   /**
-   * Look up the style for an HTML element, considering tag name and class attributes.
-   * Applies CSS cascade: element style < class style < element.class style
+   * Look up the style for an HTML element, merging every matching rule in specificity order.
    *
    * @param tagName The HTML element name (e.g., "p", "div")
    * @param classAttr The class attribute value (may contain multiple space-separated classes)
+   * @param idAttr The id attribute value (may be empty)
+   * @param ancestors Open ancestors, outermost first; the last entry is the direct parent
+   * @param ancestorCount Number of valid entries in `ancestors`
+   * @param firstLetter Resolve the element's ::first-letter rules instead of its own
    * @return Combined style with all applicable rules merged
    */
-  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr) const;
+  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr,
+                                      std::string_view idAttr = {}, const CssAncestor* ancestors = nullptr,
+                                      size_t ancestorCount = 0, bool firstLetter = false) const;
+
+  /** True when any ::first-letter rule is stored, so callers can skip that lookup. */
+  [[nodiscard]] bool hasFirstLetterRules() const { return hasFirstLetterRules_; }
+
+  /** Build the hashed identity the chapter parser stores on its ancestor stack. */
+  [[nodiscard]] static CssAncestor makeAncestor(std::string_view tagName, std::string_view classAttr,
+                                                std::string_view idAttr);
 
   /**
    * Parse an inline style attribute string.
@@ -106,6 +132,7 @@ class CssParser {
     selectorPoolSize_ = selectorPoolCapacity_ = 0;
     styleCount_ = styleCapacity_ = 0;
     ruleGrowthStopped_ = false;
+    hasIdRules_ = hasCompoundRules_ = hasContextualRules_ = hasFirstLetterRules_ = false;
   }
 
   /**
@@ -148,6 +175,29 @@ class CssParser {
     OutOfMemory,
   };
 
+  // A lookup key assembled from views, so keys are compared without being copied into a buffer.
+  // Stored keys are the canonical subject compound (element, #id, sorted classes), optionally
+  // followed by ::first-letter and then CONTEXT_SEPARATOR plus the lowercase ancestor part of a
+  // descendant/child selector (e.g. "div.poem > "). Growing the ancestor part is bounded by the
+  // selector pool cap; at the cap the parser degrades to ParseResult::Partial.
+  struct KeyPieces {
+    static constexpr size_t MAX_PIECES = 14;
+    std::string_view piece[MAX_PIECES];
+    uint8_t count = 0;
+    size_t length = 0;
+    bool add(const std::string_view view) {
+      if (view.empty()) return true;
+      if (count == MAX_PIECES) return false;
+      piece[count++] = view;
+      length += view.size();
+      return true;
+    }
+    void removeLast() {
+      if (count == 0) return;
+      length -= piece[--count].size();
+    }
+  };
+
   struct SelectorEntry {
     uint32_t offset;
     uint16_t styleIndex;
@@ -167,19 +217,23 @@ class CssParser {
   uint16_t styleCount_ = 0;
   uint16_t styleCapacity_ = 0;
   bool ruleGrowthStopped_ = false;
+  // Shape flags let resolveStyle skip lookups no stored rule can satisfy.
+  bool hasIdRules_ = false;
+  bool hasCompoundRules_ = false;
+  bool hasContextualRules_ = false;
+  bool hasFirstLetterRules_ = false;
 
   std::string cachePath;
 
   // Internal parsing helpers
   bool restoreCacheBackupIfNeeded() const;
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
-  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, std::string_view p0, std::string_view p1,
-                                         std::string_view p2) const;
-  [[nodiscard]] size_t lowerBound(std::string_view p0, std::string_view p1, std::string_view p2, bool& exact) const;
-  [[nodiscard]] const CssStyle* findStyle(std::string_view p0, std::string_view p1 = {},
-                                          std::string_view p2 = {}) const;
+  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, const KeyPieces& key,
+                                         bool prefixOnly = false) const;
+  [[nodiscard]] size_t lowerBound(const KeyPieces& key, bool& exact) const;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
-  RuleInsertResult insertOrMerge(std::string_view selector, const CssStyle& style);
+  RuleInsertResult insertOrMerge(const KeyPieces& key, const CssStyle& style);
+  void noteRuleShape(std::string_view storedKey);
   PoolResult ensureEntryCapacity(size_t needed);
   PoolResult ensureSelectorPoolCapacity(size_t needed);
   PoolResult ensureStyleCapacity(size_t needed);
@@ -193,6 +247,8 @@ class CssParser {
   static CssFontWeight interpretFontWeight(std::string_view val);
   static CssTextDecoration interpretDecoration(std::string_view val);
   static CssLength interpretLength(std::string_view val);
+  /** Parses font-size including the CSS named sizes; false when the value is not a size. */
+  static bool tryInterpretFontSize(std::string_view val, CssLength& out);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);
 };
