@@ -1,5 +1,6 @@
 #include "UITheme.h"
 
+#include <BoardConfig.h>
 #include <EpdFont.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -168,17 +169,34 @@ int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader
   return UITheme::getInstance().getTheme().getListPageItems(availableHeight, hasSubtitle);
 }
 
+// Shell rectangles sit inside the viewable rect on a board whose glass is
+// recessed behind a printed bezel (Read Pico: viewableInsets {5,5,8,5}). The
+// X3/X4 shell keeps its historical full-bleed rectangle — there those insets
+// are consumed by list chrome and the reader viewport instead (see
+// ui_theme_detail::scrollInset and readerChromeMetrics), so clipping the safe
+// area too would re-lay every page out.
+//
+// This is the single policy point for that difference: a board opts in by
+// being listed here, and no draw site carries a per-board `#if` for it.
+static constexpr bool panelInsetsClipSafeArea() {
+#if FREEINK_DEVICE_READPICO
+  return true;
+#else
+  return false;
+#endif
+}
+
 // Screen area excluding the bezel and button hints.
 Rect UITheme::getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints, bool hasSideButtonHints) {
   auto orientation = renderer.getOrientation();
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
   Rect safeArea = Rect{0, 0, screenWidth, screenHeight};
-#if FREEINK_DEVICE_READPICO
-  int top, right, bottom, left;
-  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
-  safeArea = Rect{left, top, screenWidth - left - right, screenHeight - top - bottom};
-#endif
+  if (panelInsetsClipSafeArea()) {
+    int top, right, bottom, left;
+    renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+    safeArea = Rect{left, top, screenWidth - left - right, screenHeight - top - bottom};
+  }
   const ThemeMetrics metrics = getMetrics();
   switch (orientation) {
     case GfxRenderer::Orientation::Portrait:
@@ -250,6 +268,13 @@ int UITheme::getStatusBarHeight() {
   // reserved height does not depend on whether an RTC is present.
   return (sb.textLaneVisible() ? (metrics.statusBarVerticalMargin) : 0) +
          (sb.showsProgressBar() ? (sb.progressBarHeightPx + metrics.progressBarMarginTop) : 0);
+}
+
+int UITheme::getCornerRadius() const { return static_cast<int>(BoardConfig::ACTIVE.cornerRadius); }
+
+int UITheme::getBottomCornerRadius() const {
+  const int bottom = static_cast<int>(BoardConfig::ACTIVE.bottomCornerRadius);
+  return bottom > 0 ? bottom : getCornerRadius();
 }
 
 int UITheme::getProgressBarHeight() {
