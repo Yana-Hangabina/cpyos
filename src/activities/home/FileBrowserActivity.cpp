@@ -566,7 +566,7 @@ void FileBrowserActivity::finishEdit(const std::string& returnPath, const int fa
 
 void FileBrowserActivity::promptDelete(const std::string& fullPath, const std::string& entry) {
   const int returnIndex = nav.selected;
-  const std::string heading = tr(STR_DELETE) + std::string("? ");
+  const std::string heading = tr(STR_DELETE_ITEM_CONFIRM);
   confirm_.ask(heading.c_str(), cleanEntryName(entry).c_str(), tr(STR_DELETE), [this, fullPath, returnIndex] {
     if (removeDirFile(fullPath)) {
       finishEdit(basepath, returnIndex);
