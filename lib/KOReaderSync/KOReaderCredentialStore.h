@@ -40,7 +40,10 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   std::string password;
   std::string serverUrl;                                            // Custom sync server URL (empty = default)
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
-  bool sendMetadata = false;                                        // Send document metadata with progress sync
+  // Send document metadata with progress sync. Default off: the request stays
+  // minimal/byte-compatible (upstream f47a218b flipped this default to true;
+  // CPYOS keeps the historical default so upgrades do not change the payload).
+  bool sendMetadata = false;
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
   KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;  // Protocol profile of the sync server
 
