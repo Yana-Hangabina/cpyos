@@ -11,7 +11,7 @@ bytes invalidates the cache; the output value is left unchanged.
 
 ## `book.bin`
 
-### Version 11
+### Version 12
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
 The current firmware writes this version from `BookMetadataCache`.
@@ -19,7 +19,9 @@ The current firmware writes this version from `BookMetadataCache`.
 > Version 9 forced a one-time rebuild after upstream began NFC-composing titles.
 > Upstream version 10 ignores ambiguous EPUB guide text references. CrossMux uses
 > 11 to include both changes while remaining above every shipped value from
-> either lineage. `BookMetadataCache.cpp` is the source of truth.
+> either lineage. Version 12 adds the OPF `linear` flag per spine entry, so an
+> auxiliary document (linear="no") keeps zero progress weight and is never chosen
+> by a percentage jump. `BookMetadataCache.cpp` is the source of truth.
 
 ImHex pattern:
 
@@ -28,7 +30,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 11
+#define EXPECTED_VERSION 12
 #define MAX_STRING_LENGTH 65535
 
 struct String {
@@ -53,8 +55,9 @@ struct Metadata {
 
 struct SpineEntry {
     String href [[comment("Resource path")]];
-    u32 cumulativeSize [[comment("Cumulative uncompressed spine size through this entry")]];
+    u32 cumulativeSize [[comment("Cumulative uncompressed size of the linear spine items through this entry")]];
     s16 tocIndex [[comment("Index into TOC, or inherited/previous TOC index when no direct entry exists")]];
+    u8 linear [[comment("1 = a reading position; 0 = OPF linear=\"no\" auxiliary document (no progress weight)")]];
 };
 
 struct TocEntry {

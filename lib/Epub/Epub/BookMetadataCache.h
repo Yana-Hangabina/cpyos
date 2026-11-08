@@ -21,10 +21,13 @@ class BookMetadataCache {
     std::string href;
     uint32_t cumulativeSize;
     int16_t tocIndex;
+    // OPF linear="no": an auxiliary document with no place in chapter order or
+    // progress weights (notes, cover pages, ad pages).
+    bool linear;
 
-    SpineEntry() : cumulativeSize(0), tocIndex(-1) {}
-    SpineEntry(std::string href, const uint32_t cumulativeSize, const int16_t tocIndex)
-        : href(std::move(href)), cumulativeSize(cumulativeSize), tocIndex(tocIndex) {}
+    SpineEntry() : cumulativeSize(0), tocIndex(-1), linear(true) {}
+    SpineEntry(std::string href, const uint32_t cumulativeSize, const int16_t tocIndex, const bool linear = true)
+        : href(std::move(href)), cumulativeSize(cumulativeSize), tocIndex(tocIndex), linear(linear) {}
   };
 
   struct TocEntry {
@@ -63,7 +66,8 @@ class BookMetadataCache {
   std::unique_ptr<serialization::BufferedFileWriter> passOut;
 
   // Cumulative spine sizes, cached in RAM at load() so progress/percent lookups avoid
-  // two seeks and a heap-allocating SpineEntry read. The cache is bounded to 4KB.
+  // two seeks and a heap-allocating SpineEntry read. Linear bits share this
+  // allocation (at most 128 more bytes on the bounded 4KB size cache).
   std::unique_ptr<uint32_t[]> cumulativeSizes;
   uint16_t cumulativeSizeCount = 0;
 
@@ -112,7 +116,7 @@ class BookMetadataCache {
   // Building phase (stream to disk immediately)
   bool beginWrite();
   bool beginContentOpfPass();
-  void createSpineEntry(const std::string& href);
+  void createSpineEntry(const std::string& href, bool linear = true);
   bool endContentOpfPass();
   bool beginTocPass();
   void createTocEntry(const std::string& title, const std::string& href, const std::string& anchor, uint8_t level);
@@ -129,6 +133,8 @@ class BookMetadataCache {
   TocEntry getTocEntry(int index);
   // Returns whether the in-RAM cache contains the requested cumulative byte size.
   bool getCumulativeSize(int index, uint32_t& size) const;
+  // Whether the in-RAM cache holds the linear flag for this spine item.
+  bool getLinear(int index, bool& linear) const;
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isLoaded() const { return loaded; }
