@@ -593,7 +593,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                            StrId::STR_SOUND_FEEDBACK_HIGH},
                           "hapticFeedbackLevel", StrId::STR_CAT_SYSTEM),
 #endif
+    });
+    // Separate batch: with all three capabilities enabled this group plus the one
+    // above was a single seven-row append, over kMaxSettingsBatchRows.
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
+    v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_BUZZER_FEEDBACK, &CrossPointSettings::buzzerFeedbackSource,
                           {StrId::STR_STATE_OFF, StrId::STR_BUZZER_SOURCE_KEYS, StrId::STR_BUZZER_SOURCE_SCREEN,
                            StrId::STR_BUZZER_SOURCE_BOTH},
@@ -603,8 +607,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           "buzzerPitch", StrId::STR_CAT_SYSTEM),
         SettingInfo::Value(StrId::STR_BUZZER_STRENGTH, &CrossPointSettings::buzzerStrength, {0, 100, 1},
                            "buzzerStrength", StrId::STR_CAT_SYSTEM),
-#endif
     });
+#endif
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_LIBRARY_USE_METADATA, &CrossPointSettings::libraryUseMetadata,
                             "libraryUseMetadata", StrId::STR_CAT_SYSTEM),
@@ -715,6 +719,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Enum(StrId::STR_CLOCK_UPDATE, &CrossPointSettings::statusBarClockUpdate,
                           {StrId::STR_CLOCK_UPDATE_PAGE_TURN, StrId::STR_CLOCK_UPDATE_MINUTE}, "statusBarClockUpdate",
                           StrId::STR_CUSTOMISE_STATUS_BAR),
+    });
+    v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
                             "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR),
         SettingInfo::Enum(StrId::STR_PROGRESS_BAR, &CrossPointSettings::statusBarProgressBar,
