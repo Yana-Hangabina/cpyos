@@ -43,6 +43,9 @@ constexpr size_t HEAP_HEADROOM = 8 * 1024;
 
 constexpr unsigned long MESSAGE_DURATION_MS = 1500;
 
+// Space between the phrase-lookup hint line and the body it introduces.
+constexpr int HINT_GAP = 4;
+
 }  // namespace
 
 // cppcheck-suppress constParameterReference // the lookup state holds the dictionary by non-const reference
@@ -99,7 +102,10 @@ DictionaryDefinitionActivity::BodyArea DictionaryDefinitionActivity::bodyArea() 
   const int contentX = orientation == GfxRenderer::Orientation::LandscapeClockwise ? hintGutterWidth : 0;
   const int contentWidth = renderer.getScreenWidth() - hintGutterWidth;
   const int contentY = isInverted ? metrics.buttonHintsHeight : 0;
-  const int topArea = contentY + metrics.topPadding + metrics.headerHeight;
+  int topArea = contentY + metrics.topPadding + metrics.headerHeight;
+  // A phrase-lookup fallback hint takes one line above the definition, so the
+  // body (and the HTML layout that is measured against it) starts that much lower.
+  if (!hint.empty()) topArea += renderer.getLineHeight(SETTINGS.getReaderFontId()) + HINT_GAP;
   const int bottomArea = metrics.buttonHintsHeight + metrics.verticalSpacing;
   return {contentX + SIDE_PADDING, topArea, contentWidth - 2 * SIDE_PADDING,
           renderer.getScreenHeight() - topArea - bottomArea};
@@ -431,6 +437,10 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
     }
     return;
   }
+  // The phrase-lookup hint describes the entry this screen was opened with, not
+  // wherever the user navigates next; dropping it also restores the extra line
+  // to the body, so the layout measured here matches what render() will draw.
+  hint.clear();
   const bool forcePlain = back && !lookup->history[lookup->depth - 1].styled;
   if (!prepareDefinition(next, forcePlain)) {
     recover(StrId::STR_DICT_LOW_MEMORY);
@@ -526,6 +536,13 @@ void DictionaryDefinitionActivity::loop() {
   });
 }
 
+// One line above the body; drawn inside both prewarm passes so its glyphs come
+// from the same batched SD read as the definition itself.
+void DictionaryDefinitionActivity::drawHintLine(const int fontId, const int x, const int y) const {
+  if (hint.empty()) return;
+  renderer.drawText(fontId, x, y, hint.c_str(), true);
+}
+
 // Draws the current page: a styled Page when the HTML layout succeeded,
 // otherwise the wrapped line spans (copied into a stack buffer for NUL
 // termination). Called twice per render: once in font-cache scan mode, once
@@ -580,10 +597,13 @@ void DictionaryDefinitionActivity::render(RenderLock&&) {
   // of one on-demand overflow read per character on every page turn.
   const int fontId = SETTINGS.getReaderFontId();
   const BodyArea body = bodyArea();
+  const int hintY = body.y - renderer.getLineHeight(fontId) - HINT_GAP;
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
+  drawHintLine(fontId, body.x, hintY);
   drawBody(fontId, body.x, body.y, content.currentPage);  // scan pass: records codepoints only
   scope.endScanAndPrewarm();
+  drawHintLine(fontId, body.x, hintY);
   drawBody(fontId, body.x, body.y, content.currentPage);
 
   const auto labels =

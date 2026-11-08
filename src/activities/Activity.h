@@ -124,6 +124,9 @@ class Activity {
   virtual void debugResumeJjwxcCacheQueue() {}
   virtual void debugJjwxcCacheQueueStatus() {}
   virtual void debugPageTurn(bool) {}
+  // Serial-only: open the reader's selection bar on the current page, so the
+  // [look up][highlight][note] chips can be inspected without a long press.
+  virtual void debugOpenPhraseSelection() {}
   virtual void debugDumpPage() {}
   virtual void debugOpenStressComment() {}
   virtual void debugOpenSearch() {}

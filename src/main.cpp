@@ -2383,6 +2383,10 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugPageTurn(false);
       } else if (cmd == "PAGEDUMP") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugDumpPage();
+      } else if (cmd == "PHRASE") {
+        // Serial hook for the reader's three-chip selection bar (look up /
+        // highlight / note), which otherwise needs a 650 ms long press.
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenPhraseSelection();
       } else if (cmd == "STRESSCOMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenStressComment();
       } else if (cmd == "FAKECOMMENT") {

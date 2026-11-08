@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 
 #include "CrossPointSettings.h"
@@ -46,6 +47,15 @@ void DictionaryWordSelectActivity::onEnter() {
   Activity::onEnter();
   fontId = SETTINGS.getReaderFontId();
   lineHeight = renderer.getLineHeight(fontId);
+  if (phraseMode) {
+    // No page and no picker: performPhraseLookup() runs on the next loop tick,
+    // which paints the busy card through requestUpdateAndWait() before blocking
+    // on SD.
+    lookupPending = true;
+    popup = Popup::Busy;
+    popupMsg = StrId::STR_DICT_LOOKING_UP;
+    return;
+  }
   // No null check: a failed allocation just disables the differential
   // fast path (drawHighlightWithSnapshot skips the read), keeping the
   // full-repaint path as the fallback.
@@ -153,15 +163,7 @@ void DictionaryWordSelectActivity::moveVertical(const int direction) {
   }
 }
 
-void DictionaryWordSelectActivity::performLookup() {
-  if (words.empty()) return;
-  if (selectOnly) {
-    // Definition viewer mode: hand the chosen word back to the parent, which
-    // owns the dictionary and the recursive back stack.
-    setResult(ActivityResult{DictionarySelectionResult{std::string(words[selected].text)}});
-    finish();
-    return;
-  }
+bool DictionaryWordSelectActivity::openAndIndex() {
   popup = Popup::Busy;
   if (!dictOpenAttempted) {
     dictOpenAttempted = true;
@@ -180,11 +182,125 @@ void DictionaryWordSelectActivity::performLookup() {
     ok = dict.buildIndex(&indexBuildYield, nullptr, &indexResult);
     dictNeedsIndex = !ok;  // a successful build leaves the sidecar fresh; a failed one retries
   }
+  if (ok) return true;
+  popup = Popup::Error;
+  // An index build allocates a scan buffer, so it fails the same way lookups do
+  // on a fragmented heap — name that rather than a generic error.
+  switch (indexResult) {
+    case Dictionary::IndexResult::LowMemory:
+      popupMsg = StrId::STR_DICT_LOW_MEMORY;
+      break;
+    case Dictionary::IndexResult::ReadError:
+      popupMsg = StrId::STR_DICT_READ_FAILED;
+      break;
+    case Dictionary::IndexResult::Ok:
+    default:
+      popupMsg = StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
+      break;
+  }
+  popupTime = millis();
+  requestUpdate();
+  return false;
+}
+
+void DictionaryWordSelectActivity::performPhraseLookup() {
+  if (!openAndIndex()) return;  // the Error popup is already up
+
+  const auto candidates = selection_text::phraseCandidates(lookupText_);
+  std::string definition;
+  std::string headword;
+  Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
+  size_t hit = 0;
+  bool found = false;
+  for (; hit < candidates.count; hit++) {
+    std::string candidateDefinition;
+    std::string candidateHeadword;
+    result = Dictionary::LookupResult::NotFound;
+    found = dict.lookup(candidates.items[hit].c_str(), candidateDefinition, candidateHeadword, &result);
+    if (found) {
+      definition = std::move(candidateDefinition);
+      headword = std::move(candidateHeadword);
+      break;
+    }
+    // A genuine miss moves down the ladder; a read or memory failure does not:
+    // the next candidate would hit the same wall.
+    if (result != Dictionary::LookupResult::NotFound) break;
+  }
+
+  if (!found) {
+    phraseMiss = result == Dictionary::LookupResult::NotFound;
+    switch (result) {
+      case Dictionary::LookupResult::Decompress:
+        popup = Popup::Error;
+        popupMsg = StrId::STR_DICT_DECOMPRESS_ERROR;
+        break;
+      case Dictionary::LookupResult::LowMemory:
+        popup = Popup::Error;
+        popupMsg = StrId::STR_DICT_LOW_MEMORY;
+        break;
+      case Dictionary::LookupResult::ReadError:
+        popup = Popup::Error;
+        popupMsg = StrId::STR_DICT_READ_FAILED;
+        break;
+      case Dictionary::LookupResult::NotFound:
+      case Dictionary::LookupResult::Found:
+      default:
+        // The whole ladder missed. Stays up (no auto-dismiss) so Confirm can
+        // hand the user the word picker for this page.
+        popup = Popup::NotFound;
+        popupMsg = StrId::STR_DICT_NOT_FOUND;
+        break;
+    }
+    popupTime = millis();
+    requestUpdate();
+    return;
+  }
+
+  popup = Popup::None;
+  // A fallback hit is a real definition, but for a different headword than the
+  // user selected: say which one, or the result reads as a wrong lookup.
+  std::string hint;
+  if (hit > 0) {
+    char line[192];
+    snprintf(line, sizeof(line), tr(STR_DICT_PHRASE_FALLBACK), headword.c_str());
+    hint = line;
+    LOG_DBG("DICT", "phrase fallback: candidate %u/%u hit", static_cast<unsigned>(hit + 1),
+            static_cast<unsigned>(candidates.count));
+  }
+  // The query is what a recursive lookup replays; it must be a word that is
+  // really in the dictionary, i.e. the candidate that hit.
+  const std::string query = candidates.items[hit];
+  auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
+                                                                  std::move(definition),
+                                                                  dict.definitionsAreHtml(), std::move(hint));
+  if (!activity || !activity->enableLookup(dict, std::string{query})) {
+    LOG_ERR("DICT", "OOM: definition activity");
+    popup = Popup::Error;
+    popupMsg = StrId::STR_DICT_LOW_MEMORY;
+    popupTime = millis();
+    requestUpdate();
+    return;
+  }
+  // Nothing to come back to: this screen has no page, so the definition's Back
+  // returns to the reader exactly like the picker path.
+  startActivityForResult(std::move(activity), [this](const ActivityResult&) { finish(); });
+}
+
+void DictionaryWordSelectActivity::performLookup() {
+  if (words.empty()) return;
+  if (selectOnly) {
+    // Definition viewer mode: hand the chosen word back to the parent, which
+    // owns the dictionary and the recursive back stack.
+    setResult(ActivityResult{DictionarySelectionResult{std::string(words[selected].text)}});
+    finish();
+    return;
+  }
+  if (!openAndIndex()) return;
 
   std::string definition;
   std::string headword;
   Dictionary::LookupResult result = Dictionary::LookupResult::NotFound;
-  const bool found = ok && dict.lookup(words[selected].text, definition, headword, &result);
+  const bool found = dict.lookup(words[selected].text, definition, headword, &result);
 
   if (found) {
     popup = Popup::None;
@@ -210,48 +326,60 @@ void DictionaryWordSelectActivity::performLookup() {
   // Name the failure: a genuine miss is "Not found"; a word that WAS found but
   // couldn't be read is a real error — and we distinguish decompression from a
   // low-memory allocation from a generic read error.
-  if (!ok) {
-    popup = Popup::Error;
-    // An index build allocates a scan buffer, so it fails the same way lookups
-    // do on a fragmented heap — name that rather than a generic error.
-    switch (indexResult) {
-      case Dictionary::IndexResult::LowMemory:
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::IndexResult::ReadError:
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::IndexResult::Ok:
-      default:
-        popupMsg = StrId::STR_DICT_ERROR;  // dict.open() failed, not the index
-        break;
-    }
-  } else {
-    switch (result) {
-      case Dictionary::LookupResult::Decompress:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_DECOMPRESS_ERROR;
-        break;
-      case Dictionary::LookupResult::LowMemory:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_LOW_MEMORY;
-        break;
-      case Dictionary::LookupResult::ReadError:
-        popup = Popup::Error;
-        popupMsg = StrId::STR_DICT_READ_FAILED;
-        break;
-      case Dictionary::LookupResult::NotFound:
-      default:
-        popup = Popup::NotFound;
-        popupMsg = StrId::STR_DICT_NOT_FOUND;
-        break;
-    }
+  switch (result) {
+    case Dictionary::LookupResult::Decompress:
+      popup = Popup::Error;
+      popupMsg = StrId::STR_DICT_DECOMPRESS_ERROR;
+      break;
+    case Dictionary::LookupResult::LowMemory:
+      popup = Popup::Error;
+      popupMsg = StrId::STR_DICT_LOW_MEMORY;
+      break;
+    case Dictionary::LookupResult::ReadError:
+      popup = Popup::Error;
+      popupMsg = StrId::STR_DICT_READ_FAILED;
+      break;
+    case Dictionary::LookupResult::NotFound:
+    case Dictionary::LookupResult::Found:
+    default:
+      popup = Popup::NotFound;
+      popupMsg = StrId::STR_DICT_NOT_FOUND;
+      break;
   }
   popupTime = millis();
   requestUpdate();
 }
 
 void DictionaryWordSelectActivity::loop() {
+  if (phraseMode) {
+    if (lookupPending) {
+      lookupPending = false;
+      performPhraseLookup();
+      return;
+    }
+    if (popup == Popup::Busy) return;
+    if (popup == Popup::NotFound && phraseMiss) {
+      // No auto-dismiss: the miss card waits for the user. Confirm asks the
+      // reader to reopen its word picker at the same page (one extra hop); Back
+      // just returns.
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        finish();
+        return;
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+        setResult(ActivityResult{DictionaryPickerRequest{}});
+        finish();
+        return;
+      }
+      return;
+    }
+    if (popup == Popup::Error && millis() - popupTime >= POPUP_DURATION_MS) {
+      popup = Popup::None;
+      finish();
+    }
+    return;
+  }
+
   if (popup == Popup::NotFound || popup == Popup::Error) {
     if (millis() - popupTime >= POPUP_DURATION_MS) {
       popup = Popup::None;
@@ -364,6 +492,13 @@ void DictionaryWordSelectActivity::drawHints() const {
   // No selectable word on this page: Confirm and navigation are all no-ops
   // (guarded by words.empty() in loop()/performLookup), so only Back does
   // anything and only Back is hinted.
+  // Phrase mode has no page and no highlight. Confirm is live only on the
+  // "not found" card, where it hands the user the page's word picker.
+  if (phraseMode) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), phraseMiss ? tr(STR_SELECT) : "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    return;
+  }
   if (words.empty()) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -395,16 +530,19 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
 
   renderer.clearScreen();
 
-  // Same prewarm-scan-then-render pass the reader uses, so SD-card fonts hit
-  // the in-RAM glyph cache during the real draw.
-  auto* fcm = renderer.getFontCacheManager();
-  auto scope = fcm->createPrewarmScope();
-  page->render(renderer, fontId, marginLeft, marginTop);
-  scope.endScanAndPrewarm();
-  page->render(renderer, fontId, marginLeft, marginTop);
+  // Phrase mode has no page: the card below is the whole screen.
+  if (page) {
+    // Same prewarm-scan-then-render pass the reader uses, so SD-card fonts hit
+    // the in-RAM glyph cache during the real draw.
+    auto* fcm = renderer.getFontCacheManager();
+    auto scope = fcm->createPrewarmScope();
+    page->render(renderer, fontId, marginLeft, marginTop);
+    scope.endScanAndPrewarm();
+    page->render(renderer, fontId, marginLeft, marginTop);
 
-  if (!words.empty()) {
-    drawHighlightWithSnapshot();
+    if (!words.empty()) {
+      drawHighlightWithSnapshot();
+    }
   }
 
   drawHints();
@@ -413,8 +551,17 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     // The popup overdraws the page, so the snapshot no longer matches the
     // framebuffer — force the next render onto the full-repaint path.
     snapshotIdx = -1;
+    // The phrase miss card waits for the user (Confirm opens the page's word
+    // picker), so it is painted and presented here together with the button
+    // hints under it instead of presenting itself.
+    if (phraseMode && popup == Popup::NotFound && phraseMiss) {
+      // I18N.get directly: tr() only accepts literal key names.
+      status_card::paintMessage(renderer, I18N.get(popupMsg), nullptr);
+      drawHints();
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      return;
+    }
     // drawPopup overlays the framebuffer and refreshes the display itself.
-    // I18N.get directly: tr() only accepts literal key names.
     status_card::showMessage(renderer, I18N.get(popupMsg), nullptr);
     return;
   }

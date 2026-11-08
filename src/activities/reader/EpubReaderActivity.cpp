@@ -87,6 +87,7 @@ extern void disarmScanWatchdog();
 #include "util/DictionaryRegistry.h"
 #include "util/ReadingBackground.h"
 #include "util/ReadingGuideLine.h"
+#include "util/SelectionText.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include <WeReadStore.h>
 
@@ -1301,12 +1302,16 @@ std::vector<EpubReaderActivity::AnnoWordRect> EpubReaderActivity::layoutPageWord
     const auto* block = line.getBlock().get();
     if (!block) continue;
     uint32_t offset = block->getVisibleOffset();
+    const uint16_t paragraph = block->getParagraphIndex();
     // Vertical columns start each line at its own depth; a word's depth grows by
     // its *character count*, not by its horizontal pixel advance (that mismatch is
     // what shifted Latin words out of place).
     int depth = line.xPos;
     const int col = colW > 0 ? line.yPos / colW : 0;
     const int columnX = marginLeft + usableW - (col + 1) * colW;
+    // Where the previous word of this line ended, so a pixel gap can be turned
+    // back into the separator the source had (see SelectionText::joinSelection).
+    int previousEnd = 0;
     for (uint16_t i = 0; i < block->wordCount(); ++i) {
       const char* text = block->wordText(i);
       const uint32_t start = offset;
@@ -1315,13 +1320,21 @@ std::vector<EpubReaderActivity::AnnoWordRect> EpubReaderActivity::layoutPageWord
       const int advance = renderer.getTextAdvanceX(fontId, text, block->wordStyle(i));
       if (vertical) {
         const int wordH = static_cast<int>(chars) * colW;
-        words.push_back({static_cast<int16_t>(columnX), static_cast<int16_t>(marginTop + depth),
-                         static_cast<int16_t>(colW), static_cast<int16_t>(wordH), lineIndex, i, start, offset, text});
+        const int wordY = marginTop + depth;
+        // A new line/column always behaves like a gap; within a line only a real
+        // pixel gap does (rounded glyph advances can differ by a pixel).
+        const bool gapBefore = i == 0 || wordY > previousEnd + 1;
+        words.push_back({static_cast<int16_t>(columnX), static_cast<int16_t>(wordY), static_cast<int16_t>(colW),
+                         static_cast<int16_t>(wordH), lineIndex, i, start, offset, text, paragraph, gapBefore});
         depth += wordH;
+        previousEnd = wordY + wordH;
       } else {
-        words.push_back({static_cast<int16_t>(marginLeft + line.xPos + block->wordXpos(i)),
-                         static_cast<int16_t>(marginTop + line.yPos), static_cast<int16_t>(advance),
-                         static_cast<int16_t>(lineHeight), lineIndex, i, start, offset, text});
+        const int wordX = marginLeft + line.xPos + block->wordXpos(i);
+        const bool gapBefore = i == 0 || wordX > previousEnd + 1;
+        words.push_back({static_cast<int16_t>(wordX), static_cast<int16_t>(marginTop + line.yPos),
+                         static_cast<int16_t>(advance), static_cast<int16_t>(lineHeight), lineIndex, i, start, offset,
+                         text, paragraph, gapBefore});
+        previousEnd = wordX + advance;
       }
     }
     ++lineIndex;
@@ -1371,11 +1384,15 @@ void EpubReaderActivity::updateSelectionDragTo(const int x, const int y) {
     if (w.line == selectionStartLine && w.word == selectionStartWord) return;
     selectionStartLine = w.line;
     selectionStartWord = w.word;
+    selectionAnchorLine = selectionEndLine;
+    selectionAnchorWord = selectionEndWord;
   } else {
     if (before(w.line, w.word, selectionStartLine, selectionStartWord)) return;
     if (w.line == selectionEndLine && w.word == selectionEndWord) return;
     selectionEndLine = w.line;
     selectionEndWord = w.word;
+    selectionAnchorLine = selectionStartLine;
+    selectionAnchorWord = selectionStartWord;
   }
   selectionAnchorX = w.x + w.w / 2;
   // E-ink cannot follow a finger; the cap keeps a drag from queuing a repaint per
@@ -1574,6 +1591,8 @@ void EpubReaderActivity::beginSelection(const int x, const int y) {
     selectionStartLine = selectionEndLine = w.line;
     selectionStartWord = selectionEndWord = w.word;
   }
+  selectionAnchorLine = selectionStartLine;
+  selectionAnchorWord = selectionStartWord;
   selectionAnchorX = w.x + w.w / 2;
   selectionActive = true;
   // Show the action bar right away: this device has no Confirm key, so a bar that
@@ -1756,7 +1775,11 @@ bool EpubReaderActivity::handleSelectionInput() {
     const bool leftKey = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightKey = mappedInput.wasReleased(MappedInputManager::Button::Right);
     if (leftKey || rightKey) {
-      selectionMenuChoice = leftKey ? 0 : 1;
+      // A new selection has three chips, an annotation being edited two (its
+      // first chip is Delete); left/right cycle within whatever is on screen.
+      const int chipCount = selectionEditingIndex >= 0 ? 2 : 3;
+      selectionMenuChoice = leftKey ? (selectionMenuChoice + chipCount - 1) % chipCount
+                                    : (selectionMenuChoice + 1) % chipCount;
       requestUpdate();
       return true;
     }
@@ -1767,7 +1790,8 @@ bool EpubReaderActivity::handleSelectionInput() {
     int tx = 0;
     int ty = 0;
     if (mappedInput.wasScreenTapped(tx, ty)) {
-      for (int i = 0; i < 2; ++i) {
+      const int chipCount = selectionEditingIndex >= 0 ? 2 : 3;
+      for (int i = 0; i < chipCount; ++i) {
         if (tx >= selectionMenuHitX[i] && tx < selectionMenuHitX[i] + selectionMenuHitW[i] &&
             ty >= selectionMenuHitY[i] && ty < selectionMenuHitY[i] + selectionMenuHitH[i]) {
           activateSelectionMenuChoice(i);
@@ -1899,7 +1923,107 @@ void EpubReaderActivity::activateSelectionMenuChoice(const int choice) {
     promptEditAnnotation(index);
     return;
   }
-  commitSelection(choice == 1);
+  if (choice == 0) {
+    startPhraseLookup();
+    return;
+  }
+  commitSelection(choice == 2);
+}
+
+// One pass over the page that both the quote and the phrase are built from, so a
+// highlight and a lookup can never disagree about what was selected. The returned
+// page (in `out.page`) owns the word text the joined phrase was copied from.
+bool EpubReaderActivity::snapshotSelection(SelectionSnapshot& out) {
+  out = SelectionSnapshot{};
+  if (!section) return false;
+  out.page = loadPageForSelection();
+  if (!out.page) return false;
+  int unusedTop = 0;
+  int mr = 0;
+  int mb = 0;
+  int ml = 0;
+  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
+  ml += SETTINGS.screenMargin;
+  const int mt = selectionMarginTop();
+  const int fontId = SETTINGS.getReaderFontId();
+  const auto words = layoutPageWords(*out.page, fontId, ml, mt);
+
+  std::vector<selection_text::Token> tokens;
+  tokens.reserve(words.size());
+  size_t anchorToken = 0;
+  bool anchorSeen = false;
+  for (const auto& w : words) {
+    if (!selectionCovers(w.line, w.word)) continue;
+    if (!out.haveRange) {
+      out.start = w.start;
+      out.haveRange = true;
+    }
+    out.end = w.end;
+    if (!anchorSeen && w.line == selectionAnchorLine && w.word == selectionAnchorWord) {
+      anchorToken = tokens.size();
+      anchorSeen = true;
+    }
+    tokens.push_back({w.text, w.paragraph, w.gapBefore});
+  }
+  if (!out.haveRange) return false;
+  out.phrase = selection_text::joinSelection(tokens.data(), tokens.size());
+  // Separator bytes only, so the prefix length maps 1:1 onto the full phrase.
+  out.anchorPrefixBytes = selection_text::joinSelection(tokens.data(), anchorToken).size();
+  return true;
+}
+
+void EpubReaderActivity::startPhraseLookup() {
+  // Same precondition as the word picker: a configured-but-deleted dictionary
+  // keeps its name in the settings, so ask the registry whether the folder still
+  // holds a usable dictionary before opening a screen that can only fail.
+  std::string dictionaryBase;
+  if (!DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryBase)) {
+    showDictionaryMessage = true;
+    dictionaryMessageTime = millis();
+    endSelection();
+    return;
+  }
+  SelectionSnapshot snapshot;
+  if (!snapshotSelection(snapshot)) {
+    LOG_DBG("ERS", "phrase: no selection page");
+    endSelection();
+    return;
+  }
+  selection_text::PhraseQuery query;
+  query.text = selection_text::normalizePhrase(snapshot.phrase);
+  if (!selection_text::hasLookupContent(query.text)) {
+    LOG_DBG("ERS", "phrase: selection has nothing to look up (%u bytes)",
+            static_cast<unsigned>(snapshot.phrase.size()));
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    endSelection();
+    return;
+  }
+  const std::string prefix =
+      selection_text::normalizePhrase(std::string_view(snapshot.phrase).substr(0, snapshot.anchorPrefixBytes));
+  query.anchorOffset = std::min(prefix.size(), query.text.size());
+  // Never log the phrase itself: it is book text, not a diagnostic.
+  LOG_DBG("ERS", "phrase: %u bytes, anchor at %u, joined %u bytes",
+          static_cast<unsigned>(query.text.size()), static_cast<unsigned>(query.anchorOffset),
+          static_cast<unsigned>(snapshot.phrase.size()));
+  // Drop the overlay before the child takes the screen (same contract as the
+  // word picker), so Back returns to a plain page at the same position.
+  endSelection();
+  const bool started = startActivityForResultWith<DictionaryWordSelectActivity>(
+      [this](const ActivityResult& result) {
+        READING_STATS.resumeSession();
+        if (std::holds_alternative<DictionaryPickerRequest>(result.data)) {
+          // The whole ladder missed: fall back to the page's word picker, which
+          // is the same screen the dictionary menu opens.
+          openDictionaryWordSelect();
+          return;
+        }
+        requestUpdate();
+      },
+      std::move(query));
+  if (!started) {
+    toast_.show(tr(STR_NOT_AVAILABLE), millis());
+    requestUpdate();
+  }
 }
 
 void EpubReaderActivity::drawSelectionMenu() {
@@ -1912,12 +2036,22 @@ void EpubReaderActivity::drawSelectionMenu() {
   const int chipH = lineHeight + 10;
   const int padX = 26;
   const int gap = 14;
-  const char* labels[2] = {selectionEditingIndex >= 0 ? tr(STR_DELETE) : tr(STR_HIGHLIGHT), tr(STR_NOTE)};
+  // A new selection offers the lookup first (the most frequent action and the one
+  // the anti-double-tap guard protects). Editing an existing annotation keeps the
+  // old two chips: the stored quote is truncated at 120 bytes, so a lookup there
+  // would search the wrong text.
+  const bool editing = selectionEditingIndex >= 0;
+  const int chipCount = editing ? 2 : 3;
+  const char* labels[3] = {editing ? tr(STR_DELETE) : tr(STR_LOOKUP), editing ? tr(STR_NOTE) : tr(STR_HIGHLIGHT),
+                           tr(STR_NOTE)};
   // CJK labels are drawn with a fallback face whose advance is wider than the
   // primary face used to measure here, so leave slack or the text spills out.
-  const int w0 = renderer.getTextAdvanceX(fontId, labels[0], EpdFontFamily::BOLD) + padX * 2 + 10;
-  const int w1 = renderer.getTextAdvanceX(fontId, labels[1], EpdFontFamily::BOLD) + padX * 2 + 10;
-  const int totalW = w0 + gap + w1;
+  int widths[3] = {0, 0, 0};
+  int totalW = gap * (chipCount - 1);
+  for (int i = 0; i < chipCount; ++i) {
+    widths[i] = renderer.getTextAdvanceX(fontId, labels[i], EpdFontFamily::BOLD) + padX * 2 + 10;
+    totalW += widths[i];
+  }
   const uint8_t radius = static_cast<uint8_t>(chipH / 2);
   const auto drawChip = [&](const int x, const int y, const int w, const char* label, const bool active,
                             const int idx) {
@@ -1930,13 +2064,21 @@ void EpubReaderActivity::drawSelectionMenu() {
     selectionMenuHitW[idx] = static_cast<int16_t>(w);
     selectionMenuHitH[idx] = static_cast<int16_t>(chipH);
   };
+  // Keep the row inside screenW-12 whenever it fits there at all; only a row too
+  // wide for the panel starts at the left edge and overflows to the right.
+  const auto rowX = [&]() {
+    int x = std::max<int>(6, (screenW - totalW) / 2);
+    if (x + totalW > screenW - 6) x = std::max<int>(6, screenW - 6 - totalW);
+    return x;
+  };
   if (SETTINGS.verticalText != 0) {
     // Vertical writing. The stack is centred on the selection's vertical middle and
     // hugs the selection's side: to the right of it (chips left-aligned against the
     // column) or, when that would overflow, to its left (chips right-aligned). When
     // neither side has room the chips fall back to a centred horizontal row.
-    const int chipW = std::max(w0, w1);
-    const int stackH = chipH * 2 + 10;
+    int chipW = 0;
+    for (int i = 0; i < chipCount; ++i) chipW = std::max(chipW, widths[i]);
+    const int stackH = chipH * chipCount + 10 * (chipCount - 1);
     const int selCenterY = (selectionFirstTopY + selectionLastBottomY) / 2;
     const int maxStackY = renderer.getScreenHeight() - stackH - 56;  // clear of the status bar
     int bx = selectionLastX + selectionLastW + 10;
@@ -1944,15 +2086,13 @@ void EpubReaderActivity::drawSelectionMenu() {
       bx = selectionFirstX - chipW - 10;
       if (bx < 6) {
         // No room on either side: centre the row on the selection's middle.
-        const int totalW = w0 + gap + w1;
-        int x = std::max<int>(6, (screenW - totalW) / 2);
+        int x = rowX();
         int y = selCenterY - chipH / 2;
         if (y > renderer.getScreenHeight() - chipH - 56) y = renderer.getScreenHeight() - chipH - 56;
         if (y < 8) y = 8;
-        for (int i = 0; i < 2; ++i) {
-          const int w = i == 0 ? w0 : w1;
-          drawChip(x, y, w, labels[i], i == selectionMenuChoice, i);
-          x += w + gap;
+        for (int i = 0; i < chipCount; ++i) {
+          drawChip(x, y, widths[i], labels[i], i == selectionMenuChoice, i);
+          x += widths[i] + gap;
         }
         return;
       }
@@ -1960,24 +2100,23 @@ void EpubReaderActivity::drawSelectionMenu() {
     int by = selCenterY - stackH / 2;
     if (by > maxStackY) by = maxStackY;
     if (by < 8) by = 8;
-    for (int i = 0; i < 2; ++i) {
-      drawChip(bx, by + i * (chipH + 10), i == 0 ? w0 : w1, labels[i], i == selectionMenuChoice, i);
+    for (int i = 0; i < chipCount; ++i) {
+      drawChip(bx, by + i * (chipH + 10), widths[i], labels[i], i == selectionMenuChoice, i);
     }
   } else {
     int barY = selectionLastBottomY + 10;
     if (barY + chipH > renderer.getScreenHeight() - 8) barY = selectionFirstTopY - chipH - 10;
     if (barY < 8) barY = 8;
-    int x = std::max<int>(6, (screenW - totalW) / 2);
-    for (int i = 0; i < 2; ++i) {
-      const int w = i == 0 ? w0 : w1;
-      drawChip(x, barY, w, labels[i], i == selectionMenuChoice, i);
-      x += w + gap;
+    int x = rowX();
+    for (int i = 0; i < chipCount; ++i) {
+      drawChip(x, barY, widths[i], labels[i], i == selectionMenuChoice, i);
+      x += widths[i] + gap;
     }
   }
   if (!selectionMenuDrawLogged) {
     selectionMenuDrawLogged = true;
-    LOG_DBG("ERS", "selection: menu drawn h=%d (sel %d..%d) vertical=%d", chipH, selectionFirstTopY,
-            selectionLastBottomY, SETTINGS.verticalText);
+    LOG_DBG("ERS", "selection: menu drawn h=%d chips=%d (sel %d..%d) vertical=%d", chipH, chipCount,
+            selectionFirstTopY, selectionLastBottomY, SETTINGS.verticalText);
   }
 }
 
@@ -1991,56 +2130,32 @@ void EpubReaderActivity::extendSelectionTo(const AnnoWordRect& word) {
   if (before(word.line, word.word, selectionStartLine, selectionStartWord)) {
     selectionStartLine = word.line;
     selectionStartWord = word.word;
+    selectionAnchorLine = selectionEndLine;
+    selectionAnchorWord = selectionEndWord;
   } else {
     selectionEndLine = word.line;
     selectionEndWord = word.word;
+    selectionAnchorLine = selectionStartLine;
+    selectionAnchorWord = selectionStartWord;
   }
   selectionAnchorX = word.x + word.w / 2;
   requestUpdate();
 }
 
 void EpubReaderActivity::commitSelection(const bool asNote) {
-  if (!section) {
-    endSelection();
-    return;
-  }
-  auto page = loadPageForSelection();
-  if (!page) {
-    endSelection();
-    return;
-  }
-  int unusedTop = 0;
-  int mr = 0;
-  int mb = 0;
-  int ml = 0;
-  renderer.getOrientedViewableTRBL(&unusedTop, &mr, &mb, &ml);
-  ml += SETTINGS.screenMargin;
-  const int mt = selectionMarginTop();
-  const int fontId = SETTINGS.getReaderFontId();
-  const auto words = layoutPageWords(*page, fontId, ml, mt);
-  bool haveStart = false;
-  uint32_t start = 0;
-  uint32_t end = 0;
-  std::string quote;
-  for (const auto& w : words) {
-    if (!selectionCovers(w.line, w.word)) continue;
-    if (!haveStart) {
-      start = w.start;
-      haveStart = true;
-    }
-    end = w.end;
-    if (quote.size() + std::strlen(w.text) <= annotations::kMaxQuoteBytes) quote.append(w.text);
-  }
-  if (!haveStart || end <= start) {
+  SelectionSnapshot snapshot;
+  if (!snapshotSelection(snapshot) || snapshot.end <= snapshot.start) {
     endSelection();
     return;
   }
   annotations::Annotation entry;
   entry.spineIndex = static_cast<uint16_t>(currentSpineIndex);
-  entry.startOffset = start;
-  entry.endOffset = end;
+  entry.startOffset = snapshot.start;
+  entry.endOffset = snapshot.end;
   entry.kind = static_cast<uint8_t>(asNote ? annotations::Kind::Note : annotations::Kind::Highlight);
-  entry.quote = annotations::clampUtf8(quote, annotations::kMaxQuoteBytes);
+  // Joined with the same separators as a lookup phrase, so a Latin quote reads
+  // "the quick brown" instead of "thequickbrown" (CJK was accidentally fine).
+  entry.quote = annotations::clampUtf8(snapshot.phrase, annotations::kMaxQuoteBytes);
   entry.chapterTitle = currentChapterTitle();
   if (!asNote) {
     annotations_.push_back(std::move(entry));
@@ -6064,6 +6179,13 @@ void EpubReaderActivity::debugOpenPanel(const int tool) {
   openOverlay(tool == 1 ? Overlay::Contents : tool == 2 ? Overlay::Text : Overlay::More);
 }
 
+
+void EpubReaderActivity::debugOpenPhraseSelection() {
+  if (!section) return;
+  // Serial-only (CMD:PHRASE): open the selection bar on the word nearest the
+  // middle of the page, which is exactly what a long press produces.
+  beginSelection(renderer.getScreenWidth() / 2, renderer.getScreenHeight() / 2);
+}
 
 void EpubReaderActivity::debugPageTurn(const bool forward) {
   if (!section) return;
