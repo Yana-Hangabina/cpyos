@@ -723,10 +723,17 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
                              const bool pixelState, const EpdFontFamily::Style style,
                              const uint8_t syntheticBoldPixels) {
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
-  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+  EpdGlyph solidFallback;
+  const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   const EpdFontData* fontData = fontFamily.getData(style);
   if (!glyph) {
     renderMissingGlyph(renderer, *fontData, cp, cursorX, cursorY, pixelState, true);
+    return;
+  }
+  if (glyph == &solidFallback) {
+    // A missing full-block/black-square: half-scale like every other glyph here.
+    renderer.fillRect(cursorX + glyph->left / 2, cursorY - glyph->top / 2, (glyph->width + 1) / 2,
+                      (glyph->height + 1) / 2, pixelState);
     return;
   }
 
@@ -795,7 +802,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
                            const bool pixelState, const EpdFontFamily::Style style,
                            const uint8_t syntheticBoldPixels = 0) {
   if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
-  const EpdGlyph* glyph = fontFamily.getGlyph(cp, style);
+  EpdGlyph solidFallback;
+  const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   const EpdFontData* fontData = fontFamily.getData(style);
   if (!glyph) {
     renderMissingGlyph<rotation>(renderer, *fontData, cp, cursorX, cursorY, pixelState);
@@ -826,6 +834,14 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     }
   }
 
+  if (glyph == &solidFallback) {
+    if constexpr (rotation == TextRotation::Rotated90CW) {
+      renderer.fillRect(cursorX + fontData->ascender - top, cursorY - left - width + 1, height, width, pixelState);
+    } else {
+      renderer.fillRect(cursorX + left, cursorY - top, width, height, pixelState);
+    }
+    return;
+  }
   const uint8_t* bitmap = renderer.getGlyphBitmap(fontData, glyph);
   if (bitmap == nullptr) return;
 
@@ -1413,14 +1429,21 @@ void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const 
 #endif
     cp = font.applyLigatures(cp, textCursor, renderStyle);
 
+    // A missing full-block/black-square still gets font-matched metrics so the
+    // cursor advances over the rectangle renderCharImpl draws below.
+    EpdGlyph solidFallback;
 #ifdef ENABLE_CHINESE_VERSION
     bool usedReplacement = false;
-    const EpdGlyph* glyph = font.getGlyph(cp, renderStyle, &usedReplacement);
+    const bool solidMissing = syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, renderStyle);
+    const EpdGlyph* glyph = solidMissing ? font.getGlyphMetrics(cp, solidFallback, renderStyle)
+                                         : font.getGlyph(cp, renderStyle, &usedReplacement);
     if (usedReplacement && fontCacheManager_) {
       fontCacheManager_->reportMissingCodepoint(resolvedFontId, sourceCp, renderStyle);
     }
 #else
-    const EpdGlyph* glyph = font.getGlyph(cp, renderStyle);
+    const bool solidMissing = syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, renderStyle);
+    const EpdGlyph* glyph =
+        solidMissing ? font.getGlyphMetrics(cp, solidFallback, renderStyle) : font.getGlyph(cp, renderStyle);
 #endif
 
     const bool missing = glyph == nullptr;
@@ -4038,7 +4061,15 @@ int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::St
       // is rarely present in the page text, so it missed the cache, measured 0,
       // and fell back to a bogus 2×"M" column width that spread ideographs far
       // apart. See SdCardFont::getAdvanceOrLoad.
-      prevAdvanceFP = static_cast<int32_t>(sdIt->second->getAdvanceOrLoad(cp, styleIdx));
+      // A missing full-block/black-square measures by its synthetic rectangle, not
+      // by the generic replacement advance.
+      if (syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style)) {
+        EpdGlyph solidFallback;
+        const EpdGlyph* solid = font.getGlyphMetrics(cp, solidFallback, style);
+        prevAdvanceFP = solid ? static_cast<int32_t>(solid->advanceX) : 0;
+      } else {
+        prevAdvanceFP = static_cast<int32_t>(sdIt->second->getAdvanceOrLoad(cp, styleIdx));
+      }
       // SUP/SUB glyphs render at 50% scale (renderCharScaled), so halve the advance
       // to keep measurement consistent with drawText and the builtin-font path below.
       if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
@@ -4078,7 +4109,13 @@ int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::St
                  trackingBetween(prevCp, cp, tracking);  // snap 12.4 fixed-point to nearest pixel
     }
 
-    prevAdvanceFP = glyph ? glyph->advanceX : missingGlyph::metrics(font.getData(style)->ascender, cp).advanceX;
+    if (syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style)) {
+      EpdGlyph solidFallback;
+      const EpdGlyph* solid = font.getGlyphMetrics(cp, solidFallback, style);
+      prevAdvanceFP = solid ? solid->advanceX : 0;
+    } else {
+      prevAdvanceFP = glyph ? glyph->advanceX : missingGlyph::metrics(font.getData(style)->ascender, cp).advanceX;
+    }
     if ((style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
       prevAdvanceFP = (prevAdvanceFP + 1) / 2;
     }
@@ -4184,14 +4221,19 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
 #endif
     cp = font.applyLigatures(cp, text, style);
 
+    EpdGlyph solidFallback;
 #ifdef ENABLE_CHINESE_VERSION
     bool usedReplacement = false;
-    const EpdGlyph* glyph = font.getGlyph(cp, style, &usedReplacement);
+    const bool solidMissing = syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style);
+    const EpdGlyph* glyph = solidMissing ? font.getGlyphMetrics(cp, solidFallback, style)
+                                         : font.getGlyph(cp, style, &usedReplacement);
     if (usedReplacement && fontCacheManager_) {
       fontCacheManager_->reportMissingCodepoint(resolvedFontId, sourceCp, style);
     }
 #else
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    const bool solidMissing = syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style);
+    const EpdGlyph* glyph =
+        solidMissing ? font.getGlyphMetrics(cp, solidFallback, style) : font.getGlyph(cp, style);
 #endif
 
     const bool missing = glyph == nullptr;

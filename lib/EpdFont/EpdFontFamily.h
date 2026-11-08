@@ -28,6 +28,12 @@ class EpdFontFamily {
   const EpdFontData* getData(Style style = REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, Style style = REGULAR) const;
   const EpdGlyph* getGlyph(uint32_t cp, Style style, bool* usedReplacement) const;
+  /// Like getGlyph(), but supplies metrics for the solid block symbols a face
+  /// may omit (U+2588/U+25A0). If the returned pointer is &solidFallback, draw
+  /// a filled rectangle: it carries no bitmap. The caller owns the storage.
+  const EpdGlyph* getGlyphMetrics(uint32_t cp, EpdGlyph& solidFallback, Style style = REGULAR) const {
+    return getFont(style)->getGlyphMetrics(cp, solidFallback);
+  }
   /// Returns true if the resolved style's font can render `cp` directly
   /// (interval coverage only — see EpdFont::hasCodepoint).
   bool hasCodepoint(uint32_t cp, Style style = REGULAR) const;
