@@ -21,7 +21,7 @@ namespace {
 const StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
     StrId::STR_USERNAME,        StrId::STR_PASSWORD,       StrId::STR_SYNC_SERVER_URL,   StrId::STR_DOCUMENT_MATCHING,
     StrId::STR_SEND_METADATA,   StrId::STR_SYNC_BEHAVIOR,  StrId::STR_SIGN_UP,           StrId::STR_AUTHENTICATE,
-    StrId::STR_CUSTOM_HEADER_1, StrId::STR_CUSTOM_HEADER_2};
+    StrId::STR_CUSTOM_HEADER_1, StrId::STR_CUSTOM_HEADER_2, StrId::STR_SERVER_TYPE};
 }  // namespace
 
 KOReaderSettingsActivity::KOReaderSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -78,6 +78,19 @@ void KOReaderSettingsActivity::activateIndex(const int index) {
           }
         },
         tr(STR_SYNC_SERVER_URL), prefillUrl, 128, InputType::Url);
+  } else if (index == 10) {
+    // Server Type - cycle CrossPoint -> KOSync -> Other. The profile decides
+    // whether the rich position and the extended metadata are transmitted.
+    const auto current = KOREADER_STORE.getServerType();
+    KOReaderServerType next = KOReaderServerType::CROSSPOINT;
+    if (current == KOReaderServerType::CROSSPOINT) {
+      next = KOReaderServerType::KOSYNC;
+    } else if (current == KOReaderServerType::KOSYNC) {
+      next = KOReaderServerType::OTHER;
+    }
+    KOREADER_STORE.setServerType(next);
+    KOREADER_STORE.saveToFile();
+    requestUpdate();
   } else if (index == 3) {
     // Document Matching - toggle between Filename and Binary
     const auto current = KOREADER_STORE.getMatchMethod();
@@ -168,6 +181,11 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
     } else if (i == 5) {
       rowValues_[i] =
           KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART ? tr(STR_SMART_SYNC) : tr(STR_ASK_EVERY_TIME);
+    } else if (i == 10) {
+      const auto type = KOREADER_STORE.getServerType();
+      rowValues_[i] = type == KOReaderServerType::CROSSPOINT ? tr(STR_SERVER_TYPE_CROSSPOINT)
+                      : type == KOReaderServerType::KOSYNC   ? tr(STR_SERVER_TYPE_KOSYNC)
+                                                             : tr(STR_SERVER_TYPE_OTHER);
     } else if (i == 8 || i == 9) {
       const size_t slot = static_cast<size_t>(i == 8 ? 0 : 1);
       rowValues_[i] = formatHttpHeaderLine(KOREADER_STORE.getCustomHeaders()[slot], true);
@@ -177,7 +195,7 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
     }
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
-  GUI.setCheckboxRow(rowItems_[4], KOREADER_STORE.getSendMetadata());
+  GUI.setCheckboxRow(rowItems_[5], KOREADER_STORE.getSendMetadata());
 
   fui::ListProps props;
   props.items = rowItems_;

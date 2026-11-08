@@ -23,6 +23,16 @@ enum class KOReaderSyncBehavior : uint8_t {
   SMART = 1,           // Auto-resolve simple cases using furthest progress.
 };
 
+// Protocol family/capability profile selected for the configured sync server.
+// CROSSPOINT is the built-in default server (rich position + extension fields),
+// KOSYNC is a strict standard KOSync server, and OTHER is a compatible custom
+// server that additionally accepts the extended bibliographic metadata.
+enum class KOReaderServerType : uint8_t {
+  CROSSPOINT = 0,
+  KOSYNC = 1,
+  OTHER = 2,
+};
+
 /**
  * Singleton class for storing KOReader sync credentials on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
@@ -36,8 +46,12 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   std::string password;
   std::string serverUrl;                                            // Custom sync server URL (empty = default)
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
-  bool sendMetadata = false;                                        // Send document metadata with progress sync
+  // Send document metadata with progress sync. Default off: the request stays
+  // minimal/byte-compatible (upstream f47a218b flipped this default to true;
+  // CPYOS keeps the historical default so upgrades do not change the payload).
+  bool sendMetadata = false;
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
+  KOReaderServerType serverType = KOReaderServerType::CROSSPOINT;  // Protocol profile of the sync server
 
   // Extra headers sent with every sync request (e.g. a Cloudflare Access
   // service token). Fixed-size to avoid vector growth on the edit path; an
@@ -78,8 +92,15 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
 
-  // Whether API calls target the CrossPoint sync server that supports protocol extensions.
-  bool usesCrossPointSyncServer() const;
+  // Server protocol/capability profile.
+  void setServerType(KOReaderServerType type);
+  KOReaderServerType getServerType() const { return serverType; }
+  // Rich CrossPoint position object (lossless progress) is an extension; strict
+  // KOSync servers must never receive it.
+  bool supportsRichProgress() const { return serverType != KOReaderServerType::KOSYNC; }
+  // Extended bibliographic metadata (series / ISBN / ASIN) is only sent to
+  // custom servers that opted into the CrossPoint extension set.
+  bool supportsExtendedMetadata() const { return serverType == KOReaderServerType::OTHER; }
 
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);

@@ -342,10 +342,10 @@ void KOReaderSyncActivity::performUpload() {
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
 
-  // Rich CrossPoint position for the default CrossPoint sync server (lossless
-  // CrossPoint<->CrossPoint sync). The HTTP client also enforces this boundary
-  // before serializing the extension.
-  if (KOREADER_STORE.usesCrossPointSyncServer()) {
+  // Rich position for server profiles that support the CrossPoint extension
+  // (lossless CrossPoint<->CrossPoint sync). The HTTP client enforces the same
+  // boundary before serializing it.
+  if (KOREADER_STORE.supportsRichProgress()) {
     KOReaderRichPosition pos;
     const float pct = localProgress.percentage < 0.0f   ? 0.0f
                       : localProgress.percentage > 1.0f ? 1.0f
@@ -374,6 +374,20 @@ void KOReaderSyncActivity::performUpload() {
     if (epub) {
       meta.title = epub->getTitle();
       meta.authors = epub->getAuthor();
+      // Series / ISBN / ASIN are only sent to servers whose profile accepts the
+      // extended metadata; reading them costs one extra OPF parse, so it stays
+      // off the default (CrossPoint / strict KOSync) paths.
+      if (KOREADER_STORE.supportsExtendedMetadata()) {
+        Epub::SyncMetadata syncMetadata;
+        if (epub->loadSyncMetadata(syncMetadata)) {
+          meta.isbn = std::move(syncMetadata.isbn);
+          meta.asin = std::move(syncMetadata.asin);
+          meta.series = std::move(syncMetadata.series);
+          meta.seriesIndex = syncMetadata.seriesIndex;
+        } else {
+          LOG_DBG("KOSync", "Could not read extended EPUB metadata; sending core metadata only");
+        }
+      }
     } else {
       LOG_ERR("KOSync", "Epub unavailable for metadata; sending filename only");
     }
