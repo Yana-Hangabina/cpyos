@@ -67,6 +67,9 @@ chmod +x .githooks/pre-commit
 pio run
 ```
 
+Development builds apply the Git version only to the sources that use
+`CROSSPOINT_VERSION`, so a branch/SHA change does not invalidate unrelated objects.
+
 ## Flash
 
 ```sh
