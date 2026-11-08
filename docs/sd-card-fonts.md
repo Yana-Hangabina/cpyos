@@ -92,7 +92,7 @@ tab in File Transfer accepts `.cpfont` files only. Copy direct fonts to the SD
 card instead. To remove a loose font file, delete that file from the SD card.
 The Fonts page can delete families stored in subfolders.
 
-## CJK in the User Interface
+## Non-Latin scripts in the user interface
 
 Unified firmware registers embedded Simplified-Chinese 8/10/12pt subsets as
 fallbacks for the compact international UI fonts.
@@ -118,11 +118,19 @@ The built-in 12pt reader subset remains an offline fallback.
 The fallback is **size-matched**. The built-in UI fonts render at 8 pt
 (small/author lines), 10 pt (list rows) and 12 pt (book-cover titles, headers),
 so CrossPoint loads your SD family at those sizes too and maps each UI font to
-its same-size SD font. CJK book names therefore appear at the same size as the
-Latin text around them. A `.cpfont` family must contain files at sizes
-**8, 10 and 12** for this UI fallback (in addition to the reader sizes 12–18).
-Any missing UI size keeps showing boxes for CJK at that size. Direct
-TTF/OTF/TTC families use the same file at all three UI sizes.
+its same-size SD font. Non-Latin book names therefore appear at the same size as
+the Latin text around them. A `.cpfont` family must contain files at sizes
+**8, 10 and 12** for this UI fallback (in addition to the reader sizes 12–18) —
+missing those is the most common reason non-Latin UI text still shows replacement
+boxes while the book itself renders fine. Any missing UI size keeps showing boxes
+for that script at that size. Direct TTF/OTF/TTC families use the same file at
+all three UI sizes.
+
+This is not about CJK: the same rule applies to Greek, Cyrillic, Armenian,
+Hebrew, Arabic, Thai, Devanagari or any other script your `.cpfont` carries an
+interval for. The built-in system font ships Chinese, Japanese kana and Latin
+only, so every other script needs an SD family with those UI sizes before it can
+appear anywhere except the book body.
 
 For `.cpfont` families, **Settings > Reader > Font Size** lists every size the family ships,
 so a family built at 8,10,12,14,16,18 offers all six as reading sizes — the UI
@@ -140,21 +148,29 @@ When converting your own font, include the UI sizes:
       --name MyCJKFont \
       --output-dir ./MyCJKFont/
 
+> **Using this font for non-Latin UI fallback too?** To get fallback in the
+> library, headers, settings rows and the file browser (see
+> [Non-Latin scripts in the user interface](#non-latin-scripts-in-the-user-interface)),
+> the family needs the UI sizes: `--sizes 8,10,12,14,16,18`. A family converted
+> with only the reader sizes still works in the book body, but every UI string
+> in that script keeps showing replacement boxes.
+
 What this means in practice:
 
-- Select a CJK-capable SD font under **Settings > Reader > Font Family**
+- Select a non-Latin-capable SD font under **Settings > Reader > Font Family**
   (see [Installing Fonts](#installing-fonts) and the `cjk` / `hangul` presets
   for `.cpfont` under [Converting Custom Fonts](#converting-custom-fonts)). That single
-  selection drives both book content *and* size-matched CJK fallback in the UI.
+  selection drives both book content *and* size-matched fallback in the UI.
 - Pure-Latin UI strings keep the crisp built-in font; only strings that
-  actually contain CJK are routed to the SD font.
+  actually contain a character the built-in font lacks are routed to the SD
+  font.
 - The fallback is per *string*, not per glyph: a mixed title such as
   `三体 Vol.1` renders entirely in the SD font (including the Latin part). If
   that SD font is a `Mono` family, the Latin portion will appear half/full
   width.
 - If no SD font is selected (a built-in reading font is active), there is no
-  CJK fallback and the UI again shows boxes for CJK — pick a CJK SD font to
-  restore it.
+  fallback and the UI again shows boxes for non-Latin text — pick an SD font
+  covering that script to restore it.
 
 ## Available Pre-Built Fonts
 
