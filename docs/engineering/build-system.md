@@ -54,6 +54,36 @@ X4 Pro, X4 Classic, Murphy M4, Waveshare 3.97 and PaperMono use application LTO 
 to keep the complete reader inside the existing 6.25 MiB OTA partitions. Their
 prebuilt `dio_opi` core continues to supply the TinyUSB CDC/MSC component graph.
 
+### Flashing toolchain (esptool)
+
+CPYOS does not pin esptool; it ships with the PlatformIO core. Always call the
+interpreter that owns it, because the system `python3` has no `esptool` module:
+
+```bash
+~/.platformio/penv/bin/python -m esptool version
+# esptool v5.3.0
+```
+
+**Verified version: esptool 5.3.0.** That is what the command above printed on
+2026-11-08 on this workstation, and it is the version the flashing procedure in
+[AGENTS.md](../../AGENTS.md) §5 calls (same interpreter). Treat 5.3.0 as the
+baseline for the Read Pico native USB-Serial/JTAG path; the success criterion for a
+write stays `Hash of data verified.` plus a boot, never the exit status.
+
+Do not bump or downgrade esptool as a side effect of another change. There is a
+documented counter-example on a different board: upstream reported 5.3.0 aborting a
+460800/921600-baud write at 7.6 % with `Packet content transfer stopped`, while 4.8.1
+completed the same image. That is specific to that board's USB-serial bridge, not to
+Read Pico, so a version change needs its own evidence: a real write plus
+`Hash of data verified.` and an actual boot on the device, not just a successful
+build.
+
+**Readback honesty rule.** Record only what a command actually printed. Never write
+a chip-ID or register value into docs, release notes or commit messages unless the
+command that produced it was run; when a part is only claimed to be register-
+compatible with another, say "compatible, not observed" instead of implying a
+verified ID. Facts without a command behind them are marked `not read`.
+
 ### Missing `framework-arduinoespressif32-libs/<chip>/sdkconfig.orig` and the TinyUSB include loss
 
 Symptom: builds fail while compiling the Arduino core with
