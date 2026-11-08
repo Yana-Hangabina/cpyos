@@ -492,8 +492,14 @@ void DictionaryWordSelectActivity::drawHints() const {
   // No selectable word on this page: Confirm and navigation are all no-ops
   // (guarded by words.empty() in loop()/performLookup), so only Back does
   // anything and only Back is hinted.
-  // Phrase mode has no page and no highlight: only Back does anything.
-  if (phraseMode || words.empty()) {
+  // Phrase mode has no page and no highlight. Confirm is live only on the
+  // "not found" card, where it hands the user the page's word picker.
+  if (phraseMode) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), phraseMiss ? tr(STR_SELECT) : "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    return;
+  }
+  if (words.empty()) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     return;
@@ -545,8 +551,17 @@ void DictionaryWordSelectActivity::render(RenderLock&&) {
     // The popup overdraws the page, so the snapshot no longer matches the
     // framebuffer — force the next render onto the full-repaint path.
     snapshotIdx = -1;
+    // The phrase miss card waits for the user (Confirm opens the page's word
+    // picker), so it is painted and presented here together with the button
+    // hints under it instead of presenting itself.
+    if (phraseMode && popup == Popup::NotFound && phraseMiss) {
+      // I18N.get directly: tr() only accepts literal key names.
+      status_card::paintMessage(renderer, I18N.get(popupMsg), nullptr);
+      drawHints();
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      return;
+    }
     // drawPopup overlays the framebuffer and refreshes the display itself.
-    // I18N.get directly: tr() only accepts literal key names.
     status_card::showMessage(renderer, I18N.get(popupMsg), nullptr);
     return;
   }
