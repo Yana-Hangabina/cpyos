@@ -36,7 +36,9 @@ def trace(sdk, reader_ref, metrics_ref, directory, inx=False):
         if name == 'UIScale.h' and 'UiHighDpiProfile' in text:
             text = '#include "UiHighDpiProfile.h"\n' + text
         (directory / name).write_text(text)
-    (directory / 'fontIds.h').write_text(source(metrics_ref, 'src/fontIds.h'))
+    # Always the worktree copy: the profile header below is also the worktree's and
+    # names the macro this file defines.
+    (directory / 'fontIds.h').write_text((ROOT / 'src/fontIds.h').read_text())
     (directory / "themes/lyra").mkdir(parents=True)
     (directory / "themes/upstream/UpstreamStyleTheme.h").write_text("#pragma once\n")
     (directory / "UiHighDpiProfile.h").write_text((ROOT / "src/components/UiHighDpiProfile.h").read_text())

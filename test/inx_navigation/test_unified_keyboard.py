@@ -308,7 +308,8 @@ def run_harness(code, tmp, name, high_dpi=False):
     cpp, binary = tmp / (name+'.cpp'), tmp / name
     cpp.write_text(code)
     ui = SDK / 'libs/ui/FreeInkUI'
-    command = ['c++', '-std=c++20', '-I'+str(ui/'include'), str(cpp), str(ui/'src/FreeInkUI.cpp'), '-o', str(binary)]
+    command = ['c++', '-std=c++20', '-I'+str(ui/'include'), '-I'+str(ROOT/'src'),
+               str(cpp), str(ui/'src/FreeInkUI.cpp'), '-o', str(binary)]
     if high_dpi: command.append('-DCROSSMUX_UI_PROFILE_HIGH_DPI')
     subprocess.run(command, check=True)
     output = subprocess.check_output([str(binary)], text=True)

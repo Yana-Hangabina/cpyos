@@ -1,5 +1,7 @@
 #pragma once
 
+#include "fontIds.h"
+
 // UI preset calibrated for roughly 300-PPI displays; targets opt in explicitly.
 // Panel dimensions, bezel insets and hardware capabilities remain board-owned.
 namespace UiHighDpiProfile {
@@ -9,7 +11,8 @@ inline constexpr bool enabled = true;
 inline constexpr bool enabled = false;
 #endif
 // Distinct bitmap revisions invalidate sections laid out with the legacy faces.
-inline constexpr int reader12FontId = 0x4738000C;
+// Owned by the font-ID generator so the value has one author.
+inline constexpr int reader12FontId = UI_HIGH_DPI_READER_12_FONT_ID;
 inline constexpr int contentPadding = 32;
 inline constexpr int controlGap = 12;
 inline constexpr int navigationHeight = 96;

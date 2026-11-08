@@ -27,7 +27,9 @@ def run_cpp(program, include_dirs=(), defines=()):
         cpp = Path(directory) / 'check.cpp'
         exe = Path(directory) / 'check'
         cpp.write_text(f'#include "{ROOT}/src/components/UiHighDpiProfile.h"\n' + program)
-        subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Werror',
+        # -Isrc so a header pulled in by absolute path (UiHighDpiProfile.h) can
+        # still resolve its own `#include "fontIds.h"`.
+        subprocess.run(['c++', '-std=c++20', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'src'),
                         *('-I'+str(path) for path in include_dirs), *('-D'+define for define in defines), str(cpp), '-o', str(exe)], check=True)
         subprocess.run([str(exe)], check=True)
 

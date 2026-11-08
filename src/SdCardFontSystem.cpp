@@ -11,6 +11,8 @@
 #include <TtfEpdFont.h>
 #include <esp_heap_caps.h>
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <iterator>
 #include <map>
@@ -41,6 +43,28 @@ int computeTtfFontId(const char* familyName, uint8_t pointSize) {
   return id != 0 ? id : 1;
 }
 #endif  // CROSSPOINT_VECTOR_FONTS
+
+// The pack registers one face per UI point size under these ids; a supplement
+// attached to the role id alone would be missed when the role is rebound to the
+// pack face (`typography::apply` uses setPreferredFont), because the resolver
+// also looks up supplements under the *effective* id. Sizes without a pack face
+// (8pt stays the built-in subset, >18pt are reader sizes) return 0.
+int cjkUiIdForPoint(const uint8_t pointSize) {
+  switch (pointSize) {
+    case 10:
+      return CJK_UI_10_FONT_ID;
+    case 12:
+      return CJK_UI_12_FONT_ID;
+    case 14:
+      return CJK_UI_14_FONT_ID;
+    case 16:
+      return CJK_UI_16_FONT_ID;
+    case 18:
+      return CJK_UI_18_FONT_ID;
+    default:
+      return 0;
+  }
+}
 
 }  // namespace
 
@@ -868,6 +892,8 @@ void SdCardFontSystem::unloadSupplementFonts(GfxRenderer& renderer) {
   freeSupplementSources();
   supplementFamilies_.clear();
   supplementPointSize_ = 0;
+  supplementUiRoleCount_ = 0;
+  supplementUiRoles_ = {};
   renderer.clearSupplementFonts();
 }
 
@@ -875,19 +901,37 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   std::vector<std::string> families;
   if (!font_extras::installedFallbackFamilies(families)) families.clear();
   if (readerPointSize == 0) readerPointSize = 12;
+
+  // Which UI roles a supplement has to mirror. With the system pack the roles
+  // follow the UI scale; elsewhere the SD UI-size table is still the truth.
+  std::array<typography::UiRolePoint, typography::kMaxUiRolePoints> uiRoles{};
+  size_t uiRoleCount = typography::uiRolePointsFor(
+      typography::pointsFor(SETTINGS.uiFontScale < static_cast<uint8_t>(typography::Scale::Count)
+                                ? static_cast<typography::Scale>(SETTINGS.uiFontScale)
+                                : typography::Scale::Standard),
+      uiRoles.data(), uiRoles.size());
+  if (uiRoleCount == 0) {
+    uiRoleCount = std::min(uiRoles.size(), std::size(kUiFontSizes));
+    for (size_t i = 0; i < uiRoleCount; ++i) {
+      uiRoles[i] = {kUiFontSizes[i].fontId, kUiFontSizes[i].pointSize};
+    }
+  }
+
   if (families.empty()) {
     if (!supplementFamilies_.empty()) unloadSupplementFonts(renderer);
     supplementPointSize_ = 0;
     return false;
   }
 
-  bool same = supplementPointSize_ == readerPointSize && families.size() == supplementFamilies_.size();
+  bool same = supplementPointSize_ == readerPointSize && families.size() == supplementFamilies_.size() &&
+              supplementUiRoleCount_ == uiRoleCount;
   if (same) {
-    for (size_t i = 0; i < families.size(); ++i) {
-      if (families[i] != supplementFamilies_[i]->family) {
-        same = false;
-        break;
-      }
+    for (size_t i = 0; i < families.size() && same; ++i) {
+      same = families[i] == supplementFamilies_[i]->family;
+    }
+    for (size_t i = 0; i < uiRoleCount && same; ++i) {
+      same = uiRoles[i].fontId == supplementUiRoles_[i].fontId &&
+             uiRoles[i].pointSize == supplementUiRoles_[i].pointSize;
     }
   }
   if (same) return true;
@@ -943,31 +987,40 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
       }
     }
 
-    // Several UI slots share a point size on this panel (SMALL/READER_STATUS at
-    // 12pt, UI_10/READER_ESTIMATE at 14pt). One face per size is enough; a
-    // second insertFont() with the same id would be ignored and waste a face.
+    // Several roles share a point size (UI_12 and CONTROL_18 both take the
+    // title size, SMALL and the footers the caption size). One face per point
+    // is enough; a second insertFont() with the same id would be ignored and
+    // waste a face.
     std::map<uint8_t, int> uiIdBySize;
-    for (const auto& ui : kUiFontSizes) {
-      const auto existing = uiIdBySize.find(ui.pointSize);
+    for (size_t role = 0; role < uiRoleCount; ++role) {
+      const int roleFontId = uiRoles[role].fontId;
+      const uint8_t pointSize = uiRoles[role].pointSize;
+      if (pointSize == 0) continue;
+      auto existing = uiIdBySize.find(pointSize);
+      int supplementId = 0;
       if (existing != uiIdBySize.end()) {
-        renderer.addSupplementFont(ui.fontId, existing->second);
-        continue;
+        supplementId = existing->second;
+      } else {
+        auto face = makeUniqueNoThrow<TtfEpdFont>();
+        if (!face) break;
+        addTtfSourcesFrom(set->sources, *face);
+        if (!face->load(pointSize, true, 16 * 1024, 384, false)) {
+          LOG_ERR("SDFS", "font supplement %s: UI face failed at %upt", name.c_str(),
+                  static_cast<unsigned>(pointSize));
+          continue;
+        }
+        supplementId = computeTtfFontId((name + "\x01suppui").c_str(), pointSize);
+        renderer.insertFont(supplementId, face->family());
+        renderer.registerTtfFont(supplementId, face.get());
+        set->uiIds.push_back(supplementId);
+        set->ui.push_back(std::move(face));
+        uiIdBySize[pointSize] = supplementId;
       }
-      auto face = makeUniqueNoThrow<TtfEpdFont>();
-      if (!face) break;
-      addTtfSourcesFrom(set->sources, *face);
-      if (!face->load(ui.pointSize, true, 16 * 1024, 384, false)) {
-        LOG_ERR("SDFS", "font supplement %s: UI face failed at %upt", name.c_str(),
-                static_cast<unsigned>(ui.pointSize));
-        continue;
-      }
-      const int id = computeTtfFontId((name + "\x01suppui").c_str(), ui.pointSize);
-      renderer.insertFont(id, face->family());
-      renderer.registerTtfFont(id, face.get());
-      set->uiIds.push_back(id);
-      set->ui.push_back(std::move(face));
-      uiIdBySize[ui.pointSize] = id;
-      renderer.addSupplementFont(ui.fontId, id);
+      renderer.addSupplementFont(roleFontId, supplementId);
+      // A pack rebinds the role to its own CJK_UI_<pt> face, and the resolver
+      // looks for supplements under the *effective* id as well as the role id.
+      const int cjkId = cjkUiIdForPoint(pointSize);
+      if (cjkId != 0) renderer.addSupplementFont(cjkId, supplementId);
     }
 
     if (set->readerId == 0 && set->uiIds.empty()) {
@@ -984,8 +1037,10 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   }
 
   supplementPointSize_ = readerPointSize;
-  LOG_INF("SDFS", "font supplements: %zu families at %upt", supplementFamilies_.size(),
-          static_cast<unsigned>(readerPointSize));
+  supplementUiRoleCount_ = uiRoleCount;
+  supplementUiRoles_ = uiRoles;
+  LOG_INF("SDFS", "font supplements: %zu families at %upt (%u UI roles)", supplementFamilies_.size(),
+          static_cast<unsigned>(readerPointSize), static_cast<unsigned>(uiRoleCount));
   return !supplementFamilies_.empty();
 }
 

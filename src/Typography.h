@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 class GfxRenderer;
@@ -21,6 +22,21 @@ struct Points {
 };
 
 Points pointsFor(Scale scale);
+
+// One UI role and the point size the pack binds it to.
+struct UiRolePoint {
+  int fontId;
+  uint8_t pointSize;
+};
+inline constexpr std::size_t kMaxUiRolePoints = 8;
+
+// The roles the vector pack binds for a scale, in attachment order. A Font
+// Extras supplement has to be built at exactly these sizes: attaching one at
+// 14pt while the pack draws the row at 10pt renders the rare glyph at the wrong
+// size in a second face, which is what a font_extras user notices first.
+// Returns 0 on targets that keep their built-in UI faces (there the SD UI-size
+// table is what the supplements follow).
+std::size_t uiRolePointsFor(Points points, UiRolePoint* out, std::size_t capacity);
 
 // Rebind UI ids to the matching vector faces. No-op when the system font pack
 // is absent (ReadPico keeps its built-in faces until an external vector pack is
