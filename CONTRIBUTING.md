@@ -31,7 +31,7 @@
 2. 保持改动聚焦：一个 PR 解决一件事，不要顺手重构无关文件。
 3. 不提交账号、密码、token、Cookie、抓包正文或真机日志。
 4. 改了 i18n YAML 后重跑 `python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ --strip-unused`，并说明语言包键数变化（数据分区需要一起刷新）。
-5. 改了 `freeink-sdk` 内的文件时，把改动同步进 `patches/freeink-sdk/` 或 `patches/freeink-sdk-cff/`；gitlink 本身不会携带工作树修改。
+5. 改了 `freeink-sdk` 内的文件时，把改动同步进 `patches/freeink-sdk/d9a1304c-local.patch`（配方见该目录 README）；gitlink 本身不会携带工作树修改。
 
 ## 本地检查
 

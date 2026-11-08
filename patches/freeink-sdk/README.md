@@ -1,27 +1,29 @@
 # Local modifications to freeink-sdk, carried as a patch
 
 `freeink-sdk` is tracked by this repository as a **gitlink** (mode 160000) pinned at
-upstream commit `96de1be`, and the submodule is **not initialised**: the directory holds
-a working tree with no `.git` of its own. Consequences, in order of how much trouble they
-cause:
+upstream commit `d9a1304c` (2026-11-03), and the submodule is **not initialised**: the
+directory holds a working tree with no `.git` of its own. Consequences, in order of how
+much trouble they cause:
 
 - Edits inside `freeink-sdk/` are invisible to every git command run in this repository.
   They cannot be staged, committed, reverted or reviewed here.
-- `git submodule update --init` checks `96de1be` out **over** the working tree and
+- `git submodule update --init` checks `d9a1304c` out **over** the working tree and
   destroys whatever was edited. Do not run it on a tree that holds un-saved work; run
   `apply.sh` afterwards if you must.
 - Committing *inside* the submodule would produce a commit that exists only on this
   machine, and moving the gitlink to it would make the repository unclonable for anyone
-  else. That is a worse trade than carrying a patch.
+  else. That is a worse trade than carrying a patch. (A fork of `freeink-sdk` would fix
+  the root cause; that decision is still open — see AGENTS §40/§41.)
 
-So the local work travels as `96de1be-local.patch`, applied with `./apply.sh`
-(idempotent: it detects its own marker function and refuses to double-apply).
+So the local work travels as `d9a1304c-local.patch`, applied with `./apply.sh`
+(idempotent: it detects its own marker and refuses to double-apply).
 
 ## What is in the patch
 
-Two ports from the **kiikoread** project (read-pico-reader / kiikoread, Apache-2.0; local copy
-under `.scratch/kiikoread/`), both display-side and both default-off or behaviour-preserving
-unless asked for — plus one unrelated storage fix (3):
+The display work below starts as two ports from the **kiikoread** project (read-pico-reader /
+kiikoread, Apache-2.0; local copy under `.scratch/kiikoread/`), default-off or
+behaviour-preserving unless asked for, and grew from there — plus two unrelated
+storage/network fixes (3 and 12):
 
 1. **TEXTTURN white-to-mid-gray early settle.** `e0470_textturn_soft_settle()`, called
    once at the end of `e0470_waveform_init()`, applies kiikoread's algorithm to the `from=15`
@@ -266,72 +268,95 @@ gray, so each needs on-panel comparison, not just a host test.
     a second full timeout on the TLS 1.2 retry before the caller moved on. The failure path
     now polls once and returns immediately when the request was aborted.
 
+## Rebase history
+
+| Base | Patch | Note |
+| --- | --- | --- |
+| `96de1be` (2026-10-03) | `96de1be-local.patch` | items 1–12, plus sibling `patches/freeink-sdk-cff/cff-otf.patch` |
+| **`d9a1304c`** (2026-11-03) | **`d9a1304c-local.patch`** | 2026-11-08 rebase; **CFF sibling patch deleted** (see below) |
+
+### 2026-11-08 rebase onto `d9a1304c` (202 commits, 337 files upstream)
+
+27 of the 31 files applied straight from the old patch; everything under
+`libs/display/EpdiyLcd/**` (engine, wrapper, e0470, page turn, host tests),
+`BoardReadPico/**` and `SecureClient.cpp` was untouched upstream, so it re-applied
+mechanically. Four files needed hand work:
+
+- **`FreeInkDisplay.cpp`** — upstream rewrote the facade around `EpdBus`
+  (`controllerName`, `powerOffBetweenFrames`, `displayGrayscaleBaseStart`,
+  `displayCommitted`, `requestResync`, `supportsDeferredGrayscaleBase`, per-driver
+  `displayWindow`) and moved `waitRefreshComplete()` into the header as
+  `finishDisplayAsync() + syncPendingAsync()`. Re-threaded here: the `_pendingGray`
+  drain moved into `syncPendingAsync()`, and the band diff / `idlePowerTick` /
+  `GrayArea` commit / water-turn plumbing now sit beside the new methods.
+- **`EpdiyLcdDriver.{h,cpp}`** — rewritten against the new driver contract. Upstream's
+  `_displayCommitted` / `_basePending` bookkeeping is kept: every path added here
+  (`displayStart`, `displayGrayStart`, the area commits, `displayWindow`) updates
+  `_displayCommitted` exactly like the upstream methods do.
+- **`SdmmcBlockDevice.cpp`** — the mount loop gained upstream's per-board gate handling
+  (`powerCycleOnMount` / `powerActiveHigh`); the 40→20→10 MHz ladder now wraps it, and the
+  64-byte DMA-alignment hunk applied unchanged.
+- **Test runners** — `PanelDriver.h` now includes `GrayArea.h`, so
+  `run_pro.py` / `run_picco.py` / `run_uc8253_power.py` / `run_uc8279.py` /
+  `run_uc8279c_a4.py` copy it too, and `run_epdiy_contract.py` stubs the epdiy API this
+  patch adds. Every display host test passes on the rebased tree
+  (`libs/display/{EpdiyLcd,FreeInkDisplay}/test/host/*.py`, 15 scripts).
+
+**`patches/freeink-sdk-cff/cff-otf.patch` is deleted and must not be re-created.** Upstream
+`d9a1304c` ships CFF/OTF itself — `cff` + `psaux` + `pshinter` + `psnames`, gated on the same
+`FREEINK_FONT_ENABLE_CFF` (still set in `platformio.ini`) — and fixes the 16 KB
+`cf2_interpT2CharString` stack frame better than we did, by heap-allocating `CF2_GlyphPath`
+in `psintrp.c`. Re-applying our old patch would prepend a second copy of the module to the
+upstream files. Consequence to verify on hardware: the 32 KB PSRAM render stack
+(`ActivityManager`) was sized for that stack frame and may now be reducible — keep it until
+measured.
+
+**Residual risk of this rebase** is concentrated in the display facade: our async start/finish,
+band-diff staging and no-op grayscale cleanup were re-expressed against a facade that changed
+its grayscale-base composition (`displayGrayscaleBaseWithContext`) and its cleanup semantics.
+The host tests cover the shapes, but only on-panel soak covers the timing (water ripple,
+banded refresh, local clean, minute clock, rails idle). Nothing else in the patch is
+semantically new relative to `96de1be`.
+
 ## Upgrading an older tree
 
-This patch grew from 20 to 31 files when items 6–12 landed; the idempotence marker
-moved from `e0470_textturn_soft_settle` to `epd_draw_base_start` when item 6 landed. A working tree that still
-carries the earlier version cannot be patched in place: `apply.sh` detects that state and
-refuses. Restore the tree to `96de1be` first (re-checkout in a scratch clone, then
-`rsync` the SDK content over `freeink-sdk/`, **never** `git submodule update --init` on a
-tree with unsaved local work), then run `./apply.sh`.
+The idempotence marker is `e0470_page_turn` (a directory only this patch creates). A tree at
+`96de1be` (or one carrying the older patch) cannot be patched in place: `apply.sh` detects
+that state and refuses. Move the gitlink to `d9a1304c` first (`git update-index --cacheinfo`,
+then `git submodule update --init freeink-sdk` on a clean worktree — **never** on a tree with
+unsaved local work), then run `./apply.sh`.
 
 ## Provenance of the patch itself
 
-Generated by diffing a pristine fetch of `96de1be` (fetched read-only into a scratch
-clone; the working tree was never touched) against the modified tree, and **verified by
-round trip**: applying it to a second pristine copy yields a tree byte-identical to the
-working tree (`diff -rq` reports zero differences, over the same exclusion set).
-Regenerate the same way if the SDK work changes:
+Generated by checking the patch content out as a commit and diffing it against
+`d9a1304c`, then **verified by round trip**: applying `d9a1304c-local.patch` to a second
+pristine `d9a1304c` checkout yields a tree byte-identical to the working tree
+(`diff -rq` reports zero differences), **and verified with both tools**
+(`git apply --check` and `patch -p1 --dry-run`).
+
+Regenerate the same way if the SDK work changes — no exclusions, no header munging, no
+`-dirty` file getting in, because the patch is now a plain `git diff` of a scratch clone:
 
 ```sh
-git fetch --depth 1 https://github.com/0x1abin/freeink-sdk.git 96de1be6ce08eb732909e6e8149af8f892b9a2c5
-# check the fetch out as sdk_pristine, copy the working tree as sdk_work, then:
-diff -ruN --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
-          --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-          --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=MetalioEink4Board.h \
-          --exclude=lucide \
-          sdk_pristine sdk_work > raw.patch
-# ★ On a case-insensitive filesystem (macOS APFS) the SDK tracks BOTH
-#   MetalioEInk4Board.h and MetalioEink4Board.h as distinct paths resolving to one
-#   file. Exclude both spellings or the unrelated in-flight Metalio change leaks in
-#   as a 30th patch file. diff's --exclude is case-sensitive even there.
-# strip the mtime that diff appends after a TAB on every --- / +++ line, and normalise
-# the header back to the plain --exclude=.git form, so regenerating produces a
-# content-only diff instead of touching all 30 headers:
-sed -E 's/^(---|\+\+\+) (sdk_pristine|sdk_work)\/([^[:space:]]+)[[:space:]].*$/\1 \2\/\3/' raw.patch \
-  | sed -E 's|^diff -ruN --exclude=[^ ]+( --exclude=[^ ]+)* sdk_pristine/|diff -ruN --exclude=.git sdk_pristine/|' \
-  > 96de1be-local.patch
-# then verify the round trip before installing it, with the SAME exclusions:
-mkdir sdk_verify && tar -c -C sdk_pristine . | tar -x -C sdk_verify
-patch -p1 -d sdk_verify < 96de1be-local.patch
-diff -rq --exclude=.git --exclude=.DS_Store --exclude=__pycache__ \
-         --exclude=cff --exclude=psaux --exclude=ft_cff.c --exclude=ft_psaux.c \
-         --exclude=ftmodule.h --exclude=MetalioEInk4Board.h --exclude=MetalioEink4Board.h \
-         --exclude=lucide \
-         sdk_verify sdk_work
+# scratch clone (SSH; the HTTPS path is unreliable here)
+git clone git@github.com:0x1abin/freeink-sdk.git scratch/sdk && cd scratch/sdk
+git checkout -b port d9a1304cd234b0536136302f629304b609f62b32
+# edit the working tree, then:
+git add -A
+git diff --cached > ../d9a1304c-local.patch       # -p1 compatible, no timestamps
+# verify on a SECOND pristine checkout
+git worktree add --detach ../clean d9a1304cd234b0536136302f629304b609f62b32
+cd ../clean && git apply --check ../d9a1304c-local.patch \
+  && patch -p1 --dry-run < ../d9a1304c-local.patch \
+  && patch -p1 < ../d9a1304c-local.patch \
+  && diff -rq --exclude=.git . ../sdk
 ```
 
-★ **Pass the `--exclude` flags literally, never via a shell variable.** Under zsh an
-unquoted `$EX` is *not* word-split, so `diff` receives one long nonsense pattern, silently
-excludes nothing, and you get a 72-file patch that looks plausible. Cost me one regeneration
-to notice; the symptom is `grep -c '^--- ' 96de1be-local.patch` coming out far too high.
-
-### What the exclusions are for
-
-| Excluded | Why |
-| --- | --- |
-| `.DS_Store`, `__pycache__` | macOS and Python artifacts. `libs/assets/Icons/tools/__pycache__/gen_icons.cpython-312.pyc` differs from pristine purely because the generator was run locally; a `Binary files … differ` line for it must never enter the patch. |
-| `lucide` | The icons tree is a **nested submodule**; `git archive 96de1be` does not contain its contents, so a plain diff against the working tree reports every icon as added. |
-| `MetalioEInk4Board.h` | Unrelated pre-existing working-tree change, not part of this patch (AGENTS §19). |
-| `cff`, `psaux`, `ft_cff.c`, `ft_psaux.c`, `ftmodule.h` | ★ **Carried by a sibling patch, not by this one.** On 2026-10-16 13:44 CFF/PSaux support was added to the vendored FreeType (upstream `96de1be` ships only autofit/base/gzip/psnames/raster/sfnt/smooth/truetype), gated behind `FREEINK_FONT_ENABLE_CFF`. That work travels as **`patches/freeink-sdk-cff/cff-otf.patch`** with its own `apply.sh` and README — apply both. Excluded here so that neither patch has to be regenerated when the other changes. |
-
-The consequence to be honest about: **this patch is not a complete description of the
-working tree.** It is a complete description of the working tree *minus* the CFF work,
-which `patches/freeink-sdk-cff/` carries. Round-trip verification only holds under the
-exclusion set above; with both patches applied the tree is complete.
-
-Keep the `sdk_pristine/` / `sdk_work/` path prefixes: `apply.sh` relies on `-p1`
-stripping exactly one component.
+★ The old recipe used `diff -ruN` plus `--exclude` flags and a `sed` to strip mtimes. That
+is no longer needed (and the old case-insensitive-filesystem trap with
+`MetalioEInk4Board.h`/`MetalioEink4Board.h` disappears with it): `d9a1304c` does not carry
+the unrelated Metalio change, and `git diff` has neither mtimes nor a `lucide` submodule
+problem.
 
 If the pinned commit ever moves, this patch must be rebased or regenerated; it is not
 expected to apply cleanly to any other upstream state.

@@ -73,7 +73,7 @@ git push fork cpyos-<v>
 
 `.github/workflows/cpyos-release.yml` 会：
 
-1. 检出 `cpyos` 与子模块，应用 `patches/freeink-sdk` 和 `patches/freeink-sdk-cff`；
+1. 检出 `cpyos` 与子模块，应用 `patches/freeink-sdk`（CFF/OTF 已由上游 SDK 自带，不再有第二个补丁）；
 2. 构建 `readpico`；
 3. 生成数据包与 `build/data_manifest.txt`；
 4. 运行 `verify_release_artifacts.py --release`；

@@ -25,7 +25,7 @@ matrix, and the photo-gated decisions).
 | `src/main.cpp` | the serial commands below |
 
 **freeink-sdk (must travel as the patch, never as a submodule commit):**
-`patches/freeink-sdk/96de1be-local.patch` (29 files) carries the atomic frame-start
+`patches/freeink-sdk/d9a1304c-local.patch` (37 files) carries the atomic frame-start
 claim, the CKV lap wait, prefill 112, the AA A/B switch, the windowed-scan clean API,
 the scan-in-progress probe, and the extracted `line_mask.h`.
 
@@ -89,8 +89,8 @@ semantics to change.
 ## 5. Shipping to the public tree
 
 1. `bash patches/freeink-sdk/apply.sh` on the public tree (idempotent; its marker is
-   `epd_draw_base_start`). Regenerate the patch from a pristine `96de1be` with the
-   README's exclusion set if the SDK work changed.
+   `e0470_page_turn`). Regenerate the patch from a pristine `d9a1304c` with the
+   README's `git diff` recipe if the SDK work changed.
 2. Carry the app files from §1; keep the public tree's own power/rail changes.
 3. Rebuild there and re-run §2's four suites (the host suites live in `cpyos/src`).
 4. `python3 scripts/generate_data_manifest.py` if any data blob changed (none of

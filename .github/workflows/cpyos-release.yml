@@ -83,17 +83,16 @@ jobs:
       - name: Prepare the pioarduino platform
         run: python3 scripts/patch_pioarduino_cache.py --prepare-platform
 
-      - name: Apply the freeink-sdk patches
+      - name: Apply the freeink-sdk patch
         run: |
           set -euo pipefail
           bash patches/freeink-sdk/apply.sh
-          bash patches/freeink-sdk-cff/apply.sh
 
       - name: Mark the expected SDK patch as clean for versioning
         run: |
           set -euo pipefail
-          # The two patches are part of the release recipe, not accidental local
-          # edits. PlatformIO stamps esp_app_desc.version with
+          # The SDK patch is part of the release recipe, not an accidental local
+          # edit. PlatformIO stamps esp_app_desc.version with
           # `git describe --dirty`; assume-unchanged keeps that expected
           # submodule dirtiness out of the version string, so the image is
           # stamped with the tag rather than `-dirty`. A genuinely dirty parent
