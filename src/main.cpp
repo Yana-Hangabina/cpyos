@@ -306,6 +306,15 @@ void updateBluetoothLifecycle() {
     bleinput::stop();
     return;
   }
+  // A book keeps the radio only for a remote that has already been paired: the HID
+  // host is central-role, so with no bond it can only scan, never link, and leaving
+  // it up drains the battery for the whole session. The pages that own BLE for its
+  // own sake (Bluetooth settings, key mapping) still run it so a remote can be
+  // paired from there.
+  if (!activityManager.hasExplicitBluetoothOwner() && !bleinput::readerRadioAllowed()) {
+    bleinput::stop();
+    return;
+  }
   // Preparation blocks new starts; C3 and PSRAM readers keep existing links
   // through chapter construction and book indexing.
   if (bleinput::isRunning() || activityManager.deferBluetoothStart() || millis() < nextStartAttemptAt) return;
