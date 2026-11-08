@@ -45,9 +45,11 @@ constexpr unsigned long MESSAGE_DURATION_MS = 1500;
 
 }  // namespace
 
-bool DictionaryDefinitionActivity::enableLookup(Dictionary& dictionary, const DictLocation location) {
-  lookup = makeUniqueNoThrow<LookupState>(dictionary, location);
+// cppcheck-suppress constParameterReference // the lookup state holds the dictionary by non-const reference
+bool DictionaryDefinitionActivity::enableLookup(Dictionary& dictionary, std::string&& query) {
+  lookup = makeUniqueNoThrow<LookupState>(dictionary);
   if (!lookup) LOG_ERR("DICT", "OOM: lookup history (%u bytes)", static_cast<unsigned>(sizeof(LookupState)));
+  if (lookup) lookup->query = std::move(query);
   return lookup != nullptr;
 }
 
@@ -352,7 +354,7 @@ void DictionaryDefinitionActivity::showMessage(const StrId nextMessage) {
 bool DictionaryDefinitionActivity::restoreCurrentDefinition(const bool styled) {
   const int page = content.currentPage;
   auto result = Dictionary::LookupResult::Found;
-  if (!lookup->dictionary.readDefinition(lookup->location, content.text, &result) ||
+  if (!lookup->dictionary.lookup(lookup->query.c_str(), content.text, content.headword, &result) ||
       !prepareDefinition(content, !styled) || styled != !content.pages.empty() || page >= content.totalPages) {
     LOG_ERR("DICT", "Cannot recover current definition after failed lookup");
     finish();
@@ -377,13 +379,11 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
   if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
 
   Definition next;
-  DictLocation location;
   auto result = Dictionary::LookupResult::Found;
-  const bool found =
-      back ? lookup->dictionary.readDefinition(lookup->history[lookup->depth - 1].location, next.text, &result)
-           : lookup->dictionary.lookup(lookup->pendingWord.c_str(), next.text, next.headword, &result, &location);
-  lookup->pendingWord.clear();
+  const char* word = back ? lookup->history[lookup->depth - 1].query.c_str() : lookup->pendingWord.c_str();
+  const bool found = lookup->dictionary.lookup(word, next.text, next.headword, &result);
   const auto recover = [this, back, styled, &next](const StrId error) {
+    lookup->pendingWord.clear();
     next.releasePayload();
     std::string{}.swap(next.headword);
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
@@ -424,18 +424,17 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
       recover(StrId::STR_DICT_RESTORE_FAILED);
       return;
     }
-    next.headword = std::move(previous.headword);
+    lookup->query = std::move(previous.query);
     next.currentPage = previous.page;
-    lookup->location = previous.location;
     --lookup->depth;
   } else {
     auto& previous = lookup->history[lookup->depth++];
-    previous.headword = std::move(content.headword);
-    previous.location = lookup->location;
+    previous.query = std::move(lookup->query);
+    lookup->query = std::move(lookup->pendingWord);
     previous.page = content.currentPage;
     previous.styled = styled;
-    lookup->location = location;
   }
+  lookup->pendingWord.clear();
   content = std::move(next);
   requestUpdate();
 }
