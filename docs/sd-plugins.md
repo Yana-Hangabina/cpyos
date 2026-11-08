@@ -24,6 +24,15 @@ browser-only plugin (no `device.json`) can explain how to use it from the web
 UI; without a README the row does nothing. `title`/`description` are read from
 `manifest.json`, with `device.json` overriding when present.
 
+**Uninstall.** Hold **Confirm** on a listed plugin for one second (or
+long-press its row on a touch screen) to open an uninstall confirmation.
+Confirming deletes that plugin's whole folder — recursively — and rescans, so
+the row disappears immediately; cancelling leaves it installed. Only a folder
+discovery actually reported under one of the roots below can be removed, so a
+crafted `title`/`name` can never point the deletion somewhere else. To keep the
+files and merely stop using the plugin, leave it installed and disable plugins
+in Settings instead.
+
 `<root>` is any of `/.crosspoint/plugins`, `/plugins`, or `/.plugins` — the
 first two-dot-free options exist so plugins are easy to copy onto the card
 from a computer. All three roots are scanned; on a name collision the earlier
