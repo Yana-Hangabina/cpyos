@@ -896,6 +896,16 @@ bool ActivityManager::deferBluetoothStart() const {
          (currentActivity && currentActivity->deferBluetoothStart());
 }
 
+bool ActivityManager::hasExplicitBluetoothOwner() const {
+  // "Explicit" = an activity that keeps BLE up for its own sake (Bluetooth
+  // settings, key mapping) rather than because a reader sits under it.
+  const auto explicitOwner = [](const auto& activity) {
+    return activity->keepsBluetoothAlive() && !activity->isReaderActivity();
+  };
+  return std::any_of(stackActivities.begin(), stackActivities.end(), explicitOwner) ||
+         (currentActivity && explicitOwner(currentActivity));
+}
+
 bool ActivityManager::handleForcedRefresh() {
   cancelIdleRender();
   return currentActivity && currentActivity->handleForcedRefresh();

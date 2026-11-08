@@ -42,6 +42,11 @@ void logDiagnostics(const char* phase);
 bool encodeKey(const freeink::KeyEvent& event, uint8_t& kind, uint8_t& value);
 void describeKey(uint8_t kind, uint8_t value, char* out, size_t outLen);
 
+// Whether a reader may keep the BLE radio up: false once this boot's first start
+// showed that no remote is bonded (see BleRemotePolicy.h). Pages that own BLE
+// explicitly — Bluetooth settings, key mapping — are not gated by this.
+bool readerRadioAllowed();
+
 #if FREEINK_CAP_BLE_HID_HOST
 inline bool isRunning() { return BleHid.isRunning(); }
 inline bool isConnected() { return BleHid.isConnected(); }

@@ -20,7 +20,7 @@ FetchContent_Declare(
 FetchContent_Declare(
   crosspoint_simulator
   GIT_REPOSITORY https://github.com/0x1abin/crosspoint-simulator.git
-  GIT_TAG 58b6694dab19a626f36486a0c5f1616110deab7f
+  GIT_TAG 5a199a0e682529150c261375ef724f3c4b4ffff7
 )
 
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -144,6 +144,8 @@ add_test(NAME WifiFontRecovery
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_wifi_font_recovery.py)
 add_test(NAME HalClockSntp
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/scripts/tests/test_hal_clock_sntp.py)
+add_test(NAME HalPowerSources
+  COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/test_hal_power_sources.py)
 add_test(NAME InxStyleCompatibility
   COMMAND ${Python3_EXECUTABLE} ${REPO_ROOT}/test/inx_navigation/test_inx_style_compat.py)
 add_test(NAME InxRecentThumbnails

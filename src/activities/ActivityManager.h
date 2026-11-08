@@ -208,6 +208,9 @@ class ActivityManager {
   bool isSleepActivity() const;
   bool keepsBluetoothAlive() const;
   bool deferBluetoothStart() const;
+  // True when an activity that owns BLE for its own sake (settings, key mapping)
+  // is on the stack, as opposed to a reader that merely keeps it alive.
+  bool hasExplicitBluetoothOwner() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

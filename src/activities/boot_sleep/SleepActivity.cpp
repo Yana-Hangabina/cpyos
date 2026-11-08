@@ -1,6 +1,7 @@
 #include "SleepActivity.h"
 
 #include <BitmapHelpers.h>
+#include <BmpToBmpConverter.h>
 #include <Cbz.h>
 #include <Epub.h>
 #include <Fb2.h>
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
 
@@ -39,6 +41,13 @@ HalDisplay::GrayscaleMode sleepGrayscaleMode(const GfxRenderer& renderer) {
   return renderer.grayscaleCapabilities(HalDisplay::GrayscaleMode::Direct).supported()
              ? HalDisplay::GrayscaleMode::Direct
              : HalDisplay::GrayscaleMode::Absolute;
+}
+
+// SSD absolute images use the new thresholds; other panels retain legacy tuning.
+bool useOriginalCoverThresholds(const GfxRenderer& renderer) {
+  return renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
+         display.getController() == HalDisplay::Controller::SSD1677 &&
+         SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
 }
 
 // Both spellings of the full-screen wallpaper pool are one logical pool; a file in either directory is a candidate.
@@ -769,46 +778,77 @@ void SleepActivity::onEnter() {
   }
 }
 
-void SleepActivity::renderCustomSleepScreen() const {
+bool SleepActivity::renderCustomSleepBmp(const std::string& path) const {
+  HalFile file;
+  if (!Storage.openFileForRead("SLP", path, file)) return false;
+  int sourceWidth = 0;
+  int sourceHeight = 0;
+  {
+    Bitmap probe(file);
+    if (probe.parseHeaders() != BmpReaderError::Ok) return false;
+    sourceWidth = probe.getWidth();
+    sourceHeight = probe.getHeight();
+  }
+  LOG_DBG("SLP", "Loading: %s", path.c_str());
+
   const bool native = renderer.getGrayscaleLevels() == 16 &&
                       SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
-  // Look for sleep.bmp on the root of the sd card to determine if we should
-  // render a custom sleep screen instead of the default.
-  // This takes priority over both custom sleep directories.
-  HalFile file;
-  if (Storage.openFileForRead("SLP", "/sleep.bmp", file)) {
-    Bitmap bitmap(file, !native,
-                  renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
-                      display.getController() == HalDisplay::Controller::SSD1677 &&
-                      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
-    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-      LOG_DBG("SLP", "Loading: /sleep.bmp");
-      renderBitmapSleepScreen(bitmap, false, native);
-      file.close();
-      return;
+  const bool thresholds = useOriginalCoverThresholds(renderer);
+  const int screenWidth = renderer.getScreenWidth();
+  const int screenHeight = renderer.getScreenHeight();
+
+  // Only sources that are smaller than the panel in some axis need the scaling
+  // pass: bigger ones are already shrunk while drawing, and an exactly
+  // screen-sized one keeps its own tones (the converter only emits 1/2-bit, so
+  // converting a 4/8bpp 16-level image would throw away most of the grayscale).
+  if (sourceWidth < screenWidth || sourceHeight < screenHeight) {
+    // Like book covers: scale and dither once into a cached screen-sized BMP, then draw it without dithering.
+    const bool crop = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+    // Same-sized BMPs share a byte count, so the key also needs the modification time.
+    const std::string key = path + '|' + std::to_string(file.size()) + '|' + std::to_string(file.modificationTime()) +
+                            '|' + std::to_string(screenWidth) + 'x' + std::to_string(screenHeight) + (crop ? "|c" : "|f") +
+                            (thresholds ? "|t" : "");
+    const std::string cachePath = "/.crosspoint/sleep_" + std::to_string(std::hash<std::string>{}(key)) + ".bmp";
+    if (!Storage.exists(cachePath.c_str())) {
+      const std::string tmpPath = cachePath + ".tmp";
+      HalFile out;
+      bool ok = Storage.openFileForWrite("SLP", tmpPath, out) &&
+                BmpToBmpConverter::bmpFileToBmpStream(file, out, crop, thresholds);
+      if (out.isOpen()) ok = out.close() && ok;
+      ok = ok && Storage.rename(tmpPath.c_str(), cachePath.c_str());
+      LOG_DBG("SLP", "Scaled %s to %s: %s", path.c_str(), cachePath.c_str(), ok ? "ok" : "failed");
+      if (!ok) Storage.remove(tmpPath.c_str());
     }
-    file.close();
+    HalFile cached;
+    if (Storage.exists(cachePath.c_str()) && Storage.openFileForRead("SLP", cachePath, cached)) {
+      Bitmap bitmap(cached);
+      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        // The cached BMP is already 1/2-bit, so it never needs the 16-level path.
+        renderBitmapSleepScreen(bitmap, false, false);
+        return true;
+      }
+      cached.close();
+      Storage.remove(cachePath.c_str());
+    }
+    LOG_ERR("SLP", "Sleep image conversion failed; drawing %s directly", path.c_str());
   }
+
+  Bitmap bitmap(file, !native, thresholds);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) return false;
+  renderBitmapSleepScreen(bitmap, false, native);
+  return true;
+}
+
+void SleepActivity::renderCustomSleepScreen() const {
+  // /sleep.bmp on the SD root takes priority over both custom sleep directories.
+  if (renderCustomSleepBmp("/sleep.bmp")) return;
 
   std::string selectedPath;
   selectRandomSleepFile(STANDARD_SLEEP_DIR, STANDARD_SLEEP_LEGACY_DIR, SleepRecentKind::Standard, selectedPath);
 
   if (!selectedPath.empty()) {
-    HalFile randFile;
-    if (Storage.openFileForRead("SLP", selectedPath, randFile)) {
-      LOG_DBG("SLP", "Randomly loading: %s", selectedPath.c_str());
-      delay(100);
-      Bitmap bitmap(randFile, !native,
-                    renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
-                        display.getController() == HalDisplay::Controller::SSD1677 &&
-                        SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderBitmapSleepScreen(bitmap, false, native);
-        randFile.close();
-        return;
-      }
-      randFile.close();
-    }
+    delay(100);
+    if (renderCustomSleepBmp(selectedPath)) return;
   }
 
   renderDefaultSleepScreen();
@@ -1074,11 +1114,7 @@ void SleepActivity::renderCoverSleepScreen() const {
     return (this->*renderNoCoverSleepScreen)();
   }
 
-  // SSD absolute images use the new thresholds; other panels retain legacy tuning.
-  const bool originalThresholds =
-      renderer.grayscaleCapabilities(sleepGrayscaleMode(renderer)).supported() &&
-      display.getController() == HalDisplay::Controller::SSD1677 &&
-      SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER;
+  const bool originalThresholds = useOriginalCoverThresholds(renderer);
   std::string coverBmpPath;
   bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 

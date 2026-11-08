@@ -1,5 +1,7 @@
 #include "BleInput.h"
 
+#include "BleRemotePolicy.h"
+
 #include <HalPowerManager.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -120,6 +122,11 @@ enum class GateFailure : uint8_t { None, InternalFree, InternalBlock, Psram, Hos
 GateFailure lastGateFailure = GateFailure::None;
 StartContext lastGateContext = StartContext::Reader;
 
+// Filled in by the first successful begin() of this boot: the HID host only loads
+// its bond list from NVS while starting, so this is the earliest honest answer to
+// "is a remote paired". Cleared only by a reboot.
+BondState bondState;
+
 GateFailure gateFailure(const MemorySnapshot& memory, const StartContext context) {
   const size_t minFree = context == StartContext::Reader ? kReaderMinFreeInternal : kExplicitMinFreeInternal;
   const size_t minLargest = context == StartContext::Reader ? kReaderMinLargestInternal : kExplicitMinLargestInternal;
@@ -215,6 +222,11 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
     reportStartFailure(GateFailure::HostStart, context, before, readMemory());
     return StartResult::Failed;
   }
+  // The host has now read its bond list: from here on the reader knows whether
+  // there is a remote worth keeping the radio up for (see readerRadioAllowed()).
+  bondState.known = true;
+  bondState.hasRemote = BleHid.pairedCount() > 0;
+  LOG_INF("BLE", "bonded remotes: %u", static_cast<unsigned>(BleHid.pairedCount()));
   lastGateFailure = GateFailure::None;
   LOG_INF("BLE", "BLE HID host started");
   logDiagnostics("after start");
@@ -229,6 +241,20 @@ void stop() {
   logDiagnostics("before stop");
   BleHid.end();
   logDiagnostics("after stop");
+#endif
+}
+
+bool readerRadioAllowed() {
+#if FREEINK_CAP_BLE_HID_HOST
+  if (BleHid.isRunning()) {
+    // The host is up, so its bond list is current: pick up a remote paired (or
+    // forgotten) since it started instead of waiting for the next reboot.
+    bondState.known = true;
+    bondState.hasRemote = BleHid.pairedCount() > 0;
+  }
+  return readerRadioAllowedFor(bondState);
+#else
+  return true;  // no BLE in this build: nothing to forbid
 #endif
 }
 
