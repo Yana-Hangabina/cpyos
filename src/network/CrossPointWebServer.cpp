@@ -1022,13 +1022,23 @@ static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   return true;
 }
 
-// Drop a partially written upload so a truncated book never lands in the library.
-// The file is new: uploads refuse to overwrite an existing name.
-static void removeUploadedFile(const CrossPointWebServer::UploadState& state) {
+static String uploadDestPath(const CrossPointWebServer::UploadState& state) {
   String filePath = state.path;
   if (!filePath.endsWith("/")) filePath += "/";
   filePath += state.fileName;
-  Storage.remove(filePath.c_str());
+  return filePath;
+}
+
+// The path actually being written: the destination itself, or "<dest>.part"
+// while an overwrite of an existing file is staged.
+static String uploadWritePath(const CrossPointWebServer::UploadState& state) {
+  return state.staged ? uploadDestPath(state) + ".part" : uploadDestPath(state);
+}
+
+// Drop a partially written upload so a truncated book never lands in the library.
+// An overwritten file is untouched: only its staged copy is removed.
+static void removeUploadedFile(const CrossPointWebServer::UploadState& state) {
+  Storage.remove(uploadWritePath(state).c_str());
 }
 
 void CrossPointWebServer::handleUpload(UploadState& state) const {
@@ -1053,6 +1063,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.size = 0;
     state.success = false;
     state.error = "";
+    state.staged = false;
     uploadStartTime = millis();
     lastLoggedSize = 0;
     state.bufferPos = 0;
@@ -1089,9 +1100,22 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     // Check if file already exists - SD operations can be slow
     resetTaskWatchdogIfSubscribed();
     if (Storage.exists(filePath.c_str())) {
-      state.error = "File already exists: " + state.fileName;
-      LOG_DBG("WEB", "[UPLOAD] Collision: %s", filePath.c_str());
-      return;
+      const String overwrite = server->arg("overwrite");
+      if (overwrite != "1" && overwrite != "true") {
+        state.error = "File already exists: " + state.fileName;
+        LOG_DBG("WEB", "[UPLOAD] Collision: %s", filePath.c_str());
+        return;
+      }
+      HalFile existing = Storage.open(filePath.c_str());
+      if (existing && existing.isDirectory()) {
+        // Never replace a folder: replaceFile() would fail after the caller lost data.
+        state.error = "A folder with this name already exists: " + state.fileName;
+        LOG_DBG("WEB", "[UPLOAD] Folder collision: %s", filePath.c_str());
+        return;
+      }
+      existing.close();
+      // Stage the body in "<dest>.part": the original survives a failed upload.
+      state.staged = true;
     }
 
     // The buffer spans upload callbacks; keep it off the task stack and release it at the end.
@@ -1104,15 +1128,15 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
     // Open file for writing - this can be slow due to FAT cluster allocation
     resetTaskWatchdogIfSubscribed();
-    if (!Storage.openFileForWrite("WEB", filePath, state.file)) {
+    if (!Storage.openFileForWrite("WEB", uploadWritePath(state), state.file)) {
       state.error = "Failed to create file on SD card";
-      LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", filePath.c_str());
+      LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", uploadWritePath(state).c_str());
       state.buffer.reset();
       return;
     }
     resetTaskWatchdogIfSubscribed();
 
-    LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", filePath.c_str());
+    LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", uploadWritePath(state).c_str());
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     if (dropUploadIfCancelled()) return;
     if (state.file && state.error.isEmpty()) {
@@ -1160,8 +1184,28 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       if (!flushUploadBuffer(state)) {
         state.error = "Failed to write final data to SD card";
       }
-      state.file.close();
-      if (!state.error.isEmpty()) removeUploadedFile(state);
+      // close() writes the final size into the directory entry; a failed close
+      // must be reported, or a file with no size looks like a good upload.
+      if (!state.file.close() && state.error.isEmpty()) state.error = "Failed to write final data to SD card";
+      // An overwrite replaces the original only once the whole body is on the card.
+      bool keepStaged = false;
+      if (state.error.isEmpty() && state.staged) {
+        resetTaskWatchdogIfSubscribed();  // removing a large original walks its cluster chain
+        const String dest = uploadDestPath(state);
+        if (!Storage.replaceFile(uploadWritePath(state).c_str(), dest.c_str())) {
+          LOG_ERR("WEB", "[UPLOAD] Replace failed: %s", dest.c_str());
+          // replaceFile() removes the original before the rename: if it is gone,
+          // the staged copy is all that is left, so keep it and say so.
+          keepStaged = !Storage.exists(dest.c_str());
+          state.error = keepStaged ? "Replace failed; the new file is kept as " + state.fileName + ".part"
+                                   : "Failed to replace the existing file";
+          if (keepStaged) {
+            clearBookCache(dest.c_str());
+            if (isLibraryBookFile(state.fileName)) library::markLibraryIndexDirty();
+          }
+        }
+      }
+      if (!state.error.isEmpty() && !keepStaged) removeUploadedFile(state);
 
       if (state.error.isEmpty()) {
         state.success = true;

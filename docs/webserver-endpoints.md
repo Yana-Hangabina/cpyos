@@ -127,6 +127,7 @@ Query parameters:
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `path` | No | `/` | Destination directory |
+| `overwrite` | No | off | `1` or `true` replaces a file with the same name |
 
 Successful response:
 
@@ -136,9 +137,17 @@ File uploaded successfully: mybook.epub
 
 Notes:
 
-- Existing files with the same name are overwritten.
+- Without `overwrite`, an existing file with the same name is kept and the
+  request fails with `400` "File already exists: <name>".
+- With `overwrite`, the upload is written to `<name>.part` and replaces the
+  existing file only when it is complete, so a failed upload keeps the old file.
+  The card needs free space for both copies while the upload runs. If a folder
+  has the name, the request fails with `400` "A folder with this name already
+  exists: <name>".
 - EPUB cache data for the uploaded path is cleared after a successful upload.
 - HTTP upload uses a 4 KB write buffer before flushing to the SD card.
+- A failed final close is reported as a write error, so an upload the card could
+  not size is never reported as successful.
 
 ### `POST /mkdir`
 
