@@ -275,7 +275,7 @@ std::string PluginCatalogActivity::substituted(std::string tpl, const Item* item
   char num[16];
   snprintf(num, sizeof(num), "%d", page);
   substituteAll(tpl, "{page}", num);
-  snprintf(num, sizeof(num), "%d", manifest.pageSize + 1);
+  snprintf(num, sizeof(num), "%d", plugincatalogpaging::limitFor(browsePaging(), manifest.pageSize));
   substituteAll(tpl, "{limit}", num);
   snprintf(num, sizeof(num), "%d", std::max(0, page - 1) * manifest.pageSize);
   substituteAll(tpl, "{offset}", num);
@@ -609,10 +609,19 @@ bool PluginCatalogActivity::parseBrowseResponse() {
   items.reserve(manifest.pageSize + 1);
   size_t retainedBytes = items.capacity() * sizeof(Item);
   bool outOfMemory = false;
-  // One extra row reveals whether a next page exists.
+  // Requests carrying {page} or {offset} are already sliced by the server. A
+  // static JSON file (neither variable) is one whole list, so the page is cut
+  // here; without this every page re-requests the same URL and repeats page 1.
+  const plugincatalogpaging::Paging paging = browsePaging();
+  const bool localPaging = paging == plugincatalogpaging::Paging::Static;
+  const size_t pageOffset =
+      localPaging ? static_cast<size_t>(std::max(0, page - 1)) * static_cast<size_t>(manifest.pageSize) : 0;
+  // The window keeps one lookahead row (or a full page for sized pages) so
+  // Next Page is only offered when the server really has more.
+  plugincatalogpaging::PageWindow window(pageOffset, manifest.pageSize);
   auto append = [&](JsonListParser::Row& row) {
-    if (outOfMemory || row.field[JsonListParser::F_TITLE].empty() || static_cast<int>(items.size()) > manifest.pageSize)
-      return;
+    const bool titled = !row.field[JsonListParser::F_TITLE].empty();
+    if (outOfMemory || !window.take(titled)) return;
     size_t bytes = row.files.capacity() * sizeof(std::string);
     for (const auto& field : row.field) bytes += field.capacity() + 1;
     for (const auto& file : row.files) bytes += file.capacity() + 1;
@@ -643,8 +652,7 @@ bool PluginCatalogActivity::parseBrowseResponse() {
     fail(StrId::STR_PARSE_FEED_FAILED);
     return false;
   }
-  hasMore = static_cast<int>(items.size()) > manifest.pageSize;
-  if (hasMore) items.resize(manifest.pageSize);
+  hasMore = window.hasMore(paging);
   computeInstallStatus();
   return true;
 }
