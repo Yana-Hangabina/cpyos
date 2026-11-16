@@ -670,6 +670,59 @@ bool sanitizeChapter(const std::string& inputPath, const std::string& outputPath
   return true;
 }
 
+bool writeUnavailableChapter(const std::string& outputPath, const std::string& imageIndexPath, const char* title,
+                             const char* message) {
+  const std::string partPath = outputPath + ".part";
+  if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+  WeReadStore::IndexWriter imageWriter;
+  if (!imageWriter.begin(imageIndexPath, WeReadStore::kImageMagic, sizeof(WeReadStore::ImageRecord))) {
+    return false;
+  }
+  HalFile output;
+  if (!Storage.openFileForWrite("WR", partPath, output)) {
+    imageWriter.abort();
+    return false;
+  }
+  const char* safeTitle = title ? title : "";
+  const char* safeMessage = message && message[0] ? message : "This chapter is currently unavailable.";
+  const bool written =
+      writeLiteral(output,
+                   "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                   "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><!--wr-unavailable--><title>") &&
+      writeXmlText(output, safeTitle) &&
+      writeLiteral(output, "</title></head><body><p class=\"wr-unavailable\">") &&
+      writeXmlText(output, safeMessage) && writeLiteral(output, "</p></body></html>");
+  if (!written) {
+    imageWriter.abort();
+    output.close();
+    Storage.remove(partPath.c_str());
+    return false;
+  }
+  output.flush();
+  output.close();
+  // Finish the empty image index first: `prepareImageWork` requires one for
+  // every chapter, and a stale index with no chapter is harmless.
+  if (!imageWriter.finish()) {
+    Storage.remove(partPath.c_str());
+    return false;
+  }
+  if (!WeReadStore::atomicReplace(partPath, outputPath)) {
+    Storage.remove(partPath.c_str());
+    return false;
+  }
+  return true;
+}
+
+bool isPlaceholderChapter(const std::string& path) {
+  HalFile file;
+  if (!Storage.openFileForRead("WR", path, file)) return false;
+  char buffer[128] = {};
+  const int read = file.read(buffer, sizeof(buffer) - 1);
+  if (read <= 0) return false;
+  buffer[read] = '\0';
+  return strstr(buffer, "<!--wr-unavailable-->") != nullptr;
+}
+
 bool visibleToNativeOffset(const std::string& path, const uint32_t visibleOffset, uint32_t& nativeOffset) {
   return resolveSourceOffset(path, SourceOffsetDirection::VisibleToNative, visibleOffset, nativeOffset);
 }

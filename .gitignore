@@ -17,6 +17,7 @@ lib/I18n/I18nStrings.cpp
 *.generated.h
 .vs
 build
+ports/metalio_plus/build_*/
 **/__pycache__/
 /compile_commands.json
 /.cache
@@ -38,6 +39,8 @@ weread_apikey*.bin
 /sdkconfig.*
 sdkconfig.sticky
 sdkconfig.x4pro
+/ports/metalio_plus/sdkconfig
+/ports/metalio_plus/sdkconfig.old
 flake.*
 
 # Local device-image backups (flashing / rollback copies), never source.

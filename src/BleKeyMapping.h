@@ -23,6 +23,19 @@ constexpr bool isValidKey(const uint8_t kind, const uint8_t value) { return kind
 constexpr bool isValidAction(const uint8_t action) { return action < static_cast<uint8_t>(Action::Count); }
 constexpr bool isEmpty(const KeyMapEntry& entry) { return entry.keyKind == 0xFF || entry.button == 0xFF; }
 
+// A fresh device can page-turn without learning a key first, matching the
+// reference firmware. kind 0 is a SpecialKey; the numeric values mirror the
+// enum order (Left=6, Right=7, PageUp=11, PageDown=12) so this shared header
+// stays independent of the board's BLE header.
+constexpr KeyMap defaultMap() {
+  KeyMap map{};
+  map[0] = {0, 6, static_cast<uint8_t>(Action::PageBack)};
+  map[1] = {0, 7, static_cast<uint8_t>(Action::PageForward)};
+  map[2] = {0, 11, static_cast<uint8_t>(Action::PageBack)};
+  map[3] = {0, 12, static_cast<uint8_t>(Action::PageForward)};
+  return map;
+}
+
 constexpr const KeyMapEntry* findByAction(const KeyMap& map, const Action action) {
   for (const auto& entry : map) {
     if (!isEmpty(entry) && entry.button == static_cast<uint8_t>(action)) return &entry;

@@ -15,7 +15,15 @@ enum class StartContext : uint8_t { Reader, Explicit };
 // begin() meanwhile, but the caller should retry without treating it as a refusal.
 enum class StartResult : uint8_t { Started, AlreadyRunning, Stopping, LowMemory, Unavailable, Failed };
 
-#if FREEINK_DEVICE_READPICO
+#if defined(CROSSPOINT_BLE_HOST_PSRAM)
+// This board moves NimBLE's host allocations to PSRAM (the runtime probe in
+// ensureStarted() rejects a host whose allocator is still internal). The
+// remaining internal floor only has to cover the host/controller task stacks
+// and bookkeeping; the generic 80/32 gate was sized for an internal host and
+// rejected a start on a Plus that idles around 69 KB free.
+inline constexpr size_t kReaderMinFreeInternal = 48 * 1024;
+inline constexpr size_t kReaderMinLargestInternal = 16 * 1024;
+#elif FREEINK_DEVICE_READPICO
 // Read Pico holds a large block of CONTIGUOUS INTERNAL DMA for its panel (epdiy's
 // LUTs, line queues and bounce buffers, ~45 KB; see platformio.ini's A3 note) on
 // top of CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768, and its BLE host allocates
@@ -32,8 +40,13 @@ inline constexpr size_t kReaderMinLargestInternal = 20 * 1024;
 inline constexpr size_t kReaderMinFreeInternal = 80 * 1024;
 inline constexpr size_t kReaderMinLargestInternal = 32 * 1024;
 #endif
+#if defined(CROSSPOINT_BLE_HOST_PSRAM)
+inline constexpr size_t kExplicitMinFreeInternal = 40 * 1024;
+inline constexpr size_t kExplicitMinLargestInternal = 12 * 1024;
+#else
 inline constexpr size_t kExplicitMinFreeInternal = 70 * 1024;
 inline constexpr size_t kExplicitMinLargestInternal = 24 * 1024;
+#endif
 inline constexpr size_t kMinFreePsram = 256 * 1024;
 inline constexpr size_t kMinLargestPsram = 32 * 1024;
 

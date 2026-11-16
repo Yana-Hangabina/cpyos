@@ -16,7 +16,8 @@ carriers and the font ids afterwards:
     python3 scripts/add_pack_codepoints.py --source /path/NotoSans-Regular.ttf
     python3 scripts/build_system_font_pack.py \
         --embedded-out assets/fonts/cpyos_han_sans.def
-    python3 scripts/build_font_ids.py
+    python3 scripts/build_ui_font_subset.py
+    python3 scripts/generate_data_manifest.py
 
 `chars_extra.txt` lists what must be present; `chars_8105.txt` stays at exactly
 8,105 Han characters because `test_system_font_pack.py` asserts that count.

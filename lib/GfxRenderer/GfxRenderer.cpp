@@ -1,4 +1,11 @@
 #include "GfxRenderer.h"
+
+namespace {
+bool s_traceText = false;
+}
+void gfxSetTextTrace(bool on) { s_traceText = on; }
+bool gfxTextTraceEnabled() { return s_traceText; }
+
 #include "RoundedClip.h"
 
 #include <BidiUtils.h>
@@ -7,6 +14,8 @@
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+
+
 #include <MemoryManager.h>
 #include <MissingGlyph.h>
 #include <ResidentGlyphBitmap.h>
@@ -383,7 +392,11 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   const char* cursor = text;
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
-    if (!primary.hasCodepoint(cp, style)) ++bestMissing;
+    // Whitespace and other zero-ink codepoints must not demote the whole run.
+    // A single missing NBSP used to drop an entire line to the 8pt emergency
+    // face, which then disagreed with per-substring measurements (underlines
+    // landed in empty space).
+    if (!missingGlyph::isInvisible(cp) && !primary.hasCodepoint(cp, style)) ++bestMissing;
   }
   if (bestMissing == 0) return effectiveFontId;
 
@@ -408,7 +421,7 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
     size_t missing = 0;
     cursor = text;
     while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
-      if (!candidate->second.hasCodepoint(cp, style)) ++missing;
+      if (!missingGlyph::isInvisible(cp) && !candidate->second.hasCodepoint(cp, style)) ++missing;
     }
     if (missing < bestMissing) {
       bestMissing = missing;
@@ -425,7 +438,7 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
     const char* cursor = text;
     uint32_t cp;
     while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
-      const bool eligible = effectiveFontId != fontId || cp >= 0x80;
+      const bool eligible = (effectiveFontId != fontId || cp >= 0x80) && !missingGlyph::isInvisible(cp);
       if (eligible && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) return true;
     }
     return false;
@@ -454,6 +467,7 @@ bool GfxRenderer::canRenderText(const int fontId, const char* text, const EpdFon
   const char* cursor = text;
   uint32_t cp;
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
+    if (missingGlyph::isInvisible(cp)) continue;  // renders no ink by design
     bool usedReplacement = false;
     if (family->second.getGlyph(cp, style, &usedReplacement) == nullptr || usedReplacement) {
       if (hasEmojiGlyph(cp)) continue;  // drawText() will switch to the emoji face for this code point
@@ -806,6 +820,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   EpdGlyph solidFallback;
   const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   const EpdFontData* fontData = fontFamily.getData(style);
+  if (s_traceText) {
+    // Glyph-level trace: the label-level trace cannot see paths that draw a
+    // string in pieces, which is what the CJK settings ghosting turned out to
+    // be. Only active under `tracetext 1`.
+    LOG_DBG("GFX", "glyph U+%04X x=%d y=%d", static_cast<unsigned>(cp), cursorX, cursorY);
+  }
   if (!glyph) {
     renderMissingGlyph<rotation>(renderer, *fontData, cp, cursorX, cursorY, pixelState);
     return;
@@ -1378,6 +1398,10 @@ void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const 
   const int resolvedFontId = resolveTextFontId(fontId, renderedText, renderStyle);
 #endif
 
+  if (s_traceText) {
+    LOG_DBG("GFX", "text f=%d r=%d x=%d y=%d lh=%d asc=%d '%.40s'", fontId, resolvedFontId, x, y,
+            getLineHeight(resolvedFontId), getFontAscenderSize(resolvedFontId), renderedText);
+  }
   int yPos = y + getFontAscenderSize(resolvedFontId);
   if (resolvedFontId != fontId) yPos += (getLineHeight(fontId) - getLineHeight(resolvedFontId)) / 2;
   int lastBaseX = x;
@@ -1982,6 +2006,7 @@ void GfxRenderer::fillRectScrim(const int x, const int y, const int width, const
 
 template <Color C>
 void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const int height) const {
+
   if constexpr (C == Color::Clear) return;
   if (width <= 0 || height <= 0) return;
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
@@ -2812,6 +2837,14 @@ void GfxRenderer::presentOverlay() const {
   displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::TransientUi);
 }
 
+bool GfxRenderer::restartGrayscale16Canvas() const {
+  if (!grayscale16Buffer) return false;
+  grayscale16Buffer = beginNativeGray(display);
+  if (!grayscale16Buffer) return false;
+  clearScreen();  // B/W proxy, same as beginGrayscale16()
+  return true;
+}
+
 void GfxRenderer::cancelGrayscale16() const {
   if (grayscale16Buffer) cancelNativeGray(display);
   grayscale16Buffer = nullptr;
@@ -3362,7 +3395,15 @@ bool GfxRenderer::areaPushAllowed() { return s_areaPushAllowed_; }
 void GfxRenderer::setBandUpdatesSuspended(const bool suspended) { s_bandSuspended = suspended; }
 
 void GfxRenderer::setBandUpdates(const bool on) {
-#if FREEINK_DEVICE_READPICO
+#if defined(CROSSPOINT_PORT_NO_BAND_DIFF)
+  // This port always pushes the whole frame (its displayWindow degrades area
+  // updates to a full HGL16/HALF scan), so a band-only repaint would publish
+  // whatever stale pixels sit outside the band: settings pages showed leftover
+  // margins from the previous tab. Full redraw + full push is the only
+  // coherent combination here.
+  (void)on;
+  bandUpdates_ = false;
+#elif FREEINK_DEVICE_READPICO
   if (on == bandUpdates_) return;
   if (!on) {
     // The snapshot is deliberately NOT freed here. Mode changes are decided by
@@ -3376,6 +3417,13 @@ void GfxRenderer::setBandUpdates(const bool on) {
   if (bandSnapshot_ == nullptr) {
     auto buffer = memory::makePsramByteBufferNoThrow(getBufferSize());
     bandSnapshot_ = buffer.release();
+    // PSRAM keeps its contents across a soft restart, and the allocator can hand
+    // back the block this renderer owned before the reboot. A stale snapshot can
+    // then match the first frame bit for bit ("no change, push skipped") and the
+    // panel keeps whatever was on it -- e.g. the shutdown card survives a USB
+    // restart until a manual refresh. A zeroed snapshot cannot match a rendered
+    // frame, so the first push is guaranteed.
+    if (bandSnapshot_ != nullptr) std::memset(bandSnapshot_, 0, getBufferSize());
   }
   // No snapshot means no way to prove what the panel already shows: stay off
   // rather than guess, and let the caller fall back to full-page pushes.
@@ -4314,7 +4362,7 @@ void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(
 
 void GfxRenderer::displayWindow(int x, int y, int w, int h, DisplayRefreshContext context) const {
   if (w <= 0 || h <= 0) return;
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(CPYOS_PLUS_BOARD_PROFILE)
   // Partial-area scans are not safe on this panel yet: a 2026-10-28 soak of the
   // reader clock through the exact area path (epdiyLcdUpdateArea) left the unit
   // unresponsive after about a dozen forced ticks. Every caller stays on the
@@ -4334,7 +4382,7 @@ void GfxRenderer::displayWindow(int x, int y, int w, int h, DisplayRefreshContex
 
 void GfxRenderer::displayPanelWindow(int x, int y, int w, int h, DisplayRefreshContext context) const {
   if (w <= 0 || h <= 0) return;
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(CPYOS_PLUS_BOARD_PROFILE)
   // Quarantined windowed scan (see setAreaPushAllowed): keep the caller's
   // contract by pushing the whole page, which is always correct.
   if (!s_areaPushAllowed_) {
@@ -4581,3 +4629,4 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
       break;
   }
 }
+

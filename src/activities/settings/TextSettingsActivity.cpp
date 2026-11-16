@@ -20,6 +20,7 @@
 #include "MappedInputManager.h"
 #include "NetworkStartup.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "Typography.h"
@@ -39,10 +40,10 @@ namespace {
 // Tab labels for Font | Size | Layout | Style.
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
 
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,      StrId::STR_WORD_SPACING,
-                                         StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
-                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_FIRST_LINE_INDENT,
-                                         StrId::STR_PARAGRAPH_INDENTATION,
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING,      StrId::STR_LINE_SPACING_PERCENT,
+                                         StrId::STR_WORD_SPACING,      StrId::STR_CHARACTER_SPACING,
+                                         StrId::STR_EXTRA_SPACING,     StrId::STR_FIRST_LINE_INDENT,
+                                         StrId::STR_FIRST_LINE_INDENT, StrId::STR_PARAGRAPH_INDENTATION,
                                          StrId::STR_ALIGNMENT,         StrId::STR_SCREEN_MARGIN,
                                          StrId::STR_VERTICAL_TEXT,     StrId::STR_VERTICAL_BOTTOM_ALIGN};
 constexpr StrId VERTICAL_TEXT_IDS[] = {StrId::STR_VERTICAL_OFF, StrId::STR_VERTICAL_ON};
@@ -844,6 +845,32 @@ void TextSettingsActivity::confirmLayoutRow(int row) {
                         });
       requestUpdate();
       break;
+    case LayoutRow::LineSpacingPercent: {
+      // 0 = off (keep the four levels and their per-family factors), then a
+      // 10 % grid so 100/110/.../200 and the 130/160 points are all reachable.
+      // The popup is used instead of a stepper because this sheet has no
+      // stepper rows; the same field also has a stepper in Settings > Reader.
+      constexpr int kFirstPercent = 80;
+      constexpr int kLastPercent = reader_line_spacing::PERCENT_MAX;
+      constexpr int kGrid = reader_line_spacing::PERCENT_STEP;
+      constexpr int kPercentCount = (kLastPercent - kFirstPercent) / kGrid + 1;
+      std::vector<std::string> options;
+      options.reserve(kPercentCount + 1);
+      options.push_back(I18N.get(StrId::STR_EXTRA_SPACING_OFF));
+      int selected = 0;
+      for (int i = 0; i < kPercentCount; ++i) {
+        const int percent = kFirstPercent + i * kGrid;
+        if (percent == SETTINGS.readerLineSpacingPercent) selected = i + 1;
+        options.push_back(std::to_string(percent) + "%");
+      }
+      optionPopup_.show(StrId::STR_LINE_SPACING_PERCENT, options, selected, [](int idx) {
+        SETTINGS.readerLineSpacingPercent = idx <= 0 ? reader_line_spacing::PERCENT_OFF
+                                                     : static_cast<uint8_t>(kFirstPercent + (idx - 1) * kGrid);
+        SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
     case LayoutRow::Alignment:
       optionPopup_.show(StrId::STR_ALIGNMENT, ALIGNMENT_IDS, static_cast<int>(std::size(ALIGNMENT_IDS)),
                         SETTINGS.paragraphAlignment, [](int idx) {
@@ -895,6 +922,10 @@ std::string TextSettingsActivity::layoutValueText(int row) const {
       const uint8_t v = SETTINGS.lineSpacing;
       return v < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[v]) : I18N.get(StrId::STR_NORMAL);
     }
+    case LayoutRow::LineSpacingPercent:
+      return SETTINGS.readerLineSpacingPercent == reader_line_spacing::PERCENT_OFF
+                 ? I18N.get(StrId::STR_EXTRA_SPACING_OFF)
+                 : std::to_string(SETTINGS.readerLineSpacingPercent) + "%";
     case LayoutRow::ParaSpacing: {
       const uint8_t v = SETTINGS.extraParagraphSpacing;
       return v < std::size(EXTRA_SPACING_IDS) ? I18N.get(EXTRA_SPACING_IDS[v]) : I18N.get(StrId::STR_EXTRA_SPACING_OFF);

@@ -206,7 +206,7 @@ strongly recommended.
 
 
 def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
-          pages_base: str, allow_dirty: bool = False) -> dict:
+          pages_base: str, allow_dirty: bool = False, full_install_only: bool = False) -> dict:
     configured = read_config_version(root)
     if configured != version:
         fail(f'platformio.ini version is {configured}, but --version is {version}')
@@ -239,6 +239,17 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         app_parts.append({'role': role, 'name': name, 'offset': offset,
                           'size': (output / name).stat().st_size,
                           'sha256': sha256_file(output / name)})
+
+    # The font tiers moved app1 and spiffs. An OTA/manifest written at the new
+    # addresses would land inside an old device's app1 slot (the new spiffs base
+    # is the old app1 range), so the transition release must be a full install.
+    layout_moved = partitions['app1'][0] != 0x740000 or partitions['spiffs'][0] != 0xE70000
+    if layout_moved and not full_install_only:
+        fail('this tree moved app1/spiffs for the font tiers (app1=0x%x, spiffs=0x%x); '
+             'an OTA manifest would write at offsets an older device does not have and can '
+             'corrupt its app1 slot. Publish with --full-install-only; later app-only OTA '
+             'releases from the new layout are safe.'
+             % (partitions['app1'][0], partitions['spiffs'][0]))
 
     firmware_asset = next(item for item in app_parts if item['role'] == 'firmware')
     if firmware_asset['size'] > partitions['app0'][1]:
@@ -285,8 +296,11 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     require_both_slots(app_only, 'manifest-app.json')
 
     write_json(output / 'manifest-install.json', build_manifest('install', version, install_parts, True))
-    write_json(output / 'manifest-upgrade.json', build_manifest('upgrade', version, update_parts, False))
-    write_json(output / 'manifest-app.json', build_manifest('app', version, app_only, False))
+    if full_install_only:
+        print('  full-install-only: no manifest-upgrade.json, manifest-app.json or OTA manifest')
+    else:
+        write_json(output / 'manifest-upgrade.json', build_manifest('upgrade', version, update_parts, False))
+        write_json(output / 'manifest-app.json', build_manifest('app', version, app_only, False))
 
     download_base = f'{pages_base.rstrip("/")}/downloads/{version}'
     github_asset = f'{GITHUB_RELEASES}/cpyos-{version}/{firmware_asset["name"]}'
@@ -301,11 +315,12 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
             'sha256': firmware_asset['sha256'],
         }],
     }
-    (output / 'ota').mkdir(exist_ok=True)
-    write_json(output / 'ota' / 'readpico.json', ota)
-    # GitHub release assets are flat; keep a root-level copy for `gh release
-    # upload` while the nested one is what Pages serves at /ota/readpico.json.
-    write_json(output / 'readpico-ota.json', ota)
+    if not full_install_only:
+        (output / 'ota').mkdir(exist_ok=True)
+        write_json(output / 'ota' / 'readpico.json', ota)
+        # GitHub release assets are flat; keep a root-level copy for `gh release
+        # upload` while the nested one is what Pages serves at /ota/readpico.json.
+        write_json(output / 'readpico-ota.json', ota)
 
     latest = {
         'product': PRODUCT,
@@ -315,8 +330,10 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         'downloads': {
             'firmware': f'{download_base}/{firmware_asset["name"]}',
             'manifestInstall': f'{download_base}/manifest-install.json',
-            'manifestUpgrade': f'{download_base}/manifest-upgrade.json',
-            'ota': f'{pages_base.rstrip("/")}/ota/readpico.json',
+            **({} if full_install_only else {
+                'manifestUpgrade': f'{download_base}/manifest-upgrade.json',
+                'ota': f'{pages_base.rstrip("/")}/ota/readpico.json',
+            }),
         },
         'notes': notes,
         'firmware': {
@@ -326,6 +343,15 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     }
     write_json(output / 'latest.json', latest)
     (output / 'FLASH.md').write_text(flash_readme(version), encoding='utf-8')
+
+    # The release workflow uploads top-level files only. Keep the project license,
+    # the JJWXC statement and every third-party license text in that flat shape.
+    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'NOTICE-JJWXC.md'):
+        copy(root / name, output / name)
+    for src in sorted((root / 'LICENSES').iterdir()):
+        if src.is_file():
+            copy(src, output / f'LICENSE-{src.name}')
+    print('  legal: LICENSE, NOTICE-JJWXC.md, THIRD_PARTY_NOTICES.md, LICENSE-*.txt')
 
     sums = []
     for path in sorted(output.iterdir()):
@@ -338,11 +364,15 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         for path in sorted(output.iterdir()):
             if path.is_file() and path.name not in {package.name}:
                 archive.write(path, arcname=path.name)
-        archive.write(output / 'ota' / 'readpico.json', arcname='ota/readpico.json')
+        if not full_install_only:
+            archive.write(output / 'ota' / 'readpico.json', arcname='ota/readpico.json')
 
     print(f'Release {PRODUCT} {version} -> {output}')
     print(f'  install parts: {len(install_parts)}, upgrade parts: {len(update_parts)}')
-    print(f'  OTA tag {ota["tag_name"]}, app {firmware_asset["size"]} B')
+    if full_install_only:
+        print(f'  full install only; app {firmware_asset["size"]} B')
+    else:
+        print(f'  OTA tag {ota["tag_name"]}, app {firmware_asset["size"]} B')
     print(f'  package: {package.name} ({package.stat().st_size} B)')
     return latest
 
@@ -355,6 +385,8 @@ def main(argv=None) -> int:
     parser.add_argument('--output', default=None, help='default: <repo>/dist/cpyos/<version>')
     parser.add_argument('--notes-json', help='{"en":[...],"zh":[...]} OTA notes')
     parser.add_argument('--pages-base', default=PAGES_BASE)
+    parser.add_argument('--full-install-only', action='store_true',
+                        help='emit the full-install bundle but no OTA/upgrade manifest (layout transition)')
     parser.add_argument('--allow-dirty', action='store_true',
                         help='local dry runs only; CI releases must use a clean tree')
     args = parser.parse_args(argv)
@@ -379,7 +411,8 @@ def main(argv=None) -> int:
                 '拼音输入与 SD 卡字体',
             ],
         })
-    build(args.version, root, build_dir, output, notes, args.pages_base, args.allow_dirty)
+    build(args.version, root, build_dir, output, notes, args.pages_base, args.allow_dirty,
+          args.full_install_only)
     return 0
 
 

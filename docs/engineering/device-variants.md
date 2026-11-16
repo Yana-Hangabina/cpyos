@@ -5,6 +5,11 @@
 > and [MindReset Read Pico](read-pico.md) are separate ESP32-S3
 > compile-time targets. The one-binary rule in this document applies only to
 > the ESP32-C3 X3/X4 pair.
+>
+> [Metalio E-INK4 Plus](metalio-eink4-plus.md) is a separate **ESP32-S31 /
+> ESP-IDF 6.1** target under `ports/metalio_plus/`. It is an experimental port
+> with no hardware validation and is not part of the PlatformIO environments or
+> the stable nightly matrix.
 
 > Deep reference for [AGENTS.md](../../AGENTS.md). How one firmware binary runs
 > on both the Xteink X3 and X4, how the device is detected at boot, what differs

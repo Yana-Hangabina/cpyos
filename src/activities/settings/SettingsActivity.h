@@ -44,6 +44,13 @@ enum class SettingAction {
   StandbyImage,
   LightSleepImage,
   DeepSleepImage,
+  // Metalio E-INK4 Plus only: the BH1098G Bluetooth audio page (row guarded by
+  // CROSSPOINT_PLUS_PORT in SettingsList.h).
+  BluetoothAudio,
+  // Metalio E-INK4 Plus only: read-only 4G status (signal/IP).
+  CellularStatus,
+  // Metalio E-INK4 Plus only: read-only charger/battery status.
+  ChargingStatus,
 };
 
 struct SettingInfo {
@@ -225,6 +232,12 @@ class SettingsActivity final : public UiTabListActivity {
   // Serial screenshot hook: a picker longer than its five-row window, opened at
   // the last entry so the scrollbar thumb touches the bottom of its track.
   void debugShowPopupDemo() override;
+  // Serial coverage hooks: switch category, list the action rows of the active
+  // category, and open one by ordinal. Used by exp/plus_ui_sweep.py so every
+  // settings sub-page is exercised without row-coordinate guessing.
+  void debugSetTab(int tab) override;
+  void debugActivateAction(int ordinal) override;
+  void debugListActions() override;
 
  private:
   InlineConfirm confirm_;

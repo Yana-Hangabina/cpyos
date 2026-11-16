@@ -8,6 +8,8 @@
 
 #include "CrossPointSettings.h"
 #include "SystemFontPack.h"
+#include "UiScriptFont.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
 namespace typography {
@@ -56,9 +58,7 @@ std::size_t uiRolePointsFor(const Points points, UiRolePoint* out, const std::si
 #endif
 }
 
-namespace {
-
-int cjkIdFor(const uint8_t pointSize) {
+int cjkFontIdForPointSize(const uint8_t pointSize) {
   switch (pointSize) {
     case 8:
       return CJK_UI_8_FONT_ID;
@@ -68,10 +68,47 @@ int cjkIdFor(const uint8_t pointSize) {
       return CJK_UI_12_FONT_ID;
     case 14:
       return CJK_UI_14_FONT_ID;
-    default:
+    case 16:
       return CJK_UI_16_FONT_ID;
+    case 18:
+      return CJK_UI_18_FONT_ID;
+    default:
+      return 0;
   }
 }
+
+size_t roleFontsFor(const uint8_t scaleIndex, RoleFont* out, const size_t capacity) {
+  if (out == nullptr || capacity == 0) return 0;
+  const Scale scale =
+      scaleIndex < static_cast<uint8_t>(Scale::Count) ? static_cast<Scale>(scaleIndex) : Scale::Standard;
+  const Points p = pointsFor(scale);
+  // NOTOSERIF_TITLE keeps its built-in serif design (Latin titles); it is a
+  // supplement target only, so a Chinese title falls back to the reading core
+  // instead of switching the whole line to the CJK sans.
+  const RoleFont table[] = {
+      {SMALL_FONT_ID, p.caption, true},
+      {READER_STATUS_FONT_ID, p.caption, true},
+      {READER_ESTIMATE_FONT_ID, p.caption, true},
+      {BaseTheme::STATUS_NUMERIC_FONT_ID, p.caption, true},
+      {UI_10_FONT_ID, p.body, true},
+      {NOTOSERIF_12_FONT_ID, p.body, true},
+      {UI_12_FONT_ID, p.title, true},
+      {CONTROL_18_FONT_ID, p.title, true},
+      {NOTOSERIF_14_FONT_ID, p.title, true},
+      {NOTOSERIF_TITLE_FONT_ID, p.title, false},
+      {NOTOSANS_18_FONT_ID, p.display, true},
+      {NOTOSERIF_16_FONT_ID, p.display, true},
+      {NOTOSERIF_18_FONT_ID, p.display, true},
+  };
+  size_t count = 0;
+  for (const RoleFont& role : table) {
+    if (count >= capacity) break;
+    out[count++] = role;
+  }
+  return count;
+}
+
+namespace {
 
 bool hasFace(const GfxRenderer& renderer, const int fontId) {
   return renderer.getFontMap().find(fontId) != renderer.getFontMap().end();
@@ -98,7 +135,7 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
     // 8pt stays the built-in subset: it is the emergency fallback and must
     // never be replaced (a later scale change would otherwise leave no 8pt
     // family at all). Reader sizes above 18pt are loaded on demand too.
-    if (pt < 10 || pt > 34) return;
+    if (pt < 8 || pt > 34) return;
     if (std::find(sizes, sizes + sizeCount, pt) != sizes + sizeCount) return;
     if (sizeCount < std::size(sizes)) sizes[sizeCount++] = pt;
   };
@@ -109,6 +146,9 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
   wantSize(points.body);
   wantSize(points.title);
   wantSize(points.display);
+  // Compact density draws SMALL at 8pt. Register the vector face there too;
+  // the built-in 3,500-glyph bitmap is not linked on embedded builds.
+  wantSize(8);
   wantSize(SETTINGS.fontPointSize);
 #else
   // C3 has no PSRAM: one reader face at a time. The system UI keeps the
@@ -117,34 +157,28 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
   wantSize(SETTINGS.fontPointSize);
 #endif
   system_font_pack::configure(renderer, sizes, sizeCount);
+  // Non-CJK UI scripts ride along as supplements at the same sizes.
+  ui_script_font::begin();
+  ui_script_font::configure(renderer, sizes, sizeCount);
 
 #if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
-  const auto bind = [&](const int uiId, const uint8_t pointSize) {
-    const int cjkId = cjkIdFor(pointSize);
-    if (hasFace(renderer, cjkId)) renderer.setPreferredFont(uiId, cjkId);
-  };
-
-  bind(SMALL_FONT_ID, points.caption);
-  bind(UI_10_FONT_ID, points.body);
-  bind(UI_12_FONT_ID, points.title);
-  bind(CONTROL_18_FONT_ID, points.title);
-  // Large UI values (stats, games, web cards) follow the display role. The
-  // reader's 18pt selection uses CJK_UI_18 instead, so it stays 18pt.
-  bind(NOTOSANS_18_FONT_ID, points.display);
-  // Status/estimate are single-line chrome; the caption size is what their
-  // fixed 48px bands were designed around. Using body/title here clipped the
-  // status row on Read Pico's high-DPI layout.
-  bind(READER_STATUS_FONT_ID, points.caption);
-  bind(READER_ESTIMATE_FONT_ID, points.caption);
+  RoleFont roles[16];
+  const size_t roleCount = roleFontsFor(scaleIndex, roles, std::size(roles));
+  for (size_t i = 0; i < roleCount; ++i) {
+    if (!roles[i].bindPreferred) continue;
+    const int cjkId = cjkFontIdForPointSize(roles[i].pointSize);
+    if (cjkId != 0 && hasFace(renderer, cjkId)) renderer.setPreferredFont(roles[i].fontId, cjkId);
+  }
 #endif
   // removeFont() cleared the fallbacks that pointed at the placeholder ids.
   // Re-point every role at the 8pt built-in emergency face so an unusual
   // codepoint still draws something instead of an empty family.
   const int emergency = CJK_UI_8_FONT_ID;
   for (const int id : {SMALL_FONT_ID, UI_10_FONT_ID, UI_12_FONT_ID, CONTROL_18_FONT_ID, NOTOSANS_18_FONT_ID,
-                       CJK_UI_18_FONT_ID, READER_STATUS_FONT_ID, READER_ESTIMATE_FONT_ID, NOTOSANS_12_FONT_ID,
-                       NOTOSANS_14_FONT_ID, NOTOSANS_16_FONT_ID, NOTOSERIF_12_FONT_ID, NOTOSERIF_14_FONT_ID,
-                       NOTOSERIF_16_FONT_ID}) {
+                       BaseTheme::STATUS_NUMERIC_FONT_ID,
+                       NOTOSERIF_18_FONT_ID, CJK_UI_18_FONT_ID, READER_STATUS_FONT_ID, READER_ESTIMATE_FONT_ID,
+                       NOTOSANS_12_FONT_ID, NOTOSANS_14_FONT_ID, NOTOSANS_16_FONT_ID, NOTOSERIF_12_FONT_ID,
+                       NOTOSERIF_14_FONT_ID, NOTOSERIF_16_FONT_ID}) {
     if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
   }
   for (uint8_t pt = 10; pt <= 34; ++pt) {

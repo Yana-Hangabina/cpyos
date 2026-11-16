@@ -163,11 +163,13 @@ void UsbDriveActivity::buildDriveScreen(UiScreen& screen) const {
       static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), static_cast<int16_t>(metrics.contentSidePadding),
       static_cast<int16_t>(metrics.buttonHintsHeight), static_cast<int16_t>(metrics.contentSidePadding)});
 
-  auto messageStyle = SETTINGS.uiTheme == CrossPointSettings::INX ? screen.theme().titleText : screen.theme().smallText;
+  // INX is retired; every remaining theme uses the compact message/detail
+  // faces (the old non-INX branch).
+  auto messageStyle = screen.theme().smallText;
   messageStyle.align = fui::TextAlign::Center;
   messageStyle.bold = true;
   messageStyle.maxLines = 2;
-  auto detailStyle = SETTINGS.uiTheme == CrossPointSettings::INX ? screen.theme().bodyText : screen.theme().smallText;
+  auto detailStyle = screen.theme().smallText;
   detailStyle.align = fui::TextAlign::Center;
   detailStyle.maxLines = 3;
 

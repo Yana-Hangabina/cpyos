@@ -1393,6 +1393,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
       const auto matches = liveResultsFn_(liveResultsCtx_, text.c_str());
       if (matches.empty()) {
         renderer.drawText(UI_10_FONT_ID, effectiveMargin, y, tr(STR_LOCAL_NO_MATCHES));
+        y += renderer.getLineHeight(UI_10_FONT_ID) + 4;
       } else {
         for (size_t i = 0; i < matches.size() && y + rowH <= previewBottom - 24; ++i) {
           renderer.drawText(UI_10_FONT_ID, effectiveMargin, y + (rowH - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
@@ -1403,7 +1404,12 @@ void KeyboardEntryActivity::render(RenderLock&&) {
         }
       }
       if (jjwxcSearchFn_ != nullptr) {
-        const int lineY = std::min(y + 6, previewBottom - renderer.getLineHeight(SMALL_FONT_ID));
+        // Keep the App-search row strictly below the local match area: with an
+        // empty result list the old clamp (min with previewBottom) could put it
+        // on top of "本地没有匹配" and the two lines overlapped.
+        const int jjwxcLh = renderer.getLineHeight(SMALL_FONT_ID);
+        const int lineY = std::min(y + 6, previewBottom - jjwxcLh);
+        if (lineY >= y) {
         renderer.drawText(SMALL_FONT_ID, effectiveMargin, lineY, tr(STR_JJWXC_SEARCH_IN_APP));
         jjwxcSearchRect_ = freeink::ui::Rect{static_cast<int16_t>(effectiveMargin),
                                              static_cast<int16_t>(lineY - 6),
@@ -1411,6 +1417,9 @@ void KeyboardEntryActivity::render(RenderLock&&) {
                                              static_cast<int16_t>(renderer.getLineHeight(SMALL_FONT_ID) + 12)};
         renderer.drawLine(pageWidth - effectiveMargin - 8, lineY + 6, pageWidth - effectiveMargin, lineY + 12, true);
         renderer.drawLine(pageWidth - effectiveMargin, lineY + 12, pageWidth - effectiveMargin - 8, lineY + 18, true);
+        } else {
+          jjwxcSearchRect_ = freeink::ui::Rect{};
+        }
       } else {
         jjwxcSearchRect_ = freeink::ui::Rect{};
       }

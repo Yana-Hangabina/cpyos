@@ -241,6 +241,24 @@ bool EpubReaderMenuActivity::handleButtons() {
   return false;
 }
 
+void EpubReaderMenuActivity::debugSelect(const int index) {
+  const int count = static_cast<int>(menuItems.size());
+  if (count <= 0) return;
+  nav.selected = std::clamp(index, 0, count - 1);
+  requestUpdate();
+}
+
+void EpubReaderMenuActivity::debugMoveRing(const int delta) {
+  const int count = static_cast<int>(menuItems.size());
+  if (count <= 0) return;
+  nav.selected = ((nav.selected + delta) % count + count) % count;
+  requestUpdate();
+}
+
+void EpubReaderMenuActivity::debugConfirm() {
+  if (nav.selected >= 0 && nav.selected < static_cast<int>(menuItems.size())) activateIndex(nav.selected);
+}
+
 void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = uiThemeMetrics(true);
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);

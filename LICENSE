@@ -1,24 +1,185 @@
-MIT License
+CPYOS PROJECT LICENSE 1.0
+SPDX-License-Identifier: LicenseRef-CPYOS-1.0
 
-Copyright (c) 2025 Dave Allie
-Copyright (c) 2026 FreeInk
-Copyright (c) 2026 EEGO A4 Template Firmware contributors
-Copyright (c) 2025 CrossPoint Reader organization
+Copyright (c) 2026 Yana-Hangabina and CPYOS contributors.
+All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+中文摘要（仅供参考；如中英文不一致，以英文正文为准）
+本许可适用于 CPYOS 项目（公共源码、构建脚本、文档、资源与官方固件），但第三方组件
+仍按其自身许可。它允许个人、非商业的学习、研究、测试、阅读与自用构建，允许免费分享
+官方构建和未修改的公共源码；禁止商业使用、销售、预装/捆绑、收费刷机/定制/维护，
+禁止绕过付费或访问控制、批量抓取或传播作品。晋江组件的源码不公开，官方固件可以包含
+其二进制。本许可不是 OSI 批准的开源许可证。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. DEFINITIONS
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1.1 "Project" means the CPYOS firmware, source code, build scripts, documentation,
+assets and other materials published by the CPYOS project, excluding Third-Party
+Components.
+
+1.2 "Public Source" means the portion of the Project's source code that the CPYOS
+project publishes in its public repository.
+
+1.3 "JJWXC Component" means the private component that implements the JJWXC client,
+including the source and binaries under `src/jjwxc/` or the `cpyos-jjwxc` repository.
+
+1.4 "Official Build" means a firmware image built by the CPYOS project from the
+Project and distributed by the project under this license.
+
+1.5 "Third-Party Components" means software, fonts, data and other materials that
+are not original CPYOS work and are distributed under their own licenses, including
+those listed in THIRD_PARTY_NOTICES.md.
+
+1.6 "Commercial Use" means any use that is primarily intended for or directed toward
+commercial advantage or monetary compensation. It includes, without limitation:
+(a) selling, renting, leasing, licensing or sublicensing the Project or Official
+Builds; (b) charging for downloads, subscriptions, unlocking, flashing,
+installation, customization, integration, maintenance or support; (c) preinstalling,
+bundling or distributing the Project with devices, products or services that are
+sold, rented or supplied for business purposes; (d) use in business operations,
+client deliveries, commercial product development, or advertising-funded services;
+(e) use by a company or other organization in the course of its business.
+
+1.7 "Personal Use" means use by an individual for personal learning, research,
+testing, reading of content the individual is lawfully entitled to access, and
+non-commercial sharing of feedback and Official Builds.
+
+2. GRANT
+
+Subject to this license, you may:
+
+(a) use, copy and modify the Public Source for Personal Use;
+(b) build firmware from the Public Source for Personal Use on devices you own or
+control;
+(c) run Official Builds on devices you own or control for Personal Use;
+(d) share Official Builds and unmodified Public Source free of charge for Personal
+Use, provided you keep this license and all notices intact;
+(e) share modified Public Source or modified builds for Personal Use, provided you
+clearly mark them as unofficial, keep this license and all notices intact, and do
+not imply endorsement by the CPYOS project;
+(f) if you are an authorized contributor, access and modify the JJWXC Component
+under the project's contributor terms.
+
+3. SOURCE AVAILABILITY AND THE JJWXC COMPONENT
+
+3.1 The Public Source is made available under this license.
+
+3.2 The JJWXC Component is closed-source. This license does not grant you a right to
+receive its source code. Official Builds may include the JJWXC Component in binary
+form.
+
+3.3 You may not distribute the source code of the JJWXC Component, or a modified
+version of it, without the project's prior written permission.
+
+4. CONDITIONS
+
+You must:
+
+(a) retain all copyright, license, attribution and provenance notices;
+(b) clearly mark any modified Public Source or modified build as unofficial and
+state the changes;
+(c) comply with applicable law and with the terms of any service you access;
+(d) not remove or alter any notice that identifies the Project, its contributors or
+its licenses.
+
+5. PROHIBITED USES
+
+5.1 You may not make Commercial Use of the Project or Official Builds.
+
+5.2 You may not use the Project to:
+
+(a) gain unauthorized access to any server, system, account or data;
+(b) exploit vulnerabilities, bypass paywalls, access controls, login protections,
+rate limits or technical protection measures;
+(c) scrape, crawl or bulk-download content in violation of applicable law or the
+service's terms;
+(d) redistribute, publish or otherwise make available copyrighted content except as
+expressly permitted by its rights holder;
+(e) build or operate a piracy service, a paid reading service, or a service that
+competes with the official platform by using the Project.
+
+5.3 You may not sublicense, rent, lease, sell or otherwise transfer the Project under
+a different license, or represent the Project as your own official product.
+
+5.4 You may not use the Project's name, logos or trademarks in a way that suggests
+affiliation with or endorsement by the CPYOS project or any platform.
+
+6. THIRD-PARTY COMPONENTS AND CONTENT
+
+6.1 Third-Party Components remain under their own licenses. This license does not
+relicense them. If this license conflicts with a Third-Party Component's license,
+that component's license prevails for that component. In particular, code derived
+from MIT-licensed upstream projects remains available under MIT; see
+LICENSES/MIT.txt.
+
+6.2 The Project does not grant any rights to JJWXC content, trademarks or services.
+JJWXC and related marks belong to their respective owners. The CPYOS project is
+unofficial and is not affiliated with, endorsed by, or supported by JJWXC.
+
+6.3 You are responsible for ensuring that your use of any content is lawful and
+permitted by the relevant rights holder and service terms.
+
+6.4 Copyleft components prevail where they apply. Some third-party components are
+licensed under copyleft terms (for example, epdiy under LGPL-3.0-or-later and
+wolfSSL under GPLv2 in builds that link it). For those components the terms of
+their licenses prevail over this license, including the rights to obtain the
+corresponding source, to modify and relink the component, and to redistribute the
+combined work under those terms. To the extent this license's restrictions
+conflict with such terms, the third-party license controls for that component and
+the combined work it requires.
+
+7. INTEROPERABILITY
+
+Nothing in this license prohibits reverse engineering, decompilation or other
+interoperability work that is expressly permitted by applicable law, provided that
+it does not involve bypassing paywalls, access controls or technical protection
+measures.
+
+8. NO WARRANTY
+
+THE PROJECT AND OFFICIAL BUILDS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. YOU BEAR THE ENTIRE
+RISK OF USING THE PROJECT.
+
+9. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDERS AND
+CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY OR CONSEQUENTIAL DAMAGES, INCLUDING LOSS OF DATA, DEVICE DAMAGE, LOSS OF
+PROFITS OR BUSINESS INTERRUPTION, ARISING FROM THE USE OF OR INABILITY TO USE THE
+PROJECT, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+10. TERMINATION
+
+10.1 This license terminates automatically if you breach any of its terms.
+
+10.2 On termination you must stop distributing the Project and Official Builds and
+delete any copies you hold, except that you may keep one archival copy for legal
+compliance.
+
+10.3 Sections 3.3, 5, 6, 8, 9, 10 and 11 survive termination.
+
+11. APPLICABLE LAW AND SEVERABILITY
+
+11.1 This license is governed by the laws of the People's Republic of China,
+excluding its conflict-of-law rules, unless mandatory law in your jurisdiction
+provides otherwise.
+
+11.2 If any provision is held unenforceable, the remaining provisions remain in
+effect, and the unenforceable provision shall be enforced to the maximum extent
+permitted by law.
+
+11.3 This license, together with the third-party notices, is the entire agreement
+between you and the project regarding the Project.
+
+12. NOT AN OPEN-SOURCE LICENSE
+
+This is a custom source-available, non-commercial license. It is not approved by the
+Open Source Initiative and is not an open-source license. Commercial use requires
+separate written permission from the project.
+
+13. PRIOR VERSIONS
+
+This license applies to versions of the Project distributed on or after 2026-11-06.
+Versions distributed earlier remain under the licenses they were distributed with.

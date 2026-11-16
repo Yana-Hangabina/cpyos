@@ -39,6 +39,14 @@
 #include "DuckSleepFace.h"
 #include "SloppyClockFace.h"
 
+namespace standby_debug {
+namespace {
+bool g_showBadge = false;
+}
+void showSleepBadge(bool on) { g_showBadge = on; }
+bool sleepBadgeShown() { return g_showBadge; }
+}  // namespace standby_debug
+
 namespace {
 
 constexpr uint32_t kWifiTimeoutMs = 15000u;  // Same as WifiSelectionActivity
@@ -395,7 +403,12 @@ bool StandbyActivity::canEnterLightSleep() const {
   if (background_work::active()) return false;
   const bool syncActive = syncState_ != SyncState::Idle;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
-  return !syncActive && !wifiActive && !gpio.isUsbConnected() && powerManager.canStandbyLightSleep(gpio);
+#if defined(CROSSPOINT_PLUS_PORT)
+  const bool usbBlocks = gpio.isUsbConnected() && !HalPowerManager::debugUsbSleepAllowed();
+#else
+  const bool usbBlocks = gpio.isUsbConnected();
+#endif
+  return !syncActive && !wifiActive && !usbBlocks && powerManager.canStandbyLightSleep(gpio);
 #else
   return false;
 #endif
@@ -417,7 +430,12 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
   const bool syncActive = syncState_ != SyncState::Idle;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
   const bool hardwareAllowed = powerManager.canStandbyLightSleep(gpio);
-  if (!standby_time::shouldLightSleep(idleMs, syncActive, wifiActive, gpio.isUsbConnected(), hardwareAllowed)) {
+#if defined(CROSSPOINT_PLUS_PORT)
+  const bool usbConnected = gpio.isUsbConnected() && !HalPowerManager::debugUsbSleepAllowed();
+#else
+  const bool usbConnected = gpio.isUsbConnected();
+#endif
+  if (!standby_time::shouldLightSleep(idleMs, syncActive, wifiActive, usbConnected, hardwareAllowed)) {
     return false;
   }
 
@@ -553,7 +571,9 @@ void StandbyActivity::render(RenderLock&&) {
     UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, overlayTop, tr(STR_STANDBY_SYNCING));
   }
 
-  if (phase_ == Phase::LightSleep && SETTINGS.sleepStateBadge != CrossPointSettings::SLEEP_BADGE_OFF) {
+  const bool debugBadge = standby_debug::sleepBadgeShown();
+  if (debugBadge ||
+      (phase_ == Phase::LightSleep && SETTINGS.sleepStateBadge != CrossPointSettings::SLEEP_BADGE_OFF)) {
     drawSleepStateBadge(renderer, tr(STR_LIGHT_SLEEP));
   }
   if (background_work::active()) {

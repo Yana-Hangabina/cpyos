@@ -1,0 +1,20 @@
+dependencies:
+  idf: ">=6.0"
+  # USB mass-storage device so the SD card can be mounted by a host without
+  # pulling it. Only initialized on demand (`usbmsc on` in the serial console).
+  espressif/esp_tinyusb: "^2.0.0"
+  # AI-voice client (components/cpyos_app/plus_voice_client.*): the official
+  # xiaozhi protocol needs the Opus codec and a WebSocket client.
+  #
+  # Opus: fixed-point libopus + the small C++ wrapper the vendor firmware uses.
+  # Declared as the encoder component because it pulls 78/esp-opus (the library
+  # itself); both build for every target and require IDF >= 5.3.
+  78/esp-opus-encoder: "~2.4.1"
+  # WebSocket: espressif/esp_websocket_client DIRECTLY, not 78/esp-websocket.
+  # 78/esp-websocket 1.0.0 is (a) yanked ("no more use", 2026-07-15) and
+  # (b) declares `idf: ^5.3`, which semver-excludes IDF 6.1, so the solver
+  # rejects it here. It is only a 60-line wrapper around this component, so the
+  # voice client drives esp_websocket_client itself.
+  espressif/esp_websocket_client: "^1.8.0"
+  # Protocol JSON (hello, server messages) — the vendor parses with cJSON.
+  espressif/cjson: "^1.7.19"

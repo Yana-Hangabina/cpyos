@@ -1,6 +1,17 @@
 # 安装与更新 / Install and update
 
-本文只面向 **Read Pico（小纸 Pico，RDP-G01-W）**。CPYOS 的预编译包不适用于 Xteink、Sticky、Metalio 或其它 CrossMux 目标。
+本文只面向 **Read Pico（小纸 Pico，RDP-G01-W）**。CPYOS 的预编译包不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）、**Metalio E-INK4 Plus（4.7″，ESP32-S31）** 或其它 CrossMux 目标。Plus 的 SoC、分区表、面板接口和电源拓扑都与 Read Pico 不同，刷错会变砖。
+
+## 0. 字体分层版本（app0 6.375 MiB 槽 + 3 MiB 数据分区）必须完整安装
+
+从这一版起，Read Pico 的 app0/app1 槽从 7.19 MiB 缩到 6.375 MiB，数据分区从 1.5 MiB 扩到
+3 MiB，新增的压缩阅读字体 `cjk_core.dat` 位于数据分区 `+0x180000`。分区表变了，**不能**用
+OTA 升级：新布局的数据地址会落在旧设备 app1 槽内。请使用网页完整安装（或
+`exp/flash_device.sh`）刷写一次；完成后的后续版本可以继续 OTA（应用槽偏移不再变化）。
+
+没有 SD 卡也能完成安装：系统 UI 使用 app0 内的 190 KB 字形子集，阅读器在找不到核心字体时
+会回落到 UI 子集，并通过缺字提示提供 `cjk-core` 字体扩展下载。插入 SD 卡后首次开机，固件会
+把核心字体释放到 `/fonts/CPYOSCJKCore/`。
 
 ## 0. 刷机前：整片备份
 

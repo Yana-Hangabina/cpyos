@@ -866,6 +866,81 @@ bool clearInitialProgress(const char* bookId) {
   return cleared;
 }
 
+std::string timeSyncStatePath(const char* bookId) { return bookDirectory(bookId) + "/timesync.bin"; }
+
+bool loadTimeSyncPrefs(TimeSyncPrefs& prefs) {
+  prefs = {};
+  HalFile file;
+  if (!Storage.openFileForRead("WR", kTimeSyncPrefsPath, file) || file.fileSize64() != sizeof(prefs) ||
+      file.read(&prefs, sizeof(prefs)) != static_cast<int>(sizeof(prefs)) || prefs.magic != kTimeSyncPrefsMagic ||
+      prefs.version != kTimeSyncVersion || prefs.enabled > 1 || prefs.consent > 1) {
+    prefs = {};
+    return false;
+  }
+  return true;
+}
+
+bool saveTimeSyncPrefs(const TimeSyncPrefs& prefs) {
+  if (!ensureRoot()) return false;
+  const std::string finalPath = kTimeSyncPrefsPath;
+  const std::string partPath = finalPath + ".part";
+  if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+  bool written = false;
+  {
+    HalFile file;
+    written = Storage.openFileForWrite("WR", partPath, file) && file.write(&prefs, sizeof(prefs)) == sizeof(prefs);
+    if (written) file.flush();
+  }
+  if (!written) {
+    if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+    return false;
+  }
+  return atomicReplace(partPath, finalPath);
+}
+
+bool loadTimeSyncState(const char* bookId, TimeSyncState& state) {
+  state = {};
+  if (!bookId || !bookId[0]) return false;
+  HalFile file;
+  if (!Storage.openFileForRead("WR", timeSyncStatePath(bookId), file) || file.fileSize64() != sizeof(state) ||
+      file.read(&state, sizeof(state)) != static_cast<int>(sizeof(state)) || state.magic != kTimeSyncStateMagic ||
+      state.version != kTimeSyncVersion) {
+    state = {};
+    return false;
+  }
+  return true;
+}
+
+bool saveTimeSyncState(const char* bookId, const TimeSyncState& state) {
+  if (!bookId || !bookId[0]) return false;
+  const std::string bookDir = bookDirectory(bookId);
+  if (!ensureRoot() || !Storage.ensureDirectoryExists(bookDir.c_str())) return false;
+  const std::string finalPath = timeSyncStatePath(bookId);
+  const std::string partPath = finalPath + ".part";
+  if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+  bool written = false;
+  {
+    HalFile file;
+    written = Storage.openFileForWrite("WR", partPath, file) && file.write(&state, sizeof(state)) == sizeof(state);
+    if (written) file.flush();
+  }
+  if (!written) {
+    if (Storage.exists(partPath.c_str())) Storage.remove(partPath.c_str());
+    return false;
+  }
+  return atomicReplace(partPath, finalPath);
+}
+
+bool clearTimeSyncState(const char* bookId) {
+  if (!bookId || !bookId[0]) return false;
+  const std::string finalPath = timeSyncStatePath(bookId);
+  const std::string partPath = finalPath + ".part";
+  bool cleared = true;
+  if (Storage.exists(finalPath.c_str())) cleared = Storage.remove(finalPath.c_str());
+  if (Storage.exists(partPath.c_str())) cleared = Storage.remove(partPath.c_str()) && cleared;
+  return cleared;
+}
+
 bool openBookDetail(const std::string& bookDir, BookDetailHeader& header, HalFile& file) {
   header = {};
   if (!Storage.openFileForRead("WR", detailPath(bookDir), file) ||

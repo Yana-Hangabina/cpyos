@@ -77,6 +77,15 @@ void ReadingStatsMenuActivity::openSelected() {
   }
 }
 
+void ReadingStatsMenuActivity::debugSelect(const int index) {
+  const int count = activeEntryCount();
+  if (index < 0 || index >= count) return;
+  selected = index;
+  requestUpdate();
+}
+
+void ReadingStatsMenuActivity::debugConfirm() { openSelected(); }
+
 void ReadingStatsMenuActivity::loop() {
   const int count = activeEntryCount();
   Rect cards[kEntryCount];

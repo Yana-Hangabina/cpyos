@@ -632,6 +632,11 @@ location is not migrated or read.
   HTTPS image URL in `url[512]`; both are NUL-terminated. TXT chapters have a
   valid zero-record index. Images that pass download and JPEG/PNG validation
   are stored below `<bookId>/images/` and embedded into the generated EPUB.
+- A chapter the account cannot read (paid preview, locked, or a server notice)
+  is stored as a normal chapter XHTML with an empty `WRI2` index. Its `<head>`
+  contains `<!--wr-unavailable-->`; the downloader uses that marker to re-fetch
+  the chapter on the next run (for example after purchasing it) instead of
+  reusing the placeholder forever.
 - `WIP1` records contain one `WRI2` record followed by `uint8 state`,
   `uint8 attempts`, `uint8 redirects`, and one reserved byte. They schedule
   pending images by HTTPS host so one TLS connection can serve a host batch.
@@ -754,6 +759,40 @@ no marker and remain compatible through the approximate fallback.
 Manual progress sync refreshes only an old or invalid TOC; an existing
 `/WeRead/*.epub` is retained.
 
+### WeRead effective-reading ledger (`WST1` / `WSTB`)
+
+Reading-time reporting keeps two small binary records next to the WeRead cache.
+Both are written with a `.part` file plus atomic replace, so a power loss leaves
+either the previous or the new record, never a torn one.
+
+`.crosspoint/weread/timesync.bin` (`WST1`, 16 bytes, little endian):
+
+| offset | size | field |
+|---|---|---|
+| 0 | 4 | magic `0x31545357` |
+| 4 | 2 | version `1` |
+| 6 | 1 | `enabled` (0/1) |
+| 7 | 1 | `consent` (0/1, one-time confirmation) |
+| 8 | 4 | `lastUploadSeconds` (last confirmed delta) |
+| 12 | 4 | `lastUploadEpoch` (UTC seconds, 0 when the clock was invalid) |
+
+`.crosspoint/weread/<bookId>/timesync.bin` (`WSTB`, 20 bytes):
+
+| offset | size | field |
+|---|---|---|
+| 0 | 4 | magic `0x31545342` |
+| 4 | 2 | version `1` |
+| 6 | 2 | reserved |
+| 8 | 4 | `pendingSeconds` (effective seconds not yet confirmed) |
+| 12 | 4 | `uploadedSeconds` (monotonic total confirmed) |
+| 16 | 4 | `lastUploadEpoch` |
+
+`pendingSeconds` is a ledger, not a cache of a session: the reader appends whole
+seconds on a 30 s cadence, an upload subtracts only what the cloud `readingTime`
+read-back confirms, and an ambiguous report drops its seconds instead of leaving
+them to be replayed. Duplicate or truncated records are rejected and treated as
+an empty ledger, which at worst loses unconfirmed seconds.
+
 ## JJWXC cache
 
 The Simplified Chinese build keeps the JJWXC (晋江文学城) app's private data below
@@ -822,6 +861,12 @@ update this section.
   a chapter this account cannot read again. There is no whole-book "refreshing"
   flag: an existing EPUB never triggers a re-pull, and refreshing is an explicit
   user action that ignores the remembered state.
+- `<novelId>/comments/<chapterId>.bin` is `JJC1` (per-paragraph comment totals) and
+  `<novelId>/comments/<chapterId>-<paragraphId>.bin` is `JJD1` (one page of comment
+  bodies). `paragraphId == 0` is the whole-chapter (章评) scope, stored at
+  `comments/<chapterId>-0.bin`; the JJD1 image itself is paragraph-agnostic. Byte
+  layouts live in `lib/Epub/Epub/JjwxcCommentSidecar.h`. A rejected image degrades
+  to "no offline comments" and is never partially applied.
 - `<novelId>/novel.bin` is `JXN1` (`0x314E584A`), a header plus exactly one
   368-byte record: `char novelId[16]`, `char title[96]`, `char author[48]`,
   `char coverUrl[192]`, `uint32 remoteChapterCount`, `uint32 cachedChapterCount`,
@@ -994,6 +1039,93 @@ initialized the display and physically rendered its startup verification page.
 Only after confirmation cancels rollback may the old firmware slot be erased
 and rebuilt as a font cache. If that copy is interrupted or fails, the
 uncommitted header remains invalid and the selected font loads from SD.
+## Font containers (CPFZ / CPFP / FEXT1)
+
+The tiered font system is described in
+[engineering/font-tiers.md](engineering/font-tiers.md). Three small binary
+containers are involved.
+
+### CPFZ — raw-deflate TrueType carrier
+
+Used by the app0 UI pack (`assets/fonts/cpyos_han_sans.def`), the small-language
+UI supplement (`assets/fonts/cpyos_ui_ext.def`) and the reading core
+(`build/cjk_core.dat`).
+
+| Offset | Field |
+|---:|---|
+| 0 | `char magic[4]` = `CPFZ` |
+| 4 | `uint16 version` = 1 |
+| 6 | `uint16 headerSize` = 32 |
+| 8 | `uint32 rawSize` |
+| 12 | `uint32 rawCrc` (zlib CRC-32 of the raw TTF) |
+| 16 | `uint32 compressedSize` |
+| 20 | `uint8 reserved[12]` |
+| 32 | raw-deflate stream (no zlib wrapper), `compressedSize` bytes |
+
+The embedded UI pack is inflated once into PSRAM and referenced through
+`Backend::Memory`; it is never written to or read from SD. The supplement and
+the core use the same container.
+
+A consumer that maps the carrier in flash must start the deflate input at
+`+32` and map `32 + compressedSize` bytes. Mapping from the header and feeding
+the header to the inflater fails silently; that was the 2026-11-14 core-release
+bug.
+
+**CRC convention:** `SystemFontPack.cpp`'s `crc32Update()` is the incremental
+form (no leading/trailing complement), so the embedded check is
+`crc32Update(UINT32_MAX, raw, rawSize) ^ UINT32_MAX`. `UiScriptFont` and
+`SystemCoreFont` have self-contained helpers that complement at both ends and
+are called with seed 0. A wrong convention rejects a perfectly valid font at
+boot; the 2026-11-14 e4plus tofu regression was exactly that (see the font-tiers
+doc).
+
+### CPFP — C3 spiffs pack
+
+| Offset | Field |
+|---:|---|
+| 0 | `char magic[4]` = `CPFP` |
+| 4 | `uint16 version` = 1 |
+| 6 | `uint16 headerSize` = 32 |
+| 8 | `uint32 payloadSize` |
+| 12 | `uint32 payloadCrc` |
+| 16 | `uint8 reserved[16]` |
+| 32 | raw TTF bytes |
+
+Written to the ESP32-C3 spiffs partition at offset 0 by
+`scripts/build_system_font_pack.py`; the firmware streams glyphs directly from
+the partition. Read Pico and the Plus use CPFZ instead.
+
+### Reading-core release layout
+
+`build/cjk_core.dat` (CPFZ) lives at **spiffs +0x180000** — raw flash
+`0xE50000` with the readpico/Plus OTA table, `0xB30000` with the Plus
+single-slot table. On the first boot after a full install,
+`SystemCoreFont::releaseToSd()` inflates it and writes:
+
+- `/fonts/CPYOSCJKCore/CPYOSCJKCore.ttf` — the raw 8,105-character TTF
+- `/fonts/CPYOSCJKCore/.core-crc` — the raw TTF CRC as `%08x\n`
+- `/fonts/CPYOSCJKCore/.cpyos-core` — empty marker that identifies the family
+
+The sidecar lets a later boot skip the 2.5 MB write. If the carrier is absent
+(app-only OTA that did not update the data partition) or the SD is missing, the
+release is skipped, the reader stays on the embedded UI subset, and the normal
+missing-glyph prompt offers the downloadable `cjk-core` font-extra.
+
+### FEXT1 — font-extra manifest
+
+`site/fonts/manifest-v1.txt` is a `FEXT1` text manifest:
+
+```
+FEXT1
+pack<TAB>id<TAB>kind<TAB>family<TAB>name<TAB>file<TAB>size<TAB>sha256<TAB>url
+```
+
+`kind` is `fallback` or `emoji`; `family` is `-` for emoji. Packs are raw
+`.ttf/.otf/.ttc` files. The device downloads them with the existing font-extra
+worker (Wi-Fi required, SHA-256 verified, atomic install). `cjk-core` is the
+2.55 MB fallback for devices whose data partition predates the core; `cjk-full`
+and `world-scripts` remain optional coverage extensions.
+
 ## CLX1 — library index (`.crosspoint/library.idx`)
 
 Written by `lib/LibraryIndex/LibraryBuilder.cpp`, read by `LibraryIndexFile`. One

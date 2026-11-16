@@ -5,9 +5,9 @@
 #include "UserGuide.h"
 
 namespace {
-constexpr const char* MARKER = "/.crosspoint/user-guide.checked";
+constexpr const char* MARKER = "/.crosspoint/cpyos-user-guide.checked";
 constexpr const char* TEMP = "/.crosspoint/user-guide.epub.tmp";
-constexpr const char* MARKER_TEMP = "/.crosspoint/user-guide.checked.tmp";
+constexpr const char* MARKER_TEMP = "/.crosspoint/cpyos-user-guide.checked.tmp";
 using namespace bundled_user_guide;
 
 class UserGuideTest : public ::testing::Test {
@@ -21,6 +21,7 @@ class UserGuideTest : public ::testing::Test {
     guide_test::writeLimit = SIZE_MAX;
     guide_test::bytesWritten = 0;
     guide_test::failRecents = false;
+    guide_test::libraryDirty = false;
     RECENT_BOOKS.books.clear();
     RECENT_BOOKS.persisted.clear();
     UserGuide::prepare(true);
@@ -38,9 +39,10 @@ class UserGuideTest : public ::testing::Test {
     const auto& book = RECENT_BOOKS.persisted.front();
     EXPECT_EQ(book.path, asset.path);
     EXPECT_EQ(book.title, asset.title);
-    EXPECT_EQ(book.author, "CrossMux");
+    EXPECT_EQ(book.author, asset.author);
     EXPECT_FALSE(book.coverBmpPath.empty());
     EXPECT_TRUE(Storage.exists(MARKER));
+    EXPECT_TRUE(guide_test::libraryDirty);
   }
 };
 
@@ -61,16 +63,29 @@ TEST_F(UserGuideTest, OtherLanguagesUseEnglishAndUnopenedBooksDoNotPreventSeedin
   EXPECT_EQ(guide_test::files["/unopened.epub"], std::vector<uint8_t>{'b'});
 }
 
-TEST_F(UserGuideTest, ExistingRecentIsMarkedBeforeItCanBeCleared) {
+TEST_F(UserGuideTest, ExistingRecentsGetTheGuideOnceAtTheFront) {
   guide_test::files["/book.epub"] = {'b'};
   RECENT_BOOKS.addBook("/book.epub", "Book", "Author", "cover");
   reboot();
+  EXPECT_FALSE(Storage.exists(MARKER));
+  UserGuide::installIfPending(true);
+  ASSERT_TRUE(Storage.exists(Chinese.path));
+  EXPECT_EQ(guide_test::files[Chinese.path], std::vector<uint8_t>(Chinese.data, Chinese.data + Chinese.size));
   EXPECT_TRUE(Storage.exists(MARKER));
-  RECENT_BOOKS.books.clear();
-  RECENT_BOOKS.persisted.clear();
+  EXPECT_TRUE(guide_test::libraryDirty);
+  ASSERT_EQ(RECENT_BOOKS.persisted.size(), 2u);
+  EXPECT_EQ(RECENT_BOOKS.persisted[0].path, Chinese.path);
+  EXPECT_EQ(RECENT_BOOKS.persisted[0].author, Chinese.author);
+  EXPECT_EQ(RECENT_BOOKS.persisted[1].path, "/book.epub");
+
+  // After the marker exists, clearing recents must not pull the guide back.
+  guide_test::libraryDirty = false;
+  RECENT_BOOKS.persisted.erase(RECENT_BOOKS.persisted.begin());
   reboot();
   UserGuide::installIfPending(false);
-  EXPECT_FALSE(Storage.exists(English.path));
+  ASSERT_EQ(RECENT_BOOKS.persisted.size(), 1u);
+  EXPECT_EQ(RECENT_BOOKS.persisted[0].path, "/book.epub");
+  EXPECT_FALSE(guide_test::libraryDirty);
 }
 
 TEST_F(UserGuideTest, MissingRecentDoesNotPreventSeeding) {
@@ -86,6 +101,7 @@ TEST_F(UserGuideTest, CorruptOrUnreadableRecentsAreNotOverwritten) {
   UserGuide::installIfPending(false);
   EXPECT_FALSE(Storage.exists(English.path));
   EXPECT_FALSE(Storage.exists(MARKER));
+  EXPECT_FALSE(guide_test::libraryDirty);
   EXPECT_EQ(guide_test::files[RecentBooksStore::getFilePath()], std::vector<uint8_t>{'{'});
 }
 
@@ -143,6 +159,7 @@ TEST_F(UserGuideTest, ExistingDifferentFileIsPreservedAndNotAdded) {
   EXPECT_EQ(guide_test::files[English.path], (std::vector<uint8_t>{'u', 's', 'e', 'r'}));
   EXPECT_TRUE(RECENT_BOOKS.books.empty());
   EXPECT_TRUE(Storage.exists(MARKER));
+  EXPECT_FALSE(guide_test::libraryDirty);
 }
 
 TEST_F(UserGuideTest, ExistingUnreadableFileDefersWithoutMarkingComplete) {

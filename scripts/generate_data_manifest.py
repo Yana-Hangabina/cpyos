@@ -52,6 +52,7 @@ PINYIN_HEADER = "lib/Pinyin/PinyinDb.h"
 I18N_PACK_HEADER = "lib/I18n/I18nPack.h"
 WEB_PACK_HEADER = "src/network/WebPackFormat.h"
 EMOJI_PACK_HEADER = "src/EmojiPackFormat.h"
+CORE_HEADER = "src/SystemCoreFont.h"
 
 # Pinyin's loader reads from partition offset 0 unconditionally (PinyinDb.cpp:96),
 # so that is not a choice this script gets to make.
@@ -112,7 +113,7 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset):
+def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset, core_offset):
     """Build the row list from whatever data blobs actually exist.
 
     pinyin/hyphen/i18n degrade to a note when absent. The web pack does not:
@@ -126,6 +127,11 @@ def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, 
         ("i18n", i18n_offset, os.path.join(root, "build", "i18n_pack.dat"), False),
         ("web", web_offset, os.path.join(root, "build", "web_pack.dat"), True),
         ("emoji", emoji_offset, os.path.join(root, "build", "emoji.dat"), True),
+        # Tier-1 reading face: compressed CPFZ, released to SD on first boot.
+        # Required for a full install; an app-only OTA runs without it and the
+        # reader falls back to the embedded UI subset plus the font-extras
+        # download prompt.
+        ("core", core_offset, os.path.join(root, "build", "cjk_core.dat"), True),
     ]
     rows = []
     for name, offset, path, required in candidates:
@@ -223,12 +229,19 @@ def main():
     if emoji_offset <= i18n_offset:
         fail("EmojiPackFormat.h puts emoji at 0x%x, which is not after the language pack (0x%x)"
              % (emoji_offset, i18n_offset))
+    core_offset = read_cpp_constant(os.path.join(args.repo, CORE_HEADER), "kPartitionOffset")
+    if core_offset <= emoji_offset:
+        fail("SystemCoreFont.h puts the core font at 0x%x, which is not after the emoji slot (0x%x)"
+             % (core_offset, emoji_offset))
     # The pack is generated from the committed subset every time the manifest is
     # rebuilt, so a missing/stale pack cannot describe a partition the firmware
     # would reject at boot.
     subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "generate_emoji_pack.py"),
                     "--repo", args.repo], check=True)
-    rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset)
+    subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "build_ui_font_subset.py"),
+                    "--core-only"], check=True)
+    rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset,
+                   core_offset)
     text = render(base, partition_size, rows)
 
     out = args.out or os.path.join(args.repo, "build", "data_manifest.txt")

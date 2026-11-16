@@ -106,6 +106,21 @@ const char* motionLabel() {
 }
 
 std::string wifiValue() {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: the compat layer reports the modem link as a connected station and
+  // SSID() as "4G", which would read like a Wi-Fi join. Show the transport the
+  // user selected instead, plus the modem's own lease when there is one.
+  if (SETTINGS.networkType == CrossPointSettings::NETWORK_CELLULAR) {
+    const String ip = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
+    char buf[64];
+    if (ip.length() > 0) {
+      std::snprintf(buf, sizeof(buf), "%s %s", tr(STR_NETWORK_4G), ip.c_str());
+    } else {
+      std::snprintf(buf, sizeof(buf), "%s", tr(STR_NETWORK_4G));
+    }
+    return buf;
+  }
+#endif
   if (WiFi.status() == WL_CONNECTED) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), I18N.get(StrId::STR_WIFI_CONNECTED_FMT), WiFi.SSID().c_str());
@@ -140,12 +155,36 @@ void MyActivity::onEnter() {
   initialTab_ = -1;
   toolSelected_ = 0;
   storageKnown_ = HalStorage::getInstance().getSpace(storageTotalBytes_, storageFreeBytes_);
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.maybeShow(renderer, mappedInput);
+#endif
   requestUpdate();
+}
+
+void MyActivity::onExit() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.dismiss();
+#endif
+  Activity::onExit();
 }
 
 Rect MyActivity::tabRect(const int index) const {
   const Rect content = pageContentRect();
-  return Rect{content.x + kMargin + index * 120, content.y, 110, kTabH};
+  // Slot widths follow the measured label (bold when active) instead of a
+  // fixed 120 px pitch. The pitch was tuned for 2-3 glyph CJK labels; a
+  // proportional script ("Records") is wider and ran into the next tab.
+  const char* labels[kTabCount] = {I18N.get(StrId::STR_MY_TAB_RECORDS), I18N.get(StrId::STR_MY_TAB_TOOLS),
+                                   I18N.get(StrId::STR_SETTINGS_TITLE)};
+  int x = content.x + kMargin;
+  for (int i = 0; i < kTabCount; ++i) {
+    const bool on = static_cast<int>(tab_) == i;
+    const int w = renderer.getTextWidth(UI_12_FONT_ID, labels[i],
+                                        on ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+    const int slot = w + 56;  // trailing air keeps the old 120 px CJK rhythm
+    if (i == index) return Rect{x, content.y, slot, kTabH};
+    x += slot;
+  }
+  return Rect{x, content.y, 110, kTabH};
 }
 
 Rect MyActivity::bodyRect() const {
@@ -472,6 +511,24 @@ void MyActivity::drawTools() {
       if (appIndex < 0) continue;
       title = app_catalog::at(appIndex).titleId;
       icon = app_catalog::at(appIndex).icon;
+      // InxAppIcons has no UIIcon::Image entry (its switch falls through to
+      // nullptr), so a catalog row that asks for the image glyph would draw no
+      // icon at all -- the same failure the Wifi/File tiles had. The Lucide
+      // 48 px image asset already exists for list rows, so route it through
+      // the mask path the plugin tile uses. Only the camera tile uses it.
+      if (icon == UIIcon::Image) maskIcon = &icon_image_48;
+#if defined(CROSSPOINT_PLUS_PORT)
+      // The voice memo tile: UIIcon has no audio glyph and BaseTheme.h is not
+      // part of this port's edit scope, so the catalog row borrows the existing
+      // Lucide 48 px music note through the same mask path.
+      if (app_catalog::at(appIndex).id == appVisibility::AppId::VoiceMemo && maskIcon == nullptr) {
+        maskIcon = &icon_music_48;
+      }
+      // AI voice client: same problem, different asset — the Lucide speaker.
+      if (app_catalog::at(appIndex).id == appVisibility::AppId::VoiceClient && maskIcon == nullptr) {
+        maskIcon = &icon_volume_2_48;
+      }
+#endif
     } else {
       title = StrId::STR_PLUGIN_DIRECTORY;
       maskIcon = &icon_blocks_48;
@@ -506,8 +563,15 @@ void MyActivity::drawQuickPills() {
   const std::string wifi = wifiValue();
   const char* labels[3] = {wifi.c_str(), tr(STR_BLUETOOTH), nullptr};
   char sleep[48];
-  std::snprintf(sleep, sizeof(sleep), I18N.get(StrId::STR_SLEEP_MINUTES_FMT),
-                static_cast<unsigned>(SETTINGS.sleepTimeoutMinutes));
+  if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
+    // "Never" is the top of the value range, not a number of minutes; printing
+    // the raw value showed "31 min" instead of the never label the settings row
+    // already uses. The moon icon already says what the pill is about.
+    std::snprintf(sleep, sizeof(sleep), "%s", tr(STR_SLEEP_NEVER));
+  } else {
+    std::snprintf(sleep, sizeof(sleep), I18N.get(StrId::STR_SLEEP_MINUTES_FMT),
+                  static_cast<unsigned>(SETTINGS.sleepTimeoutMinutes));
+  }
   labels[2] = sleep;
   const freeink::Icon* icons[3] = {&icon_wifi_48, &icon_bluetooth_48, &icon_moon_48};
   for (int i = 0; i < 3; ++i) {
@@ -604,12 +668,23 @@ void MyActivity::drawSettingsCard(const int index) {
     const Rect r = cardRowRect(index, row);
     renderer.drawLine(r.x, r.y, r.x + r.width, r.y, true);
     drawMaskIcon(renderer, *rowIcons[row], r.x + 18, r.y + (r.height - 24) / 2, 24);
-    renderer.drawText(UI_10_FONT_ID, r.x + 52,
-                      r.y + (r.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2, labels[row]);
+    const int labelX = r.x + 52;
+    // Long translations ("Texteinstellungen", "Touch-Steuerung") used to run
+    // under the right-aligned value: truncate the label to the space actually
+    // left of it instead of drawing both and hoping they fit.
+    int labelMax = r.x + r.width - 26;
+    std::string shown;
+    int valueWidth = 0;
     if (!values[row].empty()) {
-      const std::string shown = renderer.truncatedText(SMALL_FONT_ID, values[row].c_str(), 118);
-      const int vw = renderer.getTextWidth(SMALL_FONT_ID, shown.c_str());
-      renderer.drawText(SMALL_FONT_ID, r.x + r.width - 26 - vw,
+      shown = renderer.truncatedText(SMALL_FONT_ID, values[row].c_str(), 118);
+      valueWidth = renderer.getTextWidth(SMALL_FONT_ID, shown.c_str());
+      labelMax = r.x + r.width - 26 - valueWidth - 10;
+    }
+    const std::string label = renderer.truncatedText(UI_10_FONT_ID, labels[row], std::max(40, labelMax - labelX));
+    renderer.drawText(UI_10_FONT_ID, labelX, r.y + (r.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                      label.c_str());
+    if (!shown.empty()) {
+      renderer.drawText(SMALL_FONT_ID, r.x + r.width - 26 - valueWidth,
                         r.y + (r.height - renderer.getLineHeight(SMALL_FONT_ID)) / 2, shown.c_str());
     }
     if (chevron[row]) drawChevron(renderer, r.x + r.width - 18, r.y + r.height / 2 - 6);
@@ -774,6 +849,13 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
   return false;
 }
 
+void MyActivity::debugSelect(const int index) {
+  tab_ = Tab::Tools;
+  const int count = toolCount();
+  if (count > 0) toolSelected_ = std::clamp(index, 0, count - 1);
+  requestUpdate();
+}
+
 void MyActivity::debugMoveRing(const int delta) {
   if (delta == 0) return;
   if (tab_ != Tab::Tools) {
@@ -785,7 +867,25 @@ void MyActivity::debugMoveRing(const int delta) {
   requestUpdate();
 }
 
+void MyActivity::debugConfirm() {
+  switch (tab_) {
+    case Tab::Tools:
+      openTool(toolSelected_);
+      break;
+    case Tab::Records:
+      // The chart's "achievements and profile" row opens the reading-stats hub.
+      openBookList();
+      break;
+    case Tab::Settings:
+      openSettingsCategory(0);
+      break;
+  }
+}
+
 void MyActivity::loop() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
   int x = 0;
   int y = 0;
   if (mappedInput.wasScreenTapped(x, y)) {
@@ -848,4 +948,7 @@ void MyActivity::render(RenderLock&&) {
   } else {
     renderer.displayBuffer();
   }
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.processRender(renderer, mappedInput)) return;
+#endif
 }

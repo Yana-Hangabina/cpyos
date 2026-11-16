@@ -47,6 +47,13 @@ struct OperationTestPeer {
   static bool shouldRetryPaidPreview(const bool paid, const bool plainText, const bool hasXhtmlTag) {
     return Operation::shouldRetryPaidPreview(paid, plainText, hasXhtmlTag);
   }
+  static bool primaryLooksLikePreview(const uint32_t wordCount, const uint64_t responseBytes,
+                                      const bool textMetadata) {
+    return Operation::primaryLooksLikePreview(wordCount, responseBytes, textMetadata);
+  }
+  static bool chapterLooksLikePreview(const uint32_t wordCount, const uint64_t decodedBytes) {
+    return Operation::chapterLooksLikePreview(wordCount, decodedBytes);
+  }
   static bool reuseChapterFile(const bool refreshingBook, const bool chapterExists) {
     return Operation::reuseChapterFile(refreshingBook, chapterExists);
   }
@@ -149,7 +156,9 @@ TEST(WeReadProtocol, SeparatesAuthenticationAndRetryableChapterResponses) {
   EXPECT_EQ(WeReadProtocol::classifyChapterResponse(200, true), ChapterResponse::Retryable);
   EXPECT_EQ(WeReadProtocol::classifyChapterResponse(401, false), ChapterResponse::AuthenticationRequired);
   EXPECT_EQ(WeReadProtocol::classifyChapterResponse(403, false), ChapterResponse::Retryable);
-  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(500, false), ChapterResponse::Error);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(429, false), ChapterResponse::Retryable);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(500, false), ChapterResponse::Retryable);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(404, false), ChapterResponse::Error);
 }
 
 TEST(WeReadProtocol, MatchesOnlyAnExactEmptyJsonObject) {
@@ -477,6 +486,32 @@ TEST(WeReadClientState, RetryableChapterResponsesNeverSignalCompletion) {
   EXPECT_FALSE(WeReadClient::OperationTestPeer::shouldRetryPaidPreview(true, false, true));
 }
 
+TEST(WeReadClientState, DetectsPaidPreviewsFromPrimaryAndDecodedSizes) {
+  const auto primary = WeReadClient::OperationTestPeer::primaryLooksLikePreview;
+  EXPECT_TRUE(primary(11283, 283, false));    // paid chapter: a few hundred-byte shard
+  EXPECT_FALSE(primary(11283, 34000, false)); // normal EPUB shard
+  EXPECT_TRUE(primary(311, 296, false));      // disabled last chapter ("番外预告")
+  EXPECT_FALSE(primary(199, 100, false));    // below the word threshold
+  EXPECT_FALSE(primary(11283, 283, true));   // text metadata is always the text path
+  EXPECT_FALSE(primary(600, 2000, false));
+
+  const auto chapter = WeReadClient::OperationTestPeer::chapterLooksLikePreview;
+  EXPECT_TRUE(chapter(11283, 470));   // 11k words decoded to a ~470-byte preview
+  EXPECT_FALSE(chapter(11283, 34000));
+  EXPECT_TRUE(chapter(311, 524));     // short preview is still far below 2 bytes/word
+  EXPECT_FALSE(chapter(199, 100));    // below the word threshold
+  EXPECT_TRUE(chapter(500, 499));
+}
+
+TEST(WeReadClientState, TreatsServerAndRateLimitAnswersAsRetryable) {
+  using WeReadProtocol::ChapterResponse;
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(429, false), ChapterResponse::Retryable);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(500, false), ChapterResponse::Retryable);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(503, false), ChapterResponse::Retryable);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(404, false), ChapterResponse::Error);
+  EXPECT_EQ(WeReadProtocol::classifyChapterResponse(410, false), ChapterResponse::Error);
+}
+
 TEST(WeReadClientState, ReusesChaptersOnlyWhenResumingAnInitialDownload) {
   const auto reuse = WeReadClient::OperationTestPeer::reuseChapterFile;
   EXPECT_TRUE(reuse(false, true));
@@ -727,4 +762,19 @@ TEST(WeReadProtocol, Crc32MatchesStandardVector) {
   uint32_t crc = 0xFFFFFFFF;
   crc = WeReadProtocol::crc32Update(crc, reinterpret_cast<const uint8_t*>(input), strlen(input));
   EXPECT_EQ(crc ^ 0xFFFFFFFF, 0xCBF43926u);
+}
+
+TEST(WeReadPreview, PrimaryResponseLooksLikeAPaidPreview) {
+  // An 11,283-word chapter answered with a 283-byte shard is the paid preview
+  // shape measured on the 1701-chapter book; a full response is not.
+  EXPECT_TRUE(WeReadClient::OperationTestPeer::primaryLooksLikePreview(11283, 283, false));
+  EXPECT_FALSE(WeReadClient::OperationTestPeer::primaryLooksLikePreview(11283, 24000, false));
+  EXPECT_FALSE(WeReadClient::OperationTestPeer::primaryLooksLikePreview(11283, 283, true));  // TXT metadata
+  EXPECT_FALSE(WeReadClient::OperationTestPeer::primaryLooksLikePreview(100, 50, false));    // short chapter
+}
+
+TEST(WeReadPreview, DecodedChapterLooksLikeAPaidPreview) {
+  EXPECT_TRUE(WeReadClient::OperationTestPeer::chapterLooksLikePreview(11283, 470));
+  EXPECT_FALSE(WeReadClient::OperationTestPeer::chapterLooksLikePreview(11283, 30000));
+  EXPECT_FALSE(WeReadClient::OperationTestPeer::chapterLooksLikePreview(150, 100));  // short chapter
 }

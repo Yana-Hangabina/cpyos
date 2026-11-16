@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
+#include <esp_system.h>
 
 #include <cstring>
 #include <utility>
@@ -124,7 +125,11 @@ void FontExtrasActivity::onExit() {
       vTaskDelay(pdMS_TO_TICKS(50));
     }
     if (worker_ != nullptr && !workerDone_.load(std::memory_order_acquire)) {
-      LOG_ERR("FEXT", "worker did not stop in time; deleting it");
+      /* The worker holds `this` and may be inside TLS or an SD write: deleting
+       * it corrupts the heap and returning would be a use-after-free. A reset
+       * is the safe recovery (the same rule as the comment worker). */
+      LOG_ERR("FEXT", "worker did not stop in time; restarting instead of freeing its owner");
+      esp_restart();
     }
     if (worker_ != nullptr) reapWorker();
   }

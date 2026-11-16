@@ -99,6 +99,57 @@ bool decodeEntity(const std::string_view s, size_t& i, std::string& out) {
   return false;
 }
 
+// HTML treats the Unicode space family as ordinary word separators. The device
+// fonts deliberately omit most of them (U+00A0 in particular), and a line that
+// keeps one cannot use the primary face: resolveTextFontId() would drop the
+// whole line to the 8pt emergency face. Folding them here keeps every consumer
+// (body text, link labels, titles, attributes) on one face.
+// / HTML treats the Unicode space family as ordinary word separators. Folding
+// them at the tokenizer boundary keeps every consumer on the primary face.
+bool isFoldableSpace(const uint32_t cp) {
+  return cp == 0xA0 || (cp >= 0x2000 && cp <= 0x200A) || cp == 0x202F || cp == 0x205F;
+}
+
+void foldSpaceCodepoints(std::string& text) {
+  if (text.empty()) return;
+  std::string out;
+  out.reserve(text.size());
+  bool folded = false;
+  size_t i = 0;
+  while (i < text.size()) {
+    const auto c = static_cast<unsigned char>(text[i]);
+    uint32_t cp = 0;
+    size_t len = 0;
+    if (c < 0x80) {
+      cp = c;
+      len = 1;
+    } else if ((c & 0xE0) == 0xC0 && i + 1 < text.size()) {
+      cp = ((c & 0x1Fu) << 6) | (static_cast<unsigned char>(text[i + 1]) & 0x3Fu);
+      len = 2;
+    } else if ((c & 0xF0) == 0xE0 && i + 2 < text.size()) {
+      cp = ((c & 0x0Fu) << 12) | ((static_cast<unsigned char>(text[i + 1]) & 0x3Fu) << 6) |
+           (static_cast<unsigned char>(text[i + 2]) & 0x3Fu);
+      len = 3;
+    } else if ((c & 0xF8) == 0xF0 && i + 3 < text.size()) {
+      cp = ((c & 0x07u) << 18) | ((static_cast<unsigned char>(text[i + 1]) & 0x3Fu) << 12) |
+           ((static_cast<unsigned char>(text[i + 2]) & 0x3Fu) << 6) |
+           (static_cast<unsigned char>(text[i + 3]) & 0x3Fu);
+      len = 4;
+    } else {
+      out.push_back(text[i++]);
+      continue;
+    }
+    if (isFoldableSpace(cp)) {
+      out.push_back(' ');
+      folded = true;
+    } else {
+      out.append(text, i, len);
+    }
+    i += len;
+  }
+  if (folded) text.swap(out);
+}
+
 void decodeText(const std::string_view in, std::string& out, const bool decodeEntities) {
   out.clear();
   out.reserve(in.size());
@@ -107,6 +158,7 @@ void decodeText(const std::string_view in, std::string& out, const bool decodeEn
     if (decodeEntities && in[i] == '&' && decodeEntity(in, i, out)) continue;
     out.push_back(in[i++]);
   }
+  foldSpaceCodepoints(out);
 }
 
 bool isAlpha(const char c) { return std::isalpha(static_cast<unsigned char>(c)) != 0; }

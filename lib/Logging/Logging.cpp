@@ -36,6 +36,14 @@ void addToLogRingBuffer(const char* message) {
 // Since logging can take a large amount of flash, we want to make the format string as short as possible.
 // This logPrintf prepend the timestamp, level and origin to the user-provided message, so that the user only needs to
 // provide the format string for the message itself.
+// Optional sink for platforms that mirror the application log somewhere durable
+// (the Metalio port writes it to the SD card). Weak so every other build keeps
+// the exact previous behaviour.
+extern "C" __attribute__((weak)) void logMirrorAppend(const char* line, size_t len) {
+  (void)line;
+  (void)len;
+}
+
 void logPrintf(const char* level, const char* origin, const char* format, ...) {
   va_list args;
   va_start(args, format);
@@ -72,6 +80,7 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
   logSerial.print(buf);
 #endif
   addToLogRingBuffer(buf);
+  logMirrorAppend(buf, strlen(buf));
 }
 
 std::string getLastLogs() {

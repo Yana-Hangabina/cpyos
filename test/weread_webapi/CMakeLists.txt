@@ -78,3 +78,18 @@ target_link_libraries(WeReadStoreTest PRIVATE
 )
 
 gtest_discover_tests(WeReadStoreTest PROPERTIES RUN_SERIAL TRUE)
+
+add_executable(WeReadReadingClockTest
+  WeReadReadingClockTest.cpp
+)
+
+target_include_directories(WeReadReadingClockTest PRIVATE
+  ${REPO_ROOT}/lib/WeReadWebApi/src
+)
+
+target_link_libraries(WeReadReadingClockTest PRIVATE
+  crosspoint_test_common
+  GTest::gtest_main
+)
+
+gtest_discover_tests(WeReadReadingClockTest)

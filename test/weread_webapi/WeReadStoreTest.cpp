@@ -1457,4 +1457,28 @@ TEST_F(WeReadStoreTest, BrowseParserCapsTheFinalReviewPageAtTenRecords) {
   EXPECT_NE(header.flags & WeReadBrowse::kPageHasMore, 0U);
 }
 
+TEST_F(WeReadStoreTest, WritesUnavailableChapterPlaceholderAndEmptyImageIndex) {
+  const std::string directory = "/.crosspoint/weread/placeholder-book/chapters";
+  ASSERT_TRUE(Storage.ensureDirectoryExists(directory.c_str()));
+  const std::string chapter = directory + "/000001.xhtml";
+  const std::string images = directory + "/000001.images";
+  ASSERT_TRUE(WeReadXhtmlCodec::writeUnavailableChapter(chapter, images, "Chapter <1>", "Buy & retry"));
+  EXPECT_TRUE(WeReadXhtmlCodec::isPlaceholderChapter(chapter));
+  EXPECT_FALSE(WeReadXhtmlCodec::isPlaceholderChapter(directory + "/missing.xhtml"));
+
+  HalFile file;
+  ASSERT_TRUE(Storage.openFileForRead("WR", chapter, file));
+  ASSERT_GT(file.fileSize64(), 0U);
+  std::string content(static_cast<size_t>(file.fileSize64()), '\0');
+  ASSERT_EQ(file.read(content.data(), content.size()), static_cast<int>(content.size()));
+  EXPECT_NE(content.find("<!--wr-unavailable-->"), std::string::npos);
+  EXPECT_NE(content.find("Buy &amp; retry"), std::string::npos);
+  EXPECT_NE(content.find("Chapter &lt;1&gt;"), std::string::npos);
+
+  HalFile index;
+  uint32_t count = 0;
+  ASSERT_TRUE(WeReadStore::openImageIndex(images, index, count));
+  EXPECT_EQ(count, 0U);
+}
+
 }  // namespace

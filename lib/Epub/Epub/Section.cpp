@@ -546,6 +546,8 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // Hyphenator::breakOffsets inside its hyphenationEnabled branch. Passing an empty
   // tag resolves to nullptr, which is the answer an unsupported language gets.
   Hyphenator::setPreferredLanguage(spec.hyphenationEnabled ? epub->getLanguage() : std::string{});
+  LOG_INF("HYPH", "section: enabled=%d language='%s'", static_cast<int>(spec.hyphenationEnabled),
+          epub->getLanguage().c_str());
 
   if (!build_->parser->beginParse()) {
     LOG_ERR("SCT", "Failed to begin parse");

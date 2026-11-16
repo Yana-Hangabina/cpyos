@@ -15,6 +15,23 @@ CPYOS targets the Read Pico only. It keeps what CrossMux already does and rebuil
 - display work tuned for this panel: partial refresh, anti-aliasing and page-turn effects;
 - device OTA and a browser flasher.
 
+> **Metalio E-INK4 Plus (4.7″, ESP32-S31, 1216×684 parallel panel) is an experimental port: no hardware validation and no prebuilt image yet.**
+> A separate ESP-IDF 6.1 project under `ports/metalio_plus/` links the display
+> (E0470A14-AF / GC16), TPS65185/TCA9555, FT6336U touch, 4-bit SD, the BQ27220 fuel gauge and
+> the PCF8563 RTC. It offers four builds: BSP only, a bring-up status page
+> (`CPYOS_UI_PROBE=1`), an **end-to-end reading demo** (`CPYOS_READER_DEMO=1`: SD scan → EPUB
+> parse → layout → display with touch/cover-key page turns and chapter crossing), and the
+> **full CPYOS activity shell** (`CPYOS_SHELL_DEMO=1`: Home/shelf/settings/apps/reader/file
+> browser/sleep, with the CPY theme, fonts, i18n, and a real `esp_wifi` + `esp_tls` stack).
+> 16-level text and windowed partial refresh are implemented but **nothing has been verified on
+> hardware**. The 7.19 MiB app slot currently limits the shell to EN+ZH, a shared 12pt CJK face,
+> and excludes games/AirPage/PixelSwitch and the web-server/Calibre pages; **OTA release
+> plumbing, USB MSC and BLE are not ported yet** (protected EPUB and font extras are wired).
+> It uses a different SoC and display/power topology. The `metalio_eink4` source target in
+> this tree is the 3.97″ Metalio E-Ink 4 (ESP32-S3 + SSD1677 SPI), not the Plus. Do not flash
+> the Read Pico firmware to a Plus.
+> See [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md).
+
 ## What CPYOS adds over upstream CrossMux
 
 ### UI and interaction
@@ -62,7 +79,7 @@ Enter a URL and the page is fetched and re-typeset as text at the current readin
 
 ## Install
 
-Prebuilt images target the **Read Pico only**. Back up the full 16 MiB flash before the first install:
+Prebuilt images target the **Read Pico only**. Do not flash them to a Metalio E-INK4 Plus or any other ESP32 board: the Plus uses an ESP32-S31 with a different partition layout, panel interface and power topology. Back up the full 16 MiB flash before the first install:
 
 ```bash
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
@@ -132,6 +149,12 @@ git merge main
 - **CrossMux**, **CrossPoint Reader**, **Inx**, **cpr-vcodex** and **diy-esp32-epub-reader** for the upstream firmware, interface work and early EPUB experiments.
 - **kiikoread (read-pico-reader)** for the water-ripple page-turn engine, TEXTTURN settle, gamma cover LUT, offline pinyin search/IME and shake page-turn thresholds.
 - Noto Sans CJK / Source Han Sans, FreeType, pypinyin, Lucide and the hyphenation dictionary authors.
+
+## License
+
+Original CPYOS code and Official Builds are licensed under the [CPYOS Project License 1.0](./LICENSE): source-available, personal and non-commercial use only. The JJWXC component is closed-source; Official Builds may include it in binary form. Third-party components keep their own licenses (MIT / Apache-2.0 / LGPL-3.0 / OFL / AGPL and others); see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md). MIT-licensed upstream code (CrossMux / CrossPoint and others) remains available under MIT; this license does not change third-party licenses. See [NOTICE-JJWXC.md](./NOTICE-JJWXC.md) for the JJWXC support statement.
+
+Versions released under MIT before 2026-11-06 remain under MIT. This license applies to versions released on or after 2026-11-06.
 
 ## Disclaimer
 

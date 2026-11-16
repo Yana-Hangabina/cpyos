@@ -31,10 +31,12 @@ that matches your task — don't load everything at once.
 | [sdk-upstream-sync.md](sdk-upstream-sync.md) | Reviewing the September 2026 SDK integration, upstream touch-menu behavior, source snapshots, and hardware acceptance limits. |
 | [upstream-merge-policy.md](upstream-merge-policy.md) | Reconciling upstream guide changes with the canonical `AGENTS.md` layout — how to keep the map thin and route upstream changes into these docs. |
 | [Metalio E-Ink 4](metalio-eink4.md) | Metalio BSP, CST816S bezel keys, SDMMC, power sequencing and acceptance |
+| [Metalio E-INK4 Plus](metalio-eink4-plus.md) | ESP32-S31 / ESP-IDF 6.1 port analysis: hardware matrix, kiikoread differences, license provenance and the untested-build policy |
 | [read-pico.md](read-pico.md) | Building, first-flashing, or hardware-validating the Read Pico (小纸 Pico, RDP-G01-W) ESP32-S3 target: 16-bit parallel EPD through epdiy LCD_CAM, CST836U touch, CW32L010 PMU, and the frozen interface contract. |
 | [async-push.md](async-push.md) | Deferred panel scans on Read Pico: the start/wait contract across epdiy, EpdiyLcd and FreeInkDisplay, what stays synchronous, overlap pacing, costs, and how to revert. |
 | [read-pico-refresh-stability.md](read-pico-refresh-stability.md) | Full-screen horizontal smear investigation: framebuffer-vs-glass evidence, the rejected experiments (DU, partial scans, complement baseline, 48-phase FULL, TextTurn, async), the final blocking-36-phase-GL16 configuration, and remaining optimization space. |
 | [high-dpi-ui-profile.md](high-dpi-ui-profile.md) | High-density UI preset, currently validated on ReadPico and Nightly, fixed fonts, resource budget and validation. |
+| [font-tiers.md](font-tiers.md) | Font tiers: embedded UI subset kept in PSRAM (no SD latency), 8pt bitmap retirement analysis, compressed reading core in the data partition released to SD, small-language UI supplements and their shaping limits. |
 
 ## Related docs outside this directory
 

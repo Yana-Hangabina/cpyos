@@ -32,7 +32,9 @@ class WebBrowserActivity final : public Activity {
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return state_ == State::Loading; }
   void prepareForSleep() override;
-  bool presentsGrayscale() const override { return state_ == State::Page; }
+  // A fast page turn is B/W only; the gray commit path would contradict the
+  // reader setting and pay the 37-phase scan it exists to avoid.
+  bool presentsGrayscale() const override;
 
   // Open the app on this URL (serial test hook). Consumed by onEnter().
   static void requestOpen(const char* url);
@@ -115,7 +117,7 @@ class WebBrowserActivity final : public Activity {
   static int measureThunk(void* context, const char* text, size_t length, bool bold);
   static int spaceThunk(void* context, uint32_t left, uint32_t right, bool bold);
   int measureTextWidth(const char* utf8, size_t length, bool bold);
-  int measureRange(const webbrowser::WebString& text, uint32_t start, uint32_t length, bool bold);
+  int measureRange(int fontId, const webbrowser::WebString& text, uint32_t start, uint32_t length, bool bold);
   int glyphWidthInternal(uint32_t cp, bool bold);
   int spaceWidthInternal(bool bold);
   int measureCodepoint(uint32_t cp, bool bold);
@@ -154,6 +156,11 @@ class WebBrowserActivity final : public Activity {
   bool pendingKeepPage_ = false;
   uint16_t pendingKeepPageIndex_ = 0;
   uint16_t turnsSinceHistory_ = 0;
+  // Reader display settings, applied to browser reading pages. The cadence is
+  // owned here (not by the UI): only a successful page turn may consume it.
+  int pagesUntilFullRefresh_ = 0;
+  bool pageTurnPendingRefresh_ = false;
+  int8_t waterTurnDirection_ = 0;
   std::string jobContentType_;
   Rect homeAddressRect_{};
   Rect homeBookmarksRect_{};

@@ -69,7 +69,7 @@ constexpr int16_t kGridTitleGapTop = 8;
 constexpr int16_t kGridRowGapBottom = 22;
 
 // CJK-aware greedy wrap for the coverless placeholder. GfxRenderer's
-// wrappedText only breaks on spaces, and a title like "CrossMux用户手册" is a
+// wrappedText only breaks on spaces, and a title like "CPYOS用户手册" is a
 // single word to it — it truncated to "CrossM…" in the grid (sim review,
 // 2026-10-16). Breaks per grapheme, trimming trailing spaces; when the line
 // budget runs out the remainder gets the usual ellipsis.
@@ -285,12 +285,25 @@ void LibraryListActivity::onEnter() {
   // Entered while Confirm was still held (typical when launched from the home
   // menu): ignore its release, or we would open whatever sits at row 0.
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.maybeShow(renderer, mappedInput);
+#endif
   requestUpdate(true);
 }
 
 void LibraryListActivity::onExit() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.dismiss();
+#endif
   index.close();
   Activity::onExit();
+}
+
+void LibraryListActivity::loop() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
+  UiTabListActivity::loop();
 }
 
 bool LibraryListActivity::rebuildIndex() {
@@ -2473,6 +2486,9 @@ void LibraryListActivity::render(RenderLock&& lock) {
   emptyPathCount_ = 0;
   emptySourceRect_ = Rect{};
   UiTabListActivity::render(std::move(lock));
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.processRender(renderer, mappedInput)) return;
+#endif
   if (optionPopup.isActive() || confirm_.active()) return;  // painted inside the same pass
   // Grid covers prewarm one per frame, after the frame is already on screen.
   if (bookRowCount() > 0 && usesCoverGrid() && prepareNextGridCover()) return;

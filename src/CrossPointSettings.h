@@ -514,6 +514,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // available size (and persists the snap) whenever the family changes.
   uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
+  // Advanced line-height override as a percentage of the font's natural line
+  // height: 0 = off (keep the 4-level + per-family factors), non-zero replaces
+  // them with percent/100. See src/ReaderLineSpacing.h. Defaults to off, so an
+  // old settings file needs no migration (see fromJson).
+  uint8_t readerLineSpacingPercent = 0;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Vertical page bottom alignment (upstream 8418166c). When on, every non-final
   // text-only page redistributes its leftover space between the lines so the
@@ -606,7 +611,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t embeddedStyle = 1;
   // Focus Reading - emphasizes the first part of words with bold
   uint8_t focusReadingEnabled = 0;
+#if defined(CROSSPOINT_PLUS_PORT)
+  // CPYOS's signature reader chrome is the toolbar sheet (Contents / Text /
+  // Bookmarks / More over the live page). The shared default is the legacy
+  // full-screen list, which is what this port shipped first and reads as the
+  // wrong panel: a fresh install should match the product screenshots, and the
+  // setting still lets anyone switch back.
+  uint8_t readerMenuStyle = READER_MENU_TOOLBAR;
+#else
   uint8_t readerMenuStyle = READER_MENU_LIST;
+#endif
   // Image resampling inside the reader (see IMAGE_SCALING). Applies to inline
   // book images only; reader chrome and other activities are untouched.
   uint8_t imageScaling = IMAGE_SCALING_NEAREST;
@@ -629,6 +643,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 #else
   uint8_t soundFeedbackLevel = SOUND_FEEDBACK_OFF;
 #endif
+  // Speaker volume (0..100) for UI cues and the future voice client. Changed by
+  // the side volume keys outside the reader (vendor behaviour); not a settings
+  // row, so it needs no new i18n key.
+  uint8_t audioVolume = 80;
+  // Network transport chosen at boot (official firmware semantics: setting +
+  // reboot, never an automatic switch). 4G requires a detected modem.
+  static constexpr uint8_t NETWORK_WIFI = 0;
+  static constexpr uint8_t NETWORK_CELLULAR = 1;
+  uint8_t networkType = NETWORK_WIFI;
 #if FREEINK_CAP_HAPTIC
   uint8_t hapticFeedbackLevel = HAPTIC_FEEDBACK_MEDIUM;
 #endif
@@ -719,6 +742,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t frontlightBrightness = 60;
   uint8_t frontlightWarmth = 50;
   uint8_t frontlightOn = 0;
+  // Frontlight hardware presence (E-Ink4 Plus ships with and without the LED
+  // pair; no firmware can detect it, so the user states it once).
+  uint8_t frontlightPresent = 1;
+  uint8_t frontlightProbed = 0;   // automatic current-delta probe has run
+  // Revision of the automatic probe that produced the two fields above. Older
+  // builds probed at 50 % and required an 8 mA delta, which at the vendor's
+  // 10 % PWM ceiling treated a real light as absent; anything below the
+  // current revision re-arms the probe once.
+  uint8_t frontlightProbeRev = 0;
+  uint8_t cellularPresent = 0;    // 4G module answered AT
+  uint8_t cellularProbed = 0;
   uint8_t frontlightRestoreOnWake = 1;
   // Language setting (Language enum index). Fresh devices start in English and
   // choose their UI language and matching content profile in the startup guide.
@@ -745,6 +779,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Achievement tracking + unlock popups (1 = enabled, 0 = disabled).
   uint8_t achievementsEnabled = 1;
   uint8_t achievementPopups = 0;
+  // JJWXC daily check-in reminder (private book source only; the Settings row is
+  // gated by CROSSPOINT_BOOKSOURCE_JJWXC). OFF by default: the user turns it on
+  // from the sign-in dialog/calendar, and only then does the global popup appear.
+  // The popup checkbox writes this same field, so every control agrees.
+  uint8_t jjwxcSignInReminder = 0;
 
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;

@@ -6,10 +6,13 @@
 #include <builtinFonts/chinese_chess_16.h>
 #include <builtinFonts/notosans_8_regular.h>
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
-// The external pack carries every UI size. Keep the 8pt subset only as the
-// last-resort fallback if the pack is missing (app-only OTA on an old device):
-// a readable UI is better than tofu, and 341 KB is the cheapest insurance.
+// Embedded builds carry the UI subset in app0 and register the vector face at
+// 8pt too, so the 3,500-glyph bitmap is unreachable and not linked (it cost
+// 341 KB). Spiffs builds (C3) keep it: their pack can be absent after an
+// app-only OTA, and a readable 8pt UI beats tofu.
+#if !defined(CROSSPOINT_FONT_PACK_EMBEDDED)
 #include <builtinFonts/notosans_cjk_8.h>
+#endif
 #else
 #include <builtinFonts/notosans_cjk_8.h>
 #include <builtinFonts/notosans_cjk_10.h>

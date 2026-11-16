@@ -63,6 +63,8 @@ namespace {
 
 #if FREEINK_DEVICE_WAVESHARE_EPAPER_397
 constexpr const Calibration& ACTIVE_CALIBRATION = WAVESHARE_397_CALIBRATION;
+#elif defined(CROSSPOINT_PLUS_PORT)
+constexpr const Calibration& ACTIVE_CALIBRATION = METALIO_PLUS_CALIBRATION;
 #else
 #error "CROSSPOINT_CAP_SOUND_FEEDBACK requires a board calibration"
 #endif
@@ -70,10 +72,19 @@ constexpr const Calibration& ACTIVE_CALIBRATION = WAVESHARE_397_CALIBRATION;
 constexpr uint32_t FEEDBACK_SAMPLE_RATE = 16000;
 constexpr uint8_t FEEDBACK_CHANNELS = 1;
 
+// PlatformIO (readpico) names embedded files after their repo-relative path;
+// ESP-IDF EMBED_FILES (Metalio E-INK4 Plus) uses the basename only.
+#if defined(CROSSPOINT_PLUS_PORT)
+extern const uint8_t selectWavStart[] asm("_binary_select_wav_start");
+extern const uint8_t selectWavEnd[] asm("_binary_select_wav_end");
+extern const uint8_t tapWavStart[] asm("_binary_tap_wav_start");
+extern const uint8_t tapWavEnd[] asm("_binary_tap_wav_end");
+#else
 extern const uint8_t selectWavStart[] asm("_binary_assets_sounds_select_wav_start");
 extern const uint8_t selectWavEnd[] asm("_binary_assets_sounds_select_wav_end");
 extern const uint8_t tapWavStart[] asm("_binary_assets_sounds_tap_wav_start");
 extern const uint8_t tapWavEnd[] asm("_binary_assets_sounds_tap_wav_end");
+#endif
 
 WavPcmView selectPcm;
 WavPcmView tapPcm;

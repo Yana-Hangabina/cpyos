@@ -234,6 +234,8 @@
           <tr><th>Fonts</th><td>内置 8,105 个通用规范汉字 + Emoji 子集；完整 Emoji、扩展中文与多语言文字可下载到 SD 卡</td></tr>
           <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.7.0</span></b> · 预编译包只面向 Read Pico</td></tr>
         </table>
+        <p class="muted" style="margin-top:14px;max-width:760px">Metalio E-INK4 Plus（4.7″，ESP32-S31）是实验性移植：独立 ESP-IDF 6.1 工程已链接显示/触摸/电源/SD/电量计/RTC，并提供 bring-up、端到端阅读 demo 与完整 Activity 壳（首页/书架/设置/应用/阅读器）四种构建；16 级文字与窗口局部刷新已实现，但<strong>全部未经实机验证、没有预编译包</strong>。受 app0 容量限制目前只编 EN+ZH；受保护 EPUB 与字体扩展已接入，OTA 发布通道/USB/BLE/网页服务尚未移植。它使用另一套 SoC 与并口面板，请勿用本页的 Read Pico 固件刷写。</p>
+        <p class="muted" style="margin-top:6px;max-width:760px">The Metalio E-INK4 Plus (4.7″, ESP32-S31) is an experimental port. A separate ESP-IDF 6.1 project links the display/touch/power/SD/gauge/RTC drivers and offers bring-up, end-to-end reader-demo and full activity-shell builds (home/shelf/settings/apps/reader). 16-level text and windowed partial refresh are implemented, but <strong>nothing is verified on hardware and there is no prebuilt image</strong>. The app slot currently limits it to EN+ZH; protected EPUB and font extras are wired, while OTA release plumbing/USB/BLE/web server are not ported. Do not flash the Read Pico firmware to it.</p>
       </div>
     </div>
   </section>
@@ -363,6 +365,9 @@
       <a href="https://github.com/Yana-Hangabina/cpyos/releases">发布</a> ·
       <a href="https://github.com/Yana-Hangabina/cpyos/issues">问题</a> ·
       <a href="https://github.com/0x1abin/crossmux">CrossMux 上游</a>
+    </div>
+    <div class="muted" style="margin-top:10px;font-size:12px;max-width:900px">
+      原创代码与官方固件采用 <a href="https://github.com/Yana-Hangabina/cpyos/blob/cpyos/LICENSE">CPYOS Project License 1.0</a>：源码可见、仅限个人非商业使用；晋江组件源码不公开。第三方组件保留各自许可。晋江支持声明见 <a href="https://github.com/Yana-Hangabina/cpyos/blob/cpyos/NOTICE-JJWXC.md">NOTICE-JJWXC</a>。
     </div>
   </div>
 </footer>

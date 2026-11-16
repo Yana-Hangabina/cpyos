@@ -16,7 +16,11 @@
 #include <MemoryManager.h>
 #include <ProtectedBook.h>
 #include <TrustedTime.h>
+#if defined(FREEINK_CONTENT_PORT_PSA)
+#include "PortContentCrypto.h"
+#else
 #include <WolfsslCrypto.h>
+#endif
 #include <Zip.h>
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
@@ -29,11 +33,18 @@ namespace content {
 
 namespace {
 
-// One shared crypto backend for the whole read path.
+// One shared crypto backend for the whole read path. The reference build uses
+// wolfSSL; ports without its RSA/PKCS#12 surface supply a PSA backend that
+// implements the read path (AES-CBC + hashes) and refuses the legacy
+// client-side RSA helpers.
+#if defined(FREEINK_CONTENT_PORT_PSA)
+Crypto& crypto() { return portContentCrypto(); }
+#else
 WolfsslCrypto& crypto() {
   static WolfsslCrypto instance;
   return instance;
 }
+#endif
 
 void reclaimContentCaches() {
   // miniz needs a contiguous inflate state plus stream buffers and metadata.

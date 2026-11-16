@@ -34,6 +34,10 @@ struct Frame;
 // 0 = transparent, 1-16 = gray levels (white to black)
 enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 0x0A, Black = 0x10 };
 
+// Diagnostic: log every drawText run (font, resolved face, x/y, text) when on.
+void gfxSetTextTrace(bool on);
+bool gfxTextTraceEnabled();
+
 class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
@@ -879,6 +883,12 @@ class GfxRenderer {
   // activity that left native-gray pixels on the glass is being replaced.
   void requestFullRefreshNext() const;
   void cancelGrayscale16() const;
+  // Clear both planes of an OPEN 16-level canvas. A list that has to rebuild its
+  // layout repaints the same page a second time; on the 1-bit path that pass
+  // starts with clearScreen(), but on the gray path re-beginning the canvas is
+  // refused while it is active, so the first pass's rows used to stay visible
+  // under the second one (CJK settings labels showed their tails one row higher).
+  bool restartGrayscale16Canvas() const;
   bool isGrayscale16Active() const { return grayscale16Buffer != nullptr; }
   // Present a transient overlay (dialog / wait / toast) painted over the
   // current frame. Commits the native-gray front when a 16-level pass is still

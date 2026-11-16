@@ -8,6 +8,13 @@
 
 struct ActivityResult;
 
+/* Bench-only: paint the light-sleep badge on the standby face without parking
+ * the CPU, so the badge's text and placement can be screenshotted over USB. */
+namespace standby_debug {
+void showSleepBadge(bool on);
+bool sleepBadgeShown();
+}  // namespace standby_debug
+
 class StandbyActivity final : public Activity {
  public:
   explicit StandbyActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

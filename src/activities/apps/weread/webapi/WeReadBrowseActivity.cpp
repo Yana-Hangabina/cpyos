@@ -626,6 +626,7 @@ const char* WeReadBrowseActivity::errorMessage() const {
     case WeReadClient::Error::Clock:
     case WeReadClient::Error::OutOfMemory:
     case WeReadClient::Error::WholeBookOnly:
+    case WeReadClient::Error::NotPurchased:
       return tr(STR_WEREAD_HTTP_ERROR);
   }
   return tr(STR_WEREAD_HTTP_ERROR);

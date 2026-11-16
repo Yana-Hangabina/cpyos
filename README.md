@@ -17,6 +17,20 @@ CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地�
 - 针对这块面板做局部刷新、抗锯齿和翻页效果；
 - 提供设备内 OTA 与网页刷机。
 
+> **Metalio E-INK4 Plus（4.7″，ESP32-S31，1216×684 并口墨水屏）是实验性移植：尚未实机验证，也没有预编译包。**
+> 独立的 ESP-IDF 6.1 工程在 `ports/metalio_plus/`：显示（E0470A14-AF / GC16）、
+> TPS65185/TCA9555、FT6336U、4-bit SD、BQ27220 电量计与 PCF8563 RTC 已链接；提供四种构建——
+> 纯 BSP、bring-up 状态页（`CPYOS_UI_PROBE=1`）、**端到端阅读 demo**（`CPYOS_READER_DEMO=1`：
+> SD 扫描 → EPUB 解析 → 排版 → 上屏，触摸/盖板键翻页与跨章），以及 **完整 CPYOS Activity 壳**
+> （`CPYOS_SHELL_DEMO=1`：首页/书架/设置/应用/阅读器/文件浏览/睡眠，主题、字体、i18n、
+> 真实 `esp_wifi` + `esp_tls`）。16 级文字与窗口局部刷新已实现，但**全部未经实机验证**。
+> 受 app0 7.19 MiB 限制，目前只编 EN+ZH、CJK 共用 12pt 字面，游戏/AirPage/PixelSwitch 与
+> 网页服务/Calibre 页面不编入；**OTA 发布通道、USB MSC、BLE 尚未移植**（受保护 EPUB 与字体扩展已接入）。
+> 它使用另一套 SoC 与显示/电源拓扑，不在本项目的预编译目标内。源码树中的 `metalio_eink4`
+> 环境对应的是 3.97″ 的 Metalio E-Ink 4（ESP32-S3 + SSD1677 SPI），与 Plus 不是同一台设备。
+> **请勿把 Read Pico 固件刷到 Plus 上。** 移植分析见
+> [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md)。
+
 ## 相对 CrossMux 上游的新增与改进
 
 ### 界面与交互
@@ -64,7 +78,7 @@ CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地�
 
 ## 安装
 
-预编译包**只面向 Read Pico**。第一次安装前先做整片 16 MiB 备份，并把备份放到另一台机器上：
+预编译包**只面向 Read Pico**。**不要**把这里的固件刷到 Metalio E-INK4 Plus 或其它 ESP32 设备上：Plus 使用 ESP32-S31，分区表、面板接口和电源拓扑都不同。第一次安装前先做整片 16 MiB 备份，并把备份放到另一台机器上：
 
 ```bash
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
@@ -135,6 +149,12 @@ git merge main
 - **CrossMux**、**CrossPoint Reader**、**Inx**、**cpr-vcodex**、**diy-esp32-epub-reader**：上游固件、界面与 EPUB 阅读的早期探索。
 - **kiikoread（read-pico-reader）**：水波纹翻页、TEXTTURN 提前回浅、gamma 覆盖表、离线拼音搜索与输入、摇晃翻页判定。
 - Noto Sans CJK / Source Han Sans、FreeType、pypinyin、Lucide 与断词词典作者。
+
+## 许可证
+
+CPYOS 原创代码与官方固件采用 [CPYOS Project License 1.0](./LICENSE)：源码可见、仅限个人非商业使用、禁止商用；晋江组件源码不公开，官方固件可包含其二进制。第三方组件保留各自许可（MIT / Apache-2.0 / LGPL-3.0 / OFL / AGPL 等），详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。上游 MIT 代码（CrossMux / CrossPoint 等）仍可按其原始 MIT 许可使用；本许可不改变第三方组件的原有授权。晋江支持声明见 [NOTICE-JJWXC.md](./NOTICE-JJWXC.md)。
+
+此前已按 MIT 发布的版本仍按其发布时的许可；本许可适用于 2026-11-06 及之后发布的版本。
 
 ## 免责声明
 

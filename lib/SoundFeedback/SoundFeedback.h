@@ -31,6 +31,10 @@ struct WavPcmView {
 };
 
 inline constexpr Calibration WAVESHARE_397_CALIBRATION = {{0, 85, 100, 100}, 7, 4};
+// Metalio E-INK4 Plus: PCM goes to the BH1098G link (plus_audio.c), whose
+// vendor codec already applies (volume/100)^2. The cue WAVs are quiet, so the
+// levels are higher than the waveshare table and no extra gain is layered on.
+inline constexpr Calibration METALIO_PLUS_CALIBRATION = {{0, 55, 75, 95}, 1, 1};
 
 constexpr Level levelFromSetting(const uint8_t value) {
   switch (value) {

@@ -18,6 +18,10 @@
 
 extern "C" uint8_t _ext_ram_bss_start[];
 extern "C" uint8_t _ext_ram_bss_end[];
+// Added by patches/mupdf/source/fitz/image.c (the trimmed MuPDF build): a hard
+// ceiling on decoded image bytes so a content-heavy page fails to a smaller
+// band budget instead of exhausting PSRAM. Not in the stock 1.26.3 headers.
+extern "C" void fz_set_image_budget(long long bytes);
 
 namespace {
 

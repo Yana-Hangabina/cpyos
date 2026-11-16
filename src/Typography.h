@@ -23,6 +23,27 @@ struct Points {
 
 Points pointsFor(Scale scale);
 
+// One UI font id and the point size its role wants at this scale. The table is
+// the single source of truth for both the preferred bindings below and the
+// size-matched fallback faces the SD/vector font system attaches: a role id
+// must still reach the reading core after a face reload cleared the bindings
+// (an SD family load calls clearPreferredFonts()), and a page may ask a role id
+// directly.
+struct RoleFont {
+  int fontId;
+  uint8_t pointSize;
+  // Preferred bindings are for roles that should *render* in the CJK face;
+  // supplement-only roles keep their built-in design (e.g. the serif title)
+  // and get the CJK face only for glyphs that design lacks.
+  bool bindPreferred;
+};
+
+// Fills `out` with every role id at this scale; returns the number written.
+size_t roleFontsFor(uint8_t scaleIndex, RoleFont* out, size_t capacity);
+
+// The CJK role face for a point size, or 0 when no such face exists.
+int cjkFontIdForPointSize(uint8_t pointSize);
+
 // One UI role and the point size the pack binds it to.
 struct UiRolePoint {
   int fontId;

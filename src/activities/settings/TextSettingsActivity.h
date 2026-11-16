@@ -47,6 +47,7 @@ class TextSettingsActivity final : public UiTabListActivity {
   // silently confused with a StyleRow of equal value.
   enum class LayoutRow {
     LineSpacing,
+    LineSpacingPercent,
     WordSpacing,
     CharacterSpacing,
     ParaSpacing,

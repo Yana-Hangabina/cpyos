@@ -40,8 +40,8 @@ bool isJunkToken(const std::string_view token) {
       "ad",     "ads",        "advert",  "advertisement", "banner", "breadcrumb",
       "share",  "social",     "recommend", "recommended", "sidebar", "side",
       "footer", "header",     "nav",     "navigation",    "menu",    "toolbar",
-      "comment", "comments",  "copyright", "pagination",  "pager",   "related",
-      "promo",  "popup",      "login",   "register",
+      "comment", "comments",  "copyright", "related",      "promo",   "popup",
+      "login",   "register",
   };
   for (const char* junk : kJunk) {
     size_t i = 0;
@@ -71,6 +71,41 @@ bool matchesJunkToken(const std::string_view value) {
     if (i > start && isJunkToken(value.substr(start, i - start))) return true;
   }
   return false;
+}
+
+bool containsNoCase(const std::string_view value, const std::string_view needle) {
+  if (needle.empty() || needle.size() > value.size()) return false;
+  for (size_t i = 0; i + needle.size() <= value.size(); ++i) {
+    bool same = true;
+    for (size_t k = 0; k < needle.size(); ++k) {
+      if (std::tolower(static_cast<unsigned char>(value[i + k])) != needle[k]) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return true;
+  }
+  return false;
+}
+
+// Pagination and chapter navigation are reading controls, not chrome: dropping
+// their container removes the only way to reach the next page on sites whose
+// article is split into numbered pages. Match by the conventional container
+// names so a class like `article-nav` survives the generic `nav` junk token.
+// / Pagination and chapter navigation are reading controls, not chrome.
+bool isReadingNavValue(const std::string_view value) {
+  static constexpr const char* kNames[] = {
+      "pagination", "pager",     "pagenav",     "page-nav",    "chapter-nav",
+      "prev-next",  "next-prev", "chapter-pager",
+  };
+  for (const char* name : kNames) {
+    if (containsNoCase(value, name)) return true;
+  }
+  return false;
+}
+
+bool isReadingNavContainer(const HtmlToken& token) {
+  return isReadingNavValue(token.attribute("class")) || isReadingNavValue(token.attribute("id"));
 }
 
 bool isJunkContainer(const HtmlToken& token) {
@@ -144,7 +179,7 @@ class Extractor {
     }
     if ((name == "div" || name == "section" || name == "article" || name == "aside" || name == "nav" ||
          name == "header" || name == "footer" || name == "ul" || name == "ol") &&
-        isJunkContainer(token)) {
+        !isReadingNavContainer(token) && isJunkContainer(token)) {
       closeLink();
       flush();
       if (!isVoidTag(name) && !token.selfClosing) skipStack_.emplace_back(name);
@@ -157,6 +192,16 @@ class Extractor {
     }
     if (name == "a") {
       openLink(token);
+      return;
+    }
+    if (name == "img") {
+      // An image inside a link is the link's only label: its alt (or title) is
+      // the visible text the user would have seen in a full browser.
+      if (inLink_) {
+        const std::string_view alt = token.attribute("alt");
+        const std::string_view title = alt.empty() ? token.attribute("title") : alt;
+        if (!title.empty()) appendText(title, false);
+      }
       return;
     }
     if (!isBlockTag(name)) return;
@@ -254,17 +299,33 @@ class Extractor {
     inLink_ = true;
     linkStart_ = static_cast<uint32_t>(pending_.size());
     linkHref_ = std::move(resolved);
+    const std::string_view title = token.attribute("title");
+    linkTitle_.clear();
+    if (!title.empty()) linkTitle_.assign(title.data(), title.size());
   }
 
   void closeLink() {
     if (!inLink_) return;
     inLink_ = false;
     lastWasLinkEnd_ = true;
-    if (pending_.size() > linkStart_) {
+    // An icon-only anchor carries no visible text. Its title is the only label
+    // the page offers, so use it instead of recording a zero-width link (whose
+    // underline reads as a stray dash).
+    if (!hasVisibleText(linkStart_) && !linkTitle_.empty()) appendText(linkTitle_, false);
+    if (hasVisibleText(linkStart_)) {
       pendingLinks_.push_back(
           PendingLink{linkStart_, static_cast<uint32_t>(pending_.size()) - linkStart_, linkHref_});
     }
     linkHref_.clear();
+    linkTitle_.clear();
+    lastWasLinkEnd_ = true;
+  }
+
+  bool hasVisibleText(const size_t from) const {
+    for (size_t i = from; i < pending_.size(); ++i) {
+      if (!isAsciiSpace(pending_[i])) return true;
+    }
+    return false;
   }
 
   void appendText(const std::string_view text, const bool pre) {
@@ -404,6 +465,7 @@ class Extractor {
   bool lastWasLinkEnd_ = false;
   uint32_t linkStart_ = 0;
   std::string linkHref_;
+  std::string linkTitle_;
   std::string titleBuffer_;
   WebString title_;
   bool done_ = false;

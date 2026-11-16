@@ -5,6 +5,7 @@
 #include <Bitmap.h>
 #include <FontCacheManager.h>
 #include <FreeInkUIGfxRenderer.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -21,6 +22,7 @@
 #include <string>
 
 #include "CrossPointState.h"
+#include "activities/apps/weread/WeReadTimeSync.h"
 #include "NetworkStartup.h"
 #include "SilentRestart.h"
 #include "WeReadBrowseActivity.h"
@@ -36,9 +38,9 @@
 
 namespace {
 
-static_assert(sizeof(WeReadClient::Operation) <= 8 * 1024, "WeRead workspace exceeds its fixed heap budget");
+static_assert(sizeof(WeReadClient::Operation) <= 9 * 1024, "WeRead workspace exceeds its fixed heap budget");
 
-enum class ManageAction : uint8_t { Refresh, ClearCache, Logout };
+enum class ManageAction : uint8_t { Refresh, ClearCache, TimeSync, Logout };
 
 struct ManageEntry {
   StrId title;
@@ -48,6 +50,7 @@ struct ManageEntry {
 constexpr ManageEntry kManageEntries[] = {
     {StrId::STR_WEREAD_MENU_REFRESH, ManageAction::Refresh},
     {StrId::STR_WEREAD_MENU_CLEAR_CACHE, ManageAction::ClearCache},
+    {StrId::STR_WEREAD_TIME_SYNC, ManageAction::TimeSync},
     {StrId::STR_WEREAD_MENU_LOGOUT, ManageAction::Logout},
 };
 
@@ -478,6 +481,7 @@ static_assert(sizeof(WeReadChapterRangeActivity) <= 1024, "WeRead chapter select
 }  // namespace
 
 void WeReadActivity::onEnter() {
+  weread_time_sync::setForegroundBusy(true);
   Activity::onEnter();
   if (!WeReadBrowse::clearLegacyWorkspace()) LOG_ERR("WR", "legacy browse workspace cleanup failed");
   NetworkStartup::prepare(renderer);
@@ -547,6 +551,7 @@ void WeReadActivity::enterApp() {
 }
 
 void WeReadActivity::onExit() {
+  weread_time_sync::setForegroundBusy(false);
   operation_.reset();
   downloadRenderPending_.store(false);
   stageRenderPending_.store(false);
@@ -726,6 +731,8 @@ void WeReadActivity::startJob(const Job job, const WeReadStore::ShelfRecord* boo
   progressStage_.store(WeReadClient::Operation::ProgressStage::Chapters);
   progressCompleted_.store(0);
   progressTotal_.store(0);
+  progressSkipped_.store(0);
+  cacheSummary_[0] = '\0';
   postProcessNotice_.store(PostProcessNotice::None);
   postProcessStartedAt_ = 0;
   downloadRenderPending_.store(false);
@@ -747,6 +754,8 @@ void WeReadActivity::startJob(const Job job, const WeReadStore::ShelfRecord* boo
   if (job == Job::Download && book) {
     options.imagePolicy = detailImagePolicy_;
     options.chapterScope = downloadChapterScope_;
+    options.paidChapterText = tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
+    options.unavailableChapterText = tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
   }
   if (!operation_.begin(kind, book, options, syncShelfCoverScope_)) {
     error_ = operation_.error();
@@ -766,6 +775,10 @@ void WeReadActivity::startJob(const Job job, const WeReadStore::ShelfRecord* boo
 }
 
 WeReadClient::Operation::Event WeReadActivity::stepOperation() {
+  // A 1701-chapter download runs for tens of minutes with no input, so the
+  // idle policy would otherwise drop the CPU to 80 MHz and stretch every TLS
+  // round trip. The lock is scoped to one request/packaging step.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   // Rendering owns a second 8KB task and large display buffers. Serialize it
   // with each synchronous protocol step so TLS never competes with a refresh.
   RenderLock renderBarrier(*this);
@@ -872,12 +885,15 @@ void WeReadActivity::updateJobProgress() {
   const auto stage = operation_.progressStage();
   const uint32_t completed = operation_.progressCompleted();
   const uint32_t total = operation_.progressTotal();
+  const uint32_t skipped = operation_.skippedChapterCount();
   const auto previousStage = progressStage_.exchange(stage);
   const uint32_t previousCompleted = progressCompleted_.exchange(completed);
   const uint32_t previousTotal = progressTotal_.exchange(total);
+  const uint32_t previousSkipped = progressSkipped_.exchange(skipped);
   const bool stageChanged = previousStage != stage;
   const bool totalChanged = previousTotal != total;
   const bool completedChanged = previousCompleted != completed;
+  const bool skippedChanged = previousSkipped != skipped;
   const bool decileChanged = WeReadClient::Operation::progressDecile(previousCompleted, total) !=
                              WeReadClient::Operation::progressDecile(completed, total);
 
@@ -914,6 +930,12 @@ void WeReadActivity::updateJobProgress() {
       case Job::Detail:
         break;
     }
+  }
+  // Show the "skipped" counter moving during a paid book without redrawing for
+  // every single chapter.
+  if (!requestRender && skippedChanged && retryJob_ == Job::Download &&
+      (skipped == total || skipped % 25U == 0U)) {
+    requestRender = true;
   }
   if (requestRender) requestJobUpdate();
 }
@@ -968,10 +990,32 @@ void WeReadActivity::advanceJob() {
           state_.store(State::Detail);
           requestUpdate();
           return;
-        case Job::Download:
+        case Job::Download: {
+          const uint32_t cached = operation_.cachedChapterCount();
+          const uint32_t total = operation_.requestedChapterCount();
+          const uint32_t skipped = operation_.skippedChapterCount();
+          if (cached == 0 && skipped > 0) {
+            error_ = WeReadClient::Error::NotPurchased;
+            snprintf(cacheSummary_, sizeof(cacheSummary_), "%u/%u (-%u)", static_cast<unsigned>(cached),
+                     static_cast<unsigned>(total), static_cast<unsigned>(skipped));
+            state_.store(State::Error);
+            requestUpdate();
+            return;
+          }
+          if (skipped > 0) {
+            snprintf(cacheSummary_, sizeof(cacheSummary_), "%s %u/%u (-%u)", tr(STR_WEREAD_CACHE_BADGE),
+                     static_cast<unsigned>(cached), static_cast<unsigned>(total), static_cast<unsigned>(skipped));
+            toast_.show(cacheSummary_, millis(), 4000);
+            // Stay on the detail page so the toast is readable; the user opens
+            // the book (or retries after purchasing) from here.
+            state_.store(State::Detail);
+            requestUpdate();
+            return;
+          }
           state_.store(State::OpenBook);
           openBook(operation_.finalPath());
           return;
+        }
       }
       return;
     case WeReadClient::Operation::Event::Cancelled:
@@ -990,6 +1034,12 @@ void WeReadActivity::advanceJob() {
         return;
       }
       error_ = operation_.error();
+      if (error_ == WeReadClient::Error::NotPurchased) {
+        snprintf(cacheSummary_, sizeof(cacheSummary_), "%u/%u (-%u)",
+                 static_cast<unsigned>(operation_.cachedChapterCount()),
+                 static_cast<unsigned>(operation_.requestedChapterCount()),
+                 static_cast<unsigned>(operation_.skippedChapterCount()));
+      }
       refreshShelf();
       state_.store(State::Error);
       requestJobUpdate();
@@ -1547,6 +1597,45 @@ void WeReadActivity::handleMainTabInput() {
   selectMainTab(mainTab_.load() == MainTab::Shelf ? MainTab::Manage : MainTab::Shelf);
 }
 
+std::string WeReadActivity::manageEntryLabel(const int index) const {
+  if (index < 0 || index >= kManageEntryCount) return {};
+  if (kManageEntries[index].action != ManageAction::TimeSync) {
+    return std::string(I18N.get(kManageEntries[index].title));
+  }
+  weread_time_sync::begin();
+  const char* state = !weread_time_sync::enabled()
+                          ? I18N.get(StrId::STR_OFF)
+                          : (weread_time_sync::consentGiven() ? I18N.get(StrId::STR_ON)
+                                                              : I18N.get(StrId::STR_WEREAD_TIME_SYNC_PENDING));
+  char label[96];
+  snprintf(label, sizeof(label), "%s · %s", I18N.get(StrId::STR_WEREAD_TIME_SYNC), state);
+  return std::string(label);
+}
+
+void WeReadActivity::activateTimeSync() {
+  weread_time_sync::begin();
+  if (weread_time_sync::enabled() && weread_time_sync::consentGiven()) {
+    weread_time_sync::setEnabled(false);
+    requestUpdate();
+    return;
+  }
+  if (weread_time_sync::consentGiven()) {
+    weread_time_sync::setEnabled(true);
+    requestUpdate();
+    return;
+  }
+  // First enable needs an explicit confirmation: the seconds are written into
+  // the account's WeRead statistics.
+  const char* options[2] = {I18N.get(StrId::STR_WEREAD_TIME_SYNC_DECLINE),
+                            I18N.get(StrId::STR_WEREAD_TIME_SYNC_ACCEPT)};
+  optionPopup_.showMessage(I18N.get(StrId::STR_WEREAD_TIME_SYNC), I18N.get(StrId::STR_WEREAD_TIME_SYNC_CONSENT),
+                           options, 2, 0, [this](const int index) {
+                             if (index == 1) weread_time_sync::setConsent();
+                             requestUpdate();
+                           });
+  requestUpdate();
+}
+
 void WeReadActivity::handleManageInput() {
   const auto activate = [this] {
     switch (kManageEntries[manageSelected_].action) {
@@ -1555,6 +1644,9 @@ void WeReadActivity::handleManageInput() {
         return;
       case ManageAction::ClearCache:
         promptClearCache();
+        return;
+      case ManageAction::TimeSync:
+        activateTimeSync();
         return;
       case ManageAction::Logout:
         promptLogout();
@@ -1984,6 +2076,13 @@ const char* WeReadActivity::errorMessage() const {
       return WiFi.status() == WL_CONNECTED ? tr(STR_WEREAD_HTTP_ERROR) : tr(STR_WEREAD_NO_WIFI);
     case WeReadClient::Error::Unavailable:
       return tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
+    case WeReadClient::Error::SessionExpired:
+      return tr(STR_WEREAD_LOGIN_REQUIRED);
+    case WeReadClient::Error::NotPurchased:
+      return tr(STR_WEREAD_CACHE_NOT_AVAILABLE);
+    case WeReadClient::Error::Integrity:
+    case WeReadClient::Error::Protocol:
+      return tr(STR_WEREAD_CACHE_FAILED);
     case WeReadClient::Error::WholeBookOnly:
       return tr(STR_WEREAD_CACHE_WHOLE_BOOK_ONLY);
     default:
@@ -2438,7 +2537,7 @@ void WeReadActivity::render(RenderLock&&) {
         case MainTab::Manage:
           GUI.drawButtonMenu(
               renderer, content, kManageEntryCount, mainFocus == MainFocus::Content ? manageSelected_ : -1,
-              [](const int index) { return std::string(I18N.get(kManageEntries[index].title)); }, nullptr);
+              [this](const int index) { return manageEntryLabel(index); }, nullptr);
           break;
       }
       break;
@@ -2532,7 +2631,8 @@ void WeReadActivity::render(RenderLock&&) {
       const auto stage = progressStage_.load();
       const uint32_t completed = progressCompleted_.load();
       uint32_t total = progressTotal_.load();
-      char status[32] = {};
+      const uint32_t skipped = progressSkipped_.load();
+      char status[64] = {};
       const StrId* lines = nullptr;
       int lineCount = 0;
       switch (stage) {
@@ -2555,7 +2655,9 @@ void WeReadActivity::render(RenderLock&&) {
         case WeReadClient::Operation::ProgressStage::Chapters:
         case WeReadClient::Operation::ProgressStage::Images: {
           if (total > 0) {
-            snprintf(status, sizeof(status), "%u/%u", static_cast<unsigned>(completed), static_cast<unsigned>(total));
+            snprintf(status, sizeof(status), skipped > 0 ? "%u/%u (-%u)" : "%u/%u",
+                     static_cast<unsigned>(completed), static_cast<unsigned>(total),
+                     static_cast<unsigned>(skipped));
           }
           break;
         }
@@ -2569,6 +2671,10 @@ void WeReadActivity::render(RenderLock&&) {
       break;
     }
     case State::Error: {
+      if (error_ == WeReadClient::Error::NotPurchased) {
+        status_card::paintMessage(renderer, errorMessage(), cacheSummary_);
+        break;
+      }
       if (error_ != WeReadClient::Error::SdCard && error_ != WeReadClient::Error::OutOfMemory) {
         status_card::paintMessage(renderer, errorMessage(), nullptr);
         break;

@@ -461,6 +461,11 @@ void FrontlightPanelActivity::render(RenderLock&&) {
                                                                 : DisplayRefreshContext::Normal;
 #if FREEINK_DEVICE_EEGO_A4
   renderer.displayBuffer(cleanRefreshPending ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH, context);
+#elif defined(CROSSPOINT_PORT_CLEAN_USES_FULL)
+  // The port's FULL path is a non-differential GC16 sweep; its HALF path is a
+  // differential GL16 that drives nothing once the back buffer has caught up,
+  // which left slider residue untouched. This makes 刷新屏幕 an actual clean.
+  renderer.displayBuffer(cleanRefreshPending ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH, context);
 #else
   renderer.displayBuffer(cleanRefreshPending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH, context);
 #endif

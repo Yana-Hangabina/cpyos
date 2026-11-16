@@ -10,7 +10,12 @@
 #include <TtfEpdFont.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
-#include <miniz.h>
+// Vendored miniz with CrossPoint's configuration: it renames the tinfl
+// entry points away from the ESP32 mask-ROM ones and pulls the vendored
+// header by relative path. Including <miniz.h> directly makes ESP-IDF resolve
+// esp_rom's TINFL_LESS_MEMORY build instead, which has a different struct
+// layout.
+#include <MinizConfig.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -88,9 +93,6 @@ struct RegisteredFont {
 };
 
 Source g_source;
-#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
-HalFile g_packFile;
-#endif
 std::vector<RegisteredFont> g_fonts;
 bool g_ready = false;
 bool g_fourBit = false;
@@ -252,93 +254,41 @@ bool begin(GfxRenderer& renderer) {
     LOG_ERR("SFP", "embedded font pack header invalid");
     return false;
   }
-  // Keep the multi-MB face on the SD card when possible. The carrier in app0
-  // is only a provisioning source: inflate it once, write a versioned file,
-  // and stream glyphs from that file. This leaves the reader ~2.5 MB of PSRAM
-  // for page/section caches instead of holding the whole TTF.
-  char packPath[64];
-  std::snprintf(packPath, sizeof(packPath), "/.crosspoint/system_font_%08x.dat",
-                static_cast<unsigned>(header.rawCrc));
-  auto openSdPack = [&]() {
-    if (!Storage.ready()) return false;
-    HalFile file;
-    if (!Storage.openFileForRead("SFP", packPath, file) || file.fileSize() != kHeaderSize + header.rawSize) {
-      return false;
-    }
-    PackHeader disk{};
-    if (file.read(&disk, sizeof(disk)) != static_cast<int>(sizeof(disk)) ||
-        std::memcmp(disk.magic, kMagic, sizeof(kMagic)) != 0 || disk.version != kVersion ||
-        disk.headerSize != kHeaderSize || disk.payloadSize != header.rawSize) {
-      return false;
-    }
-    g_packFile = std::move(file);
-    g_source = Source{};
-    g_source.backend = Backend::File;
-    g_source.file = &g_packFile;
-    g_source.dataOffset = kHeaderSize;
-    g_source.payloadSize = header.rawSize;
-    return true;
-  };
-
-  bool onSd = openSdPack();
-  if (!onSd) {
-    const size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    if (freePsram < header.rawSize + 512u * 1024u) {
-      LOG_ERR("SFP", "not enough PSRAM for the font pack (%u free, need %u)",
-              static_cast<unsigned>(freePsram), static_cast<unsigned>(header.rawSize + 512u * 1024u));
-      return false;
-    }
-    auto* raw = static_cast<uint8_t*>(heap_caps_malloc(header.rawSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (raw == nullptr) {
-      LOG_ERR("SFP", "font pack PSRAM allocation failed (%u)", static_cast<unsigned>(header.rawSize));
-      return false;
-    }
-    if (tinfl_decompress_mem_to_mem(raw, header.rawSize, kEmbeddedFontPackStart + kHeaderSize,
-                                    header.compressedSize, 0) != static_cast<int>(header.rawSize)) {
-      LOG_ERR("SFP", "font pack inflate failed");
-      heap_caps_free(raw);
-      return false;
-    }
-
-    // First boot: provision the SD copy. The tmp+replace keeps a power loss
-    // from leaving a half-written file that the size/header check would reject
-    // only on the next boot.
-    bool wrote = false;
-    if (Storage.ready()) {
-      char tmpPath[72];
-      std::snprintf(tmpPath, sizeof(tmpPath), "%s.tmp", packPath);
-      HalFile out;
-      PackHeader disk{};
-      std::memcpy(disk.magic, kMagic, sizeof(kMagic));
-      disk.version = kVersion;
-      disk.headerSize = kHeaderSize;
-      disk.payloadSize = header.rawSize;
-      disk.payloadCrc = header.rawCrc;
-      if (Storage.openFileForWrite("SFP", tmpPath, out)) {
-        wrote = out.write(&disk, sizeof(disk)) == sizeof(disk) &&
-                out.write(raw, header.rawSize) == header.rawSize;
-        out.flush();
-        out.close();
-        if (wrote && Storage.replaceFile(tmpPath, packPath)) {
-          wrote = openSdPack();
-        } else {
-          Storage.remove(tmpPath);
-          wrote = false;
-        }
-      }
-    }
-    if (!wrote) {
-      // No SD / write failure: keep the inflated face in PSRAM. Reading still
-      // works; only the memory budget is worse until a card is available.
-      g_packBuffer = raw;
-      g_source = Source{};
-      g_source.backend = Backend::Memory;
-      g_source.memory = raw;
-      g_source.payloadSize = header.rawSize;
-    } else {
-      heap_caps_free(raw);
-    }
+  // The UI face is a few hundred KB and belongs in PSRAM for the whole
+  // session. Keeping it there (instead of provisioning an SD copy and faulting
+  // every glyph through the card) is what guarantees the system UI is never
+  // slowed down by a slow or missing SD card. It also removes the first-boot
+  // multi-MB write older builds performed.
+  const size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  if (freePsram < header.rawSize + 256u * 1024u) {
+    LOG_ERR("SFP", "not enough PSRAM for the UI font pack (%u free, need %u)",
+            static_cast<unsigned>(freePsram), static_cast<unsigned>(header.rawSize + 256u * 1024u));
+    return false;
   }
+  auto* raw = static_cast<uint8_t*>(heap_caps_malloc(header.rawSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (raw == nullptr) {
+    LOG_ERR("SFP", "font pack PSRAM allocation failed (%u)", static_cast<unsigned>(header.rawSize));
+    return false;
+  }
+  if (tinfl_decompress_mem_to_mem(raw, header.rawSize, kEmbeddedFontPackStart + kHeaderSize,
+                                  header.compressedSize, 0) != static_cast<int>(header.rawSize)) {
+    LOG_ERR("SFP", "font pack inflate failed");
+    heap_caps_free(raw);
+    return false;
+  }
+  // crc32Update is the incremental update (no leading/trailing complement);
+  // this is the same convention the spiffs path uses below.
+  const uint32_t packCrc = crc32Update(UINT32_MAX, raw, header.rawSize) ^ UINT32_MAX;
+  if (packCrc != header.rawCrc) {
+    LOG_ERR("SFP", "font pack CRC mismatch");
+    heap_caps_free(raw);
+    return false;
+  }
+  g_packBuffer = raw;
+  g_source = Source{};
+  g_source.backend = Backend::Memory;
+  g_source.memory = raw;
+  g_source.payloadSize = header.rawSize;
   payloadSize = header.rawSize;
 #else
   const esp_partition_t* partition =
@@ -399,7 +349,7 @@ void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t co
   bool wanted[35] = {};
   for (size_t i = 0; i < count; ++i) {
     const uint8_t pt = pointSizes[i];
-    if (pt >= 10 && pt <= 34) wanted[pt] = true;
+    if (pt >= 8 && pt <= 34) wanted[pt] = true;
   }
 
   // Release first so a scale change never holds old and new faces at once.
@@ -412,7 +362,7 @@ void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t co
     return true;
   });
   for (const uint8_t pt : kPointSizes) {
-    if (pt < 10 || !wanted[pt]) continue;
+    if (pt < 8 || !wanted[pt]) continue;
     const bool loaded = std::any_of(g_fonts.begin(), g_fonts.end(),
                                     [pt](const RegisteredFont& entry) { return entry.pointSize == pt; });
     if (!loaded) registerAt(renderer, pt);
@@ -433,7 +383,6 @@ void release(GfxRenderer& renderer) {
     heap_caps_free(g_packBuffer);
     g_packBuffer = nullptr;
   }
-  g_packFile.close();
 #endif
   g_source = {};
   g_ready = false;

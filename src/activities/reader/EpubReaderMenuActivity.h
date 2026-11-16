@@ -66,6 +66,12 @@ class EpubReaderMenuActivity final : public UiListActivity {
   void onExit() override;
   void render(RenderLock&&) override;
   bool handleHomeGesture() override;
+  // Serial hooks: this menu keeps its own nav in the base class but the row
+  // activation runs through activateIndex(), so set the selection directly and
+  // confirm through the same path a key press takes.
+  void debugSelect(int index) override;
+  void debugMoveRing(int delta) override;
+  void debugConfirm() override;
 
  private:
   // Row storage: menuItems is at most MAX_MENU_ITEMS, so a

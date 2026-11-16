@@ -15,8 +15,10 @@
 #include <HalGPIO.h>
 #include <HalMemory.h>
 #include <HalOtaSlot.h>
+#include "network/OtaUpdater.h"
 #include <HalPowerManager.h>
 #include <HalStorage.h>
+#include <SDCardManager.h>
 #include <HalSystem.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
@@ -81,6 +83,7 @@
 #ifdef BOARD_HAS_PSRAM
 #if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
 #include "JjwxcActivity.h"
+#include "JjwxcPurchaseConfirmActivity.h"
 #include "TlsProbe.h"
 #endif
 #if defined(ENABLE_CHINESE_VERSION)
@@ -112,7 +115,6 @@
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "network/OtaUpdater.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
@@ -476,10 +478,18 @@ EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 // setupDisplay by SystemFontPack. The 8pt built-in subset stays as the
 // emergency fallback when the pack is absent (app-only OTA before the first
 // full install); the other placeholders are dropped and replaced at boot.
+static EpdFontData emptyCjk8Data;
 static EpdFontData emptyCjk10Data;
 static EpdFontData emptyCjk14Data;
 static EpdFontData emptyCjk16Data;
+// Embedded builds register the vector UI face at 8pt too (Compact density),
+// so the 3,500-glyph bitmap has no role left there. The C3/spiffs profile
+// keeps it: its pack can be absent after an app-only OTA.
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+EpdFont cjk8Font(&emptyCjk8Data);
+#else
 EpdFont cjk8Font(&notosans_cjk_8);
+#endif
 EpdFont cjk10Font(&emptyCjk10Data);
 EpdFont cjk14Font(&emptyCjk14Data);
 EpdFont cjk16Font(&emptyCjk16Data);
@@ -2142,7 +2152,7 @@ void loop() {
           activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
         }
       } else if (cmd.startsWith("READ")) {
-        String path = "/BOOKS/test.epub";
+        String path = "/BOOKS/embedded-font-test.epub";
         const int space = cmd.indexOf(' ');
         if (space > 0) path = cmd.substring(space + 1);
         activityManager.pushActivity(std::make_unique<EpubReaderActivity>(
@@ -2157,13 +2167,33 @@ void loop() {
 #endif
       } else if (cmd.startsWith("DETAIL")) {
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        String id = "4465668";
         const int space = cmd.indexOf(' ');
-        const String id = space > 0 ? cmd.substring(space + 1) : String();
-        if (id.isEmpty()) {
-          LOG_ERR("JJWXC", "serial CMD:DETAIL needs a novel id");
-        } else {
-          JjwxcActivity::requestDeepLink(id.c_str(), JjwxcActivity::DeepLinkAction::OpenBookDetail);
-          activityManager.goToJjwxc();
+        if (space > 0) id = cmd.substring(space + 1);
+        JjwxcActivity::requestDeepLink(id.c_str(), JjwxcActivity::DeepLinkAction::OpenBookDetail);
+        activityManager.goToJjwxc();
+#endif
+      } else if (cmd == "JJSIGNIN") {
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::SignIn);
+        activityManager.goToJjwxc();
+#endif
+      } else if (cmd.startsWith("JJSIGNUPGO ")) {
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        // Bench only: quotes nothing, performs the paid make-up immediately.
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          String date = cmd.substring(11);
+          date.trim();
+          activity->debugJjwxcSignInSupplementary(date.c_str(), true);
+        }
+#endif
+      } else if (cmd.startsWith("JJSIGNUP ")) {
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        // Quotes the cost and opens the app's cancel/confirm dialog.
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          String date = cmd.substring(9);
+          date.trim();
+          activity->debugJjwxcSignInSupplementary(date.c_str(), false);
         }
 #endif
       } else if (cmd == "JJSEARCH") {
@@ -2224,7 +2254,7 @@ void loop() {
 #endif
       } else if (cmd == "WIFI") {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
-#if defined(BOARD_HAS_PSRAM) && defined(ENABLE_CHINESE_VERSION)
+#if defined(BOARD_HAS_PSRAM)
       } else if (cmd == "FEXTDEMO") {
         activityManager.pushActivity(std::make_unique<FontExtrasActivity>(renderer, mappedInputManager));
       } else if (cmd.startsWith("FEXTURL")) {
@@ -2349,6 +2379,107 @@ void loop() {
             }
           }
         }
+#if defined(ENABLE_SERIAL_LOG) && defined(BOARD_HAS_PSRAM)
+      } else if (cmd.startsWith("PUTFILE ")) {
+        // Debug-only serial transfer: "CMD:PUTFILE <path> <size>" followed by
+        // exactly <size> raw bytes. Used to put a published font pack on the SD
+        // card on a bench with no Wi-Fi; the normal path is Font Extras.
+        String rest = cmd.substring(8);
+        rest.trim();
+        const int space = rest.indexOf(' ');
+        const String path = space > 0 ? rest.substring(0, space) : String();
+        const size_t expected = space > 0 ? rest.substring(space + 1).toInt() : 0;
+        if (path.length() == 0 || path[0] != '/' || expected == 0 || expected > 2 * 1024 * 1024) {
+          LOG_ERR("DBG", "usage: PUTFILE <path> <size>");
+        } else {
+          HalFile file;
+          if (!Storage.openFileForWrite("DBG", path.c_str(), file)) {
+            LOG_ERR("DBG", "PUTFILE open failed: %s", path.c_str());
+          } else {
+            uint8_t buffer[4096];
+            size_t received = 0;
+            size_t lastAck = 0;
+            uint16_t idle = 0;
+            logSerial.printf("PUTFILE_READY %u\n", static_cast<unsigned>(expected));
+            logSerial.flush();
+            while (received < expected) {
+              const size_t want = std::min(sizeof(buffer), expected - received);
+              const int got = logSerial.readBytes(buffer, want);
+              if (got <= 0) {
+                // A slow host may pause between ACKed chunks; do not give up
+                // until the link has been idle for ~2 s.
+                if (++idle >= 400) break;
+                delay(5);
+                continue;
+              }
+              idle = 0;
+              if (file.write(buffer, static_cast<size_t>(got)) != static_cast<size_t>(got)) {
+                LOG_ERR("DBG", "PUTFILE write failed at %u", static_cast<unsigned>(received));
+                break;
+              }
+              received += static_cast<size_t>(got);
+              if (received == expected || received - lastAck >= 16 * 1024) {
+                lastAck = received;
+                logSerial.printf("PUTFILE_ACK %u\n", static_cast<unsigned>(received));
+                logSerial.flush();
+              }
+              delay(1);
+            }
+            file.close();
+            logSerial.printf("PUTFILE_DONE %u/%u\n", static_cast<unsigned>(received),
+                             static_cast<unsigned>(expected));
+            logSerial.flush();
+          }
+        }
+#endif
+      } else if (cmd.startsWith("RM ")) {
+        String path = cmd.substring(3);
+        path.trim();
+        if (path.length() < 2 || path[0] != '/') {
+          LOG_ERR("DBG", "usage: RM <absolute path>");
+        } else {
+          LOG_INF("DBG", "RM %s %s", path.c_str(), Storage.remove(path.c_str()) ? "ok" : "failed");
+        }
+      } else if (cmd.startsWith("MOVE ")) {
+        // Serial-only recovery: rename without touching the cluster chain. The one
+        // case this exists for is a file whose chain was damaged by an interrupted
+        // write -- it still opens for read, but freeChain() fails, so O_TRUNC and
+        // remove() both refuse. Moving it aside frees the name for a fresh copy.
+        String rest = cmd.substring(5);
+        rest.trim();
+        const int space = rest.indexOf(' ');
+        if (space <= 0) {
+          LOG_ERR("DBG", "usage: MOVE <old> <new>");
+        } else {
+          String from = rest.substring(0, space);
+          String to = rest.substring(space + 1);
+          from.trim();
+          to.trim();
+          LOG_INF("DBG", "MOVE %s -> %s %s", from.c_str(), to.c_str(),
+                  Storage.rename(from.c_str(), to.c_str()) ? "ok" : "failed");
+        }
+      } else if (cmd.startsWith("UNLOCK ")) {
+        // Serial-only recovery: clear the FAT read-only attribute on one file.
+        // A write opened with O_RDWR/O_WRONLY is refused outright while that bit
+        // is set, and vol().remove() opens O_WRONLY, so such a file can be read
+        // but never rewritten or deleted from code. SdFat exposes the attribute
+        // mutator only on an open handle, hence open-for-read then attrib().
+        String path = cmd.substring(7);
+        path.trim();
+        if (path.length() < 2 || path[0] != '/') {
+          LOG_ERR("DBG", "usage: UNLOCK <absolute path>");
+        } else {
+          FsFile file = SDCardManager::getInstance().open(path.c_str(), O_RDONLY);
+          if (!file) {
+            LOG_ERR("DBG", "UNLOCK open failed: %s", path.c_str());
+          } else {
+            const int before = file.attrib();
+            const bool ok = file.attrib(FS_ATTRIB_ARCHIVE);
+            file.close();
+            LOG_INF("DBG", "UNLOCK %s attrib=0x%02x -> %s", path.c_str(), (unsigned)(before & 0xFF),
+                    ok ? "rw" : "failed");
+          }
+        }
       } else if (cmd.startsWith("CAT ")) {
         String path = cmd.substring(4);
         path.trim();
@@ -2389,12 +2520,64 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenPhraseSelection();
       } else if (cmd == "STRESSCOMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenStressComment();
+      } else if (cmd == "MESSAGEDEMO") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugShowMessageDemo();
+      } else if (cmd == "CONFIRMDEMO") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugShowConfirmDemo();
+      } else if (cmd.startsWith("CARDDEMO")) {
+        // Serial screenshot hook for the two persistent surfaces: "wait" draws
+        // the busy card, "msg" the message card. Both present over the current
+        // page and stay there until HOME repaints it.
+        if (cmd.indexOf("msg") >= 0) {
+          status_card::showMessage(renderer, tr(STR_FONT_PRELOAD_FAILED), tr(STR_SD_CARD_ERROR_DETAIL));
+        } else {
+          status_card::showWait(renderer, tr(STR_LOADING_POPUP), tr(STR_JJWXC_BUSY_HINT), nullptr, -1, false,
+                                millis());
+        }
+      } else if (cmd == "BOOTLANG") {
+        logSerial.printf("BOOTLANG cached=%u current=%u\n", (unsigned)bootlang::recall(),
+                         (unsigned)SETTINGS.language);
+      } else if (cmd == "SDPAGE") {
+        // Serial screenshot hook for the card-failure page: restores the last
+        // language from NVS exactly like the real mount-failure branch, then
+        // shows the page. HOME leaves it again.
+        const uint8_t cachedLanguage = bootlang::recall();
+        if (cachedLanguage != 0xFF) {
+          I18N.setLanguage(static_cast<Language>(cachedLanguage));
+          I18N.init();
+        }
+        activityManager.goToFullScreenMessage(tr(STR_SD_CARD_ERROR), EpdFontFamily::BOLD,
+                                              tr(STR_SD_CARD_ERROR_DETAIL), true);
+        activityManager.requestUpdateAndWait();
+      } else if (cmd == "LIBREBUILD") {
+        // Library manual rebuild: verifies the busy card rides the grid's own
+        // 16-level pass instead of pushing a 1-bit frame.
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugRebuildLibrary();
+      } else if (cmd == "POPUPDEMO") {
+        // Long picker opened at its last entry: the scrollbar's bottom end is
+        // the rounded-clip regression check.
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugShowPopupDemo();
+      } else if (cmd == "WAITDEMO") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugShowWaitDemo();
+#if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+      } else if (cmd == "PURCHASEDEMO") {
+        // Screenshot hook for the purchase drawer: sample bill, no charge --
+        // the drawer only hands a six-digit password back to its caller.
+        activityManager.pushActivity(makeUniqueNoThrow<JjwxcPurchaseConfirmActivity>(
+            renderer, mappedInputManager, "\u957f\u591c\u5c06\u660e",
+            "\u7b2c 37 \u7ae0 \u00b7 \u56de\u5f52", 12));
+#endif
       } else if (cmd == "FAKECOMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenFakeJjwxcComment();
       } else if (cmd == "COMMENTREFRESH") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugRefreshJjwxcComment();
       } else if (cmd == "COMMENTLIKE") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugLikeJjwxcComment();
+      } else if (cmd == "JJWXCIMPORT") {
+        // Bench hook for the browser-session import page (Option A). It is hidden
+        // from the account list while a session is valid, but the page itself must
+        // be testable without signing out.
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcImport();
       } else if (cmd == "COMMENT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenJjwxcComment();
       } else if (cmd == "CHCOMMENT") {

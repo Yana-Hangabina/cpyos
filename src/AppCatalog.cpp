@@ -25,6 +25,11 @@ void openBuddy() { activityManager.goToBuddy(); }
 void openPixelSwitch() { activityManager.goToPixelSwitch(); }
 void openCalculator() { activityManager.goToCalculator(); }
 void openWoodfish() { activityManager.goToWoodfish(); }
+#if defined(CROSSPOINT_PLUS_PORT)
+void openCamera() { activityManager.goToCamera(); }
+void openVoiceMemo() { activityManager.goToVoiceMemo(); }
+void openVoiceClient() { activityManager.goToVoiceClient(); }
+#endif
 #ifdef ENABLE_CHINESE_VERSION
 void openWeRead() { activityManager.goToWeRead(); }
 void openChineseChess() { activityManager.goToChineseChess(); }
@@ -65,6 +70,20 @@ constexpr app_catalog::Entry kEntries[] = {
     {AppId::Calculator, StrId::STR_CALCULATOR_TITLE, UIIcon::Calculator, &openCalculator},
     {AppId::Woodfish, StrId::STR_WOODFISH_TITLE, UIIcon::Woodfish, &openWoodfish},
     {AppId::Standby, StrId::STR_STANDBY_TITLE, UIIcon::Standby, &openStandby},
+#if defined(CROSSPOINT_PLUS_PORT)
+    // Metalio E-INK4 Plus only: the board is the one target with a GC2145 DVP
+    // sensor. Reuses the existing "images" label and the Image icon; a new i18n
+    // key would not fit the 15-bit English blob budget.
+    {AppId::Camera, StrId::STR_IMAGES, UIIcon::Image, &openCamera},
+    // Voice memo: the Plus is also the only target with the BH1098 microphone
+    // path. UIIcon has no audio glyph and BaseTheme.h is outside this port's
+    // edit scope, so the tile is drawn with the existing Lucide music note in
+    // MyActivity; the value below is only what the visibility list falls back to.
+    {AppId::VoiceMemo, StrId::STR_VOICE_MEMO, UIIcon::Text, &openVoiceMemo},
+    // AI voice client (push-to-talk over a xiaozhi WebSocket). Like the memo
+    // tile it has no UIIcon glyph; MyActivity substitutes the Lucide speaker.
+    {AppId::VoiceClient, StrId::STR_VOICE_CLIENT, UIIcon::Text, &openVoiceClient},
+#endif
 };
 
 constexpr int kCount = static_cast<int>(sizeof(kEntries) / sizeof(kEntries[0]));

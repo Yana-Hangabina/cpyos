@@ -23,7 +23,17 @@
 #include <freertos/task.h>
 #if CROSSPOINT_BLE_HOST_PSRAM
 #include <esp_memory_utils.h>
+#if defined(CROSSPOINT_PLUS_PORT)
+// The IDF Bluetooth library exposes the NimBLE memory hooks directly.
+extern "C" void *nimble_mem_malloc(size_t size);
+extern "C" void nimble_mem_free(void *ptr);
+#else
+// PlatformIO links NimBLE-Arduino, whose port exports the same hooks under
+// their platform names. Keep one call site for both targets.
 #include <nimble/esp_port/port/include/esp_nimble_mem.h>
+#define nimble_mem_malloc nimble_platform_mem_malloc
+#define nimble_mem_free nimble_platform_mem_free
+#endif
 #endif
 #endif
 
@@ -214,13 +224,13 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
 #if CROSSPOINT_BLE_HOST_PSRAM && !defined(SIMULATOR)
   // A stack buffer cannot verify the linked NimBLE allocator. Its C API owns
   // this 16-byte diagnostic allocation, which is released before starting BLE.
-  void* probe = nimble_platform_mem_malloc(16);
+  void* probe = nimble_mem_malloc(16);
   if (!probe) {
     LOG_ERR("BLE", "NimBLE allocator probe failed (16 bytes)");
     return StartResult::Failed;
   }
   const bool external = esp_ptr_external_ram(probe);
-  nimble_platform_mem_free(probe);
+  nimble_mem_free(probe);
   if (!external) {
     LOG_ERR("BLE", "NimBLE allocator probe returned internal RAM; refusing start");
     return StartResult::Failed;

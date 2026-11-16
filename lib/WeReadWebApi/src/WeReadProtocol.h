@@ -33,9 +33,11 @@ struct RemoteProgress {
   uint32_t appIdHash = 0;
   uint32_t chapterOffset = 0;
   uint32_t updateTime = 0;
+  uint32_t readingTime = 0;
   bool hasChapterOffset = false;
   bool hasUpdateTime = false;
   bool hasAppId = false;
+  bool hasReadingTime = false;
 };
 
 class RemoteProgressParser {
@@ -59,6 +61,7 @@ class RemoteProgressParser {
     ChapterOffset,
     UpdateTime,
     AppId,
+    ReadingTime,
     ErrorCode,
   };
 
@@ -69,11 +72,13 @@ class RemoteProgressParser {
     uint32_t appIdHash = 0;
     uint32_t chapterOffset = 0;
     uint32_t updateTime = 0;
+    uint32_t readingTime = 0;
     bool hasBookId = false;
     bool hasProgress = false;
     bool hasChapterOffset = false;
     bool hasUpdateTime = false;
     bool hasAppId = false;
+    bool hasReadingTime = false;
   };
 
   static JsonCallbacks callbacks(RemoteProgressParser* parser);

@@ -25,6 +25,11 @@ The Nightly full-install manifest supplies the matching offsets and files.
 Both legacy flavor manifests point to the same unified firmware. Tagged images
 for other boards are rejected by the existing flash/OTA board-tag check.
 
+For the CpyOS build the env overrides `board_build.partitions` with
+`partitions_readpico.csv` (7.19 MiB OTA slots), because the full CpyOS image is
+larger than the shared 6.25 MiB table; see
+[small-screen-targets.md](small-screen-targets.md).
+
 ## Hardware contract
 
 | Function | Wiring / behavior |

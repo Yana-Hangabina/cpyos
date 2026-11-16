@@ -19,6 +19,11 @@ symmetric 28 px safe margin, and AirPage is available. Reading, library,
 settings, Web file transfer, and same-target SD firmware update remain
 available; remote OTA/catalog publication remains withheld.
 
+For the CpyOS build the env overrides `board_build.partitions` with
+`partitions_readpico.csv` (7.19 MiB OTA slots) because the full UI/font/language
+image no longer fits the shared 6.25 MiB table. First installation must include
+that partition table; see [small-screen-targets.md](small-screen-targets.md).
+
 The desktop target models the 768x552 panel, `eego_a4` identity, symmetric
 28 px content margin, touch/rotation, RTC, buttons, the screen Home/Back key,
 and Power-only wake. Use the mouse for touch, arrows for Up/Down, `P` for

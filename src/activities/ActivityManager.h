@@ -180,6 +180,19 @@ class ActivityManager {
   void goToWebBrowser();
 #endif
 #endif
+#ifdef CROSSPOINT_PLUS_PORT
+  // Metalio E-INK4 Plus still camera (GC2145 DVP stills). Declaration and call
+  // site are both gated on the port macro because the activity itself lives in
+  // the Plus component; other targets never see the tile.
+  void goToCamera();
+  // Metalio E-INK4 Plus voice memo (BH1098 mic capture + WAV playback). Same
+  // gating: the page lives in the Plus component.
+  void goToVoiceMemo();
+  // Metalio E-INK4 Plus AI voice client (push-to-talk over a xiaozhi
+  // WebSocket). Same gating; the page and its worker live in the Plus
+  // component, so no other target links the Opus/WebSocket stack.
+  void goToVoiceClient();
+#endif
   void goHome(HomeMenuItem initialMenuItem = HomeMenuItem::NONE);
   MainTabFocus getMainTabFocus() const { return mainTabFocus; }
 

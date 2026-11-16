@@ -5,6 +5,9 @@
 #include <string>
 
 #include "activities/Activity.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 
 namespace freeink {
 struct Icon;
@@ -21,6 +24,7 @@ class MyActivity final : public Activity {
       : Activity("My", renderer, mappedInput), initialTab_(initialTab) {}
 
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   MainTab mainTab() const override { return MainTab::Settings; }
@@ -33,6 +37,8 @@ class MyActivity final : public Activity {
     requestUpdate();
   }
   void debugMoveRing(int delta) override;
+  void debugSelect(int index) override;
+  void debugConfirm() override;
 
  private:
   enum class Tab : uint8_t { Records = 0, Tools = 1, Settings = 2 };
@@ -78,6 +84,9 @@ class MyActivity final : public Activity {
   Tab tab_ = Tab::Settings;
   int initialTab_ = -1;
   int toolSelected_ = 0;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  jjwxc_signin::ReminderPopup signInReminder_;
+#endif
   uint64_t storageFreeBytes_ = 0;
   uint64_t storageTotalBytes_ = 0;
   bool storageKnown_ = false;

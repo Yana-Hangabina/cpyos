@@ -18,15 +18,29 @@
 #include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/2048/Game2048Activity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/airpage/AirPageActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/avatar/UglyAvatarActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/buddy/BuddyActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/calculator/CalculatorActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/sokoban/SokobanGameActivity.h"
+#endif
 #include "components/SubpageLayout.h"
 #ifdef ENABLE_CHINESE_VERSION
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/chinese-chess/ChineseChessMenuActivity.h"
+#endif
 #endif
 #ifdef ENABLE_CHINESE_VERSION
 #ifdef BOARD_HAS_PSRAM
@@ -35,14 +49,31 @@
 #endif
 #include "apps/weread/WeReadActivity.h"
 #endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/gomoku/GomokuMenuActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/minesweeper/MinesweeperMenuActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/pixel-switch/PixelSwitchActivity.h"
+#endif
 #include "apps/reading-stats/ReadingStatsActivity.h"
 #include "apps/reading-stats/ReadingStatsMenuActivity.h"
 #include "apps/standby/StandbyActivity.h"
+#if defined(CROSSPOINT_PLUS_PORT)
+// Port-local page: the file lives in the Plus component (cpyos_app), which is
+// also what compiles this translation unit.
+#include "plus_camera_activity.h"
+#include "plus_voice_activity.h"
+#include "plus_voice_memo_activity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/sudoku/SudokuMenuActivity.h"
+#endif
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/woodfish/WoodfishActivity.h"
+#endif
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -55,7 +86,11 @@
 #include "home/InxRecentActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "library/LibraryListActivity.h"
+#if !defined(CROSSPOINT_PORT_NO_NETWORK_SHELL)
 #include "network/CrossPointWebServerActivity.h"
+#else
+#include "plus_transfer_activity.h"
+#endif
 #include "network/UsbDriveActivity.h"
 #include "plugins/PluginCatalogActivity.h"
 #include "reader/ReaderActivity.h"
@@ -616,12 +651,22 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   }
 }
 
-void ActivityManager::goToFileTransfer() { replaceActivityWith<CrossPointWebServerActivity>(); }
+void ActivityManager::goToFileTransfer() {
+#if defined(CROSSPOINT_PORT_NO_NETWORK_SHELL)
+  replaceActivityWith<PlusTransferActivity>();
+#else
+  replaceActivityWith<CrossPointWebServerActivity>();
+#endif
+}
 
 void ActivityManager::goToJoinNetwork() {
   // Post heap-defrag reboot: enter the web-server activity straight in Join
   // Network mode (skips mode selection, does not reboot again).
+#if defined(CROSSPOINT_PORT_NO_NETWORK_SHELL)
+  replaceActivityWith<PlusTransferActivity>();
+#else
   replaceActivityWith<CrossPointWebServerActivity>(/*startInJoinNetwork=*/true);
+#endif
 }
 
 void ActivityManager::goToUsbDrive() {
@@ -641,7 +686,13 @@ void ActivityManager::goToMy() { replaceActivityWith<MyActivity>(); }
 
 void ActivityManager::goToSettings() { replaceActivityWith<SettingsActivity>(); }
 
-void ActivityManager::goToUglyAvatar() { replaceActivityWith<UglyAvatarActivity>(); }
+void ActivityManager::goToUglyAvatar() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<UglyAvatarActivity>();
+#endif
+}
 
 void ActivityManager::goToFileBrowser(std::string path) { replaceActivityWith<FileBrowserActivity>(std::move(path)); }
 
@@ -790,25 +841,91 @@ void ActivityManager::goToReadingStatsMenu() { replaceActivityWith<ReadingStatsM
 
 void ActivityManager::goToReadingStats() { replaceActivityWith<ReadingStatsActivity>(); }
 
-void ActivityManager::goToSudoku() { replaceActivityWith<SudokuMenuActivity>(); }
+void ActivityManager::goToSudoku() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<SudokuMenuActivity>();
+#endif
+}
 
-void ActivityManager::goToSokoban() { replaceActivityWith<SokobanGameActivity>(); }
+void ActivityManager::goToSokoban() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<SokobanGameActivity>();
+#endif
+}
 
-void ActivityManager::goToGomoku() { replaceActivityWith<GomokuMenuActivity>(); }
+void ActivityManager::goToGomoku() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<GomokuMenuActivity>();
+#endif
+}
 
-void ActivityManager::goToMinesweeper() { replaceActivityWith<MinesweeperMenuActivity>(); }
+void ActivityManager::goToMinesweeper() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<MinesweeperMenuActivity>();
+#endif
+}
 
-void ActivityManager::goToPixelSwitch() { replaceActivityWith<PixelSwitchActivity>(); }
+void ActivityManager::goToPixelSwitch() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<PixelSwitchActivity>();
+#endif
+}
 
-void ActivityManager::goToCalculator() { replaceActivityWith<CalculatorActivity>(); }
+void ActivityManager::goToCalculator() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<CalculatorActivity>();
+#endif
+}
 
-void ActivityManager::goToWoodfish() { replaceActivityWith<WoodfishActivity>(); }
+#ifdef CROSSPOINT_PLUS_PORT
+void ActivityManager::goToCamera() { replaceActivityWith<PlusCameraActivity>(); }
+void ActivityManager::goToVoiceMemo() { replaceActivityWith<PlusVoiceMemoActivity>(); }
+void ActivityManager::goToVoiceClient() { replaceActivityWith<PlusVoiceActivity>(); }
+#endif
 
-void ActivityManager::goToGame2048() { replaceActivityWith<Game2048Activity>(); }
+void ActivityManager::goToWoodfish() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<WoodfishActivity>();
+#endif
+}
 
-void ActivityManager::goToAirPage() { replaceActivityWith<AirPageActivity>(); }
+void ActivityManager::goToGame2048() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<Game2048Activity>();
+#endif
+}
 
-void ActivityManager::goToBuddy() { replaceActivityWith<BuddyActivity>(); }
+void ActivityManager::goToAirPage() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<AirPageActivity>();
+#endif
+}
+
+void ActivityManager::goToBuddy() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<BuddyActivity>();
+#endif
+}
 
 void ActivityManager::goToStandby() {
   // Standby is an overlay, never a replacement: the activity below keeps its
@@ -829,7 +946,13 @@ void ActivityManager::goToStandby() {
 }
 
 #ifdef ENABLE_CHINESE_VERSION
-void ActivityManager::goToChineseChess() { replaceActivityWith<ChineseChessMenuActivity>(); }
+void ActivityManager::goToChineseChess() {
+#if defined(CROSSPOINT_PORT_MINIMAL_APPS)
+  goToFullScreenMessage("This app is not ported to this hardware target yet.");
+#else
+  replaceActivityWith<ChineseChessMenuActivity>();
+#endif
+}
 #endif
 
 #ifdef ENABLE_CHINESE_VERSION

@@ -9,6 +9,14 @@
       "url": "https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/NotoEmoji-Full.ttf"
     },
     {
+      "id": "cjk-core",
+      "kind": "fallback",
+      "family": "CPYOSCJKCore",
+      "name": "中文核心（8,105 字）",
+      "file": "CPYOSCJKCore.ttf",
+      "url": "https://raw.githubusercontent.com/Yana-Hangabina/cpyos/cpyos/site/fonts/CPYOSCJKCore.ttf"
+    },
+    {
       "id": "cjk-full",
       "kind": "fallback",
       "family": "CPYOSCJK",

@@ -33,9 +33,9 @@
 #include <algorithm>
 #include <cstring>
 
-#include "I18nKeys.h"
+#include <I18nKeys.h>
 #include "I18nOffsetBuilder.h"
-#include "I18nStrings.h"
+#include <I18nStrings.h>
 
 #if defined(I18N_PACK_HOST_TEST)
 #include "I18nPackHost.h"

@@ -15,6 +15,9 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 #include "MappedInputManager.h"
 #include "ReadingStatsStore.h"
 #include "activities/settings/OtaUpdateActivity.h"
@@ -118,6 +121,17 @@ void InxRecentActivity::onEnter() {
     const RecentBook& book = (*books)[i];
     bookStats[i] = READING_STATS.findMatchingBookForPath(book.path, book.title, book.author);
   }
+  // The home geometry is the first page with a compact/standard split; logging
+  // the resolved mode makes a build-only QA pass able to confirm it on the
+  // serial console without a photograph.
+  {
+    const Rect content = contentRect();
+    const DashLayout layout = dashboardLayout(content);
+    LOG_INF("UI", "home dashboard: %s content=%dx%d first=%d today=%d recent=%d sync=%d",
+            layout.compact ? "compact" : "standard", content.width, content.height,
+            layout.firstCard.height, layout.todayCard.height, layout.recentCard.height,
+            layout.syncRow.height);
+  }
   selected = 0;
   chapterInfo_.fill({});
   for (size_t i = 0; i < std::min<size_t>(books->size(), chapterInfo_.size()); ++i) {
@@ -130,18 +144,21 @@ void InxRecentActivity::onEnter() {
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
   clearCoverCaches();
 #endif
-  maybePromptPackUpdate();
+  const bool packPrompted = maybePromptPackUpdate();
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (!packPrompted) signInReminder_.maybeShow(renderer, mappedInput);
+#endif
   requestUpdate();
 }
 
-void InxRecentActivity::maybePromptPackUpdate() {
+bool InxRecentActivity::maybePromptPackUpdate() {
 #if defined(CROSSPOINT_I18N_PACK)
-  if (packRetryPrompted_) return;
+  if (packRetryPrompted_) return false;
   packRetryPrompted_ = true;
   // English and Chinese are image-resident; only a packed UI language can show
   // the fallback. Do not interrupt readers who would see no difference.
-  if (!i18n_pack::isPacked(static_cast<Language>(SETTINGS.language))) return;
-  if (!i18n_pack::needsUpdate()) return;
+  if (!i18n_pack::isPacked(static_cast<Language>(SETTINGS.language))) return false;
+  if (!i18n_pack::needsUpdate()) return false;
 
   const char* options[] = {I18N.get(StrId::STR_CANCEL), I18N.get(StrId::STR_UPDATE)};
   packRetryPopup_.showMessage(I18N.get(StrId::STR_UPDATE_PACKS), I18N.get(StrId::STR_PACKS_RETRY_HINT), options, 2,
@@ -153,11 +170,17 @@ void InxRecentActivity::maybePromptPackUpdate() {
                                 }
                                 requestUpdate();
                               });
+  return true;
+#else
+  return false;
 #endif
 }
 
 void InxRecentActivity::onExit() {
   packRetryPopup_.dismiss();
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.dismiss();
+#endif
   books = nullptr;
   bookStats.fill(nullptr);
   targetCoverStates.fill(CoverCacheState::Unchecked);
@@ -417,28 +440,8 @@ bool InxRecentActivity::prepareNextMissingCover() {
 void InxRecentActivity::loop() { loopDashboard(); }
 
 InxRecentActivity::DashLayout InxRecentActivity::dashboardLayout(const Rect& content) const {
-  const int pad = UITheme::getInstance().getMetrics().contentSidePadding;
-  const int x = content.x + pad;
-  const int w = std::max(1, content.width - pad * 2);
-  DashLayout out;
-  int y = content.y + 4;
-  // Continue card is sized by its content: cover / right column end at +270,
-  // the wave takes the last 38 px. The freed height goes to the recent block
-  // (larger covers + author lines), so the page still closes above the dock.
-  out.firstCard = Rect{x, y, w, 318};
-  y += out.firstCard.height + 12;
-  out.todayCard = Rect{x, y, w, 140};
-  y += out.todayCard.height + 12;
-  out.recentCard = Rect{x, y, w, 370};
-  out.recentAll = Rect{x + w - 156, y, 132, 44};
-  constexpr int kColW = 168;
-  constexpr int kColGap = 26;
-  for (int i = 0; i < 3; ++i) {
-    out.recentBooks[i] = Rect{x + 22 + i * (kColW + kColGap), y + 50, kColW, 300};
-  }
-  y += out.recentCard.height + 12;
-  out.syncRow = Rect{x, y, w, 96};
-  return out;
+  return home_dashboard::compute(content, syncRowVisible(), renderer.getLineHeight(SMALL_FONT_ID),
+                                 renderer.getLineHeight(UI_12_FONT_ID));
 }
 
 bool InxRecentActivity::syncRowVisible() const {
@@ -457,7 +460,7 @@ int InxRecentActivity::dashboardIndexFromPoint(const int x, const int y) const {
   if (hit(rects.firstCard)) return 0;
   if (hit(rects.todayCard)) return 1;
   for (int i = 0; i < 3; ++i) {
-    if (hit(rects.recentBooks[i])) return 2 + i;
+    if (hit(rects.recentItems[i])) return 2 + i;
   }
   if (hit(rects.recentAll)) return 5;
   if (syncRowVisible() && hit(rects.syncRow)) return 6;
@@ -466,6 +469,9 @@ int InxRecentActivity::dashboardIndexFromPoint(const int x, const int y) const {
 
 void InxRecentActivity::loopDashboard() {
   if (packRetryPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     dashboardActivate(selected);
     return;
@@ -569,10 +575,7 @@ void InxRecentActivity::checkJjwxcUpdates() {
 }
 
 Rect InxRecentActivity::dashboardCoverRect(const Rect& content) const {
-  const DashLayout rects = dashboardLayout(content);
-  // Bottom aligns with the action row (right column ends at +270): the cover
-  // and everything on its right share one bottom edge.
-  return Rect{rects.firstCard.x + 24, rects.firstCard.y + 58, 140, 212};
+  return dashboardLayout(content).firstCover;
 }
 
 void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverArt) {
@@ -599,9 +602,10 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
       renderer.fillRect(cover.x, cover.y, cover.width, cover.height, false);
     }
 
-    const int cardRight = rects.firstCard.x + rects.firstCard.width - 24;
-    const int textX = cover.x + cover.width + 24;
-    const int textW = std::max(1, cardRight - textX);
+    const int cardRight = rects.firstCard.x + rects.firstCard.width - (rects.compact ? 16 : 24);
+    const int edge = rects.compact ? 16 : 24;
+    const int textX = rects.firstTextX;
+    const int textW = rects.firstTextW;
     const RecentBook& book = (*books)[kContinueIndex];
     const ReadingBookStats* stats = statsAt(kContinueIndex);
     const CachedChapterInfo info = chapterInfo_[kContinueIndex];
@@ -610,7 +614,7 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     // Card header: last-read position left, cached/progress right. The bottom
     // pill is the only "continue reading" affordance (the old text link
     // duplicated this label and its chevron did not sit on the text baseline).
-    renderer.drawText(SMALL_FONT_ID, rects.firstCard.x + 24, rects.firstCard.y + 18,
+    renderer.drawText(SMALL_FONT_ID, rects.firstCard.x + edge, rects.firstHeaderY,
                       tr(STR_LAST_READ_AT), true, EpdFontFamily::BOLD);
     char head[72];
     if (info.total > 0) {
@@ -621,7 +625,7 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
       head[0] = '\0';
     }
     const int headW = renderer.getTextWidth(SMALL_FONT_ID, head);
-    renderer.drawText(SMALL_FONT_ID, cardRight - headW, rects.firstCard.y + 18, head);
+    renderer.drawText(SMALL_FONT_ID, cardRight - headW, rects.firstHeaderY, head);
 
     // One type scale across the card: title 24 bold, author 18 regular, chapter
     // 20 bold. The serif title previously fell back to a smaller CJK face for
@@ -630,7 +634,7 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     const std::string title = renderer.truncatedText(
         UI_12_FONT_ID, book.title.empty() ? book.path.c_str() : book.title.c_str(), textW,
         EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, textX, rects.firstCard.y + 58, title.c_str(), true,
+    renderer.drawText(UI_12_FONT_ID, textX, rects.firstTitleY, title.c_str(), true,
                       EpdFontFamily::BOLD);
 
     std::string authorText = book.author;
@@ -638,28 +642,30 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     if (!authorText.empty()) authorText += " · ";
     authorText += source;
     const std::string author = renderer.truncatedText(SMALL_FONT_ID, authorText.c_str(), textW);
-    renderer.drawText(SMALL_FONT_ID, textX, rects.firstCard.y + 100, author.c_str());
+    renderer.drawText(SMALL_FONT_ID, textX, rects.firstAuthorY, author.c_str());
 
-    if (stats != nullptr && !stats->chapterTitle.empty()) {
+    if (rects.firstShowChapter && stats != nullptr && !stats->chapterTitle.empty()) {
       const std::string chapter = renderer.truncatedText(UI_10_FONT_ID, stats->chapterTitle.c_str(), textW);
-      renderer.drawText(UI_10_FONT_ID, textX, rects.firstCard.y + 132, chapter.c_str(), true,
+      renderer.drawText(UI_10_FONT_ID, textX, rects.firstChapterY, chapter.c_str(), true,
                         EpdFontFamily::BOLD);
     }
 
     // State pills: source (always real), finished state (derived from progress),
     // and the snapshot's new-chapter count when present.
     int pillX = textX;
-    // 4 px lower than the old +170: at the current 14 pt chapter line the pill
-    // outline sat only 3 px under the chapter glyphs and read as an underline.
-    const int pillY = rects.firstCard.y + 175;
+    const int pillY = rects.firstPillsY;
+    const int pillH = rects.firstPillH;
     const auto drawPill = [&](const char* label) {
       const int textWpx = renderer.getTextWidth(SMALL_FONT_ID, label);
-      const int ph = 34;
-      const int pw = textWpx + 22;
-      renderer.fillRoundedRect(pillX, pillY, pw, ph, ph / 2, Color::White);
-      renderer.drawRoundedRect(pillX, pillY, pw, ph, 2, ph / 2, true);
-      renderer.drawText(SMALL_FONT_ID, pillX + 11, pillY + (ph - renderer.getLineHeight(SMALL_FONT_ID)) / 2, label);
-      pillX += pw + 8;
+      const int pw = textWpx + (rects.compact ? 16 : 22);
+      // A narrow text column must not let the pills paint past the card edge;
+      // the source pill always comes first, so it is the one that survives.
+      if (pillX + pw > textX + textW) return;
+      renderer.fillRoundedRect(pillX, pillY, pw, pillH, pillH / 2, Color::White);
+      renderer.drawRoundedRect(pillX, pillY, pw, pillH, 2, pillH / 2, true);
+      renderer.drawText(SMALL_FONT_ID, pillX + (rects.compact ? 8 : 11),
+                        pillY + (pillH - renderer.getLineHeight(SMALL_FONT_ID)) / 2, label);
+      pillX += pw + (rects.compact ? 6 : 8);
     };
     drawPill(source);
     if (pct >= 100) {
@@ -678,31 +684,32 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
 #endif
     (void)metrics;
 
-    // Primary action: the row directly under the 晋江/未读完 pills, in the text
-    // column. The cover now ends on this row's bottom edge (+270), so there is
-    // no blank square under the cover and no separate button-only row.
-    constexpr int kActionH = 56;
+    // Primary action: the row directly under the pills, in the text column.
+    const int actionH = rects.firstActionH;
     const int barX = textX;
     const int barW = std::max(1, cardRight - textX);
-    const int actionY = rects.firstCard.y + 214;
+    const int actionY = rects.firstActionY;
     // Primary action shape is a capsule everywhere (h/2), not a 12 px rounded bar.
-    renderer.fillRoundedRect(barX, actionY, barW, kActionH, kActionH / 2, Color::Black);
-    const int resumeY = actionY + (kActionH - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
+    renderer.fillRoundedRect(barX, actionY, barW, actionH, actionH / 2, Color::Black);
+    const int resumeY = actionY + (actionH - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     const char* resumeLabel = tr(STR_CONTINUE_READING);
-    renderer.drawText(UI_10_FONT_ID, barX + 24, resumeY, resumeLabel, false, EpdFontFamily::BOLD);
-    const int arrowX = barX + 24 + renderer.getTextWidth(UI_10_FONT_ID, resumeLabel, EpdFontFamily::BOLD) + 12;
+    const int actionPad = rects.compact ? 16 : 24;
+    renderer.drawText(UI_10_FONT_ID, barX + actionPad, resumeY, resumeLabel, false, EpdFontFamily::BOLD);
+    const int arrowX =
+        barX + actionPad + renderer.getTextWidth(UI_10_FONT_ID, resumeLabel, EpdFontFamily::BOLD) + 12;
     // A glyph, not two drawLine() strokes: on the 16-level Home canvas this
     // keeps the chevron anti-aliased like the white label (drawLine is 1-bit).
     renderer.drawText(UI_10_FONT_ID, arrowX, resumeY, ">", false, EpdFontFamily::BOLD);
     char pctText[8];
     std::snprintf(pctText, sizeof(pctText), "%d%%", pct);
     const int pctW = renderer.getTextWidth(UI_10_FONT_ID, pctText, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, barX + barW - 24 - pctW, resumeY, pctText, false, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, barX + barW - actionPad - pctW, resumeY, pctText, false,
+                      EpdFontFamily::BOLD);
 
     // Full-width wave progress at the card's foot (design frame 01).
     drawWaveProgress(renderer,
-                     Rect{rects.firstCard.x + 2, rects.firstCard.y + rects.firstCard.height - 38,
-                          rects.firstCard.width - 4, 34},
+                     Rect{rects.firstCard.x + 2, rects.firstWaveY, rects.firstCard.width - 4,
+                          rects.firstWaveH},
                      pct);
   }
 
@@ -733,71 +740,74 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
     const freeink::Icon* icons[4] = {&icon_clock_48, &icon_chart_line_48, &icon_zap_48, &icon_target_48};
     const StrId labels[4] = {StrId::STR_DASH_TODAY, StrId::STR_DASH_WEEK, StrId::STR_STREAK_SHORT,
                              StrId::STR_GOAL_SHORT};
-    constexpr int kColW = 100;
+    const int stripPad = rects.compact ? 12 : 16;
+    const int iconSize = rects.compact ? 20 : 24;
     for (int i = 0; i < 4; ++i) {
-      const int cx = rects.todayCard.x + 16 + i * kColW;
-      drawMaskIcon(renderer, *icons[i], cx, rects.todayCard.y + 16, 24);
-      renderer.drawText(UI_12_FONT_ID, cx, rects.todayCard.y + 52, values[i], true, EpdFontFamily::BOLD);
-      renderer.drawText(SMALL_FONT_ID, cx, rects.todayCard.y + 90, I18N.get(labels[i]));
+      const int cx = rects.todayCard.x + stripPad + i * rects.todayColW;
+      drawMaskIcon(renderer, *icons[i], cx, rects.todayIconY, iconSize);
+      renderer.drawText(UI_12_FONT_ID, cx, rects.todayValueY, values[i], true, EpdFontFamily::BOLD);
+      renderer.drawText(SMALL_FONT_ID, cx, rects.todayLabelY, I18N.get(labels[i]));
     }
 
-    // Seven slim columns on the right, today in black.
-    const int barAreaX = rects.todayCard.x + rects.todayCard.width - 148;
-    const int barAreaW = 128;
-    const int baseline = rects.todayCard.y + 88;
-    constexpr int kBarW = 12;
-    constexpr int kGap = 6;
-    std::array<uint64_t, 7> weekMs{};
-    const time_t now = time(nullptr);
-    const bool weekWindow = now > 1700000000;
-    uint32_t todayOrdinal = 0;
-    uint64_t maxMs = 1;
-    if (weekWindow) {
-      todayOrdinal = TimeUtils::getLocalDayOrdinal(static_cast<uint32_t>(now));
-      for (const auto& day : READING_STATS.getReadingDays()) {
-        if (day.dayOrdinal <= todayOrdinal && todayOrdinal - day.dayOrdinal < weekMs.size()) {
-          weekMs[todayOrdinal - day.dayOrdinal] += day.readingMs;
+    if (rects.todayShowBars) {
+      // Seven slim columns on the right, today in black.
+      const int barAreaX = rects.todayBarX;
+      const int baseline = rects.todayBaselineY;
+      constexpr int kBarW = 12;
+      constexpr int kGap = 6;
+      std::array<uint64_t, 7> weekMs{};
+      const time_t now = time(nullptr);
+      const bool weekWindow = now > 1700000000;
+      uint32_t todayOrdinal = 0;
+      uint64_t maxMs = 1;
+      if (weekWindow) {
+        todayOrdinal = TimeUtils::getLocalDayOrdinal(static_cast<uint32_t>(now));
+        for (const auto& day : READING_STATS.getReadingDays()) {
+          if (day.dayOrdinal <= todayOrdinal && todayOrdinal - day.dayOrdinal < weekMs.size()) {
+            weekMs[todayOrdinal - day.dayOrdinal] += day.readingMs;
+          }
+        }
+        for (const uint64_t ms : weekMs) maxMs = std::max(maxMs, ms);
+      }
+      for (int i = 0; i < 7; ++i) {
+        const size_t daysAgo = weekWindow ? weekMs.size() - 1 - static_cast<size_t>(i) : 0;
+        const uint64_t ms = weekWindow ? weekMs[daysAgo] : 0;
+        const int h = ms == 0 ? 4 : 4 + static_cast<int>(ms * 46 / maxMs);
+        const int bx = barAreaX + i * (kBarW + kGap);
+        if (i == 6) {
+          renderer.fillRoundedRect(bx, baseline - h, kBarW, h, 3, Color::Black);
+        } else {
+          renderer.fillRoundedRect(bx, baseline - h, kBarW, h, 3, Color::DarkGray);
         }
       }
-      for (const uint64_t ms : weekMs) maxMs = std::max(maxMs, ms);
+      renderer.drawText(SMALL_FONT_ID, barAreaX, rects.todayCard.y + 90, tr(STR_DASH_LAST7));
     }
-    for (int i = 0; i < 7; ++i) {
-      const size_t daysAgo = weekWindow ? weekMs.size() - 1 - static_cast<size_t>(i) : 0;
-      const uint64_t ms = weekWindow ? weekMs[daysAgo] : 0;
-      const int h = ms == 0 ? 4 : 4 + static_cast<int>(ms * 46 / maxMs);
-      const int bx = barAreaX + i * (kBarW + kGap);
-      if (i == 6) {
-        renderer.fillRoundedRect(bx, baseline - h, kBarW, h, 3, Color::Black);
-      } else {
-        renderer.fillRoundedRect(bx, baseline - h, kBarW, h, 3, Color::DarkGray);
-      }
-    }
-    renderer.drawText(SMALL_FONT_ID, barAreaX, rects.todayCard.y + 90, tr(STR_DASH_LAST7));
   }
 
   // ---- 03 recent covers (604 x 288) ---------------------------------------
   GUI.drawCardFrame(renderer, rects.recentCard, selected == 2 || selected == 3 || selected == 4);
   {
-    renderer.drawText(SMALL_FONT_ID, rects.recentCard.x + 22, rects.recentCard.y + 16,
+    const int recentEdge = rects.compact ? 12 : 22;
+    renderer.drawText(SMALL_FONT_ID, rects.recentCard.x + recentEdge, rects.recentHeaderY,
                       tr(STR_HOME_RECENT_READING), true, EpdFontFamily::BOLD);
     const int total = books != nullptr ? static_cast<int>(books->size()) : 0;
     char all[48];
     std::snprintf(all, sizeof(all), I18N.get(StrId::STR_ALL_BOOKS_FMT), static_cast<unsigned>(total));
     const int allW = renderer.getTextWidth(SMALL_FONT_ID, all);
-    const int chevX = rects.recentCard.x + rects.recentCard.width - 20;
-    const int allX = chevX - 10 - allW;
-    renderer.drawText(SMALL_FONT_ID, allX, rects.recentCard.y + 16, all);
+    const int chevX = rects.recentChevron.x;
+    const int allX = chevX - (rects.compact ? 6 : 10) - allW;
+    renderer.drawText(SMALL_FONT_ID, allX, rects.recentHeaderY, all);
     // Same reason as the continue chevron: use a font glyph so the 16-level
     // canvas can anti-alias it instead of thresholding drawLine() pixels.
-    renderer.drawText(SMALL_FONT_ID, chevX - 2, rects.recentCard.y + 16, ">", true, EpdFontFamily::REGULAR);
+    renderer.drawText(SMALL_FONT_ID, chevX - 2, rects.recentHeaderY, ">", true, EpdFontFamily::REGULAR);
 
     bool anyExtra = false;
     for (int i = 0; i < 3; ++i) {
       const int bookIndex = i + 1;
       if (books == nullptr || bookIndex >= static_cast<int>(books->size())) continue;
       anyExtra = true;
-      const Rect item = rects.recentBooks[i];
-      const Rect cover{item.x, item.y, 132, 184};
+      const Rect item = rects.recentItems[i];
+      const Rect cover = rects.recentCovers[i];
       if (drawCoverArt) {
         drawBookCover(bookIndex, cover);
       } else {
@@ -808,17 +818,20 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
       const std::string title = renderer.truncatedText(
           SMALL_FONT_ID, recent.title.empty() ? recent.path.c_str() : recent.title.c_str(), item.width,
           EpdFontFamily::BOLD);
-      renderer.drawText(SMALL_FONT_ID, item.x, item.y + 192, title.c_str(), true, EpdFontFamily::BOLD);
-      if (!recent.author.empty()) {
-        const std::string author =
-            renderer.truncatedText(SMALL_FONT_ID, recent.author.c_str(), item.width);
-        renderer.drawText(SMALL_FONT_ID, item.x, item.y + 220, author.c_str());
-      } else {
-        // Keep the three-line rhythm when a local book has no author: the
-        // source is the one true byline we have for it.
-        const std::string source =
-            renderer.truncatedText(SMALL_FONT_ID, sourceLabelForPath(recent.path), item.width);
-        renderer.drawText(SMALL_FONT_ID, item.x, item.y + 220, source.c_str());
+      renderer.drawText(SMALL_FONT_ID, item.x, cover.y + rects.recentTitleDY, title.c_str(), true,
+                        EpdFontFamily::BOLD);
+      if (rects.recentShowAuthor) {
+        if (!recent.author.empty()) {
+          const std::string author =
+              renderer.truncatedText(SMALL_FONT_ID, recent.author.c_str(), item.width);
+          renderer.drawText(SMALL_FONT_ID, item.x, cover.y + rects.recentAuthorDY, author.c_str());
+        } else {
+          // Keep the three-line rhythm when a local book has no author: the
+          // source is the one true byline we have for it.
+          const std::string source =
+              renderer.truncatedText(SMALL_FONT_ID, sourceLabelForPath(recent.path), item.width);
+          renderer.drawText(SMALL_FONT_ID, item.x, cover.y + rects.recentAuthorDY, source.c_str());
+        }
       }
       char meta[64] = {};
       const int pct = stats != nullptr ? static_cast<int>(stats->lastProgressPercent) : 0;
@@ -828,21 +841,24 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
       } else {
         std::snprintf(meta, sizeof(meta), "%d%%", pct);
       }
-      renderer.drawText(SMALL_FONT_ID, item.x, item.y + 248, meta);
+      renderer.drawText(SMALL_FONT_ID, item.x, cover.y + rects.recentMetaDY, meta);
     }
     if (!anyExtra) {
-      UITheme::drawCenteredText(renderer, Rect{rects.recentCard.x, rects.recentCard.y + 110,
-                                               rects.recentCard.width, 40},
-                                SMALL_FONT_ID, rects.recentCard.y + 118, tr(STR_NO_RECENT_BOOKS));
+      const int emptyY = rects.recentCard.y + rects.recentCard.height / 2 - 20;
+      UITheme::drawCenteredText(renderer,
+                                Rect{rects.recentCard.x, emptyY - 8, rects.recentCard.width, 40},
+                                SMALL_FONT_ID, emptyY, tr(STR_NO_RECENT_BOOKS));
     }
   }
 
-  // ---- 04 update row (604 x 96) -------------------------------------------
+  // ---- 04 update row -------------------------------------------------------
   if (syncRowVisible()) {
     const Rect& row = rects.syncRow;
     GUI.drawCardFrame(renderer, row, selected == 6);
-    drawMaskIcon(renderer, icon_refresh_cw_48, row.x + 24, row.y + (row.height - 28) / 2, 28);
-    const int textX = row.x + 24 + 28 + 18;
+    const int iconSize = rects.syncIconSize;
+    drawMaskIcon(renderer, icon_refresh_cw_48, row.x + rects.syncPad,
+                 row.y + (row.height - iconSize) / 2, iconSize);
+    const int textX = row.x + rects.syncPad + iconSize + (rects.compact ? 12 : 18);
     // Secondary action: 28 px bold sits below the 32 px book title in the
     // scale, instead of competing with it.
     const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
@@ -850,14 +866,14 @@ void InxRecentActivity::drawDashboard(const Rect& content, const bool drawCoverA
                       I18N.get(StrId::STR_JJWXC_CHECK_UPDATES_ACTION), true, EpdFontFamily::BOLD);
     const std::string action = tr(STR_CHECK_SHORT);
     const int actionW = renderer.getTextWidth(SMALL_FONT_ID, action.c_str(), EpdFontFamily::BOLD);
-    constexpr int kPillH = 48;
-    const int pillW = actionW + 48;
-    const int pillX = row.x + row.width - 24 - pillW;
-    const int pillY = row.y + (row.height - kPillH) / 2;
-    renderer.fillRoundedRect(pillX, pillY, pillW, kPillH, kPillH / 2, Color::White);
-    renderer.drawRoundedRect(pillX, pillY, pillW, kPillH, 2, kPillH / 2, true);
+    const int pillH = rects.syncPillH;
+    const int pillW = actionW + pillH;
+    const int pillX = row.x + row.width - rects.syncPad - pillW;
+    const int pillY = row.y + (row.height - pillH) / 2;
+    renderer.fillRoundedRect(pillX, pillY, pillW, pillH, pillH / 2, Color::White);
+    renderer.drawRoundedRect(pillX, pillY, pillW, pillH, 2, pillH / 2, true);
     renderer.drawText(SMALL_FONT_ID, pillX + (pillW - actionW) / 2,
-                      pillY + (kPillH - renderer.getLineHeight(SMALL_FONT_ID)) / 2, action.c_str(), true,
+                      pillY + (pillH - renderer.getLineHeight(SMALL_FONT_ID)) / 2, action.c_str(), true,
                       EpdFontFamily::BOLD);
   }
 }
@@ -904,6 +920,9 @@ void InxRecentActivity::render(RenderLock&&) {
     return;
   }
   if (packRetryPopup_.processRender(renderer, mappedInput)) return;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.processRender(renderer, mappedInput)) return;
+#endif
   // A tap that already queued another screen makes this frame dead on arrival:
   // paying its ~0.4 s panel scan would be pure latency on the way to the one the
   // user asked for (rapid Home <-> Library switching).

@@ -32,6 +32,14 @@ git push fork cpyos
 - 多个人/agent 并行时，各自用 `work/<topic>`，不要改写别人的分支。
 - 公开树不放设备截图、书名、WiFi、账号；`refreshed UI` 是界面名称，`kiikoread` 是致谢名称。
 
+## 字体分层过渡版本：只发完整安装包
+
+`scripts/build_cpyos_release.py` 会检查 app1/spiffs 偏移。当前布局（app1 0x670000、
+spiffs 0xCD0000）与旧版不同，脚本会拒绝生成 OTA 清单，除非显式传入
+`--full-install-only`。该模式只产出 `manifest-install.json`、完整安装资产和网页刷写页面，
+不产出 `manifest-upgrade.json` / `manifest-app.json` / OTA 清单。完成一次完整安装后，
+后续版本在新布局上可以恢复普通 OTA 发布。
+
 ## 发布前检查
 
 ```bash
@@ -109,6 +117,10 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.7.0 --output _sit
 | `manifest-app.json` | 仅 app |
 | `readpico-ota.json` | OTA 清单（GitHub Release 附件，扁平名） |
 | `latest.json` | 站点版本、下载链接、更新说明 |
+| `LICENSE` | CPYOS Project License 1.0（项目整体） |
+| `NOTICE-JJWXC.md` | 晋江支持声明 |
+| `THIRD_PARTY_NOTICES.md` | 第三方组件许可与来源 |
+| `LICENSE-*.txt` | 第三方许可全文（MIT / Apache-2.0 / OFL / AGPL / 厂商 MIT 等） |
 | `SHA256SUMS` | 所有发布文件的校验和 |
 
 ## OTA 清单
@@ -179,3 +191,10 @@ Tag "0.1.0" is not allowed to deploy to github-pages due to environment protecti
 - GitHub Release 附件不覆盖；需要回滚时重新指向上一版 OTA 清单，或让用户刷上一版完整包。
 - 紧急修复走新的 patch 版本（`1.7.1`），不要重打同一个 tag。
 - 如果 `platformio.ini` 的 version 改了但 tag 没改，工作流会拒绝发布。
+
+## Metalio E-INK4 Plus（实验性，未实机验证）
+
+- Plus 使用 **ESP-IDF 6.1** 与 `ports/metalio_plus/`，与 `readpico` 的 PlatformIO 构建分离；不要使用本页的 `readpico` 资产、分区表或网页 manifest。
+- 在完成真机验收前，版本号、文件名、Release notes 与 OTA 说明必须带 **`UNTESTED ON HARDWARE`**；不得进入默认 OTA 清单或稳定通道。
+- 发布包必须附 `LICENSE`、`THIRD_PARTY_NOTICES.md`、`NOTICE-JJWXC.md` 与 `LICENSES/`。
+- 首次上机前必须做整片备份；VCOM、波形、电源时序、触摸与 SD 4-bit 都只能在真机上确认。详见 [`docs/engineering/metalio-eink4-plus.md`](../engineering/metalio-eink4-plus.md)。

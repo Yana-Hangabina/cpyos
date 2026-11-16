@@ -139,7 +139,17 @@ void FindBooksActivity::onEnter() {
   Activity::onEnter();
   selected_ = 0;
   refreshSourceState();
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.maybeShow(renderer, mappedInput);
+#endif
   requestUpdate();
+}
+
+void FindBooksActivity::onExit() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.dismiss();
+#endif
+  Activity::onExit();
 }
 
 StrId FindBooksActivity::labelFor(const Action action) const {
@@ -239,6 +249,9 @@ void FindBooksActivity::debugMoveRing(const int delta) {
 }
 
 void FindBooksActivity::loop() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.goHome();
     return;
@@ -474,4 +487,7 @@ void FindBooksActivity::render(RenderLock&&) {
   } else {
     renderer.displayBuffer();
   }
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.processRender(renderer, mappedInput)) return;
+#endif
 }

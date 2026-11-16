@@ -19,6 +19,15 @@
 #include "SdCardFontSystem.h"
 #include "activities/RenderLock.h"
 
+#if defined(CROSSPOINT_PLUS_PORT)
+// Port-only: the cellular link aliases WIFI_STA in the Arduino compat layer, so
+// releaseRadio() must be able to tell the modem apart from a real station.
+#include <PlusCellular.h>
+// Port-only: sound feedback warms the BH1098 I2S path at boot, whose DMA
+// descriptors sit in the same internal pool esp_wifi_init needs.
+#include <plus_audio.h>
+#endif
+
 namespace {
 
 constexpr size_t MIN_FREE_PSRAM = 256 * 1024;
@@ -73,6 +82,12 @@ void logMemory(const char* stage) {
 }
 
 void prepare(GfxRenderer& renderer) {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // The S31 panel feeder queues and the audio I2S DMA pool share internal RAM;
+  // with the full shell the Wi-Fi driver cannot allocate unless the audio
+  // channels are gone. A later cue re-creates them on demand.
+  plus_audio_release_i2s();
+#endif
   logMemory("before font reclaim");
   const MemorySnapshot before = readMemorySnapshot();
   if (!shouldReleaseRenderMemory(before)) return;
@@ -112,6 +127,17 @@ void resumeTimeSync() {
 
 void releaseRadio() {
 #if !defined(SIMULATOR)
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: the compat layer reports the modem link as WIFI_STA (so the Arduino API
+  // behaves), which means the teardown below would stop the data path the caller
+  // is about to use. "Connect and leave" entry points pass keepRadioOnExit=false
+  // and would silently kill the modem on exit. The modem is the configured
+  // transport and the boot path starts it, so releasing the radio leaves it up.
+  if (plus_cellular_active()) {
+    LOG_INF("NET", "releaseRadio: cellular link active, keeping the modem");
+    return;
+  }
+#endif
   if (WiFi.getMode() == WIFI_MODE_NULL) return;
   LOG_INF("NET", "releasing radio (mode=%d)", static_cast<int>(WiFi.getMode()));
   WiFi.disconnect(true);  // disconnect and power the station down

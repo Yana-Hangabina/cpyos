@@ -56,6 +56,8 @@ TARGETS = {
         'environments': {'nightly': 'eego_a4_nightly'},
         'supportedChannels': ['nightly'],
         'fullInstall': True,
+        # CpyOS needs the 7.19 MiB OTA slots; shared with Read Pico.
+        'partitionsCsv': 'partitions_readpico.csv',
     },
     'murphy_m4': {
         'deviceSlug': 'murphy-m4',
@@ -86,6 +88,8 @@ TARGETS = {
         'environments': {'nightly': 'metalio_eink4_nightly'},
         'supportedChannels': ['nightly'],
         'fullInstall': True,
+        # CpyOS needs the 7.19 MiB OTA slots; shared with Read Pico.
+        'partitionsCsv': 'partitions_readpico.csv',
     },
     'readpico': {
         'deviceSlug': 'readpico',

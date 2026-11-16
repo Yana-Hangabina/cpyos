@@ -1,5 +1,9 @@
 #include "WebBrowserActivity.h"
 
+#if defined(CROSSPOINT_PORT_STUCK_JOB_RESTART)
+#include <esp_system.h>
+#endif
+
 #include <Arduino.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
@@ -170,6 +174,9 @@ void WebBrowserActivity::loadFixtureDocument() {
     currentUrl_ = "https://example.invalid/fixture";
     pendingUrl_ = currentUrl_;
     pageIndex_ = 0;
+    pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
+    pageTurnPendingRefresh_ = false;
+    waterTurnDirection_ = 0;
     bodyFont_ = CJK_READER_SIZE_FONT_ID(SETTINGS.fontPointSize);
     if (renderer.getLineHeight(bodyFont_) <= 0) bodyFont_ = CJK_UI_12_FONT_ID;
     paginateDocument();
@@ -248,6 +255,10 @@ void WebBrowserActivity::debugBrowserStatus() {
           static_cast<unsigned>(history_.size()), currentUrl_.c_str());
 }
 
+bool WebBrowserActivity::presentsGrayscale() const {
+  return state_ == State::Page && SETTINGS.fastPageTurn == 0;
+}
+
 void WebBrowserActivity::onEnter() {
   Activity::onEnter();
   // Pagination runs on the UI task (pollJob), outside render(): fix the logical
@@ -262,6 +273,9 @@ void WebBrowserActivity::onEnter() {
   pagination_.clear();
   history_.clear();
   pageIndex_ = 0;
+  pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
+  pageTurnPendingRefresh_ = false;
+  waterTurnDirection_ = 0;
   optionPopupClosing_ = false;
   loadPlaces();
   entryFrame_ = true;
@@ -299,8 +313,18 @@ void WebBrowserActivity::onExit() {
     // TLS connect cannot be interrupted from here; deleting a task mid-call is
     // the least-bad option, and it must match the creation call or the stack
     // leaks. The request timeout bounds how long this can take in practice.
+#if defined(CROSSPOINT_PORT_STUCK_JOB_RESTART)
+    // The fetch task may be inside a blocking TLS call and still touches this
+    // activity; deleting it mid-heap crashed with a Store access fault on the
+    // Plus. Persisted state is on SD, so restart instead (same policy as the
+    // comment activity).
+    LOG_ERR(kTag, "fetch did not stop in time; restarting instead of deleting it mid-heap");
+    fflush(stdout);
+    esp_restart();
+#else
     LOG_ERR(kTag, "fetch did not stop in time; deleting it");
     reapJob();
+#endif
   } else if (jobTask_ != nullptr) {
     reapJob();
   }
@@ -315,6 +339,13 @@ void WebBrowserActivity::onExit() {
   hasQueuedNav_ = false;
   queuedNavUrl_.clear();
   jobAbandoned_ = false;
+  // Never leak reader-only display state into the next activity.
+  renderer.setPageTurnDirection(0);
+  GfxRenderer::setExperimentalReaderDu(false);
+  GfxRenderer::setBwGlyphThreshold(2);
+  GfxRenderer::setBwGlyphThreshold4(10);
+  waterTurnDirection_ = 0;
+  pageTurnPendingRefresh_ = false;
   document_.clear();
   incomingDocument_.clear();
   pagination_.clear();
@@ -691,6 +722,8 @@ void WebBrowserActivity::navigateTo(const std::string& input, const bool addHist
     const RenderLock lock;
     currentUrl_ = normalized;
     pendingUrl_ = normalized;
+    waterTurnDirection_ = 0;
+    pageTurnPendingRefresh_ = false;
     if (addHistory && !busy) {
       if (history_.empty() || std::string(history_.back().c_str()) != normalized) {
         history_.push_back(webbrowser::WebString(normalized.data(), normalized.size()));
@@ -1137,6 +1170,9 @@ void WebBrowserActivity::pollJob() {
     case JobResult::Ok:
       document_ = std::move(incomingDocument_);
       pageIndex_ = 0;
+      pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
+      pageTurnPendingRefresh_ = false;
+      waterTurnDirection_ = 0;
       paginateDocument();
       if (pagination_.lines.empty()) {
         state_ = State::Error;
@@ -1302,6 +1338,8 @@ void WebBrowserActivity::enterList(const State list) {
   listIndex_ = 0;
   listScroll_ = 0;
   state_ = list;
+  waterTurnDirection_ = 0;
+  pageTurnPendingRefresh_ = false;
   requestUpdate();
 }
 
@@ -1330,6 +1368,8 @@ void WebBrowserActivity::reloadCurrentPage() {
 void WebBrowserActivity::goHomeState() {
   updateHistoryPage();
   state_ = State::Home;
+  waterTurnDirection_ = 0;
+  pageTurnPendingRefresh_ = false;
   requestUpdate();
 }
 
@@ -1571,6 +1611,10 @@ void WebBrowserActivity::pageTurn(const int delta) {
     return;
   }
   pageIndex_ = static_cast<size_t>(target);
+  // Mirror the reader: the water-ripple request belongs to a sequential turn,
+  // and only that turn may consume the refresh cadence.
+  waterTurnDirection_ = SETTINGS.pageTurnEffect == 1 ? (delta > 0 ? 1 : -1) : 0;
+  pageTurnPendingRefresh_ = true;
   ++turnsSinceHistory_;
   if (turnsSinceHistory_ >= 10) {
     turnsSinceHistory_ = 0;
@@ -1592,9 +1636,17 @@ void WebBrowserActivity::showNotice(const char* message) {
 
 void WebBrowserActivity::render(RenderLock&&) {
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  // Reading pages follow the reader's display settings. Fast turn is B/W with
+  // the reader's old 25% weight; normal pages keep the 16-level canvas.
+  const bool pageState = state_ == State::Page;
+  const bool fastPageTurn = pageState && SETTINGS.fastPageTurn != 0;
+  GfxRenderer::setExperimentalReaderDu(false);
+  GfxRenderer::setBwGlyphThreshold(fastPageTurn ? 1 : 2);
+  GfxRenderer::setBwGlyphThreshold4(fastPageTurn ? 7 : 10);
   // A reading page goes through the 16-level canvas so the vector face keeps
-  // its antialiasing; chrome/footer/icons ride along and are thresholded.
-  const bool gray16 = state_ == State::Page && renderer.beginGrayscale16();
+  // its antialiasing; chrome/footer/icons ride along and are thresholded. A
+  // fast turn is deliberately 1-bit: the DU profile carries no midtones.
+  const bool gray16 = pageState && !fastPageTurn && renderer.beginGrayscale16();
   if (!gray16) renderer.clearScreen();
 
   switch (state_) {
@@ -1639,9 +1691,47 @@ void WebBrowserActivity::render(RenderLock&&) {
   }
 
   if (optionPopup_.isActive()) optionPopup_.render(renderer);
-  if (gray16) {
-    if (renderer.commitGrayscale16(false)) return;
+
+  if (pageState) {
+    // The reader's cadence is consumed only by an actual sequential page turn.
+    // Menus, notices and the first paint of a page must not spend it.
+    bool clean = false;
+    if (pageTurnPendingRefresh_) {
+      if (pagesUntilFullRefresh_ <= 1) {
+        pagesUntilFullRefresh_ = SETTINGS.getRefreshFrequency();
+        clean = SETTINGS.periodicFullRefresh != 0;
+      } else {
+        --pagesUntilFullRefresh_;
+      }
+      pageTurnPendingRefresh_ = false;
+    }
+    const bool waterOk = waterTurnDirection_ != 0 && !optionPopup_.isActive();
+    renderer.setPageTurnDirection(waterOk ? waterTurnDirection_ : 0);
+    waterTurnDirection_ = 0;
+
+    if (gray16) {
+      if (renderer.commitGrayscale16(clean)) {
+        GfxRenderer::setExperimentalReaderDu(false);
+        return;
+      }
+    } else if (fastPageTurn) {
+      // Same path as the reader's fast turn: B/W + single-phase DU, with the
+      // periodic cadence still able to promote a due page to GC16.
+      GfxRenderer::setExperimentalReaderDu(true);
+      renderer.displayBuffer(clean ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH,
+                             DisplayRefreshContext::ContinuousReading);
+      GfxRenderer::setExperimentalReaderDu(false);
+      return;
+    }
+    // Gray start failed (or the page was drawn B/W): fall back to one push.
+    renderer.displayBuffer(clean ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH,
+                           DisplayRefreshContext::ContinuousReading);
+    GfxRenderer::setExperimentalReaderDu(false);
+    return;
   }
+
+  renderer.setPageTurnDirection(0);
+  GfxRenderer::setExperimentalReaderDu(false);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH, DisplayRefreshContext::Normal);
 }
 
@@ -1953,7 +2043,11 @@ void WebBrowserActivity::renderPage(const std::string* urlOverride, const bool w
     memcpy(lineBuffer, document_.text.data() + line.textStart, length);
     lineBuffer[length] = '\0';
     const auto style = (line.flags & webbrowser::LineHeading) ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-    renderer.drawText(bodyFont_, contentLeft, y, lineBuffer, true, style);
+    // Resolve once for the whole line. drawText and the per-link measurements
+    // below must use the same face; resolving a link substring independently
+    // can pick a different fallback and strand its underline in empty space.
+    const int lineFont = renderer.chooseFontForText(bodyFont_, lineBuffer, style);
+    renderer.drawText(lineFont, contentLeft, y, lineBuffer, true, style);
 
     // Underline the link segments that fall on this line and remember their hit
     // rectangles. The underline is the only visual affordance: the page has no
@@ -1966,8 +2060,9 @@ void WebBrowserActivity::renderPage(const std::string* urlOverride, const bool w
       const uint32_t begin = std::max(lineStart, link.textStart);
       const uint32_t end = std::min(lineEnd, link.textStart + link.textLength);
       if (begin >= end) continue;
-      const int x0 = contentLeft + measureRange(document_.text, lineStart, begin - lineStart, false);
-      const int x1 = x0 + measureRange(document_.text, begin, end - begin, false);
+      const int x0 = contentLeft + measureRange(lineFont, document_.text, lineStart, begin - lineStart, false);
+      const int x1 = x0 + measureRange(lineFont, document_.text, begin, end - begin, false);
+      if (x1 <= x0) continue;  // zero-width label: no stray dash, no hit target
       renderer.drawLine(x0, y + lineHeight - 2, x1, y + lineHeight - 2, true);
       LinkHit hit;
       // Six pixels of slack below the line and a few at the sides: a fingertip
@@ -2125,7 +2220,7 @@ int WebBrowserActivity::glyphWidthInternal(const uint32_t cp, const bool bold) {
   return width;
 }
 
-int WebBrowserActivity::measureRange(const webbrowser::WebString& text, const uint32_t start,
+int WebBrowserActivity::measureRange(const int fontId, const webbrowser::WebString& text, const uint32_t start,
                                      const uint32_t length, const bool bold) {
   char buffer[512];
   uint32_t copy = length;
@@ -2136,5 +2231,5 @@ int WebBrowserActivity::measureRange(const webbrowser::WebString& text, const ui
   if (copy == 0) return 0;
   memcpy(buffer, text.data() + start, copy);
   buffer[copy] = '\0';
-  return renderer.getTextWidth(bodyFont_, buffer, bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+  return renderer.getTextWidth(fontId, buffer, bold ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
 }

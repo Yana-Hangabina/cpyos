@@ -22,9 +22,9 @@ class UserGuideEpubTest(unittest.TestCase):
             generator.build_bundled(ROOT / 'docs/user-guide', output, header)
             before = header.read_bytes()
             total = 0
-            for language, filename, title in (
-                ('zh-CN', 'CrossMux用户手册.epub', 'CrossMux用户手册'),
-                ('en', 'CrossMux User Guide.epub', 'CrossMux User Guide'),
+            for language, filename, title, author in (
+                ('zh-CN', '脆皮鸭用户手册.epub', '脆皮鸭用户手册', '脆皮鸭 CPYOS'),
+                ('en', 'CPYOS User Guide.epub', 'CPYOS User Guide', 'CPYOS'),
             ):
                 data = (output / filename).read_bytes()
                 total += len(data)
@@ -41,15 +41,18 @@ class UserGuideEpubTest(unittest.TestCase):
                     container = ET.fromstring(archive.read('META-INF/container.xml'))
                     opf_path = container.find('c:rootfiles/c:rootfile', ns).get('full-path')
                     opf = ET.fromstring(archive.read(opf_path))
+                    self.assertEqual(opf.find('o:metadata/dc:identifier', ns).text,
+                                     f'cpyos-user-guide-{language}')
                     self.assertEqual(opf.find('o:metadata/dc:title', ns).text, title)
                     self.assertEqual(opf.find('o:metadata/dc:language', ns).text, language)
+                    self.assertEqual(opf.find('o:metadata/dc:creator', ns).text, author)
                     items = {item.get('id'): item for item in opf.findall('o:manifest/o:item', ns)}
                     for item in items.values():
                         self.assertRegex(item.get('id'), r'^[A-Za-z_][\w.-]*$')
                         self.assertIn('OEBPS/' + item.get('href'), archive.namelist())
                         self.assertNotIn('font', item.get('media-type'))
                     spine = [item.get('idref') for item in opf.findall('o:spine/o:itemref', ns)]
-                    self.assertEqual(len(spine), 11)
+                    self.assertEqual(len(spine), 12)
                     self.assertNotIn('nav', spine)
                     self.assertNotIn('style', spine)
                     self.assertTrue(all(item in items for item in spine))
@@ -60,11 +63,11 @@ class UserGuideEpubTest(unittest.TestCase):
                     self.assertNotIn('OEBPS/cover.png', archive.namelist())
                     self.assertNotIn('OEBPS/cover.xhtml', archive.namelist())
                     self.assertIn('OEBPS/' + spine[0] + '.xhtml', archive.namelist())
-                    section = ET.fromstring(archive.read('OEBPS/' + spine[5] + '.xhtml'))
+                    section = ET.fromstring(archive.read('OEBPS/' + spine[6] + '.xhtml'))
                     self.assertEqual(len(section.findall('.//x:h3', ns)), 2)
                     self.assertTrue(section.findall('.//x:blockquote', ns))
                     self.assertTrue(section.findall('.//x:link[@rel="stylesheet"]', ns))
-                    troubleshooting = ET.fromstring(archive.read('OEBPS/' + spine[9] + '.xhtml'))
+                    troubleshooting = ET.fromstring(archive.read('OEBPS/' + spine[10] + '.xhtml'))
                     self.assertEqual(len(troubleshooting.findall('.//x:h3', ns)), 4)
                     self.assertTrue(any((p.text or '').startswith('1. ') for p in
                                         troubleshooting.findall('.//x:p', ns)))

@@ -244,7 +244,7 @@ def package_target(root, target_id, channel, output):
     # a future pack-using release target without spiffs assets fails here rather
     # than shipping an app-only image that silently degrades.
     if firmware_uses_data_packs(firmware):
-        data_roles = {'pinyin', 'hyphen', 'i18n', 'web'}
+        data_roles = {'pinyin', 'hyphen', 'i18n', 'web', 'core'}
         has_data_assets = any(asset['role'] in data_roles for asset in assets)
         if not has_data_assets:
             if target['fullInstall']:

@@ -18,6 +18,7 @@
 #include "HomeButtonSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "activities/settings/SettingsActivity.h"
 #include "components/UITheme.h"
@@ -263,7 +264,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 
     std::vector<SettingInfo> v;
     // Rows appended by the batches below (see invariant 2 above the function).
-    // 98 is every unconditional row; each guard adds one row per row it enables:
+    // 103 is every unconditional row; guards add one row per row they enable:
+    //   !CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS  deep-sleep style + image rows
     //   FREEINK_CAP_FRONTLIGHT          restore light on wake
     //   CROSSPOINT_FONT_PACK_EMBEDDED   UI font scale
     //   CROSSPOINT_CAP_SOUND_FEEDBACK   sound feedback
@@ -271,7 +273,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     //   FREEINK_CAP_WARMLIGHT           frontlight warmth
     //   FREEINK_DEVICE_READPICO         page turn effect + fast page turn
     //   CROSSPOINT_CAP_BUZZER_FEEDBACK  buzzer source + pitch + strength
-    constexpr size_t entryCount = 98
+    //   CROSSPOINT_PLUS_PORT            Bluetooth audio action
+    constexpr size_t entryCount = 103
+#if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
+                                  + 2
+#endif
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+                                  + 1
+#endif
 #if FREEINK_CAP_FRONTLIGHT
                                   + 1
 #endif
@@ -287,11 +296,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #if FREEINK_CAP_WARMLIGHT
                                   + 1
 #endif
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(CROSSPOINT_PORT_NO_WATER_TURN)
                                   + 2
 #endif
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
                                   + 3
+#endif
+#if defined(CROSSPOINT_PLUS_PORT)
+                                  + 1
 #endif
         ;
     // Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
@@ -303,8 +315,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           "standbyStyle", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_LIGHT_SLEEP_STYLE, &CrossPointSettings::lightSleepStyle, lightSleepStyleValues,
                           "lightSleepStyle", StrId::STR_CAT_DISPLAY),
+#if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
         SettingInfo::Enum(StrId::STR_DEEP_SLEEP_STYLE, &CrossPointSettings::deepSleepStyle, deepSleepStyleValues,
                           "deepSleepStyle", StrId::STR_CAT_DISPLAY),
+#endif
         SettingInfo::Toggle(StrId::STR_SLEEP_STATE_BADGE, &CrossPointSettings::sleepStateBadge,
                             "sleepStateBadge", StrId::STR_CAT_DISPLAY),
     });
@@ -318,7 +332,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     v.insert(v.end(), {
         SettingInfo::Action(StrId::STR_STANDBY_IMAGE, SettingAction::StandbyImage),
         SettingInfo::Action(StrId::STR_LIGHT_SLEEP_IMAGE, SettingAction::LightSleepImage),
+#if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
         SettingInfo::Action(StrId::STR_DEEP_SLEEP_IMAGE, SettingAction::DeepSleepImage),
+#endif
     });
     v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_STANDBY_TITLE, &CrossPointSettings::standbyShortcutEnabled,
@@ -332,6 +348,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // "thin paper" level for 60 pages on hardware (2026-10-29).
         SettingInfo::Toggle(StrId::STR_PERIODIC_REFRESH, &CrossPointSettings::periodicFullRefresh,
                             "periodicFullRefresh", StrId::STR_CAT_DISPLAY),
+    });
+    v.insert(v.end(), {
+        SettingInfo::Enum(StrId::STR_NETWORK_TYPE, &CrossPointSettings::networkType,
+                          {StrId::STR_NETWORK_WIFI, StrId::STR_NETWORK_4G}, "networkType",
+                          StrId::STR_CAT_SYSTEM),
         SettingInfo::Value(StrId::STR_REFRESH_INTERVAL, &CrossPointSettings::readerRefreshPages, {5, 120, 5},
                            "readerRefreshPages", StrId::STR_CAT_DISPLAY),
     });
@@ -396,6 +417,16 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             .withTextSettings(),
     });
     v.insert(v.end(), {
+        // Advanced override for the four levels above: an exact percentage of
+        // the font's natural line height. 0 (the default) keeps the level and
+        // per-family factors, so this row is inert until the user opts in.
+        // It also appears in the in-reader Text sheet (Layout tab).
+        SettingInfo::Value(StrId::STR_LINE_SPACING_PERCENT, &CrossPointSettings::readerLineSpacingPercent,
+                           {reader_line_spacing::PERCENT_MIN, reader_line_spacing::PERCENT_MAX,
+                            reader_line_spacing::PERCENT_STEP},
+                           "readerLineSpacingPercent", StrId::STR_CAT_READER),
+    });
+    v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_CHARACTER_SPACING, &CrossPointSettings::characterSpacing,
                           {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1, StrId::STR_SPACING_ZERO,
                            StrId::STR_SPACING_PLUS_1, StrId::STR_SPACING_PLUS_2},
@@ -415,7 +446,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                             StrId::STR_CAT_READER)
             .withTextSettings(),
     });
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(CROSSPOINT_PORT_NO_WATER_TURN)
     // 水波纹翻页是 Read Pico epdiy LCD 路径的能力（EpdiyLcd/src/e0470_page_turn）；
     // 其余面板没有这个引擎，条目整个不出现，避免"选了没反应"。
     // / The water-ripple turn is a capability of Read Pico's epdiy LCD path
@@ -566,6 +597,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_STATE_OFF, StrId::STR_MOTION_TILT, StrId::STR_MOTION_TILT_REVERSED,
                            StrId::STR_MOTION_SHAKE, StrId::STR_MOTION_SHAKE_REVERSED},
                           "motionPageTurn", StrId::STR_CAT_CONTROLS),
+    });
+    v.insert(v.end(), {
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
     });
@@ -573,6 +606,17 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
                             "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
     });
+#if defined(CROSSPOINT_PLUS_PORT)
+    v.insert(v.end(), {
+        // Metalio E-INK4 Plus only: the BH1098G Bluetooth audio module on UART1
+        // (AT-command scan / pair). The port's cpyos_ui component defines
+        // CROSSPOINT_PLUS_PORT, so Read Pico never sees this row. Like the
+        // standby-image actions it carries no category here: SettingsActivity
+        // appends the visible ACTION row to the Controls tab (the base entry
+        // keeps it in the shared list for the settings API).
+        SettingInfo::Action(StrId::STR_BT_AUDIO, SettingAction::BluetoothAudio),
+    });
+#endif
     v.insert(v.end(), {
         // --- System ---
         SettingInfo::Value(
@@ -581,6 +625,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                             StrId::STR_CAT_SYSTEM),
+    });
+    v.insert(v.end(), {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        // Home's once-a-day check-in reminder. The same field is the checkbox in
+        // the app's dialog; this row is the way back after the user unchecks it.
+        SettingInfo::Toggle(StrId::STR_JJWXC_REMIND_DAILY, &CrossPointSettings::jjwxcSignInReminder,
+                            "jjwxcSignInReminder", StrId::STR_CAT_SYSTEM),
+#endif
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
         SettingInfo::Enum(StrId::STR_SOUND_FEEDBACK, &CrossPointSettings::soundFeedbackLevel,
                           {StrId::STR_STATE_OFF, StrId::STR_SOUND_FEEDBACK_LOW, StrId::STR_SOUND_FEEDBACK_MEDIUM,
@@ -649,6 +701,18 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Value(StrId::STR_WARMTH, &CrossPointSettings::frontlightWarmth, {0, 100, 5}, "frontlightWarmth"),
 #endif
         SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightOn, "frontlightOn"),
+    });
+    v.insert(v.end(), {
+        // Hardware-variant probe results. No category: persisted and web-visible
+        // but never rendered as a setting row (detection is automatic).
+        SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightPresent, "frontlightPresent"),
+        SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightProbed, "frontlightProbed"),
+        // Speaker volume, changed from the side keys (no settings row).
+        SettingInfo::Value(StrId::STR_SOUND_FEEDBACK, &CrossPointSettings::audioVolume, {0, 100, 5}, "audioVolume"),
+    });
+    v.insert(v.end(), {
+        SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::cellularPresent, "cellularPresent"),
+        SettingInfo::Toggle(StrId::STR_FRONTLIGHT, &CrossPointSettings::cellularProbed, "cellularProbed"),
     });
     v.insert(v.end(), {
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
@@ -839,6 +903,8 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 }
 
 inline bool isSettingAvailableOnBoard(const SettingInfo& setting) {
+  // Network type only exists on units where the 4G modem was detected.
+  if (setting.valuePtr == &CrossPointSettings::networkType && SETTINGS.cellularPresent == 0) return false;
   if (!BoardConfig::hasTouch() && setting.nameId == StrId::STR_TOUCH_READER_CONTROLS) return false;
   if (!BoardConfig::hasHomeKey() && setting.nameId == StrId::STR_SHOW_READER_MENU) return false;
   // The Home key carries the remaining reading shortcuts on this board, so the

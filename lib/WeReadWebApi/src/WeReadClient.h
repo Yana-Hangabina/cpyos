@@ -27,6 +27,9 @@ enum class Error {
   Clock,
   OutOfMemory,
   WholeBookOnly,
+  // Every chapter in the requested range was a paid/locked preview. The UI
+  // uses this to explain the book instead of showing a generic network error.
+  NotPurchased,
 };
 
 struct DownloadOptions {
@@ -37,6 +40,10 @@ struct DownloadOptions {
 
   WeReadStore::ImagePolicy imagePolicy = WeReadStore::ImagePolicy::Embed;
   ChapterScope chapterScope = ChapterScope::WholeBook;
+  // Localized placeholder body for skipped chapters. The Operation copies both
+  // strings into fixed buffers so a language reload cannot invalidate them.
+  const char* paidChapterText = nullptr;
+  const char* unavailableChapterText = nullptr;
 };
 
 enum class LocalOffsetBasis : uint8_t {
@@ -50,8 +57,10 @@ struct ProgressSyncInput {
   uint32_t localTocIndex = 0;
   uint32_t localOffset = 0;
   LocalOffsetBasis localOffsetBasis = LocalOffsetBasis::None;
+  // Effective reading seconds accumulated locally since the last confirmed upload.
+  uint32_t readingSeconds = 0;
 };
-static_assert(sizeof(ProgressSyncInput) == 16);
+static_assert(sizeof(ProgressSyncInput) == 20);
 
 enum class ProgressSyncMode : uint8_t {
   Compare,
@@ -70,11 +79,21 @@ enum class ProgressSyncOutcome : uint8_t {
 struct ProgressSyncResult {
   ProgressSyncOutcome outcome = ProgressSyncOutcome::Pending;
   WeReadProtocol::RemoteProgress remote;
+  // Cloud reading-time read-back around an upload, in whole seconds.
+  uint32_t submittedReadingSeconds = 0;
+  uint32_t appliedReadingSeconds = 0;
+  uint32_t cloudReadingSecondsBefore = 0;
+  uint32_t cloudReadingSecondsAfter = 0;
+  bool cloudReadingBeforeValid = false;
+  bool cloudReadingAfterValid = false;
+  // True once the report request reached the server (so an ambiguous failure
+  // could still have applied the time).
+  bool reportSent = false;
 };
 
 class Operation {
  public:
-  enum class Kind : uint8_t { Sync, Detail, Download, ProgressSync, Browse };
+  enum class Kind : uint8_t { Sync, Detail, Download, ProgressSync, Browse, TimeSync };
   enum class ShelfCoverScope : uint8_t { None, All };
   enum class Event : uint8_t {
     None,
@@ -92,6 +111,8 @@ class Operation {
   bool begin(Kind kind, const WeReadStore::ShelfRecord* book = nullptr, DownloadOptions options = {},
              ShelfCoverScope shelfCoverScope = ShelfCoverScope::None);
   bool beginProgressSync(const char* bookId, ProgressSyncInput input, ProgressSyncMode mode);
+  // Uploads accumulated reading seconds without resolving position conflicts.
+  bool beginTimeSync(const char* bookId, ProgressSyncInput input);
   bool beginBrowseCache(const WeReadStore::BookRecord& book);
   Event step(WeReadStore::WorkCallback callback = nullptr, void* callbackContext = nullptr);
   void cancel();
@@ -101,9 +122,20 @@ class Operation {
 
   Error error() const { return error_; }
   uint32_t chapterCount() const { return chapterCount_; }
+  // Size of the range this job actually walked (equals chapterCount() for a
+  // whole-book run). Completion summaries must use this, not chapterCount().
+  uint32_t requestedChapterCount() const {
+    return lastChapterIndex_ >= firstChapterIndex_ ? lastChapterIndex_ - firstChapterIndex_ + 1 : 0;
+  }
   ProgressStage progressStage() const { return progressStage_; }
   uint32_t progressCompleted() const { return progressCompleted_; }
   uint32_t progressTotal() const { return progressTotal_; }
+  // Chapters with real content (including ones reused from a previous run).
+  uint32_t cachedChapterCount() const { return cachedChapters_; }
+  // Chapters replaced by a localized placeholder because the account could not
+  // read them (paid / locked / server preview).
+  uint32_t skippedChapterCount() const { return skippedChapters_; }
+  uint32_t skippedPaidCount() const { return skippedPaid_; }
   const char* progressTitle() const { return book_.title; }
   static constexpr uint8_t progressDecile(const uint32_t completed, const uint32_t total) {
     return total == 0 ? 0 : static_cast<uint8_t>((static_cast<uint64_t>(completed) * 10) / total);
@@ -143,6 +175,13 @@ class Operation {
     Skipped,
   };
 
+  // A chapter the account cannot read is replaced by a placeholder instead of
+  // failing the whole book. Paid and locked chapters get different text.
+  enum class ChapterSkipReason : uint8_t {
+    Paid,
+    Unavailable,
+  };
+
   enum class ShelfCoverPassAction : uint8_t {
     StartSources,
     StartThumbnails,
@@ -174,6 +213,7 @@ class Operation {
     SendProgressEnter,
     SendProgressReport,
     VerifyProgress,
+    VerifyTimeSync,
     OpenToc,
     AwaitChapterRange,
     LoadChapter,
@@ -254,6 +294,18 @@ class Operation {
   static constexpr bool shouldRetryPaidPreview(const bool paid, const bool plainText, const bool hasXhtmlTag) {
     return paid && !plainText && !hasXhtmlTag;
   }
+  // A paid preview is a few hundred bytes, while a full chapter of the same
+  // word count is at least ~3x longer in the encodings WeRead serves (base64
+  // shard / UTF-8 text). Both checks are independent of the server's `paid`
+  // flag, which differs between anonymous and signed-in accounts.
+  static constexpr uint32_t kPreviewWordThreshold = 200;
+  static constexpr bool primaryLooksLikePreview(const uint32_t wordCount, const uint64_t responseBytes,
+                                                const bool textMetadata) {
+    return !textMetadata && wordCount >= kPreviewWordThreshold && responseBytes < wordCount;
+  }
+  static constexpr bool chapterLooksLikePreview(const uint32_t wordCount, const uint64_t decodedBytes) {
+    return wordCount >= kPreviewWordThreshold && decodedBytes < static_cast<uint64_t>(wordCount) * 2ULL;
+  }
   static constexpr bool reuseChapterFile(const bool refreshingBook, const bool chapterExists) {
     return !refreshingBook && chapterExists;
   }
@@ -280,8 +332,11 @@ class Operation {
   static constexpr bool wholeChapterRange(const uint32_t first, const uint32_t last, const uint32_t count) {
     return validChapterRange(first, last, count) && first == 0 && last == count - 1;
   }
-  static constexpr ProgressAction progressAction(const ProgressSyncMode mode, const bool samePosition) {
-    if (samePosition) return ProgressAction::AlreadySynced;
+  static constexpr ProgressAction progressAction(const ProgressSyncMode mode, const bool samePosition,
+                                                 const bool hasReadingTime = false) {
+    // Reading seconds travel with the report request; keep the enter/report
+    // pair alive even when positions already match so the time is not lost.
+    if (samePosition) return hasReadingTime ? ProgressAction::UploadLocal : ProgressAction::AlreadySynced;
     switch (mode) {
       case ProgressSyncMode::Compare:
         return ProgressAction::SelectDirection;
@@ -323,6 +378,10 @@ class Operation {
   Event fail(Error error);
   Event handleRequestError(Error error, Phase retryPhase);
   Event retryChapterResponse();
+  Event skipChapter(ChapterSkipReason reason, const char* detail);
+  ChapterSkipReason chapterSkipReason() const {
+    return chapter_.paid ? ChapterSkipReason::Paid : ChapterSkipReason::Unavailable;
+  }
   Event reauthenticateChapter();
   void requestSucceeded();
   void guardBookSession(const char* phase);
@@ -351,6 +410,8 @@ class Operation {
   bool remoteAppIdMatchesLocal() const;
   void persistInitialProgress();
   Error decideProgress();
+  Error mapLocalProgressToChapter();
+  Error prepareTimeSync();
   Error fetchReaderOnce();
   Error fetchShardOnce(const char* endpoint, const std::string& destination);
   void startDownloadMetrics();
@@ -391,6 +452,17 @@ class Operation {
   uint32_t progressCompleted_ = 0;
   uint32_t progressTotal_ = 0;
   uint32_t progressChapterOffset_ = 0;
+  uint32_t cachedChapters_ = 0;
+  uint32_t skippedChapters_ = 0;
+  uint32_t skippedPaid_ = 0;
+  uint32_t consecutiveSkips_ = 0;
+  bool refreshingBook_ = false;
+  bool bookIsTextFormat_ = false;
+  unsigned long psvtsFetchedAt_ = 0;
+  uint32_t cloudReadingBefore_ = 0;
+  uint32_t cloudReadingAfter_ = 0;
+  bool cloudReadingBeforeValid_ = false;
+  bool cloudReadingAfterValid_ = false;
   uint32_t workCount_ = 0;
   uint32_t workCursor_ = 0;
   uint32_t workCompleted_ = 0;
@@ -435,6 +507,8 @@ class Operation {
   WeReadProtocol::ImageType coverType_ = WeReadProtocol::ImageType::None;
   char cookie_[kCookieSize] = {};
   char url_[kUrlSize] = {};
+  char paidChapterText_[128] = {};
+  char unavailableChapterText_[128] = {};
   uint8_t ioBuffer_[kIoBufferSize] = {};
   std::string referer_;
   std::string bookDir_;
@@ -442,6 +516,8 @@ class Operation {
   std::string outputPath_;
   std::string finalPartPath_;
 };
-static_assert(sizeof(Operation) <= 8 * 1024, "WeRead operation exceeds its fixed heap budget");
+// 9 KiB: the progress-sync workspace gained the reading-time ledger fields
+// (input seconds, cloud before/after counters and the read-back flags).
+static_assert(sizeof(Operation) <= 9 * 1024, "WeRead operation exceeds its fixed heap budget");
 
 }  // namespace WeReadClient

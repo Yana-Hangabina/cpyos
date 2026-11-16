@@ -65,6 +65,10 @@ class Activity {
   virtual bool handleForcedRefresh() { return false; }
   virtual bool isHomeActivity() const { return false; }
   virtual bool handleHomeGesture() { return false; }
+  // Hardware AI/BOOT key on boards that have one (Metalio E-INK4 Plus, GPIO61).
+  // Return true when this page consumed the gesture; the port otherwise opens
+  // the AI-voice page.
+  virtual bool onAiKey(bool /*longPress*/) { return false; }
   virtual MainTab mainTab() const { return MainTab::None; }
   virtual bool mainTabBackReturnsToTabs() const { return true; }
   virtual void selectMainTabContentEdge(MainTabContentEdge) {}
@@ -101,8 +105,27 @@ class Activity {
   virtual bool presentsGrayscale() const { return false; }
   // Serial-only soak hook: moves the list ring like a NavNext/NavPrevious press.
   virtual void debugMoveRing(int) {}
+  // Absolute selection for scripted device tests (ring moves are relative).
+  virtual void debugSelect(int) {}
   // Serial-only soak hook: performs the Confirm action at the current ring position.
   virtual void debugConfirm() {}
+  // Serial-only soak hook: opens the Nth action (sub-page) row of a settings
+  // list and logs which one, so a device sweep never depends on row geometry.
+  virtual void debugActivateAction(int) {}
+  // Vendor-OTA bench hooks (Plus port): check now, install a direct URL, and
+  // pick the update channel. All work stays on the page's own worker task.
+  virtual void debugCheck() {}
+  virtual void debugInstallUrl(const char*) {}
+  virtual void debugSetChannel(int) {}
+  // Serial-only soak hook: logs every action row of the current settings page.
+  virtual void debugListActions() {}
+  // Serial-only soak hook: starts the activity's cloud-progress sync (the
+  // reader's KOReader row), which is otherwise only reachable from a menu.
+  virtual void debugSync() {}
+  // Bench-only: date is YYYY-MM-DD. execute=false quotes the make-up cost;
+  // execute=true performs the paid action without a dialog, so only the serial
+  // console uses it.
+  virtual void debugJjwxcSignInSupplementary(const char* /*date*/, bool /*execute*/) {}
   // Serial-only soak hook: triggers the in-progress Cancel action.
   virtual void debugCancel() {}
   // Serial-only soak hook: performs one game move (0..3 = up/right/down/left).
@@ -117,6 +140,7 @@ class Activity {
   virtual void debugRefreshJjwxcComment() {}
   virtual void debugLikeJjwxcComment() {}
   virtual void debugOpenJjwxcCacheQueue() {}
+  virtual void debugOpenJjwxcImport() {}
   virtual void debugEnqueueJjwxcCacheQueue() {}
   virtual void debugEnqueueJjwxcCacheQueueRange(uint32_t from, uint32_t to) {}
   virtual void debugPauseJjwxcCacheQueue() {}

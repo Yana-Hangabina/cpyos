@@ -21,6 +21,10 @@ constexpr uint32_t kImageWorkMagic = 0x31504957;        // WIP1
 constexpr uint32_t kBookOptionsMagic = 0x314F5257;      // WRO1
 constexpr uint32_t kBookDetailMagic = 0x31444257;       // WBD1
 constexpr uint32_t kInitialProgressMagic = 0x31505257;  // WRP1
+constexpr uint32_t kTimeSyncPrefsMagic = 0x31545357;    // WST1
+constexpr uint32_t kTimeSyncStateMagic = 0x31545342;    // WSTB
+constexpr uint16_t kTimeSyncVersion = 1;
+constexpr const char* kTimeSyncPrefsPath = "/.crosspoint/weread/timesync.bin";
 constexpr uint16_t kIndexVersion = 1;
 constexpr uint16_t kBookOptionsVersion = 1;
 constexpr uint16_t kBookDetailVersion = 1;
@@ -50,6 +54,30 @@ struct InitialProgress {
   uint32_t millionths = 0;
 };
 static_assert(sizeof(InitialProgress) == 8);
+
+// Global opt-in for reporting effective reading seconds to WeRead. `consent`
+// records the one-time confirmation; `enabled` is the user-visible switch.
+struct TimeSyncPrefs {
+  uint32_t magic = kTimeSyncPrefsMagic;
+  uint16_t version = kTimeSyncVersion;
+  uint8_t enabled = 0;
+  uint8_t consent = 0;
+  uint32_t lastUploadSeconds = 0;
+  uint32_t lastUploadEpoch = 0;
+};
+static_assert(sizeof(TimeSyncPrefs) == 16);
+
+// Per-book ledger of effective reading seconds that have not been confirmed by
+// the server yet. Written before an upload and settled only after read-back.
+struct TimeSyncState {
+  uint32_t magic = kTimeSyncStateMagic;
+  uint16_t version = kTimeSyncVersion;
+  uint16_t reserved = 0;
+  uint32_t pendingSeconds = 0;
+  uint32_t uploadedSeconds = 0;
+  uint32_t lastUploadEpoch = 0;
+};
+static_assert(sizeof(TimeSyncState) == 20);
 
 struct Session {
   char vid[64] = {};
@@ -222,6 +250,12 @@ bool saveBookOptions(const std::string& bookDir, const BookOptions& options);
 bool loadInitialProgress(const char* bookId, float& fraction);
 bool saveInitialProgress(const char* bookId, float fraction);
 bool clearInitialProgress(const char* bookId);
+bool loadTimeSyncPrefs(TimeSyncPrefs& prefs);
+bool saveTimeSyncPrefs(const TimeSyncPrefs& prefs);
+bool loadTimeSyncState(const char* bookId, TimeSyncState& state);
+bool saveTimeSyncState(const char* bookId, const TimeSyncState& state);
+bool clearTimeSyncState(const char* bookId);
+std::string timeSyncStatePath(const char* bookId);
 bool openBookDetail(const std::string& bookDir, BookDetailHeader& header, HalFile& file);
 bool atomicReplace(const std::string& partPath, const std::string& finalPath);
 bool looksLikeZip(const std::string& path);

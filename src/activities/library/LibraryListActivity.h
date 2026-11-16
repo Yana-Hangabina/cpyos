@@ -11,6 +11,9 @@
 #include "RecentBooksStore.h"
 #include "activities/UiTabListActivity.h"
 #include "components/OptionPopup.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 
 // One Library screen: every indexed book on the card shown by recency, title,
 // or author. The Recent shelf orders by file modification time (when a book
@@ -36,6 +39,7 @@ class LibraryListActivity final : public UiTabListActivity {
 
   void onEnter() override;
   void onExit() override;
+  void loop() override;
   // The grid presents through the 16-level canvas (real cover tones, and no
   // GC16 promotion when the previous screen was Home). Band updates are 1-bit
   // only; the list layout keeps them.
@@ -78,6 +82,9 @@ class LibraryListActivity final : public UiTabListActivity {
   void drawChrome() override;
   void beforeDisplayHook() override;
   void captureSnapshot();
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  jjwxc_signin::ReminderPopup signInReminder_;
+#endif
   void drawFooter() override;
   // OptionPopup is a self-contained modal: it owns rendering (and the button
   // hints) whenever it is up.

@@ -25,6 +25,7 @@
 #include "ReadingStatsStore.h"
 #include "SilentRestart.h"
 #include "WeReadXhtmlCodec.h"
+#include "activities/apps/weread/WeReadTimeSync.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/EpubReaderUtils.h"
@@ -35,7 +36,7 @@
 #include "util/TimeUtils.h"
 
 namespace {
-static_assert(sizeof(WeReadClient::Operation) <= 8 * 1024, "WeRead progress workspace exceeds its fixed heap budget");
+static_assert(sizeof(WeReadClient::Operation) <= 9 * 1024, "WeRead progress workspace exceeds its fixed heap budget");
 }
 
 WeReadProgressSyncActivity::WeReadProgressSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -83,6 +84,7 @@ WeReadProgressContext WeReadProgressSyncActivity::makeContext(const Epub& epub, 
 
 void WeReadProgressSyncActivity::onEnter() {
   Activity::onEnter();
+  weread_time_sync::setForegroundBusy(true);
   fullRefreshPending_.store(true);
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
@@ -95,6 +97,11 @@ void WeReadProgressSyncActivity::onEnter() {
     return;
   }
 
+  // Effective seconds accumulated for this book ride along with the report
+  // request; the cap keeps a single request bounded after long offline periods.
+  const uint32_t pendingSeconds = weread_time_sync::pendingSeconds(bookId_);
+  input_.readingSeconds = pendingSeconds > 3600 ? 3600 : pendingSeconds;
+
   NetworkStartup::prepare(renderer);
   wifiActivated_ = true;
   if (WiFi.status() == WL_CONNECTED) {
@@ -106,6 +113,7 @@ void WeReadProgressSyncActivity::onEnter() {
 }
 
 void WeReadProgressSyncActivity::onExit() {
+  weread_time_sync::setForegroundBusy(false);
   operation_.reset();
   Activity::onExit();
   if (!wifiActivated_) return;
@@ -176,11 +184,23 @@ void WeReadProgressSyncActivity::advanceSync() {
     case WeReadClient::Operation::Event::Cancelled:
       returnToReader();
       return;
-    case WeReadClient::Operation::Event::Failed:
+    case WeReadClient::Operation::Event::Failed: {
       error_ = operation_.error();
+      // A report that reached the server but could not be verified may have
+      // been applied. Following the WeRead policy it is never replayed, so the
+      // local ledger drops it instead of double counting on the next upload.
+      const auto failedResult = operation_.progressSyncResult();
+      if (input_.readingSeconds > 0 && failedResult.reportSent) {
+        const bool dropped =
+            weread_time_sync::settle(bookId_, 0, input_.readingSeconds, true);
+        LOG_INF("WRSync", "ambiguous report: dropped %u second(s) ok=%d",
+                static_cast<unsigned>(input_.readingSeconds), dropped ? 1 : 0);
+      }
+      operation_.reset();
       state_ = error_ == WeReadClient::Error::SessionExpired ? State::LoginRequired : State::Failed;
       requestUpdate();
       return;
+    }
     case WeReadClient::Operation::Event::Complete:
       break;
   }
@@ -201,6 +221,16 @@ void WeReadProgressSyncActivity::advanceSync() {
   if (outcome_ == WeReadClient::ProgressSyncOutcome::ApplyRemote) {
     applyRemoteProgress(result.remote);
     return;
+  }
+  if (outcome_ == WeReadClient::ProgressSyncOutcome::LocalUploaded && input_.readingSeconds > 0) {
+    // Prefer the cloud read-back delta; fall back to the submitted amount when
+    // the response did not expose a reading counter. Without an ambiguous
+    // report there is nothing left to replay, so the ledger is settled here.
+    const uint32_t applied =
+        result.appliedReadingSeconds > 0 ? result.appliedReadingSeconds : input_.readingSeconds;
+    const bool settled = weread_time_sync::settle(bookId_, applied, input_.readingSeconds, true);
+    LOG_INF("WRSync", "reading time settled: submitted=%u applied=%u ok=%d",
+            static_cast<unsigned>(input_.readingSeconds), static_cast<unsigned>(applied), settled ? 1 : 0);
   }
   state_ = State::Success;
   requestUpdate();
@@ -344,6 +374,8 @@ const char* WeReadProgressSyncActivity::errorMessage() const {
     case WeReadClient::Error::Protocol:
     case WeReadClient::Error::Integrity:
     case WeReadClient::Error::OutOfMemory:
+    case WeReadClient::Error::WholeBookOnly:
+    case WeReadClient::Error::NotPurchased:
       return tr(STR_SYNC_FAILED_MSG);
   }
   return tr(STR_SYNC_FAILED_MSG);

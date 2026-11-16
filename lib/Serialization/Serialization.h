@@ -1,7 +1,11 @@
 #pragma once
 #include <HalStorage.h>
 
-#include <iostream>
+// Only the stream types are used here. <iostream> would pull in libstdc++'s
+// std::cin/cout global initialiser, and on this RISC-V port that constructor
+// runs right before esp_ipc_init and leaves the internal heap unusable.
+#include <istream>
+#include <ostream>
 #include <utility>
 
 namespace serialization {

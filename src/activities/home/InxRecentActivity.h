@@ -8,7 +8,11 @@
 #include "InxRecentLayout.h"
 #include "RecentBooksStore.h"
 #include "activities/Activity.h"
+#include "components/HomeDashboardLayout.h"
 #include "components/OptionPopup.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
 #include <cstddef>
@@ -40,6 +44,9 @@ class InxRecentActivity final : public Activity {
   const std::vector<RecentBook>* books = nullptr;
   std::array<const ReadingBookStats*, RecentBooksStore::MAX_RECENT_BOOKS> bookStats{};
   OptionPopup packRetryPopup_;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  jjwxc_signin::ReminderPopup signInReminder_;
+#endif
   bool packRetryPrompted_ = false;
   std::array<CoverCacheState, RecentBooksStore::MAX_RECENT_BOOKS> targetCoverStates{};
   std::array<CoverCacheState, RecentBooksStore::MAX_RECENT_BOOKS> fallbackCoverStates{};
@@ -54,7 +61,9 @@ class InxRecentActivity final : public Activity {
   Rect contentRect() const;
   const ReadingBookStats* statsAt(int index) const;
   void openSelected();
-  void maybePromptPackUpdate();
+  // Returns true when it actually showed a dialog; the caller then defers the
+  // check-in reminder so the two never stack.
+  bool maybePromptPackUpdate();
   void setThumbnailHeight(int displayHeight);
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR) && !defined(CROSSPOINT_EMULATED)
   void clearCoverCaches();
@@ -78,17 +87,11 @@ class InxRecentActivity final : public Activity {
   uint32_t coverLoadingSinceMs_ = 0;
 
 
-  // Pond v5 home (design frame 01): one large continue card, a 140 px reading
-  // strip with the week bars, the three most recent covers, and the update row.
+  // Pond v5 home (design frame 01): one large continue card, a reading strip,
+  // the three most recent covers, and the update row. The geometry lives in
+  // components/HomeDashboardLayout.h so compact panels can be host-tested.
   // Ring slots: 0 continue, 1 today, 2..4 recent books, 5 sync.
-  struct DashLayout {
-    Rect firstCard;
-    Rect todayCard;
-    Rect recentCard;
-    Rect recentBooks[3];
-    Rect recentAll;
-    Rect syncRow;
-  };
+  using DashLayout = home_dashboard::Layout;
   static constexpr int kDashSlots = 7;
 
   // Chapter counts read once on entry for the continue card and the three

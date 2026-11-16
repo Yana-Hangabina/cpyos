@@ -57,26 +57,36 @@ sources or generator, never the generated header. Validate with
 `python3 scripts/tests/test_userguide_epub.py` and the `UserGuideTest` host target.
 
 After SD initialization and recent-list loading, `UserGuide::prepare()` checks
-`/.crosspoint/user-guide.checked`. An existing readable recent list with any
-present book is marked checked immediately. An absent list or a readable list
-with no present books is eligible; an existing list that fails to load is left
+the CPYOS marker `/.crosspoint/cpyos-user-guide.checked`. The marker is separate
+from CrossMux's old `user-guide.checked`, so a card that already ran CrossMux
+still performs one CPYOS check. An existing list that fails to load is left
 alone. Recovery firmware and panic boots skip the check.
 
 The first `goHome()` after onboarding writes the selected guide to the SD root
 (Simplified Chinese UI selects Chinese; all other languages select English).
-It verifies a temporary file before renaming, adds the standard recent entry
-and thumbnail path, then writes the checked marker. No reader is opened and no
-reading statistics are created. Cover generation remains with the active theme.
+An existing recent list does **not** suppress this: the guide is added there and
+`addBook()` moves it to the front, so it is the first "Continue reading" card.
+The library index is marked dirty once so the new file also appears in the
+Library. It verifies a temporary file before renaming, adds the standard recent
+entry and thumbnail path, then writes the checked marker. No reader is opened and
+no reading statistics are created. Cover generation remains with the active theme.
+
+If the selected language's file is already present with different bytes, it is
+preserved and the check is marked complete without adding a recent entry. If an
+interrupted marker write left the other language's exact guide behind, that file
+is reused instead of writing a second language.
 A different existing file at the same destination is preserved and marks the
 check skipped; an unreadable file defers the attempt. Failures retry only on a
 later boot, reusing an identical already-installed EPUB.
 
 The marker is independent of settings and recents: deleting/moving the guide,
 clearing recents, resetting settings, changing language or upgrading firmware
-does not restore/replace it. A new card or explicitly removing the marker allows
-a new check. Card filesystem corruption and removal of the whole `.crosspoint`
-directory are not distinguishable from first use. FAT writes/renames are not a
-power-loss transaction; test interruption recovery on real cards.
+does not restore/replace it. In particular, later firmware updates never write
+the book again even when the bundled archive changes. A new card or explicitly
+removing the marker allows a new check. Card filesystem corruption and removal
+of the whole `.crosspoint` directory are not distinguishable from first use.
+FAT writes/renames are not a power-loss transaction; test interruption recovery
+on real cards.
 
 Hardware acceptance: on X3/X4, start with a backed-up fresh SD card, select each
 language and inspect ordinary, carousel and INX homes, then open all chapters.

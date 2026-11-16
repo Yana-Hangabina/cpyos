@@ -22,7 +22,7 @@ void CatalogActivity::onEnter() {
 
 void CatalogActivity::onExit() {
   Activity::onExit();
-  if (WiFi.getMode() != WIFI_MODE_NULL) {
+  if (WiFi.getMode() != WIFI_OFF) {
     WiFi.disconnect(false);
     delay(30);
     silentRestart();

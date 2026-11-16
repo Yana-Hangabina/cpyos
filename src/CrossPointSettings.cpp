@@ -16,6 +16,7 @@
 
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
+#include "ReaderLineSpacing.h"
 #include "SettingsList.h"
 #include "fontIds.h"
 #include "util/ParagraphIndentMigration.h"
@@ -24,7 +25,15 @@
 // Resolved here (not in the header) so I18nKeys.h — auto-generated and
 // changed on every translation edit — doesn't pull a recompile of every
 // file that includes CrossPointSettings.h.
-uint8_t CrossPointSettings::defaultLanguageIndex() { return static_cast<uint8_t>(Language::EN); }
+uint8_t CrossPointSettings::defaultLanguageIndex() {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // Chinese-market port: a fresh install should come up in Chinese. An
+  // existing settings file still wins, so the user's choice is preserved.
+  return static_cast<uint8_t>(Language::ZH_CN);
+#else
+  return static_cast<uint8_t>(Language::EN);
+#endif
+}
 
 namespace {
 
@@ -293,12 +302,19 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["readerGestureHintSeen"] = readerGestureHintSeen;
+  // The reader's Text sheet exposes these two switches on every board, but the
+  // SettingsList rows only exist under the Read Pico guard. Persist them here so
+  // a toggle survives a reboot on the other panels too (measured on the Plus:
+  // the switch read back 否 after `reboot` because nothing ever wrote the key).
+  doc["fastPageTurn"] = fastPageTurn;
+  doc["pageTurnEffect"] = pageTurnEffect;
   doc["frontButtonBack"] = frontButtonBack;
   doc["frontButtonConfirm"] = frontButtonConfirm;
   doc["frontButtonLeft"] = frontButtonLeft;
   doc["frontButtonRight"] = frontButtonRight;
   doc["bluetoothEnabled"] = bluetoothEnabled;
   JsonArray storedBleMap = doc["bleKeyMap"].to<JsonArray>();
+  doc["bleMapVersion"] = 1;
   for (const auto& entry : bleKeyMap) {
     if (bleinput::isEmpty(entry)) continue;
     JsonObject object = storedBleMap.add<JsonObject>();
@@ -336,6 +352,9 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
     doc["dictionaryName"] = dictionaryName;
   }
   doc["otaNightlyEnabled"] = otaNightlyEnabled;
+  // Hardware variant probes are persisted through SettingsList; the revision
+  // that produced them is not a row, so save it here.
+  doc["frontlightProbeRev"] = frontlightProbeRev;
   // Home-button gestures are added dynamically to getSettingsList() (not the
   // base list), so they must be persisted manually here.
   if (BoardConfig::hasHomeKey()) {
@@ -625,6 +644,8 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // `clamp(value, 1, 0)` treats 1 as out of range and is why the one-shot hint
   // returned after every reboot.
   readerGestureHintSeen = storedBoolFlag(doc["readerGestureHintSeen"] | static_cast<uint8_t>(0));
+  fastPageTurn = storedBoolFlag(doc["fastPageTurn"] | static_cast<uint8_t>(0));
+  pageTurnEffect = storedBoolFlag(doc["pageTurnEffect"] | static_cast<uint8_t>(0));
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
       clamp(doc["frontButtonConfirm"] | (uint8_t)FRONT_HW_CONFIRM, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_CONFIRM);
@@ -635,10 +656,25 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   bluetoothEnabled = clamp(doc["bluetoothEnabled"] | static_cast<uint8_t>(0), static_cast<uint8_t>(2), 0);
   bleKeyMap = {};
   const JsonArrayConst storedBleMap = doc["bleKeyMap"];
-  if (!storedBleMap.isNull()) {
+  if (storedBleMap.isNull()) {
+    // No saved map at all (fresh install / pre-BLE upgrade): seed the standard
+    // page-turn binds.
+    bleKeyMap = bleinput::defaultMap();
+  } else {
     for (const JsonObjectConst object : storedBleMap) {
       bleinput::appendValidated(bleKeyMap, object["k"] | static_cast<uint8_t>(0xFF),
                                 object["v"] | static_cast<uint8_t>(0), object["b"] | static_cast<uint8_t>(0xFF));
+    }
+    // Older builds always wrote the array, often empty even when the user never
+    // edited it. Without the version marker an empty map means "never
+    // configured", so seed the defaults; once bleMapVersion exists an empty
+    // map is an explicit user choice and stays empty.
+    bool haveEntry = false;
+    for (const auto& entry : bleKeyMap) {
+      if (!bleinput::isEmpty(entry)) { haveEntry = true; break; }
+    }
+    if (!haveEntry && doc["bleMapVersion"].isNull()) {
+      bleKeyMap = bleinput::defaultMap();
     }
   }
   hiddenAppsMask =
@@ -748,6 +784,18 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // Absent means unconfigured, which is the default.
   if (doc["keyboardLayouts"].is<uint16_t>()) {
     keyboardLayouts = doc["keyboardLayouts"].as<uint16_t>();
+  }
+
+  // Frontlight probe revision. Rev 1 probes ran at 50 % brightness with an
+  // 8 mA threshold; at the vendor's 10 % PWM ceiling that never saw a real
+  // pair and persisted "absent", which hid the frontlight control. Re-arm the
+  // one-shot probe instead of trusting a result the old algorithm produced.
+  frontlightProbeRev = static_cast<uint8_t>(doc["frontlightProbeRev"] | 0);
+  if (frontlightProbeRev < 2) {
+    frontlightProbeRev = 2;
+    frontlightPresent = 1;
+    frontlightProbed = 0;
+    needsResave = true;
   }
 
   if (needsResave) {
@@ -947,47 +995,64 @@ float CrossPointSettings::getReaderLineCompression() const {
   // Bookerly-tuned 1.1/1.2 steps were visually near-indistinguishable. At
   // 12pt in portrait (~760px viewport) this scale spans ~26/24/19/15 lines
   // per page — each step reads as a clearly different density.
+  float factor = 1.0f;
   if (sdFontFamilyName[0] != '\0') {
     switch (lineSpacing) {
       case TIGHT:
-        return 0.95f;
+        factor = 0.95f;
+        break;
+      case WIDE:
+        factor = 1.3f;
+        break;
+      case EXTRA_WIDE:
+        factor = 1.6f;
+        break;
       case NORMAL:
       default:
-        return 1.0f;
-      case WIDE:
-        return 1.3f;
-      case EXTRA_WIDE:
-        return 1.6f;
+        factor = 1.0f;
+        break;
+    }
+  } else {
+    switch (fontFamily) {
+      case NOTOSANS:
+        switch (lineSpacing) {
+          case TIGHT:
+            factor = 0.90f;
+            break;
+          case WIDE:
+            factor = 1.0f;
+            break;
+          case EXTRA_WIDE:
+            factor = 1.05f;
+            break;
+          case NORMAL:
+          default:
+            factor = 0.95f;
+            break;
+        }
+        break;
+      case NOTOSERIF:
+      default:
+        switch (lineSpacing) {
+          case TIGHT:
+            factor = 0.95f;
+            break;
+          case WIDE:
+            factor = 1.1f;
+            break;
+          case EXTRA_WIDE:
+            factor = 1.2f;
+            break;
+          case NORMAL:
+          default:
+            factor = 1.0f;
+            break;
+        }
+        break;
     }
   }
-
-  switch (fontFamily) {
-    case NOTOSERIF:
-    default:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.95f;
-        case NORMAL:
-        default:
-          return 1.0f;
-        case WIDE:
-          return 1.1f;
-        case EXTRA_WIDE:
-          return 1.2f;
-      }
-    case NOTOSANS:
-      switch (lineSpacing) {
-        case TIGHT:
-          return 0.90f;
-        case NORMAL:
-        default:
-          return 0.95f;
-        case WIDE:
-          return 1.0f;
-        case EXTRA_WIDE:
-          return 1.05f;
-      }
-  }
+  // An explicit percentage wins over the level/family factors; 0 keeps them.
+  return reader_line_spacing::resolve(factor, readerLineSpacingPercent);
 }
 
 unsigned long CrossPointSettings::getSleepTimeoutMs() const {

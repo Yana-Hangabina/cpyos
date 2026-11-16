@@ -15,6 +15,17 @@
 #include <cmath>
 #include <cstdio>
 
+#if defined(CROSSPOINT_PLUS_PORT)
+// 4G transport (Metalio E-INK4 Plus only). See the helper block below for why
+// the bring-up never runs on the UI task.
+#include <PlusCellular.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include <atomic>
+#include <cstdint>
+#endif
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "NetworkStartup.h"
@@ -53,6 +64,73 @@ constexpr int kSheetFooterH = 90;
 // repaint was pure latency. The next screen (comment panel, app busy page)
 // already tells the user what is happening.
 constexpr unsigned long kConnectedAckMs = 800;
+
+#if defined(CROSSPOINT_PLUS_PORT)
+// --- 4G transport -----------------------------------------------------------
+// The official firmware has no Wi-Fi picker on the cellular board: the modem
+// link *is* the connection. Attaching is not free, though. plus_cellular_start()
+// holds its internal mutex for the whole attach (rail settle + UART-Ethernet
+// handshake + SIM registration + DHCP, up to ~45 s) and the vendor driver is not
+// re-entrant, so a second start only queues behind that mutex. Two rules follow:
+//   * the bring-up always runs on a worker -- a blocking start on the UI task
+//     froze the sheet and the whole device;
+//   * a cancelled sheet only detaches from the result -- stopping the modem from
+//     here would block on the same mutex for as long as the attach takes.
+constexpr int kCellularStartTimeoutMs = 45000;
+// UI-side safety net. The worker answers first with its own timeout; this only
+// fires if the worker itself wedged (e.g. the modem never answers a frame).
+constexpr unsigned long kCellularUiDeadlineMs = 55000;
+
+enum : int { kCellJobIdle = 0, kCellJobRunning = 1, kCellJobReady = 2, kCellJobFailed = 3 };
+std::atomic<int> sCellJob{kCellJobIdle};
+// Bumped by cancel/exit so a late completion cannot reopen a closed sheet.
+std::atomic<uint32_t> sCellJobGeneration{0};
+
+bool cellularNetworkActive() {
+  return SETTINGS.networkType == CrossPointSettings::NETWORK_CELLULAR && SETTINGS.cellularPresent != 0;
+}
+
+// Starts (or joins) the modem bring-up. Never blocks. Returns the job state as
+// of this call: kCellJobRunning means "poll again", the other two are final.
+int kickCellularBringUp() {
+  if (plus_cellular_ready()) {
+    sCellJob.store(kCellJobReady);
+    return kCellJobReady;
+  }
+  if (sCellJob.load() == kCellJobRunning) return kCellJobRunning;  // one attach at a time
+
+  const uint32_t generation = sCellJobGeneration.fetch_add(1) + 1;
+  sCellJob.store(kCellJobRunning);
+  const bool spawned = xTaskCreate(
+      [](void* arg) {
+        const auto attempt = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(arg));
+        const bool ready = plus_cellular_start(kCellularStartTimeoutMs);
+        LOG_INF("WIFI", "4G bring-up %s", ready ? "ready" : "failed");
+        if (sCellJobGeneration.load() == attempt) sCellJob.store(ready ? kCellJobReady : kCellJobFailed);
+        vTaskDelete(nullptr);
+      },
+      "cell-sheet", 8192, reinterpret_cast<void*>(static_cast<uintptr_t>(generation)), 3, nullptr);
+  if (!spawned) {
+    LOG_ERR("WIFI", "4G bring-up worker could not start");
+    sCellJob.store(kCellJobFailed);
+    return kCellJobFailed;
+  }
+  return kCellJobRunning;
+}
+
+// Leaves an in-flight attach alone and makes its verdict land on the floor. The
+// worker frees itself when its own timeout expires; a success that arrives after
+// the user cancelled still leaves the modem up, which is what the boot path
+// wants anyway (4G is the configured transport).
+void abandonCellularBringUp() {
+  sCellJobGeneration.fetch_add(1);
+  if (plus_cellular_ready()) {
+    sCellJob.store(kCellJobReady);
+  } else if (sCellJob.load() == kCellJobRunning) {
+    sCellJob.store(kCellJobIdle);
+  }
+}
+#endif  // CROSSPOINT_PLUS_PORT
 
 int signalBarsForRssi(const int32_t rssi) {
   if (rssi >= -55) return 4;
@@ -333,6 +411,21 @@ void WifiSelectionActivity::onEnter() {
   // Trigger first update to show scanning message
   requestUpdate();
 
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: nothing to scan and nothing to pick, so saved-credential auto-connect
+  // and the scan fallback below are both meaningless. The modem link is the
+  // connection; show the same connecting sheet so every caller keeps one
+  // contract (WifiResult{connected, "4G", <ip>}).
+  if (cellularNetworkActive()) {
+    selectedSSID = tr(STR_NETWORK_4G);
+    selectedRequiresPassword = false;
+    usedSavedPassword = true;  // there is no password to offer to save
+    autoConnecting = false;    // single Cancel button, no "show networks"
+    attemptConnection();
+    return;
+  }
+#endif
+
   // Attempt to auto-connect to known networks. Try the last successful
   // network first for speed, then scan and try any visible saved networks by
   // signal strength. The user can interrupt this and show the scan result.
@@ -364,6 +457,12 @@ void WifiSelectionActivity::onExit() {
 
   LOG_DBG("WIFI", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: never stop or join the modem here (see abandonCellularBringUp). This
+  // only makes sure a late attach verdict does not reopen the next sheet.
+  if (cellularNetworkActive()) abandonCellularBringUp();
+#endif
+
   // Stop any ongoing WiFi scan
   LOG_DBG("WIFI", "Deleting WiFi scan...");
   WiFi.scanDelete();
@@ -390,6 +489,26 @@ void WifiSelectionActivity::showNetworkError() {
 }
 
 void WifiSelectionActivity::startWifiScan(const bool autoScan) {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G has no scan: WiFi.scanNetworks() returns 0 on the modem path, and
+  // NetworkStartup::setMode()/WiFi.disconnect() below would either block the UI
+  // for the whole attach or tear the modem down. "Retry" from the error sheet
+  // is a fresh bring-up, which attemptConnection() already orders correctly.
+  if (cellularNetworkActive()) {
+    closeRouting();
+    app.clearTapFlash();
+    autoConnecting = false;
+    manualNetworkListRequested = false;
+    listNav.reset();
+    selectedNetworkIndex = 0;
+    networks.clear();
+    networkStatuses.clear();
+    networkRowItems.clear();
+    realNetworkCount = 0;
+    attemptConnection();
+    return;
+  }
+#endif
   closeRouting();
   app.clearTapFlash();
   autoConnecting = autoScan;
@@ -698,6 +817,27 @@ void WifiSelectionActivity::showNetworkListFromAutoConnect() {
 }
 
 void WifiSelectionActivity::attemptConnection() {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: there is no SSID/password to submit. NetworkStartup::setMode() and
+  // WiFi.begin() both end up in plus_cellular_start(), which blocks the caller
+  // until the modem attaches; WiFi.disconnect(true, true) would instead stop the
+  // modem. So "connect"/"retry" here means "start or join the bring-up worker".
+  if (cellularNetworkActive()) {
+    state = WifiSelectionState::CONNECTING;
+    connectionStartTime = millis();
+    connectedIP.clear();
+    connectionError.clear();
+    lastWifiStatus_ = 0;
+    requestUpdate();
+    if (kickCellularBringUp() == kCellJobFailed) {
+      connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+      state = WifiSelectionState::CONNECTION_FAILED;
+      requestUpdate();
+    }
+    return;
+  }
+#endif
+
   state = autoConnecting ? WifiSelectionState::AUTO_CONNECTING : WifiSelectionState::CONNECTING;
   connectionStartTime = millis();
   connectedIP.clear();
@@ -740,6 +880,54 @@ void WifiSelectionActivity::checkConnectionStatus() {
   if (state != WifiSelectionState::CONNECTING && state != WifiSelectionState::AUTO_CONNECTING) {
     return;
   }
+
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: the worker owns the attach, this poll only reads its verdict. "Ready"
+  // also needs a lease (plus_cellular_ready() flips on the modem event, DHCP
+  // may land a moment later), otherwise the callers would get an empty IP.
+  if (cellularNetworkActive()) {
+    const int job = sCellJob.load();
+    if ((job == kCellJobReady || plus_cellular_ready()) && connectedIP.empty()) {
+      const char* modemIp = plus_cellular_ip();
+      if (modemIp != nullptr && modemIp[0] != '\0') {
+        connectedIP = modemIp;
+      } else {
+        const IPAddress ip = WiFi.localIP();
+        if (ip[0] != 0) {
+          char ipStr[16];
+          snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+          connectedIP = ipStr;
+        }
+      }
+    }
+    if (!connectedIP.empty()) {
+      // Work the Wi-Fi path does on a join that also applies here: the ack
+      // frame reuses the connecting footer, and the loan-clock floor snaps to
+      // real time. NTP itself is left to the clock's own task so the sheet is
+      // never held by a DNS lookup (the station path blocks up to 10 s here).
+      lastWifiStatus_ = static_cast<int>(WL_CONNECTED);
+      ackAutoConnecting_ = false;
+      autoConnecting = false;
+      LOG_INF("WIFI", "4G link ready at %s", connectedIP.c_str());
+      trustedtime::startSync();
+      enterConnectedState();
+      return;
+    }
+    if (job == kCellJobFailed) {
+      connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+      state = WifiSelectionState::CONNECTION_FAILED;
+      requestUpdate();
+      return;
+    }
+    if (millis() - connectionStartTime > kCellularUiDeadlineMs) {
+      connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
+      state = WifiSelectionState::CONNECTION_FAILED;
+      requestUpdate();
+      return;
+    }
+    return;  // attach still in flight; the frame does not change
+  }
+#endif
 
   const wl_status_t status = WiFi.status();
   lastWifiStatus_ = static_cast<int>(status);
@@ -1495,6 +1683,17 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
     }
     case WifiSelectionState::CONNECTION_FAILED: {
       const int top = g.footer.y + 1;
+#if defined(CROSSPOINT_PLUS_PORT)
+      // 4G has no network list to fall back to, so the failure sheet keeps the
+      // NETWORK_ERROR pair (Retry / Cancel) instead of offering a dead button.
+      if (cellularNetworkActive()) {
+        const int half = (innerWidth - kBtnGap) / 2;
+        g.btn1 = Rect{static_cast<int16_t>(innerLeft), static_cast<int16_t>(top), static_cast<int16_t>(half), btnH};
+        g.btn3 = Rect{static_cast<int16_t>(innerLeft + half + kBtnGap), static_cast<int16_t>(top),
+                      static_cast<int16_t>(half), btnH};
+        break;
+      }
+#endif
       const int w1 = innerWidth * 32 / 100;
       const int w2 = innerWidth * 32 / 100;
       const int w3 = std::max(80, innerWidth - w1 - w2 - 2 * kBtnGap);
@@ -1549,6 +1748,17 @@ void WifiSelectionActivity::leaveConnectedState(const bool connected) {
 }
 
 void WifiSelectionActivity::cancelSheet() {
+#if defined(CROSSPOINT_PLUS_PORT)
+  // 4G: WiFi.disconnect() would stop the modem, and that call blocks on the
+  // bring-up mutex for the rest of the attach (up to ~45 s) when a worker is
+  // still inside plus_cellular_start(). Detach from the verdict and leave the
+  // link alone: 4G is the configured transport and the boot path starts it too.
+  if (cellularNetworkActive()) {
+    abandonCellularBringUp();
+    onComplete(false);
+    return;
+  }
+#endif
   if (state == WifiSelectionState::SCANNING) WiFi.scanDelete();
   if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
     WiFi.disconnect();
@@ -1757,7 +1967,12 @@ void WifiSelectionActivity::renderSheet() {
                           reasonY + renderer.getLineHeight(SMALL_FONT_ID) + 6, raw);
       }
 
-      if (state == WifiSelectionState::NETWORK_ERROR) {
+      bool twoButtons = state == WifiSelectionState::NETWORK_ERROR;
+#if defined(CROSSPOINT_PLUS_PORT)
+      // 4G failures keep the same pair (see sheetGeom): no network list exists.
+      if (cellularNetworkActive()) twoButtons = true;
+#endif
+      if (twoButtons) {
         drawSheetButton(renderer, g.btn1, tr(STR_RETRY), true);
         drawSheetButton(renderer, g.btn3, tr(STR_CANCEL), false);
       } else {
@@ -1942,6 +2157,12 @@ void WifiSelectionActivity::handleSheetInput() {
         attemptConnection();
         return;
       }
+#if defined(CROSSPOINT_PLUS_PORT)
+      // In 4G mode sheetGeom() leaves btn2 unset; WiFi.disconnect() here would
+      // stop the modem (and block on the attach mutex), so the "Wi-Fi networks"
+      // tap must not exist at all.
+      if (cellularNetworkActive()) return;
+#endif
       if (tapped(g.btn2)) {
         WiFi.disconnect();
         startWifiScan();

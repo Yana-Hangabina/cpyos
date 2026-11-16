@@ -26,7 +26,7 @@
 
 #include <cstdint>
 
-#include "I18nKeys.h"
+#include <I18nKeys.h>
 
 // Partition-relative offset of the pack inside data/spiffs. Single source of
 // truth: scripts/generate_data_manifest.py reads this constant (as text) to

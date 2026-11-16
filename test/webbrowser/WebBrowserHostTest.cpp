@@ -519,11 +519,85 @@ void testAdjacentLinks() {
   CHECK_EQ(blockText(blocks, 1), std::string("乙"));
 }
 
+void testBrowserRobustness() {
+  // NBSP is a word separator, not a glyph. Leaving it in the text makes the
+  // renderer pick a fallback face for the whole line (the browser showed the
+  // footer navigation at 8pt and its link underlines in empty space).
+  Document nbsp;
+  CHECK(extractDocument(
+      "<html><head><title>甲&nbsp;&nbsp;乙</title></head><body>"
+      "<p>主受文&nbsp;&nbsp;万人迷</p></body></html>",
+      "https://a.com/", nbsp));
+  CHECK_EQ(std::string(nbsp.title.c_str()), std::string("甲 乙"));
+  CHECK_EQ(blockText(nbsp, 0), std::string("主受文 万人迷"));
+  CHECK(nbsp.text.find("\xC2\xA0") == std::string::npos);
+
+  // `pagination` and `article-nav` are reading controls. They used to be
+  // dropped by the generic junk-token match (pagination) or its `nav` token
+  // (article-nav), which removed the only next-page link on many chapter pages.
+  Document pagination;
+  CHECK(extractDocument(
+      "<body><div class=\"pagination\"><a href=\"/p1\">上一页</a> "
+      "<a href=\"/p2\">下一页</a></div></body>",
+      "https://a.com/", pagination));
+  CHECK_EQ(pagination.links.size(), 2u);
+  CHECK_EQ(blockText(pagination, 0), std::string("上一页 下一页"));
+
+  Document chapterNav;
+  CHECK(extractDocument(
+      "<body><nav class=\"chapter-nav\"><span><a href=\"/prev\">上一章</a></span> "
+      "<span><a href=\"/next\">下一章</a></span></nav></body>",
+      "https://a.com/", chapterNav));
+  CHECK_EQ(chapterNav.links.size(), 2u);
+  CHECK_EQ(blockText(chapterNav, 0), std::string("上一章 下一章"));
+
+  // A site's article/book navigation is not chapter pagination; it stays chrome.
+  Document articleNav;
+  CHECK(extractDocument(
+      "<body><nav class=\"article-nav\"><a href=\"/other\">另一本书</a></nav><p>正文</p></body>",
+      "https://a.com/", articleNav));
+  CHECK_EQ(articleNav.links.size(), 0u);
+  CHECK_EQ(articleNav.blocks.size(), 1u);
+
+  // Site-level navigation is still chrome.
+  Document chromeNav;
+  CHECK(extractDocument("<body><nav class=\"nav\"><a href=\"/x\">菜单</a></nav><p>正文</p></body>",
+                        "https://a.com/", chromeNav));
+  CHECK_EQ(chromeNav.links.size(), 0u);
+  CHECK_EQ(chromeNav.blocks.size(), 1u);
+
+  // Image-only and title-only anchors still get a readable label.
+  Document imageLink;
+  CHECK(extractDocument("<body><p><a href=\"/cover\"><img alt=\"封面图\"></a></p></body>",
+                        "https://a.com/", imageLink));
+  CHECK_EQ(imageLink.links.size(), 1u);
+  if (imageLink.links.size() == 1) {
+    CHECK_EQ(slice(imageLink.text, imageLink.links[0].textStart, imageLink.links[0].textLength),
+             std::string("封面图"));
+  }
+
+  Document titleLink;
+  CHECK(extractDocument("<body><p><a href=\"/toc\" title=\"目录\"></a></p></body>", "https://a.com/",
+                        titleLink));
+  CHECK_EQ(titleLink.links.size(), 1u);
+  if (titleLink.links.size() == 1) {
+    CHECK_EQ(slice(titleLink.text, titleLink.links[0].textStart, titleLink.links[0].textLength),
+             std::string("目录"));
+  }
+
+  // An anchor with neither text nor a label must not become a zero-width link
+  // (it would draw a stray underline and an invisible tap target).
+  Document emptyLink;
+  CHECK(extractDocument("<body><p>前<a href=\"/x\"></a>后</p></body>", "https://a.com/", emptyLink));
+  CHECK_EQ(emptyLink.links.size(), 0u);
+}
+
 int main() {
   testUrls();
   testScanner();
   testExtraction();
   testAdjacentLinks();
+  testBrowserRobustness();
   testPager();
   testCharset();
   testGbkPipeline();

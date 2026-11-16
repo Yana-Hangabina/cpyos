@@ -44,6 +44,15 @@ constexpr unsigned long kLoginTimeoutMs = 240000;
 constexpr unsigned long kLoginPollMs = 2000;
 constexpr unsigned long kClockSyncTimeoutMs = 12000;
 constexpr unsigned long kNetworkRetryBaseMs = 1000;
+// 1701-chapter books issue thousands of requests. Without pacing they look
+// like bulk scraping and the server starts answering with `{}` / previews.
+constexpr unsigned long kChapterPacingMs = 250;
+// `psvts` is a per-reading-session token. A whole-book download can outlive it,
+// so refresh proactively instead of waiting for the first `{}` response.
+constexpr unsigned long kPsvtsRefreshMs = 20UL * 60UL * 1000UL;
+// Stop a fully-paid book early instead of probing every chapter. A book with
+// some readable chapters keeps going so interleaved free chapters are cached.
+constexpr uint32_t kMaxConsecutiveSkipsWithoutCache = 100;
 constexpr size_t kTransferBufferSize = 1024;
 constexpr size_t kMaxImageBytes = 4 * 1024 * 1024;
 // Shard validation uses one 1 KB transfer buffer; decode/package reuse Operation::ioBuffer_.
@@ -74,6 +83,12 @@ void logMemory([[maybe_unused]] const char* phase) {
 void logJobComplete() {
   LOG_INF("WR", "job complete");
   logMemory("job complete");
+}
+
+void copyBounded(char* destination, const size_t capacity, const char* source, const char* fallback) {
+  if (!destination || capacity == 0) return;
+  const char* value = source && source[0] ? source : fallback;
+  snprintf(destination, capacity, "%s", value ? value : "");
 }
 
 struct ResponseSink {
@@ -1369,7 +1384,7 @@ bool appendEncodedId(char* out, const size_t outSize, size_t& position, char* wo
 bool appendProgressQuery(char* out, const size_t outSize, char* work, const size_t workSize, const char* bookId,
                          const WeReadStore::TocRecord& chapter, const uint32_t chapterOffset, const uint32_t progress,
                          const uint32_t now, const char* psvts, const char* pclts, const char* token, const bool report,
-                         const uint64_t timestampMs, const uint32_t randomNumber) {
+                         const uint32_t readingSeconds, const uint64_t timestampMs, const uint32_t randomNumber) {
   size_t position = 0;
   out[0] = '\0';
   if (!makeWebAppId(work, workSize) || !appendText(out, outSize, position, "appId=") ||
@@ -1395,6 +1410,7 @@ bool appendProgressQuery(char* out, const size_t outSize, char* work, const size
   }
   if (report) {
     if (!appendText(out, outSize, position, "&rn=") || !appendUnsigned(out, outSize, position, randomNumber) ||
+        !appendText(out, outSize, position, "&rt=") || !appendUnsigned(out, outSize, position, readingSeconds) ||
         !appendText(out, outSize, position, "&sg=")) {
       return false;
     }
@@ -1414,8 +1430,8 @@ bool appendProgressQuery(char* out, const size_t outSize, char* work, const size
 
 bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter, const uint32_t chapterOffset,
                       const float localFraction, const char* psvts, const char* pclts, const char* readerToken,
-                      const bool report, char* body, const size_t bodySize, char* work, const size_t workSize,
-                      size_t& written) {
+                      const bool report, const uint32_t readingSeconds, char* body, const size_t bodySize, char* work,
+                      const size_t workSize, size_t& written) {
   static constexpr char kDefaultReaderToken[] = "3c5c8717f3daf09iop3423zafeqoi";
   const uint32_t now = TimeUtils::getCurrentValidTimestamp();
   if (now == 0 || !isSafeProtocolToken(bookId) || !isSafeProtocolToken(chapter.chapterUid) ||
@@ -1431,7 +1447,7 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
       report ? static_cast<uint64_t>(now) * 1000ULL + static_cast<uint32_t>(random(0, 1000)) : 0;
 
   if (!appendProgressQuery(body, bodySize, work, workSize, bookId, chapter, chapterOffset, progress, now, psvts, pclts,
-                           token, report, timestampMs, randomNumber)) {
+                           token, report, readingSeconds, timestampMs, randomNumber)) {
     return false;
   }
   char signature[24];
@@ -1464,17 +1480,20 @@ bool makeProgressBody(const char* bookId, const WeReadStore::TocRecord& chapter,
   }
   if (!appendText(body, bodySize, position, "\"")) return false;
   if (report) {
-    if (!appendText(body, bodySize, position, ",\"ts\":") || !appendUnsigned(body, bodySize, position, timestampMs) ||
-        !appendText(body, bodySize, position, ",\"rn\":") || !appendUnsigned(body, bodySize, position, randomNumber)) {
+    if (!appendText(body, bodySize, position, ",\"rn\":") || !appendUnsigned(body, bodySize, position, randomNumber) ||
+        !appendText(body, bodySize, position, ",\"rt\":") ||
+        !appendUnsigned(body, bodySize, position, readingSeconds) ||
+        !appendText(body, bodySize, position, ",\"sg\":\"")) {
       return false;
     }
     const int sourceLength = snprintf(work, workSize, "%llu%u%s", static_cast<unsigned long long>(timestampMs),
                                       static_cast<unsigned>(randomNumber), token);
     if (sourceLength <= 0 || static_cast<size_t>(sourceLength) >= workSize || !sha256Hex(work, work, workSize) ||
-        !appendText(body, bodySize, position, ",\"sg\":\"") || !appendText(body, bodySize, position, work) ||
-        !appendText(body, bodySize, position, "\"")) {
+        !appendText(body, bodySize, position, work) ||
+        !appendText(body, bodySize, position, "\",\"ts\":")) {
       return false;
     }
+    if (!appendUnsigned(body, bodySize, position, timestampMs)) return false;
   }
   if (!appendText(body, bodySize, position, ",\"s\":\"") || !appendText(body, bodySize, position, signature) ||
       !appendText(body, bodySize, position, "\"}")) {
@@ -1888,6 +1907,7 @@ bool Operation::active() const {
     case Phase::SendProgressEnter:
     case Phase::SendProgressReport:
     case Phase::VerifyProgress:
+    case Phase::VerifyTimeSync:
     case Phase::OpenToc:
     case Phase::AwaitChapterRange:
     case Phase::LoadChapter:
@@ -1943,6 +1963,13 @@ void Operation::reset() {
   progressCompleted_ = 0;
   progressTotal_ = 0;
   progressChapterOffset_ = 0;
+  cachedChapters_ = 0;
+  skippedChapters_ = 0;
+  skippedPaid_ = 0;
+  consecutiveSkips_ = 0;
+  refreshingBook_ = false;
+  bookIsTextFormat_ = false;
+  psvtsFetchedAt_ = 0;
   workCount_ = 0;
   workCursor_ = 0;
   workCompleted_ = 0;
@@ -1953,6 +1980,10 @@ void Operation::reset() {
   imageBytes_ = 0;
   requestAttempt_ = 0;
   progressVerifyAttempts_ = 0;
+  cloudReadingBefore_ = 0;
+  cloudReadingAfter_ = 0;
+  cloudReadingBeforeValid_ = false;
+  cloudReadingAfterValid_ = false;
   chapterResponseAttempts_ = 0;
   coverAttempts_ = 0;
   coverRedirects_ = 0;
@@ -1997,7 +2028,7 @@ void Operation::reset() {
 bool Operation::begin(const Kind kind, const WeReadStore::ShelfRecord* book, const DownloadOptions options,
                       const ShelfCoverScope shelfCoverScope) {
   reset();
-  if (kind == Kind::ProgressSync || kind == Kind::Browse) {
+  if (kind == Kind::ProgressSync || kind == Kind::Browse || kind == Kind::TimeSync) {
     error_ = Error::Protocol;
     phase_ = Phase::Failed;
     return false;
@@ -2021,6 +2052,10 @@ bool Operation::begin(const Kind kind, const WeReadStore::ShelfRecord* book, con
           return false;
       }
       options_ = options;
+      copyBounded(paidChapterText_, sizeof(paidChapterText_), options.paidChapterText,
+                  "This chapter requires purchase in WeRead.");
+      copyBounded(unavailableChapterText_, sizeof(unavailableChapterText_), options.unavailableChapterText,
+                  "This chapter is currently unavailable.");
     }
     if (!memchr(book->coverUrl, '\0', sizeof(book->coverUrl))) {
       error_ = Error::Protocol;
@@ -2110,6 +2145,29 @@ bool Operation::beginProgressSync(const char* bookId, ProgressSyncInput input, c
   return true;
 }
 
+bool Operation::beginTimeSync(const char* bookId, ProgressSyncInput input) {
+  reset();
+  if (!isSafeProtocolToken(bookId) || !std::isfinite(input.localFraction) || input.readingSeconds == 0) {
+    error_ = Error::Protocol;
+    phase_ = Phase::Failed;
+    return false;
+  }
+  kind_ = Kind::TimeSync;
+  strncpy(book_.bookId, bookId, sizeof(book_.bookId) - 1);
+  progressSyncInput_ = input;
+  progressSyncInput_.localFraction = std::max(0.0f, std::min(1.0f, input.localFraction));
+  progressSyncMode_ = ProgressSyncMode::UploadLocal;
+  WeReadStore::loadSession(session_);
+  if (!session_.valid()) {
+    error_ = Error::SessionExpired;
+    phase_ = Phase::Failed;
+    return false;
+  }
+  phase_ = Phase::PrepareProgressSync;
+  LOG_INF("WR", "time sync start: seconds=%u", static_cast<unsigned>(input.readingSeconds));
+  return true;
+}
+
 bool Operation::setChapterRange(const uint32_t first, const uint32_t last) {
   if (phase_ != Phase::AwaitChapterRange || !validChapterRange(first, last, chapterCount_)) return false;
   firstChapterIndex_ = first;
@@ -2175,7 +2233,10 @@ void Operation::requestAuthentication(const Phase resume) {
     phase_ = Phase::Renew;
     return;
   }
-  if (kind_ == Kind::ProgressSync) {
+  // A whole-book download must never put a QR login in the middle of a long
+  // job. Try the renewal once, then stop with an explicit SessionExpired;
+  // the user can log in again and retry from the cached chapters.
+  if (kind_ == Kind::ProgressSync || kind_ == Kind::TimeSync || kind_ == Kind::Download) {
     error_ = Error::SessionExpired;
     phase_ = Phase::Failed;
     return;
@@ -2228,8 +2289,13 @@ Operation::Event Operation::handleRequestError(const Error error, const Phase re
 
 Operation::Event Operation::retryChapterResponse() {
   const Event event = chapterResponseRetryEvent(++chapterResponseAttempts_);
-  if (event == Event::Failed) return fail(Error::Unavailable);
+  if (event == Event::Failed) {
+    // One unreadable chapter must not discard a whole 1701-chapter book. Write
+    // a placeholder, remember how many were skipped, and continue.
+    return skipChapter(chapterSkipReason(), "retry-exhausted");
+  }
   psvts_[0] = '\0';
+  psvtsFetchedAt_ = 0;
   requestAttempt_ = 0;
   nextActionAt_ = millis() + kNetworkRetryBaseMs * chapterResponseAttempts_;
   phase_ = chapterResponseRetryPhase();
@@ -2241,8 +2307,51 @@ Operation::Event Operation::retryChapterResponse() {
 
 Operation::Event Operation::reauthenticateChapter() {
   psvts_[0] = '\0';
+  psvtsFetchedAt_ = 0;
   requestAuthentication(Phase::LoadChapter);
   return phase_ == Phase::Failed ? fail(error_) : Event::None;
+}
+
+Operation::Event Operation::skipChapter(const ChapterSkipReason reason, const char* detail) {
+  const std::string chapterPath = WeReadStore::chapterPath(bookDir_, chapterIndex_);
+  // A refresh of an already readable chapter must not replace real content
+  // with a placeholder when the server happens to answer with a preview.
+  if (refreshingBook_ && Storage.exists(chapterPath.c_str()) &&
+      !WeReadXhtmlCodec::isPlaceholderChapter(chapterPath)) {
+    LOG_INF("WR", "keeping cached chapter on unreadable response: index=%u detail=%s",
+            static_cast<unsigned>(chapterIndex_), detail ? detail : "-");
+    ++cachedChapters_;
+    consecutiveSkips_ = 0;
+    requestAttempt_ = 0;
+    nextActionAt_ = 0;
+    phase_ = Phase::AdvanceChapter;
+    return Event::None;
+  }
+
+  const char* body = reason == ChapterSkipReason::Paid ? paidChapterText_ : unavailableChapterText_;
+  if (!WeReadXhtmlCodec::writeUnavailableChapter(chapterPath, WeReadStore::imageIndexPath(bookDir_, chapterIndex_),
+                                                 chapter_.title, body)) {
+    LOG_ERR("WR", "Failed to write unreadable-chapter placeholder: index=%u",
+            static_cast<unsigned>(chapterIndex_));
+    return fail(Error::SdCard);
+  }
+  ++skippedChapters_;
+  if (reason == ChapterSkipReason::Paid) ++skippedPaid_;
+  ++consecutiveSkips_;
+  LOG_INF("WR",
+          "chapter skipped: index=%u uid=%s paid=%u wordCount=%u reason=%s detail=%s skipped=%u",
+          static_cast<unsigned>(chapterIndex_), chapter_.chapterUid, static_cast<unsigned>(chapter_.paid),
+          static_cast<unsigned>(chapter_.wordCount),
+          reason == ChapterSkipReason::Paid ? "paid" : "unavailable", detail ? detail : "-",
+          static_cast<unsigned>(skippedChapters_));
+  // A fully paid/locked book would otherwise probe every chapter for hours.
+  if (cachedChapters_ == 0 && consecutiveSkips_ >= kMaxConsecutiveSkipsWithoutCache) {
+    return fail(Error::NotPurchased);
+  }
+  requestAttempt_ = 0;
+  nextActionAt_ = 0;
+  phase_ = Phase::AdvanceChapter;
+  return Event::None;
 }
 
 void Operation::requestSucceeded() {
@@ -2271,6 +2380,7 @@ bool Operation::preparePaths() {
   bookDir_ = WeReadStore::bookDirectory(book_.bookId);
   outputPath_ = WeReadStore::finalBookPath(book_);
   finalPartPath_ = outputPath_ + ".part";
+  refreshingBook_ = Storage.exists(outputPath_.c_str());
   tocPath_ = bookDir_ + "/toc.bin";
   const std::string chaptersDir = bookDir_ + "/chapters";
   const std::string imagesDir = bookDir_ + "/images";
@@ -2566,6 +2676,7 @@ Operation::Event Operation::stepShelfCovers() {
         case Error::Unavailable:
         case Error::Clock:
         case Error::WholeBookOnly:
+        case Error::NotPurchased:
           break;
       }
       cleanupDetailTransient(bookDir_);
@@ -2616,6 +2727,7 @@ Operation::Event Operation::stepShelfCovers() {
         case Error::Unavailable:
         case Error::Clock:
         case Error::WholeBookOnly:
+        case Error::NotPurchased:
           ++workSkipped_;
           advanceShelfCoverItem();
           return Event::None;
@@ -2929,9 +3041,7 @@ void Operation::persistInitialProgress() {
   WeReadStore::clearInitialProgress(book_.bookId);
 }
 
-Error Operation::decideProgress() {
-  const float remoteFraction = normalizedRemoteProgress();
-  progressSyncResult_.remote.percent = remoteFraction * 100.0f;
+Error Operation::mapLocalProgressToChapter() {
   bool preciseLocal = false;
   const char* basis = "fraction";
   switch (progressSyncInput_.localOffsetBasis) {
@@ -2957,8 +3067,25 @@ Error Operation::decideProgress() {
           static_cast<unsigned>(preciseLocal), basis, static_cast<unsigned>(progressSyncInput_.localTocIndex),
           chapter_.chapterUid, static_cast<unsigned>(progressChapterOffset_),
           static_cast<unsigned long>(progressSyncInput_.localFraction * 1000000.0f + 0.5f));
+  return Error::Ok;
+}
+
+Error Operation::prepareTimeSync() {
+  const Error mapError = mapLocalProgressToChapter();
+  if (mapError != Error::Ok) return mapError;
+  if (!makeReaderReferer(book_.bookId, chapter_.chapterUid, referer_)) return Error::Unavailable;
+  progressUploadStartedAt_ = TimeUtils::getCurrentValidTimestamp();
+  return progressUploadStartedAt_ == 0 ? Error::Clock : Error::Ok;
+}
+
+Error Operation::decideProgress() {
+  const float remoteFraction = normalizedRemoteProgress();
+  progressSyncResult_.remote.percent = remoteFraction * 100.0f;
+  const Error mapError = mapLocalProgressToChapter();
+  if (mapError != Error::Ok) return mapError;
   const bool samePosition = sameRemotePosition();
-  const ProgressAction action = progressAction(progressSyncMode_, samePosition);
+  const ProgressAction action =
+      progressAction(progressSyncMode_, samePosition, progressSyncInput_.readingSeconds > 0);
   LOG_INF("WR", "progress decision: mode=%u same=%u action=%u", static_cast<unsigned>(progressSyncMode_),
           static_cast<unsigned>(samePosition), static_cast<unsigned>(action));
   switch (action) {
@@ -2998,8 +3125,8 @@ Error Operation::fetchProgressReaderOnce() {
 Error Operation::sendProgressOnce(const bool report) {
   size_t bodySize = 0;
   if (!makeProgressBody(book_.bookId, chapter_, progressChapterOffset_, progressSyncInput_.localFraction, psvts_,
-                        imageHost_, previousVid_, report, reinterpret_cast<char*>(ioBuffer_), sizeof(ioBuffer_), url_,
-                        sizeof(url_), bodySize)) {
+                        imageHost_, previousVid_, report, progressSyncInput_.readingSeconds,
+                        reinterpret_cast<char*>(ioBuffer_), sizeof(ioBuffer_), url_, sizeof(url_), bodySize)) {
     return Error::Clock;
   }
   SimpleJsonContext context;
@@ -3036,8 +3163,16 @@ Error Operation::fetchReaderOnce() {
   chapterTransferMs_ += millis() - startedAt;
   if (error != Error::Ok) return error;
   if (responseStatus_ == 401) return Error::SessionExpired;
-  if (responseStatus_ == 403 || (responseStatus_ == 200 && !context.complete())) return Error::Unavailable;
+  if (responseStatus_ == 200 && !context.complete()) {
+    // The reader page normally contains `psvts`. A 200 page without it is the
+    // login page (or a stale CDN copy), i.e. the web session expired. Treat it
+    // as an auth problem so a long download can renew instead of retrying the
+    // same page three times and aborting with the wrong error.
+    return Error::SessionExpired;
+  }
+  if (responseStatus_ == 403) return Error::Unavailable;
   if (responseStatus_ != 200 || !isSafeProtocolToken(psvts_)) return Error::Protocol;
+  psvtsFetchedAt_ = millis();
   return Error::Ok;
 }
 
@@ -3554,7 +3689,7 @@ Operation::Event Operation::inspectPrimary() {
     case WeReadProtocol::ChapterResponse::Retryable:
       return retryChapterResponse();
     case WeReadProtocol::ChapterResponse::Error:
-      return fail(Error::Protocol);
+      return skipChapter(ChapterSkipReason::Unavailable, "http");
   }
 
   WeReadProtocol::PrimaryResponseProbe probe(url_, sizeof(url_));
@@ -3569,19 +3704,33 @@ Operation::Event Operation::inspectPrimary() {
   }
   if (probe.sessionExpired()) return reauthenticateChapter();
   if (probe.textMetadata()) {
+    bookIsTextFormat_ = true;
     LOG_DBG("WR", "primary classified: chapter=%u status=%d bytes=%llu format=txt",
             static_cast<unsigned>(chapterIndex_), responseStatus_, static_cast<unsigned long long>(responseBytes));
     phase_ = Phase::FetchText0;
     return Event::None;
   }
-  if (probe.jsonObject()) return integrityFailure("json");
+  if (probe.jsonObject()) {
+    // A JSON object without `bookId` is a server notice (rate limit, purchase
+    // gate, removed chapter), not chapter data. One such response must not
+    // discard a whole book.
+    LOG_INF("WR", "primary json notice: chapter=%u bytes=%llu", static_cast<unsigned>(chapterIndex_),
+            static_cast<unsigned long long>(responseBytes));
+    return skipChapter(chapterSkipReason(), "primary-json");
+  }
 
   uint8_t prefix[4] = {};
   if (!readPrefix(raw0, prefix, sizeof(prefix))) return integrityFailure("short");
   if (prefix[0] == 'P' && prefix[1] == 'K' && prefix[2] == 3 && prefix[3] == 4) {
     return finishWholeBook(raw0);
   }
-  if (!validateShard(raw0)) return integrityFailure("shard");
+  if (primaryLooksLikePreview(chapter_.wordCount, responseBytes, false)) {
+    LOG_INF("WR", "primary preview: chapter=%u uid=%s wordCount=%u bytes=%llu format=%s",
+            static_cast<unsigned>(chapterIndex_), chapter_.chapterUid, static_cast<unsigned>(chapter_.wordCount),
+            static_cast<unsigned long long>(responseBytes), bookIsTextFormat_ ? "txt" : "epub");
+    return skipChapter(chapterSkipReason(), "primary-preview");
+  }
+  if (!validateShard(raw0)) return retryChapterResponse();
   phase_ = Phase::FetchEpub1;
   return Event::None;
 }
@@ -3597,20 +3746,21 @@ Operation::Event Operation::decodeChapter(const bool plainText) {
   const bool combined = combineAndDecode(shards, count, bookDir_, decoded, ioBuffer_, sizeof(ioBuffer_));
   const unsigned long combineMs = millis() - combineStartedAt;
   chapterDecodeMs_ += combineMs;
-  if (!combined) return fail(Error::Integrity);
   const auto cleanup = [&]() {
     Storage.remove(decoded.c_str());
     Storage.remove(raw0.c_str());
     Storage.remove(raw1.c_str());
     if (!plainText) Storage.remove(raw3.c_str());
   };
-#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 1
+  if (!combined) {
+    cleanup();
+    return skipChapter(ChapterSkipReason::Unavailable, "decode");
+  }
   uint64_t decodedBytes = 0;
   {
     HalFile decodedFile;
     if (Storage.openFileForRead("WR", decoded, decodedFile)) decodedBytes = decodedFile.fileSize64();
   }
-#endif
   LOG_DBG("WR", "chapter combine/Base64: index=%u paid=%u ms=%lu bytes=%llu", static_cast<unsigned>(chapterIndex_),
           static_cast<unsigned>(chapter_.paid), combineMs, static_cast<unsigned long long>(decodedBytes));
   if (!plainText) {
@@ -3620,8 +3770,15 @@ Operation::Event Operation::decodeChapter(const bool plainText) {
       return finishWholeBook(decoded);
     }
   }
+  if (chapterLooksLikePreview(chapter_.wordCount, decodedBytes)) {
+    LOG_INF("WR", "chapter preview: index=%u uid=%s wordCount=%u bytes=%llu",
+            static_cast<unsigned>(chapterIndex_), chapter_.chapterUid, static_cast<unsigned>(chapter_.wordCount),
+            static_cast<unsigned long long>(decodedBytes));
+    cleanup();
+    return skipChapter(chapterSkipReason(), "preview-size");
+  }
   bool hasXhtmlTag = true;
-  if (chapter_.paid && !plainText) {
+  if (!plainText) {
     if (!containsAllowedXhtmlTag(decoded, ioBuffer_, sizeof(ioBuffer_), hasXhtmlTag)) {
       cleanup();
       return fail(Error::SdCard);
@@ -3631,7 +3788,7 @@ Operation::Event Operation::decodeChapter(const bool plainText) {
     LOG_INF("WR", "paid preview rejected: chapter=%u bytes=%llu", static_cast<unsigned>(chapterIndex_),
             static_cast<unsigned long long>(decodedBytes));
     cleanup();
-    return retryChapterResponse();
+    return skipChapter(ChapterSkipReason::Paid, "paid-preview");
   }
   const unsigned long sanitizeStartedAt = millis();
   const bool ok = WeReadXhtmlCodec::sanitizeChapter(
@@ -3644,6 +3801,8 @@ Operation::Event Operation::decodeChapter(const bool plainText) {
           static_cast<unsigned long long>(decodedBytes));
   cleanup();
   if (!ok) return fail(Error::SdCard);
+  ++cachedChapters_;
+  consecutiveSkips_ = 0;
   phase_ = Phase::AdvanceChapter;
   return Event::None;
 }
@@ -3651,8 +3810,11 @@ Operation::Event Operation::decodeChapter(const bool plainText) {
 Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void* const callbackContext) {
   if (!active()) return Event::None;
   if (cancelRequested_) return cancelNow();
-  if ((requestAttempt_ > 0 || chapterResponseAttempts_ > 0 || phase_ == Phase::VerifyProgress) && nextActionAt_ != 0 &&
-      static_cast<long>(millis() - nextActionAt_) < 0) {
+  // One deadline for every delayed phase: retry backoff, login polling,
+  // verification, and the per-chapter pacing below. SyncClock is the exception:
+  // it polls the SNTP state and must be re-entered as soon as the clock is valid
+  // instead of waiting out its timeout.
+  if (phase_ != Phase::SyncClock && nextActionAt_ != 0 && static_cast<long>(millis() - nextActionAt_) < 0) {
     return Event::None;
   }
 
@@ -3709,7 +3871,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       if (error == Error::Network) return handleRequestError(error, Phase::Renew);
       if (error == Error::SdCard) return fail(error);
       WeReadStore::clearSession();
-      if (kind_ == Kind::ProgressSync) return fail(Error::SessionExpired);
+      if (kind_ == Kind::ProgressSync || kind_ == Kind::Download) return fail(Error::SessionExpired);
       if (loginRecoveryAttempted_) return fail(Error::SessionExpired);
       loginRecoveryAttempted_ = true;
       startLogin(resumePhase_);
@@ -3885,7 +4047,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
     }
 
     case Phase::FetchProgress: {
-      const Error error = fetchProgressOnce(kind_ == Kind::ProgressSync);
+      const Error error = fetchProgressOnce(kind_ == Kind::ProgressSync || kind_ == Kind::TimeSync);
       if (kind_ == Kind::Download) {
         if (error == Error::Ok) {
           initialProgressFraction_ = normalizedRemoteProgress();
@@ -3904,11 +4066,21 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       }
       if (error != Error::Ok) return handleRequestError(error, Phase::FetchProgress);
       requestSucceeded();
+      if (kind_ == Kind::TimeSync || kind_ == Kind::ProgressSync) {
+        cloudReadingBefore_ = progressSyncResult_.remote.readingTime;
+        cloudReadingBeforeValid_ = progressSyncResult_.remote.hasReadingTime;
+      }
       phase_ = Phase::DecideProgress;
       return Event::None;
     }
 
     case Phase::DecideProgress: {
+      if (kind_ == Kind::TimeSync) {
+        const Error error = prepareTimeSync();
+        if (error != Error::Ok) return fail(error);
+        phase_ = Phase::FetchProgressReader;
+        return Event::None;
+      }
       const Error error = decideProgress();
       if (error != Error::Ok) return fail(error);
       if (progressSyncResult_.outcome != ProgressSyncOutcome::Pending) {
@@ -3953,10 +4125,52 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       }
       if (error != Error::Ok) return handleRequestError(error, Phase::SendProgressReport);
       requestSucceeded();
+      progressSyncResult_.reportSent = true;
       progressVerifyAttempts_ = 0;
       nextActionAt_ = millis() + kNetworkRetryBaseMs;
-      phase_ = Phase::VerifyProgress;
+      phase_ = kind_ == Kind::TimeSync ? Phase::VerifyTimeSync : Phase::VerifyProgress;
       return Event::None;
+    }
+
+    case Phase::VerifyTimeSync: {
+      const Error error = fetchProgressOnce(true);
+      if (error == Error::SessionExpired) {
+        requestAuthentication(Phase::VerifyTimeSync);
+        return phase_ == Phase::Failed ? fail(error_) : Event::None;
+      }
+      if (error != Error::Ok) return handleRequestError(error, Phase::VerifyTimeSync);
+      requestSucceeded();
+      ++progressVerifyAttempts_;
+      cloudReadingAfter_ = progressSyncResult_.remote.readingTime;
+      cloudReadingAfterValid_ = progressSyncResult_.remote.hasReadingTime;
+      const uint32_t submitted = progressSyncInput_.readingSeconds;
+      uint32_t applied = 0;
+      if (cloudReadingBeforeValid_ && cloudReadingAfterValid_) {
+        applied = cloudReadingAfter_ > cloudReadingBefore_ ? cloudReadingAfter_ - cloudReadingBefore_ : 0;
+        if (applied > submitted) applied = submitted;
+      }
+      progressSyncResult_.submittedReadingSeconds = submitted;
+      progressSyncResult_.appliedReadingSeconds = applied;
+      progressSyncResult_.cloudReadingSecondsBefore = cloudReadingBefore_;
+      progressSyncResult_.cloudReadingSecondsAfter = cloudReadingAfter_;
+      progressSyncResult_.cloudReadingBeforeValid = cloudReadingBeforeValid_;
+      progressSyncResult_.cloudReadingAfterValid = cloudReadingAfterValid_;
+      LOG_INF("WR", "time verify: attempt=%u before=%u(%u) after=%u(%u) submitted=%u applied=%u",
+              static_cast<unsigned>(progressVerifyAttempts_), static_cast<unsigned>(cloudReadingBefore_),
+              static_cast<unsigned>(cloudReadingBeforeValid_), static_cast<unsigned>(cloudReadingAfter_),
+              static_cast<unsigned>(cloudReadingAfterValid_), static_cast<unsigned>(submitted),
+              static_cast<unsigned>(applied));
+      if (applied == 0 && cloudReadingBeforeValid_ && cloudReadingAfterValid_ &&
+          progressVerifyAttempts_ < kMaxRequestAttempts) {
+        nextActionAt_ = millis() + kNetworkRetryBaseMs;
+        return Event::None;
+      }
+      progressSyncResult_.outcome =
+          applied > 0 ? ProgressSyncOutcome::LocalUploaded : ProgressSyncOutcome::AlreadySynced;
+      bookSession_.reset();
+      phase_ = Phase::Complete;
+      logJobComplete();
+      return Event::Complete;
     }
 
     case Phase::VerifyProgress: {
@@ -3969,6 +4183,25 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       requestSucceeded();
       ++progressVerifyAttempts_;
       progressSyncResult_.remote.percent = normalizedRemoteProgress() * 100.0f;
+      // Reading-time read-back: the report body carried `rt`, so comparing the
+      // cloud counter before/after tells us whether it was actually applied.
+      {
+        const uint32_t submitted = progressSyncInput_.readingSeconds;
+        uint32_t applied = 0;
+        if (cloudReadingBeforeValid_ && progressSyncResult_.remote.hasReadingTime) {
+          const uint32_t after = progressSyncResult_.remote.readingTime;
+          applied = after > cloudReadingBefore_ ? after - cloudReadingBefore_ : 0;
+          if (applied > submitted) applied = submitted;
+          cloudReadingAfter_ = after;
+          cloudReadingAfterValid_ = true;
+        }
+        progressSyncResult_.submittedReadingSeconds = submitted;
+        progressSyncResult_.appliedReadingSeconds = applied;
+        progressSyncResult_.cloudReadingSecondsBefore = cloudReadingBefore_;
+        progressSyncResult_.cloudReadingSecondsAfter = cloudReadingAfter_;
+        progressSyncResult_.cloudReadingBeforeValid = cloudReadingBeforeValid_;
+        progressSyncResult_.cloudReadingAfterValid = cloudReadingAfterValid_;
+      }
       const bool samePosition = sameRemotePosition();
       const bool sameAppId = remoteAppIdMatchesLocal();
       const auto& remote = progressSyncResult_.remote;
@@ -4014,6 +4247,18 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       progressCompleted_ = 0;
       progressTotal_ = chapterRangeCount(firstChapterIndex_, lastChapterIndex_, chapterCount_);
       psvts_[0] = '\0';
+      psvtsFetchedAt_ = 0;
+      nextActionAt_ = 0;
+      {
+        uint32_t paidCount = 0;
+        for (uint32_t i = 0; i < chapterCount_; ++i) {
+          WeReadStore::TocRecord record;
+          if (!WeReadStore::readTocRecord(indexFile_, i, record)) return fail(Error::SdCard);
+          if (record.paid) ++paidCount;
+        }
+        LOG_INF("WR", "toc: chapters=%u paidFlag=%u", static_cast<unsigned>(chapterCount_),
+                static_cast<unsigned>(paidCount));
+      }
       logMemory("toc parsed");
       switch (options_.chapterScope) {
         case DownloadOptions::ChapterScope::WholeBook:
@@ -4029,6 +4274,9 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
     case Phase::LoadChapter: {
       if (chapterIndex_ > lastChapterIndex_) {
         if (indexFile_.isOpen()) indexFile_.close();
+        // Do not package a book made only of placeholders: a range of paid
+        // chapters should fail with the real reason, not leave an empty EPUB.
+        if (cachedChapters_ == 0 && skippedChapters_ > 0) return fail(Error::NotPurchased);
         progressStage_ = ProgressStage::Preparing;
         progressCompleted_ = 0;
         progressTotal_ = 0;
@@ -4039,13 +4287,23 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       chapterResponseAttempts_ = 0;
       HalFile imageIndex;
       uint32_t imageCount = 0;
-      if (reuseChapterFile(Storage.exists(outputPath_.c_str()),
-                           Storage.exists(WeReadStore::chapterPath(bookDir_, chapterIndex_).c_str())) &&
+      const std::string chapterPath = WeReadStore::chapterPath(bookDir_, chapterIndex_);
+      if (reuseChapterFile(refreshingBook_, Storage.exists(chapterPath.c_str())) &&
+          !WeReadXhtmlCodec::isPlaceholderChapter(chapterPath) &&
           WeReadStore::openImageIndex(WeReadStore::imageIndexPath(bookDir_, chapterIndex_), imageIndex, imageCount)) {
+        // Reused chapters count as cached so a resumed run still reports the
+        // right "cached / skipped" totals at the end.
+        ++cachedChapters_;
+        consecutiveSkips_ = 0;
         phase_ = Phase::AdvanceChapter;
         return Event::None;
       }
       if (!makeReaderReferer(book_.bookId, chapter_.chapterUid, referer_)) return fail(Error::Protocol);
+      if (psvts_[0] && psvtsFetchedAt_ != 0 && millis() - psvtsFetchedAt_ >= kPsvtsRefreshMs) {
+        LOG_INF("WR", "psvts refresh due: chapter=%u", static_cast<unsigned>(chapterIndex_));
+        psvts_[0] = '\0';
+        psvtsFetchedAt_ = 0;
+      }
       if (!psvts_[0]) {
         if (!TimeUtils::isClockValid()) {
           if (!WeReadHttpClient::networkReady()) return fail(Error::Network);
@@ -4066,6 +4324,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
     case Phase::SyncClock:
       if (TimeUtils::isClockValid()) {
         logMemory("clock sync complete");
+        nextActionAt_ = 0;
         phase_ = Phase::LoadChapter;
         return Event::None;
       }
@@ -4109,7 +4368,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
         case WeReadProtocol::ChapterResponse::Retryable:
           return retryChapterResponse();
         case WeReadProtocol::ChapterResponse::Error:
-          return fail(Error::Protocol);
+          return skipChapter(chapterSkipReason(), "http");
       }
     }
 
@@ -4121,7 +4380,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       guardBookSession("text validate");
       switch (WeReadProtocol::classifyChapterResponse(responseStatus_, smallFileIsEmptyObject(raw1))) {
         case WeReadProtocol::ChapterResponse::Content:
-          if (!validateShard(bookDir_ + "/shard0.part") || !validateShard(raw1)) return fail(Error::Integrity);
+          if (!validateShard(bookDir_ + "/shard0.part") || !validateShard(raw1)) return retryChapterResponse();
           phase_ = Phase::DecodeText;
           return Event::None;
         case WeReadProtocol::ChapterResponse::AuthenticationRequired:
@@ -4129,7 +4388,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
         case WeReadProtocol::ChapterResponse::Retryable:
           return retryChapterResponse();
         case WeReadProtocol::ChapterResponse::Error:
-          return fail(Error::Protocol);
+          return skipChapter(chapterSkipReason(), "http");
       }
     }
 
@@ -4147,7 +4406,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
         case WeReadProtocol::ChapterResponse::Retryable:
           return retryChapterResponse();
         case WeReadProtocol::ChapterResponse::Error:
-          return fail(Error::Protocol);
+          return skipChapter(chapterSkipReason(), "http");
       }
     }
 
@@ -4161,7 +4420,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       switch (WeReadProtocol::classifyChapterResponse(responseStatus_, smallFileIsEmptyObject(raw3))) {
         case WeReadProtocol::ChapterResponse::Content:
           if (!validateShard(bookDir_ + "/shard0.part") || !validateShard(raw1) || !validateShard(raw3)) {
-            return fail(Error::Integrity);
+            return retryChapterResponse();
           }
           phase_ = Phase::DecodeEpub;
           return Event::None;
@@ -4170,7 +4429,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
         case WeReadProtocol::ChapterResponse::Retryable:
           return retryChapterResponse();
         case WeReadProtocol::ChapterResponse::Error:
-          return fail(Error::Protocol);
+          return skipChapter(chapterSkipReason(), "http");
       }
     }
 
@@ -4189,6 +4448,7 @@ Operation::Event Operation::step(const WeReadStore::WorkCallback callback, void*
       ++chapterIndex_;
       progressCompleted_ = chapterIndex_ - firstChapterIndex_;
       phase_ = Phase::LoadChapter;
+      nextActionAt_ = millis() + kChapterPacingMs;
       return Event::ChapterComplete;
 
     case Phase::PrepareImages: {

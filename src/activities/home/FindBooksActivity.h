@@ -3,6 +3,9 @@
 #include <I18n.h>
 
 #include "activities/Activity.h"
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 
 // Third main tab: a source directory, not a merged ranking (Pond v5 frame 08).
 // A top row opens the way books arrive on the card (the web upload page), then
@@ -24,6 +27,7 @@ class FindBooksActivity final : public Activity {
   bool wantsBandUpdates() const override { return true; }
   void debugMoveRing(int delta) override;
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
@@ -64,6 +68,9 @@ class FindBooksActivity final : public Activity {
   int selected_ = 0;
   bool jjwxcSession_ = false;
   bool wereadSession_ = false;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  jjwxc_signin::ReminderPopup signInReminder_;
+#endif
 
   // Hit rects recorded while drawing (render runs on the render task; loop()
   // is the only reader). Width 0 = no such control this frame.

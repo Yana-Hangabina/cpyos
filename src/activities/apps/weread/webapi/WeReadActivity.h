@@ -80,9 +80,13 @@ class WeReadActivity final : public Activity {
   std::atomic<WeReadClient::Operation::ProgressStage> progressStage_{WeReadClient::Operation::ProgressStage::Chapters};
   std::atomic<uint32_t> progressCompleted_{0};
   std::atomic<uint32_t> progressTotal_{0};
+  std::atomic<uint32_t> progressSkipped_{0};
   std::atomic<PostProcessNotice> postProcessNotice_{PostProcessNotice::None};
   std::atomic<int> disclaimerActionsY_{-1};
   WeReadClient::Error error_ = WeReadClient::Error::Ok;
+  // Formatted detail for the partial-cache toast and the "no readable
+  // chapters" error page. Kept as a member so render() can reuse it.
+  char cacheSummary_[192] = {};
   WeReadStore::ShelfRecord pendingBook_;
   char qrUrl_[256] = {};
   uint32_t shelfCount_ = 0;
@@ -150,6 +154,8 @@ class WeReadActivity final : public Activity {
   void moveDetailSelection(int direction);
   void activateDetailSelection();
   void showCacheScopePopup();
+  void activateTimeSync();
+  std::string manageEntryLabel(int index) const;
   void showShelfRefreshPopup();
   void startBookDownload();
   void selectChapterRange();

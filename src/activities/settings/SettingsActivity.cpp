@@ -1,9 +1,18 @@
 #include "SettingsActivity.h"
+
+#if defined(CROSSPOINT_PLUS_PORT)
+#include "plus_battery.h"
+#include "plus_charger.h"
+#endif
 #include "components/StatusCards.h"
+#if defined(CROSSPOINT_PLUS_PORT)
+#include <PlusCellular.h>
+#endif
 
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
+#include <HalFrontlight.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
 #include <LibraryBuilder.h>
@@ -43,7 +52,15 @@
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
+#if defined(CPYOS_PLUS_VENDOR_OTA)
+#include "plus_ota_activity.h"
+#else
 #include "OtaUpdateActivity.h"
+#endif
+#include "ReaderLineSpacing.h"
+#if defined(CROSSPOINT_PLUS_PORT)
+#include "plus_bt_audio_activity.h"
+#endif
 #include "ReadingStatsSettingsActivity.h"
 #include "SdCardFontSystem.h"
 #include "ScreenRepairActivity.h"
@@ -148,6 +165,12 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     case SettingAction::LightSleepImage:
     case SettingAction::DeepSleepImage:
       return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
+    case SettingAction::BluetoothAudio:
+    case SettingAction::CellularStatus:
+    case SettingAction::ChargingStatus:
+      // Metalio Plus only; there is no dedicated group, so it lands with the
+      // rest of the board-specific rows at the end of the Controls tab.
+      return {StrId::STR_SET_GROUP_OTHER, 9};
     case SettingAction::None:
       break;
   }
@@ -497,6 +520,16 @@ void SettingsActivity::rebuildSettingsLists() {
 #if FREEINK_CAP_BLE_HID_HOST
   controlsSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
 #endif
+#if defined(CROSSPOINT_PLUS_PORT)
+  // Metalio E-INK4 Plus: the BH1098G Bluetooth audio page. The base entry in
+  // SettingsList.h carries no category (like the standby-image actions), so the
+  // visible row is appended here, at the end of the Controls tab.
+  controlsSettings.push_back(SettingInfo::Action(StrId::STR_BT_AUDIO, SettingAction::BluetoothAudio));
+  controlsSettings.push_back(SettingInfo::Action(StrId::STR_CHARGER, SettingAction::ChargingStatus));
+  if (SETTINGS.cellularPresent) {
+    controlsSettings.push_back(SettingInfo::Action(StrId::STR_NETWORK_4G, SettingAction::CellularStatus));
+  }
+#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_APPS_TITLE, SettingAction::Apps));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_APP_VISIBILITY, SettingAction::AppVisibility));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_DATE_AND_TIME, SettingAction::ClockSettings));
@@ -738,6 +771,13 @@ void SettingsActivity::onRowAction(const fui::ActionEvent& event) { UiTabListAct
 void SettingsActivity::onExit() {
   Activity::onExit();
 
+#if defined(CPYOS_PLUS_BOARD_PROFILE)
+  // The frontlight-presence toggle changes which rows exist AND must not leave
+  // an absent pair driven; apply both here so the next repaint is consistent.
+  Frontlight.setPresentOverride(SETTINGS.frontlightPresent != 0);
+  if (!SETTINGS.frontlightPresent) Frontlight.setOn(false);
+#endif
+
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
@@ -750,6 +790,46 @@ void SettingsActivity::debugShowPopupDemo() {
   constexpr int kLast = static_cast<int>(std::size(kOptions)) - 1;
   optionPopup.show("Long picker", kOptions, kLast + 1, kLast, [](int) {});
   requestUpdate();
+}
+
+void SettingsActivity::debugSetTab(const int tab) {
+  if (tab < 0 || tab >= categoryCount) return;
+  onTabAction(tab);
+  requestUpdate();
+}
+
+void SettingsActivity::debugListActions() {
+  if (currentSettings == nullptr) {
+    LOG_INF("PLUS", "slist tab=%d: no category", selectedCategoryIndex);
+    return;
+  }
+  int ordinal = 0;
+  for (const auto& setting : *currentSettings) {
+    if (setting.action == SettingAction::None) continue;
+    LOG_INF("PLUS", "saction tab=%d #%d %s", selectedCategoryIndex, ordinal, I18N.get(setting.nameId));
+    ++ordinal;
+  }
+  LOG_INF("PLUS", "slist tab=%d actions=%d", selectedCategoryIndex, ordinal);
+}
+
+void SettingsActivity::debugActivateAction(const int ordinal) {
+  if (currentSettings == nullptr || ordinal < 0) return;
+  int seen = 0;
+  for (size_t i = 0; i < currentSettings->size(); ++i) {
+    const SettingInfo& setting = (*currentSettings)[i];
+    if (setting.action == SettingAction::None) continue;
+    if (seen++ != ordinal) continue;
+    for (int row = 0; row < listCount(); ++row) {
+      if (settingIndexAtRow(row) != static_cast<int>(i)) continue;
+      LOG_INF("PLUS", "saction open tab=%d #%d %s", selectedCategoryIndex, ordinal, I18N.get(setting.nameId));
+      activeNav().selected = row + 1;
+      activateIndex(row);
+      return;
+    }
+    LOG_INF("PLUS", "saction tab=%d #%d: row vanished", selectedCategoryIndex, ordinal);
+    return;
+  }
+  LOG_INF("PLUS", "saction tab=%d #%d: no such action row", selectedCategoryIndex, ordinal);
 }
 
 bool SettingsActivity::paintOverlayBeforePresent() {
@@ -925,6 +1005,12 @@ void SettingsActivity::toggleCurrentSetting() {
             if (valuePtr == &CrossPointSettings::uiFontScale) {
               RenderLock lock;
               typography::apply(renderer, idx);
+#if CROSSPOINT_VECTOR_FONTS
+              // The core/font-extra UI faces are built at the new role sizes;
+              // without this a title drawn at a size that did not exist before
+              // boxes until the next ensureLoaded (reader or app entry).
+              sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+#endif
             }
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
             // Preview the sound the user just picked. The tap on the option row
@@ -995,6 +1081,17 @@ void SettingsActivity::toggleCurrentSetting() {
         }
 #endif
         break;
+      case SettingAction::BluetoothAudio:
+#if defined(CROSSPOINT_PLUS_PORT)
+        // Metalio E-INK4 Plus: the BH1098G AT-command page (scan / pair a
+        // headset). Only this board has that module on UART1.
+        releaseListsForMemoryHungryChild();
+        if (!startActivityForResultWith<PlusBtAudioActivity>(resultHandler)) {
+          rebuildSettingsLists();
+          requestUpdate();
+        }
+#endif
+        break;
       case SettingAction::CustomiseStatusBar:
         startActivityForResultWith<StatusBarSettingsActivity>(resultHandler);
         break;
@@ -1055,6 +1152,46 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::SdFirmwareUpdate:
         startActivityForResultWith<SdFirmwareUpdateActivity>(resultHandler);
         break;
+      case SettingAction::ChargingStatus:
+#if defined(CROSSPOINT_PLUS_PORT)
+      {
+        plus_battery_sample_t battery{};
+        const bool haveBattery = PlusBattery_Read(&battery);
+        plus_charger_sample_t charger{};
+        const bool haveCharger = PlusCharger_Read(&charger) && charger.valid;
+        char body[128];
+        std::snprintf(body, sizeof(body), "%d mV %d mA %d%% | VBUS: %s CHG: %s",
+                      haveBattery ? battery.millivolts : 0, haveBattery ? battery.milliamps : 0,
+                      haveBattery ? battery.soc_percent : 0,
+                      haveCharger ? PlusCharger_VbusName(charger.vbus) : "?",
+                      haveCharger ? PlusCharger_ChargeName(charger.chg_stat) : "?");
+        const char* okButton[1] = {tr(STR_OK_BUTTON)};
+        optionPopup.showMessage(tr(STR_CHARGER), body, okButton, 1, 0, [](int) {});
+        requestUpdate();
+      }
+#endif
+      break;
+      case SettingAction::CellularStatus:
+#if defined(CROSSPOINT_PLUS_PORT)
+      {
+        char body[96];
+        if (plus_cellular_ready()) {
+          const int csq = plus_cellular_csq();
+          if (csq >= 0 && csq <= 31) {
+            std::snprintf(body, sizeof(body), "%s  CSQ %d (%d dBm) %s", plus_cellular_ip(), csq, -113 + 2 * csq,
+                          plus_cellular_registered() ? "REG" : "NO REG");
+          } else {
+            std::snprintf(body, sizeof(body), "%s", plus_cellular_ip());
+          }
+        } else {
+          std::snprintf(body, sizeof(body), "%s", tr(STR_NOT_AVAILABLE));
+        }
+        const char* okButton[1] = {tr(STR_OK_BUTTON)};
+        optionPopup.showMessage(tr(STR_NETWORK_4G), body, okButton, 1, 0, [](int) {});
+        requestUpdate();
+      }
+#endif
+      break;
       case SettingAction::ScreenRepair:
         startActivityForResultWith<ScreenRepairActivity>(resultHandler);
         break;
@@ -1156,6 +1293,14 @@ void SettingsActivity::toggleCurrentSetting() {
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   SETTINGS.saveToFile();
+  if (setting.valuePtr == &CrossPointSettings::networkType) {
+    // Official firmware semantics: the transport is chosen at boot, so a change
+    // takes effect after a restart instead of switching under live sockets.
+    LOG_INF("SET", "networkType=%u; restarting", static_cast<unsigned>(SETTINGS.networkType));
+    vTaskDelay(pdMS_TO_TICKS(250));
+    silentRestart();
+    return;
+  }
   rebuildSettingsLists();
   // Ring positions include the group headers; settingsCount does not. Clamping
   // to settingsCount snapped a row below a header back to an earlier setting.
@@ -1221,12 +1366,22 @@ void SettingsActivity::releaseListsForMemoryHungryChild() {
 void SettingsActivity::openOtaUpdate() {
   releaseListsForMemoryHungryChild();
 
+#if defined(CPYOS_PLUS_VENDOR_OTA)
+  // Metalio E-Ink4 Plus: the vendor OTA channel (CloudZao Burner). The GitHub
+  // release manifests target Read Pico and must never be offered on this SoC.
+  if (startActivityForResultWith<PlusOtaActivity>([this](const ActivityResult&) {
+        rebuildSettingsLists();
+      })) {
+    return;
+  }
+#else
   if (startActivityForResultWith<OtaUpdateActivity>([this](const ActivityResult&) {
         SETTINGS.saveToFile();
         rebuildSettingsLists();
       })) {
     return;
   }
+#endif
 
   rebuildSettingsLists();
   requestUpdate();
@@ -1386,6 +1541,14 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
       snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
                static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
       return valueBuffer;
+    }
+    if (setting.valuePtr == &CrossPointSettings::readerLineSpacingPercent) {
+      // The raw field is a percentage where 0 means "keep the level factors";
+      // show that state and the unit instead of a bare 0/130 (the same reason
+      // the sleep row above formats itself).
+      if (SETTINGS.readerLineSpacingPercent == reader_line_spacing::PERCENT_OFF)
+        return tr(STR_EXTRA_SPACING_OFF);
+      return std::to_string(SETTINGS.readerLineSpacingPercent) + "%";
     }
     return std::to_string(SETTINGS.*(setting.valuePtr));
   }

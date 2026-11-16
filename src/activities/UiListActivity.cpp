@@ -29,6 +29,18 @@ void UiListActivity::debugMoveRing(const int delta) {
   requestUpdate();
 }
 
+void UiListActivity::debugSelect(const int index) {
+  const int count = listCount();
+  if (count <= 0) return;
+  activeNav().requestSelection(std::clamp(index, 0, count - 1));
+  requestUpdate();
+}
+
+void UiListActivity::debugConfirm() {
+  const int selected = activeNav().selected;
+  if (selected >= 0 && selected < listCount()) activateIndex(selected);
+}
+
 void UiListActivity::onEnter() {
   Activity::onEnter();
   activeNav().reset();
@@ -279,7 +291,16 @@ void UiListActivity::render(RenderLock&&) {
   // the nav advanced the viewport and asked for another build. Bounded: top
   // strictly advances toward the selection each pass.
   for (int pass = 0; activeNav().consumeRebuildNeeded() && pass < 8; ++pass) {
-    if (!gray) renderer.clearScreen();
+    // A rebuild pass repaints the whole page. On the gray canvas there is no
+    // clearScreen(): beginGrayscale16() refuses to run twice, so without this
+    // the first pass's rows stayed under the second one and CJK labels showed a
+    // ghost one row higher (Settings -> Display). Clearing both planes keeps the
+    // two passes from stacking.
+    if (gray) {
+      renderer.restartGrayscale16Canvas();
+    } else {
+      renderer.clearScreen();
+    }
     drawChrome();
     renderUi();
   }

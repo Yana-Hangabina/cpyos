@@ -102,3 +102,23 @@ fi
 
 echo ""
 echo "ALL OTF SUPPORT CHECKS PASSED"
+
+# CFF ink scale: without a pshinter module the outline used to be scaled twice
+# (ink ~2.1x, advance 1x). The hinted and the explicitly unhinted load of the
+# SAME face must now agree; this needs no second fixture and is a hard failure.
+echo "== CFF ink scale (hinted vs unhinted) =="
+cc -std=c99 -O1 $INC -DFREEINK_FONT_ENABLE_CFF=1 -o "$BUILD_DIR/size" \
+  "$SCRIPT_DIR/CffSizeHostTest.c" "$BUILD_DIR/cff"/ft_*.o -lm
+"$BUILD_DIR/size" "$CFF_FIXTURE"
+
+# Cross-outline parity when the same family is available as .otf and .ttf.
+FONT_TEST_DIR="$REPO_ROOT/.scratch/font-test"
+[ -d "$FONT_TEST_DIR" ] || FONT_TEST_DIR="$REPO_ROOT/../../.scratch/font-test"
+OTF_SAME="$FONT_TEST_DIR/SHSansSC-regular-gb2312.otf"
+TTF_SAME="$FONT_TEST_DIR/SHSansSC-regular-gb2312.ttf"
+if [ -f "$OTF_SAME" ] && [ -f "$TTF_SAME" ]; then
+  echo "== CFF vs glyf ink parity =="
+  "$BUILD_DIR/size" "$OTF_SAME" "$TTF_SAME" 32
+else
+  echo "SKIP: same-family .otf/.ttf fixtures not present ($FONT_TEST_DIR)" >&2
+fi

@@ -114,16 +114,23 @@ bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* f
   size_t last_slash = path.find_last_of('/');
   if (last_slash != std::string::npos) {
     std::string dir = path.substr(0, last_slash);
-    if (!Storage.exists(dir.c_str())) {
-      if (!Storage.mkdir(dir.c_str())) {
-        return false;
-      }
+    // FatFs mkdir() does not create parents: a book screenshot goes to
+    // /screenshots/<title>/, and on a card that has never taken a screenshot
+    // the "/screenshots" root does not exist yet, so the single mkdir failed.
+    const size_t parentSlash = dir.find_last_of('/');
+    if (parentSlash != std::string::npos && parentSlash > 0) {
+      const std::string parent = dir.substr(0, parentSlash);
+      if (!Storage.exists(parent.c_str())) Storage.mkdir(parent.c_str());
+    }
+    if (!Storage.exists(dir.c_str()) && !Storage.mkdir(dir.c_str())) {
+      LOG_ERR("SCR", "Cannot create %s", dir.c_str());
+      return false;
     }
   }
 
   HalFile file;
   if (!Storage.openFileForWrite("SCR", filename, file)) {
-    LOG_ERR("SCR", "Failed to save screenshot");
+    LOG_ERR("SCR", "Failed to open %s", filename);
     return false;
   }
 
@@ -144,8 +151,10 @@ bool ScreenshotUtil::saveFramebufferAsBmp(const char* filename, const uint8_t* f
   }
 
   const uint32_t rowSizePadded = (phyWidth + 31) / 32 * 4;
-  // Max row size for 528px height (X3) after rotation = 68 bytes; use fixed buffer to avoid VLA
-  constexpr size_t kMaxRowSize = 68;
+  // One row at 1-bit for the tallest supported panel, after rotation: the
+  // Metalio E-INK4 Plus is 684x1216, so a row is 88 bytes (the old 68-byte
+  // buffer was sized for the 528-px X3 and rejected every Plus screenshot).
+  constexpr size_t kMaxRowSize = 152;
   if (rowSizePadded > kMaxRowSize) {
     LOG_ERR("SCR", "Row size %u exceeds buffer capacity", rowSizePadded);
     // Explicitly close() file before calling Storage.remove()

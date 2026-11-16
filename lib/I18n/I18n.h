@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "I18nKeys.h"
+#include <I18nKeys.h>
 /**
  * Internationalization (i18n) system for CrossPoint Reader
  */

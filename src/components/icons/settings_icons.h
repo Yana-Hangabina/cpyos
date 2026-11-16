@@ -51,6 +51,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
       return &icon_clock_48;
     case StrId::STR_HIDE_BATTERY:
     case StrId::STR_BATTERY:
+    case StrId::STR_CHARGER:
       return &icon_battery_48;
     case StrId::STR_REFRESH_FREQ:
     case StrId::STR_PERIODIC_REFRESH:
@@ -89,6 +90,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_FONT_SIZE:
       return &icon_case_sensitive_48;
     case StrId::STR_LINE_SPACING:
+    case StrId::STR_LINE_SPACING_PERCENT:
       return &icon_align_justify_48;
     case StrId::STR_WORD_SPACING:
     case StrId::STR_CHARACTER_SPACING:
@@ -181,6 +183,9 @@ inline const freeink::Icon* forSetting(const StrId id) {
     // list is aligned on every board that shows them.
     case StrId::STR_BLUETOOTH:
       return &icon_bluetooth_48;
+    // Metalio E-INK4 Plus Bluetooth audio page (row only exists on that port).
+    case StrId::STR_BT_AUDIO:
+      return &icon_bluetooth_48;
     case StrId::STR_HOME_BUTTON:
       return &icon_house_48;
     case StrId::STR_REMAP_FRONT_BUTTONS:
@@ -225,6 +230,8 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_DATE_AND_TIME:
       return &icon_clock_48;
     case StrId::STR_WIFI_NETWORKS:
+    case StrId::STR_NETWORK_TYPE:
+    case StrId::STR_NETWORK_4G:
       return &icon_wifi_48;
     case StrId::STR_KOREADER_SYNC:
     case StrId::STR_OPDS_SERVERS:

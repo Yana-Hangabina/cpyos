@@ -29,6 +29,10 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Serial soak hook: move the selection like NavNext/NavPrevious would (the tab
   // variant overrides it to walk tabs + rows).
   void debugMoveRing(int delta) override;
+  void debugSelect(int index) override;
+  // Serial soak hook: activate the current selection (the base had no
+  // implementation, so `confirm` was a no-op on every plain list page).
+  void debugConfirm() override;
 
  protected:
   // Base-owned row action; subclass-registered actions start at ACTION_USER.

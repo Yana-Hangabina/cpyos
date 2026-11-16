@@ -1,6 +1,7 @@
 #include "SdCardFontSystem.h"
 
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "SystemCoreFont.h"
 #include "SystemFontPack.h"
 #endif
 
@@ -20,6 +21,7 @@
 #include "CrossPointSettings.h"
 #include "FontExtras.h"
 #include "ReaderFontSizes.h"
+#include "Typography.h"
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "SystemFontPack.h"
 #endif
@@ -136,6 +138,13 @@ static_assert(std::size(kReadPicoUiPointSizes) == std::size(kUiFontSizes));
 }  // namespace
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+  // Tier-1 reading face: release the compressed core from the data partition
+  // before the registry scan, so this pass discovers it. If there is no SD card
+  // (or no core carrier) this is a no-op and the reader stays on the UI subset;
+  // the missing-glyph prompt then offers the downloadable core pack.
+  system_core_font::releaseToSd();
+#endif
   registry_.discover();
 #if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
   // Do this here, before the saved-family load, instead of relying only on
@@ -892,14 +901,25 @@ void SdCardFontSystem::unloadSupplementFonts(GfxRenderer& renderer) {
   freeSupplementSources();
   supplementFamilies_.clear();
   supplementPointSize_ = 0;
+  // removeFont() above already pruned this set's ids from every chain. Do not
+  // clearSupplementFonts() here: it is global, and would also drop the
+  // small-language UI faces registered by UiScriptFont until the next scale
+  // change re-runs typography::apply().
+  // The role bookkeeping below still belongs to this family, so reset it.
   supplementUiRoleCount_ = 0;
   supplementUiRoles_ = {};
-  renderer.clearSupplementFonts();
 }
 
 bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t readerPointSize) {
   std::vector<std::string> families;
   if (!font_extras::installedFallbackFamilies(families)) families.clear();
+  // The core released from the data partition is not an installed font-extra,
+  // but it behaves exactly like one: reader-grade budgets, plus UI faces for
+  // titles/authors. Prefer it when no explicit reader family was selected.
+  if (system_core_font::ready() &&
+      std::find(families.begin(), families.end(), system_core_font::kFamilyName) == families.end()) {
+    families.insert(families.begin(), system_core_font::kFamilyName);
+  }
   if (readerPointSize == 0) readerPointSize = 12;
 
   // Which UI roles a supplement has to mirror. With the system pack the roles
@@ -953,17 +973,22 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
       continue;
     }
     set->family = name;
+    const bool isCore = name == system_core_font::kFamilyName;
     const auto* regular = family->findFile(0, 0);
     if (regular == nullptr) regular = &family->files.front();
-    // Supplements are rare-glyph faces, not page text: a 512 KB resident cap and
-    // a 256 KB stream prefix keep several script packs inside one PSRAM budget.
+    // Rare-glyph packs get a 512 KB resident cap and a 256 KB prefix so several
+    // script packs fit in one PSRAM budget. The core is page text, not a rare
+    // fallback: give it the reader-family budget (4 MB resident cap, 1 MB
+    // prefix) so a 2.5 MB font stays hot and page turns do not fault SD.
     char regularPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
     if (!family->filePath(*regular, regularPath, sizeof(regularPath))) {
       LOG_ERR("SDFS", "font supplement %s: path does not fit", name.c_str());
       continue;
     }
-    if (!openTtfSourceInto(set->sources, 0, regularPath, 512 * 1024, 2 * 1024 * 1024, 256 * 1024,
-                           512 * 1024)) {
+    const size_t residentMax = isCore ? 4u * 1024u * 1024u : 512u * 1024u;
+    const size_t familyMax = isCore ? 4u * 1024u * 1024u : 2u * 1024u * 1024u;
+    const size_t prefix = isCore ? 1024u * 1024u : 256u * 1024u;
+    if (!openTtfSourceInto(set->sources, 0, regularPath, residentMax, familyMax, prefix, 512 * 1024)) {
       LOG_ERR("SDFS", "font supplement %s: cannot open %s", name.c_str(), regularPath);
       continue;
     }
@@ -971,14 +996,22 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
     auto reader = makeUniqueNoThrow<TtfEpdFont>();
     if (reader) {
       addTtfSourcesFrom(set->sources, *reader);
-      // Rare-glyph fallback: a smaller arena than the primary reader face is
-      // enough, and leaves room for several script packs.
-      if (reader->load(readerPointSize, true, 256 * 1024, 1024, fourBit)) {
+      // The core carries page text, so it gets the reader arena; rare-glyph
+      // packs keep the smaller one.
+      const size_t readerCache = isCore ? 1024u * 1024u : 256u * 1024u;
+      const uint16_t readerGlyphs = isCore ? 4096 : 1024;
+      if (reader->load(readerPointSize, true, readerCache, readerGlyphs, fourBit)) {
         const int id = computeTtfFontId((name + "\x01supp").c_str(), readerPointSize);
         renderer.insertFont(id, reader->family());
         renderer.registerTtfFont(id, reader.get());
         set->readerId = id;
         set->reader = std::move(reader);
+        if (isCore && SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.readerFontOverrideId == 0) {
+          // No explicit reader family: make the core the reader face instead of
+          // resolving word-by-word between the UI subset and the supplement.
+          renderer.setPreferredFont(CJK_READER_SIZE_FONT_ID(readerPointSize), id);
+          LOG_INF("SDFS", "core font is the reader face at %upt", static_cast<unsigned>(readerPointSize));
+        }
         renderer.addSupplementFont(SETTINGS.getReaderFontId(), id);
         renderer.addSupplementFont(CJK_READER_SIZE_FONT_ID(readerPointSize), id);
       } else {

@@ -175,11 +175,23 @@ through the reader's existing pagination LUT. Older generated books without
 anchors retain the visible-offset approximation, and other EPUBs fall back to
 the whole-book percentage derived from `WRT2` word counts. Different canonical
 positions show the direction selector. A local upload uses an enter/report pair
-and is accepted only after a read-back verifies the chapter and offset. Selecting
-the remote position updates local progress without reporting it to the server;
-matching positions complete without an upload. The sync context and request body
-do not include local reading duration. An expired session directs the user back
-to **Apps → WeRead** to sign in; it does not open a QR flow from the reader.
+and carries the effective reading seconds accumulated since the last confirmed
+upload (`rt` in both the signed query and the JSON body). When the remote
+position is selected, its exact chapter and offset are reported before being
+applied locally, so reporting time cannot move cloud progress backwards.
+Upload is accepted only after a read-back verifies the chapter and offset.
+
+Reading time is opt-in per account (`WeRead → Manage → Reading time sync`); the
+first enable asks for confirmation and the switch can be turned off at any
+time. The reader samples while the page is visible: gaps over 60 s (sleep,
+home, standby) are not counted, whole seconds are flushed to a per-book ledger
+(`/.crosspoint/weread/<bookId>/timesync.bin`) every 30 s and on exit, and a
+manual sync also reports them even when the positions already match. The cloud
+`readingTime` counter is read before and after the report; the applied delta
+settles the ledger. An ambiguous report (sent but not verifiable) is never
+replayed and is dropped instead of double-counting. An expired session directs
+the user back to **Apps → WeRead** to sign in; it does not open a QR flow from
+the reader.
 
 For a new standard-book cache, the downloader fetches cloud progress after the
 `WRT2` catalog and before any chapter or image. This request is best effort:

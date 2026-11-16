@@ -183,9 +183,11 @@ void RemoteProgressParser::acceptCandidate(const Candidate& candidate) {
   progress_.appIdHash = candidate.appIdHash;
   progress_.chapterOffset = candidate.chapterOffset;
   progress_.updateTime = candidate.updateTime;
+  progress_.readingTime = candidate.readingTime;
   progress_.hasChapterOffset = candidate.hasChapterOffset && candidate.chapterUid[0] != '\0';
   progress_.hasUpdateTime = candidate.hasUpdateTime;
   progress_.hasAppId = candidate.hasAppId;
+  progress_.hasReadingTime = candidate.hasReadingTime;
   bestDepth_ = objectDepth_;
   bestScore_ = score;
 }
@@ -205,6 +207,8 @@ void RemoteProgressParser::onKey(void* raw, const char* key, size_t) {
     parser.field_ = Field::UpdateTime;
   } else if (strcmp(key, "appId") == 0 || strcmp(key, "app_id") == 0) {
     parser.field_ = Field::AppId;
+  } else if (strcmp(key, "readingTime") == 0 || strcmp(key, "reading_time") == 0) {
+    parser.field_ = Field::ReadingTime;
   } else if (strcmp(key, "errcode") == 0 || strcmp(key, "errCode") == 0) {
     parser.field_ = Field::ErrorCode;
   } else {
@@ -257,6 +261,12 @@ void RemoteProgressParser::onValue(void* raw, const char* value, const size_t le
           }
         }
         break;
+      case Field::ReadingTime:
+        if (len > 0 && len <= 20) {
+          candidate->readingTime = parseUint32OrZero(value, len);
+          candidate->hasReadingTime = true;
+        }
+        break;
       case Field::None:
       case Field::ErrorCode:
         break;
@@ -299,7 +309,12 @@ static_assert(sizeof(RemoteProgressParser) <= 4096, "WeRead progress parser exce
 
 ChapterResponse classifyChapterResponse(const int status, const bool emptyObject) {
   if (status == 401) return ChapterResponse::AuthenticationRequired;
-  if (status == 403 || (status == 200 && emptyObject)) return ChapterResponse::Retryable;
+  // 403 is WeRead's usual "preview/forbidden" answer and 429/5xx are
+  // transient; retry all of them briefly before turning the chapter into a
+  // placeholder. 404/410/423/451 are permanent for this chapter.
+  if (status == 403 || status == 429 || status >= 500 || (status == 200 && emptyObject)) {
+    return ChapterResponse::Retryable;
+  }
   return status == 200 ? ChapterResponse::Content : ChapterResponse::Error;
 }
 

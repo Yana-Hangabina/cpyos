@@ -12,7 +12,6 @@
 
 #include <limits>
 #else
-#include <esp_crt_bundle.h>
 #endif
 
 namespace {
@@ -500,7 +499,8 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
                                     const WeReadHttpClient::DataCallback& onData,
                                     const WeReadHttpClient::HeaderCallback& onHeader, int& status,
                                     esp_http_client_handle_t& client, char* sessionHost, const size_t sessionHostSize,
-                                    uint32_t& newConnections, uint32_t& reusedRequests) {
+                                    uint32_t& newConnections, uint32_t& reusedRequests,
+                                    const bool retriedAfterOpenFailure = false) {
   status = -1;
   char host[128];
   const char* path = nullptr;
@@ -536,7 +536,12 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     config.buffer_size = HTTP_RX_BUF;
     config.buffer_size_tx = HTTP_TX_BUF;
     config.timeout_ms = options.timeoutMs;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    // The reference build's TLS path calls SecureClient::setInsecure(): CPYOS
+    // does not authenticate peers. This esp_http_client fallback has no
+    // "insecure" switch; leaving cacert/bundle empty is the equivalent. It is
+    // also required here: with the bundle attached, IDF 6.1's PSA-backed x509
+    // verification fails every chain on the ESP32-S31 ("PSA signature
+    // verification failed", -141), which blocked every JJWXC/JJ request.
     config.method = method;
     config.keep_alive_enable = false;
     config.event_handler = onRequestEvent;
@@ -571,6 +576,18 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
   if (err != ESP_OK) {
     LOG_ERR("HTTP", "verified request open failed: %s", esp_err_to_name(err));
     cleanupClient(client);
+    // A connect failure happens on this port both for a dead reused session and
+    // for the first connect after the radio idles (measured: m.jjwxc.net rejects
+    // one request right after an app-cdn exchange, then answers on the next try).
+    // Rebuild the client and retry once, with a short pause so a sleeping modem
+    // can wake. One attempt only: the request was never sent, so replaying it
+    // cannot duplicate a body or a side effect.
+    if (!retriedAfterOpenFailure) {
+      LOG_INF("WR", "connect failed; reconnecting once");
+      delay(300);
+      return runRequest(url, options, onData, onHeader, status, client, sessionHost, sessionHostSize,
+                        newConnections, reusedRequests, /*retriedAfterOpenFailure=*/true);
+    }
     return WeReadHttpClient::Result::NetworkError;
   }
 

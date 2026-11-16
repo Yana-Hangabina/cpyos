@@ -212,3 +212,62 @@ Philosophy: Reading comes first. Lightweight apps, analytics, standby customizat
 - 分支 Pages 在同一 commit 先部署了 0.4.0，release 的 deploy 被去重；推送 site-only 提交
   触发 Pages 后，live `latest.json` / `ota/readpico.json` 更新为 0.5.0。
 - 按既有要求，推送后不做本地/真机验证。
+
+## 66. 分支、dev→public 同步与设备版本规则（2026-11-16，硬约束）
+
+本节是后续所有 agent 的工作入口；与旧流程冲突时以本节为准。
+
+### 66.1 开发顺序
+
+1. **所有本机修改先在 `dev` 做**。大型/长期功能先从 `dev` 切 `feat/<topic>` 或
+   `work/<topic>`，完成、构建、测试后再合回 `dev`；不要直接在 `feat/*` 上发版。
+2. `dev` 是唯一集成分支。**不要把 dev、feat、work 或私有组件分支直接 push 到公开仓**。
+3. 私有组件 `src/jjwxc/` 只存在于 dev 工作树，必须在独立私有仓 `cpyos-jjwxc` 维护；
+   **绝不对它执行 `git add`**，public 树也绝不能出现被跟踪的 `src/jjwxc`。
+
+### 66.2 与远端 `fork/cpyos` 同步
+
+1. 每次同步 public 前先 `git fetch fork --prune`。
+2. **公开分支必须从当前 `fork/cpyos` 的最新 tip 派生，不能从一个陈旧的本地 `cpyos`
+   快照继续提交**。最少检查：
+   ```bash
+   git rev-list --left-right --count fork/cpyos...HEAD
+   ```
+   结果必须是 `0 <ahead>`（behind 为 0）；若 behind 不为 0，先把远端合并/重建到新分支，
+   不要用旧分支继续追加。
+3. public 采用“**内容快照**”而不是把 dev 的私有历史 merge 进去：
+   从 `fork/cpyos` 建新分支，复制 dev 的 tracked 内容，保留 public 的站点/发布文件，
+   做私有字符串和 SSID 清洗，构建 `readpico`，然后提交。
+4. 同步后必须满足：`git diff --name-only dev cpyos` 只允许
+   `src/main.cpp`（dev 的私有调试路径）和 `ports/metalio_plus/docs/plus-feature-matrix.md`
+   （public 已清洗的 SSID）等**已登记的**差异；出现其他差异就是同步漏项。
+5. 不使用 force push；发布 tag 只从干净的 public 提交创建。
+
+### 66.3 发版
+
+- 没有用户明确的“发版”指令，不 bump `crosspoint.version`、不建 tag、不 push。
+- 发版时先确认 public 是 `fork/cpyos` 的后代且工作树干净，再按 §31 的
+  `cpyos-X.Y.Z` tag 流程执行；发布后核对 `esp_app_desc`、资产、Pages/OTA 清单。
+
+### 66.4 设备版本号必须可区分（用户反馈定位）
+
+基版本（`platformio.ini` 的 `crosspoint.version`）由所有设备共享；**每个设备的完整版本
+必须在末尾带设备标签**，反馈版本号即可判断设备，不允许两个设备给出同一个完整版本串：
+
+| 设备 | 版本标签 | 示例 |
+|---|---|---|
+| Read Pico | `-rp` | `0.8.0-rp` |
+| Metalio E-INK4 Plus | `-e4p` | `0.8.0-e4p` |
+| Metalio E-Ink 4 | `-e4` | `0.8.0-e4` |
+| EEGO A4 | `-eego-a4` | `0.8.0-eego-a4` |
+| Murphy M4 | `-m4` | `0.8.0-m4` |
+| X3 | `-x3` | `0.8.0-x3` |
+| X4 / X4 Pro / X4C | `-x4` / `-x4pro` / `-x4c` | `0.8.0-x4` |
+| C3 共享构建 | `-c3` | `0.8.0-c3` |
+
+- 设备标签写进该 env 的 `-DCROSSPOINT_VERSION`；About 页、崩溃报告、OTA 清单和用户反馈
+  都显示完整版本。
+- Release **tag/文件名**仍用不带设备标签的 `cpyos-<base>`（一次发布包含多个设备镜像），
+  但每个镜像的 `app_desc.version` 必须带自己的设备标签。
+- 如果以后需要“纯数字也互不重合”，必须先和用户讨论再改为按设备分配独立 MAJOR/MINOR
+  版本线；不要私自把共享基版本拆成多条数字线。

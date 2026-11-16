@@ -33,6 +33,12 @@
 #include <Txt.h>
 #include <WiFi.h>
 
+#ifdef ENABLE_CHINESE_VERSION
+namespace {
+uint64_t readerMonotonicMs();
+}  // namespace
+#endif
+
 // The windowed-push watchdog lives in main.cpp: the area path has no bounded
 // wait inside epdiy, so callers arm a deadline and a stuck scan restarts instead
 // of hanging the device (this board has no reset button).
@@ -60,6 +66,14 @@ extern void disarmScanWatchdog();
 #include "EpubReaderBookmarksActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderFootnoteSelectActivity.h"
+
+#if defined(CROSSPOINT_PLUS_PORT)
+// Port bench entry point (CMD:embfont). Embedded CFF faces used to be skipped
+// here because the vendored FreeType scaled their outlines twice; the driver
+// now loads unhinted when no pshinter module is linked, so both outline kinds
+// are used.
+extern "C" bool plus_embedded_font_enabled();
+#endif
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
@@ -378,6 +392,9 @@ EpubReaderActivity::~EpubReaderActivity() {
 }
 
 void EpubReaderActivity::onExit() {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  signInReminder_.dismiss();
+#endif
   // If the reader was closed before loop() got a chance to consume the
   // show-time hint write, persist it here (onExit runs on the UI task too).
   if (hintPersistPending_.exchange(false)) {
@@ -394,6 +411,17 @@ void EpubReaderActivity::onExit() {
     const SavedPosition& origin = savedPositions[0];
     saveProgress(origin.spineIndex, origin.pageNumber, 0);
   }
+
+#ifdef ENABLE_CHINESE_VERSION
+  if (weReadTracking_) {
+    flushWeReadPendingSeconds();
+    // Leaving the book is a natural settle point: if Wi-Fi is already up the
+    // remainder is handed to the background worker before the reader dies.
+    kickWeReadTimeSync();
+    weReadTracking_ = false;
+    weReadClock_.stop();
+  }
+#endif
 
   READING_STATS.endSession();
   ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
@@ -451,6 +479,7 @@ class PsramGrowingSink final : public Print {
 
   bool overflowed() const { return overflowed_; }
   uint32_t size() const { return size_; }
+  const uint8_t* data() const { return buf_.get(); }
   memory::ByteBuffer take() {
     size_ = cap_ = 0;
     return std::move(buf_);
@@ -487,6 +516,8 @@ void EpubReaderActivity::loadEmbeddedFontIfPresent() {
   // after the first open on the device.
   epub->discoverEmbeddedFontsFromZip();
   if (epub->getEmbeddedFonts().empty()) return;
+#if defined(CROSSPOINT_PLUS_PORT)
+#endif
 
   const auto pointSize = SETTINGS.fontPointSize;
   const bool havePsram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) > 0;
@@ -518,6 +549,19 @@ void EpubReaderActivity::loadEmbeddedFontIfPresent() {
     const int id = readerVectorFontId((family + "\x01epub").c_str(), static_cast<uint8_t>(pointSize));
     renderer.insertFont(id, face->family());
     renderer.registerTtfFont(id, face.get());
+#if defined(CROSSPOINT_PLUS_PORT)
+    // Facts for the CFF scale report: face metrics vs what the renderer measures
+    // for one glyph. TTF and CFF at the same point size should print the same.
+    {
+      const EpdFontData* fd = face->family().getData(EpdFontFamily::REGULAR);
+      if (fd != nullptr) {
+        LOG_DBG("ERS", "embedded face metrics: advY=%u asc=%d desc=%d", (unsigned)fd->advanceY, fd->ascender,
+                fd->descender);
+      }
+      LOG_DBG("ERS", "embedded face measure: line=%d A=%d", renderer.getLineHeight(id),
+              renderer.getTextWidth(id, "A"));
+    }
+#endif
     embeddedFontBytes_ = std::move(bytes);
     embeddedFont_ = face.release();
     embeddedFontId_ = id;
@@ -686,6 +730,15 @@ bool EpubReaderActivity::loadBook() {
       clearInitialProgressAfterSave_ = true;
     } else {
       WeReadStore::clearInitialProgress(wereadBookId_);
+    }
+    // Effective reading time starts counting only for WeRead books with the
+    // opt-in enabled; the ledger itself lives on the card.
+    weread_time_sync::begin();
+    if (weread_time_sync::enabled()) {
+      const uint64_t nowMs = readerMonotonicMs();
+      weReadClock_.begin(nowMs);
+      weReadLastSampleMs_ = nowMs;
+      weReadTracking_ = true;
     }
   }
 #endif
@@ -2220,8 +2273,11 @@ void EpubReaderActivity::exportAnnotations() {
   char stamp[16] = "";
   const time_t now = time(nullptr);
   if (now > 0) {
-    const tm* local = localtime(&now);
-    if (local != nullptr) strftime(stamp, sizeof(stamp), "%Y-%m-%d", local);
+    // localtime_r, not localtime: newlib's localtime() needs a 2.5 KB
+    // thread-local buffer, and on the RISC-V port that TLS block is placed in
+    // every task stack (the 1 KB IPC task overflows and corrupts the heap).
+    tm local{};
+    if (localtime_r(&now, &local) != nullptr) strftime(stamp, sizeof(stamp), "%Y-%m-%d", &local);
   }
   const std::string body = annotations::formatExport(epub->getTitle(), stamp, annotations_);
   const std::string path = epub->getCachePath() + "/annotations.txt";
@@ -2438,6 +2494,10 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+#ifdef ENABLE_CHINESE_VERSION
+  trackWeReadTime();
+#endif
+
   // renderContents() marked the one-shot hint as seen on the render task; the
   // settings write has to happen here, on the UI task. Exactly one write per
   // device: the flag is consumed with exchange().
@@ -2500,6 +2560,17 @@ void EpubReaderActivity::loop() {
     finishFontPreview();
     return;
   }
+
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  // The shared gate is off by default and records today's prompt itself, so this
+  // is safe to try once per reader entry. Menus, font prompts and the first-run
+  // hint have already returned above; a popup must not fight them.
+  if (!signInReminderChecked_ && overlay == Overlay::None) {
+    signInReminderChecked_ = true;
+    signInReminder_.maybeShow(renderer, mappedInput);
+  }
+  if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
+#endif
 
   if (handleSelectionInput()) return;
   if (overlay == Overlay::None && handleSelectionTouch()) return;
@@ -3377,6 +3448,69 @@ bool EpubReaderActivity::launchKOReaderSync() {
 }
 
 #ifdef ENABLE_CHINESE_VERSION
+namespace {
+// Monotonic milliseconds for the reading clock. millis() wraps after ~49 days;
+// the session counter is extended so a wrap cannot look like a huge gap.
+uint64_t readerMonotonicMs() {
+  static uint32_t last = 0;
+  static uint64_t base = 0;
+  const uint32_t now = millis();
+  if (now < last) base += 0x100000000ULL;
+  last = now;
+  return base + now;
+}
+}  // namespace
+
+void EpubReaderActivity::flushWeReadPendingSeconds() {
+  if (!weReadTracking_ || !wereadBookId_[0]) return;
+  const uint32_t seconds = weReadClock_.takeSeconds();
+  if (seconds > 0) weread_time_sync::addPending(wereadBookId_, seconds);
+}
+
+void EpubReaderActivity::trackWeReadTime() {
+  if (!weReadTracking_ || !wereadBookId_[0]) return;
+  const uint64_t nowMs = readerMonotonicMs();
+  if (nowMs - weReadLastSampleMs_ < 1000ULL) return;
+  weReadLastSampleMs_ = nowMs;
+  // Menus and the first-run map are not reading; move the cursor instead of
+  // counting that gap as effective time.
+  const bool reading = overlay == Overlay::None && !gestureHintVisible;
+  if (reading) {
+    weReadClock_.sample(nowMs);
+  } else {
+    weReadClock_.skipTo(nowMs);
+  }
+  if (!weReadClock_.tickDue(nowMs)) return;
+  weReadClock_.markTick(nowMs);
+  flushWeReadPendingSeconds();
+  kickWeReadTimeSync();
+}
+
+void EpubReaderActivity::kickWeReadTimeSync() {
+  if (!weReadTracking_ || !wereadBookId_[0] || !epub) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (weread_time_sync::busy()) return;
+  const uint32_t pending = weread_time_sync::pendingSeconds(wereadBookId_);
+  if (pending < weread_time_sync::kMinUploadSeconds) return;
+
+  const int currentPage = section ? section->currentPage : nextPageNumber;
+  const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
+  const float chapterFraction =
+      totalPages > 1 ? static_cast<float>(currentPage) / static_cast<float>(totalPages - 1) : 0.0f;
+  const float localFraction = epub->calculateProgress(currentSpineIndex, chapterFraction);
+  const auto context =
+      WeReadProgressSyncActivity::makeContext(*epub, wereadBookId_, localFraction, getCurrentPosition());
+  WeReadClient::ProgressSyncInput input;
+  input.localFraction = context.localFraction;
+  input.localTocIndex = context.localTocIndex;
+  input.localOffset = context.localOffset;
+  input.localOffsetBasis = context.localOffsetBasis;
+  input.readingSeconds = pending > 3600 ? 3600 : pending;
+  if (weread_time_sync::kick(wereadBookId_, input)) {
+    LOG_INF("WRSync", "time sync queued: %u second(s)", static_cast<unsigned>(input.readingSeconds));
+  }
+}
+
 bool EpubReaderActivity::launchWeReadSync() {
   if (!wereadBookId_[0]) return false;
 
@@ -3387,6 +3521,9 @@ bool EpubReaderActivity::launchWeReadSync() {
   const float localFraction = epub->calculateProgress(currentSpineIndex, chapterFraction);
   const CrossPointPosition localPosition = getCurrentPosition();
   std::string savedEpubPath = epub->getSourcePath();
+
+  // Flush accumulated seconds first so the sync request can carry them.
+  flushWeReadPendingSeconds();
 
   if (!saveProgress(currentSpineIndex, currentPage, totalPages)) {
     LOG_ERR("WRSync", "Aborting sync because current progress could not be saved");
@@ -3645,6 +3782,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (fontPromptState != FontPromptState::Idle) {
     overlayPopup.processRender(renderer, mappedInput);
   }
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  if (signInReminder_.processRender(renderer, mappedInput)) return;
+#endif
 }
 
 bool EpubReaderActivity::skipLoopDelay() {
@@ -6283,6 +6423,12 @@ void EpubReaderActivity::debugConfirm() {
   if (overlay == Overlay::Text && panelIndex >= 1 && panelIndex <= 4) {
     showTextRowPopup(panelIndex);
     requestUpdate();
+  }
+}
+
+void EpubReaderActivity::debugSync() {
+  if (!launchKOReaderSync()) {
+    LOG_ERR("KOSync", "debug sync ignored: no credentials configured");
   }
 }
 

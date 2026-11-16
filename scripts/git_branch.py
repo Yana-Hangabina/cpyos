@@ -108,6 +108,12 @@ def inject_version(env):
     short_sha = get_git_short_sha(project_dir)
     if pioenv in ('default', 'sticky'):
         version_string = f'{base_version}-dev-{get_git_branch(project_dir)}-{short_sha}'
+    elif pioenv in ('eego_a4', 'metalio_eink4'):
+        # These panels have no hardware acceptance yet; carry that in the
+        # version string so About/OTA and a serial log cannot present a
+        # build-only image as validated.
+        device = pioenv.replace('_', '-')
+        version_string = f'{base_version}-{device}-untested+{short_sha}'
     else:
         device = pioenv.replace('_', '-')
         version_string = f'{base_version}-{device}-rc+{short_sha}'

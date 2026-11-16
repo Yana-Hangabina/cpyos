@@ -60,6 +60,12 @@ const char* displayControllerName(const BoardConfig::DisplayController c) {
       return "UC8179";
     case BoardConfig::DisplayController::UC8279C:
       return "UC8279C";
+#if defined(CROSSPOINT_PLUS_PORT)
+    // The shared freeink-sdk has no epdiy controller; the Metalio Plus port
+    // supplies its own compat BoardConfig with this enum value.
+    case BoardConfig::DisplayController::Epdiy:
+      return "epdiy EPD";
+#endif
   }
   return "?";
 }
@@ -78,6 +84,10 @@ const char* touchControllerName(const BoardConfig::TouchController c) {
       return "FT6336U";
     case BoardConfig::TouchController::Gslx680:
       return "GSLX680";
+    case BoardConfig::TouchController::Cst816s:
+      return "CST816S";
+    case BoardConfig::TouchController::Cst836u:
+      return "CST836U";
   }
   return nullptr;
 }

@@ -17,6 +17,7 @@ inline std::string corruptOnFlush;
 inline size_t writeLimit = SIZE_MAX;
 inline size_t bytesWritten = 0;
 inline bool failRecents = false;
+inline bool libraryDirty = false;
 }  // namespace guide_test
 
 class HalFile {

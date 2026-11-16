@@ -22,6 +22,12 @@
 #include "ReaderFontPreview.h"
 #include "ReaderPageCache.h"
 #include "ReaderToolbarUi.h"
+#ifdef ENABLE_CHINESE_VERSION
+#include "activities/apps/weread/WeReadTimeSync.h"
+#endif
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+#include "JjwxcSignInReminderPopup.h"
+#endif
 #include "components/OptionPopup.h"
 #ifdef BOARD_HAS_PSRAM
 #include "booksource/PsramAllocator.h"
@@ -149,6 +155,15 @@ class EpubReaderActivity final : public ReaderActivity {
   char wereadBookId_[64] = {};
   bool clearInitialProgressAfterSave_ = false;
   bool maybeOfferCompleteChineseFont();
+  // Effective reading-time accounting for WeRead progress sync. The clock only
+  // accumulates; whole seconds are flushed to the per-book ledger on a 30 s
+  // cadence and on exit, which keeps the upload idempotent across sessions.
+  weread_time_sync::ReadingClock weReadClock_;
+  uint64_t weReadLastSampleMs_ = 0;
+  bool weReadTracking_ = false;
+  void trackWeReadTime();
+  void flushWeReadPendingSeconds();
+  void kickWeReadTimeSync();
 #endif
 
   // Toolbar reader menu (SETTINGS.readerMenuStyle == READER_MENU_TOOLBAR): drawn
@@ -747,7 +762,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // Serial soak hook: press Confirm on the focused panel cell (the Text grid
   // uses this to open its value pickers without a touch panel).
   void debugConfirm() override;
+  void debugSync() override;
   void debugOpenPhraseSelection() override;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+  // Daily check-in reminder over the reading surface; checked once per reader
+  // entry, but the shared JSGN date gate is what limits it to once a day.
+  jjwxc_signin::ReminderPopup signInReminder_;
+  bool signInReminderChecked_ = false;
+#endif
   void debugDismissHint() override;
   void debugOpenJjwxcComment() override;
   void debugOpenFakeJjwxcComment() override;

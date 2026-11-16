@@ -4,6 +4,7 @@
 #include <Epub.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 
 #include <algorithm>
@@ -14,8 +15,11 @@
 
 namespace UserGuide {
 namespace {
-constexpr const char* CHECKED_PATH = "/.crosspoint/user-guide.checked";
-constexpr const char* CHECKED_TEMP_PATH = "/.crosspoint/user-guide.checked.tmp";
+// CPYOS keeps its own marker: a device that already ran CrossMux still gets the
+// CPYOS guide exactly once on its first CPYOS boot. Later firmware updates never
+// write the book again, even if the bundled bytes change.
+constexpr const char* CHECKED_PATH = "/.crosspoint/cpyos-user-guide.checked";
+constexpr const char* CHECKED_TEMP_PATH = "/.crosspoint/cpyos-user-guide.checked.tmp";
 constexpr const char* EPUB_TEMP_PATH = "/.crosspoint/user-guide.epub.tmp";
 constexpr uint8_t CHECKED[] = {'1', '\n'};
 constexpr size_t CHUNK_SIZE = 256;
@@ -63,42 +67,52 @@ bool markChecked() {
   return true;
 }
 
-bool hasValidRecent() {
-  const auto& books = RECENT_BOOKS.getBooks();
-  return std::any_of(books.begin(), books.end(),
-                     [](const RecentBook& book) { return !book.path.empty() && !RecentBooksStore::isMissing(book); });
-}
-
 void install(const bool simplifiedChinese) {
-  if (hasValidRecent()) {
-    markChecked();
-    return;
-  }
-  const auto& asset = simplifiedChinese ? bundled_user_guide::Chinese : bundled_user_guide::English;
-  if (Storage.exists(asset.path)) {
-    switch (compareFile(asset.path, asset.data, asset.size)) {
+  const auto& selected = simplifiedChinese ? bundled_user_guide::Chinese : bundled_user_guide::English;
+  const auto& other = simplifiedChinese ? bundled_user_guide::English : bundled_user_guide::Chinese;
+  const bundled_user_guide::Asset* asset = nullptr;
+  if (Storage.exists(selected.path)) {
+    switch (compareFile(selected.path, selected.data, selected.size)) {
       case FileMatch::ReadError:
         LOG_ERR("GUIDE", "Cannot read existing guide; retry on next boot");
         return;
       case FileMatch::Different:
-        LOG_INF("GUIDE", "Preserving existing file: %s", asset.path);
+        LOG_INF("GUIDE", "Preserving existing file: %s", selected.path);
         markChecked();
         return;
       case FileMatch::Equal:
-        break;  // Resume after a previous boot installed the file but not its recent entry.
+        asset = &selected;  // Resume after a previous boot installed the file but not its recent entry.
+        break;
     }
-  } else if (!writeVerified(EPUB_TEMP_PATH, asset.data, asset.size) || !Storage.rename(EPUB_TEMP_PATH, asset.path)) {
-    LOG_ERR("GUIDE", "Failed to install guide; retry on next boot");
-    return;
+  } else {
+    // An interrupted marker write can leave the other language's guide installed.
+    // Reuse it instead of writing a second guide in the newly selected language.
+    if (Storage.exists(other.path) && compareFile(other.path, other.data, other.size) == FileMatch::Equal) {
+      asset = &other;
+    } else {
+      if (!writeVerified(EPUB_TEMP_PATH, selected.data, selected.size) ||
+          !Storage.rename(EPUB_TEMP_PATH, selected.path)) {
+        LOG_ERR("GUIDE", "Failed to install guide; retry on next boot");
+        return;
+      }
+      asset = &selected;
+    }
   }
 
   // Epub derives the standard cache path without parsing the archive. Fixed asset
   // paths/cache strings are each <64 bytes (including the 64-bit host hash). These
   // cold-path strings reuse the Epub/recents APIs; no metadata/ZIP buffers are allocated.
-  const Epub epub(asset.path, "/.crosspoint");
-  if (!RECENT_BOOKS.addBook(asset.path, asset.title, "CrossMux", epub.getThumbBmpPath())) {
+  // addBook() de-duplicates and moves an existing entry to the front, so the guide
+  // becomes the first "Continue reading" card only on this first CPYOS boot.
+  const Epub epub(asset->path, "/.crosspoint");
+  if (!RECENT_BOOKS.addBook(asset->path, asset->title, asset->author, epub.getThumbBmpPath())) {
     LOG_ERR("GUIDE", "Failed to save guide in recents; retry on next boot");
     return;
+  }
+  // The card may already have books, so the library index may predate this file.
+  // One rebuild makes the guide visible in the Library without touching recents again.
+  if (!library::markLibraryIndexDirty()) {
+    LOG_ERR("GUIDE", "Failed to mark the library index dirty");
   }
   markChecked();
 }
@@ -109,10 +123,6 @@ void prepare(const bool recentsLoaded) {
   if (Storage.exists(CHECKED_PATH)) return;
   if (!recentsLoaded && Storage.exists(RecentBooksStore::getFilePath())) {
     LOG_ERR("GUIDE", "Unreadable recents; skipping first-use check");
-    return;
-  }
-  if (hasValidRecent()) {
-    markChecked();
     return;
   }
   state = State::Pending;

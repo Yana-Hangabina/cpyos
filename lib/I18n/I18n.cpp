@@ -4,7 +4,7 @@
 #include <cstring>
 
 #include "I18nOffsetBuilder.h"
-#include "I18nStrings.h"
+#include <I18nStrings.h>
 
 // Same guard as I18nPack.cpp and WebAssets.cpp: the pack path allocates into
 // PSRAM and reads a data partition, so a target without PSRAM must not select

@@ -1,0 +1,18 @@
+# Metalio E-INK4 Plus (ESP32-S31, 16 MiB) — CPYOS layout WITH OTA.
+#
+# Identical to ../../../partitions_readpico.csv on purpose: both boards are
+# 16 MiB, and sharing the table keeps the OTA slot sizes, the spiffs pack
+# offsets and the release manifests the same. The 6.375 MiB app slots follow the
+# UI font subset; the 3 MiB data partition carries the compressed reading core
+# at +0x180000, released to SD on first boot.
+#
+# The legacy partitions.csv in this directory is a single 10 MiB app with no
+# ota_1; it cannot OTA and must not be used for the product image.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x660000,
+app1,     app,  ota_1,   0x670000,0x660000,
+spiffs,   data, spiffs,  0xCD0000,0x320000,
+coredump, data, coredump,0xFF0000,0x10000,

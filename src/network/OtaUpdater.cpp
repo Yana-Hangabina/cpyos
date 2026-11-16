@@ -295,6 +295,15 @@ bool writePackFromFile(const esp_partition_t* partition, const char* path, const
 }  // namespace
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate(const Channel requestedChannel) {
+#if defined(CPYOS_OTA_DISABLED)
+  // This port has no release channel: the only manifests on the network target
+  // Read Pico (ESP32-S3) builds, and installing one on this SoC would brick the
+  // device. Report "wrong device" (the UI already has that message) and never
+  // open a download.
+  (void)requestedChannel;
+  LOG_INF("OTA", "OTA is disabled on this port (no release channel before hardware validation)");
+  return WRONG_DEVICE_ERROR;
+#endif
   channel = requestedChannel;
   packsLoaded = false;
   packCount = 0;
@@ -635,6 +644,13 @@ bool OtaUpdater::checkPackUpdates() {
 }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installDataPacks(ProgressCallback onProgress, void* ctx, const bool required) {
+#if defined(CPYOS_OTA_DISABLED)
+  (void)onProgress;
+  (void)ctx;
+  (void)required;
+  LOG_ERR("OTA", "refusing to install data packs: OTA is disabled on this port");
+  return WRONG_DEVICE_ERROR;
+#endif
   if (!packsLoaded) {
     const auto result = loadPackManifest();
     if (result != OK) {
@@ -744,6 +760,12 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installDataPacksOnly(ProgressCallback on
 }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgress, void* ctx) {
+#if defined(CPYOS_OTA_DISABLED)
+  (void)onProgress;
+  (void)ctx;
+  LOG_ERR("OTA", "refusing to install: OTA is disabled on this port");
+  return WRONG_DEVICE_ERROR;
+#endif
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }

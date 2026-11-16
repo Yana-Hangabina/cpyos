@@ -17,6 +17,9 @@ class ReadingStatsMenuActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // Serial coverage hooks (the cards are a hand-drawn grid, not a UiList).
+  void debugSelect(int index) override;
+  void debugConfirm() override;
 
  private:
   void openSelected();

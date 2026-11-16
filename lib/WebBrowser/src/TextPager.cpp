@@ -98,7 +98,7 @@ bool noBreakAfter(const uint32_t cp) {
 }
 
 bool canBreakBetween(const uint32_t previous, const uint32_t cp) {
-  if (cp == ' ') return true;
+  if (cp == ' ' || cp == 0xA0) return true;
   if (noBreakBefore(cp) || noBreakAfter(previous)) return false;
   if (isCjk(previous) || isCjk(cp)) return true;
   return previous == '-' || previous == '/';

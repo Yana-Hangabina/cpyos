@@ -107,10 +107,50 @@ touched.
 8. No `[ERR]` in the session; `refresh_soak.py` unaffected (the app is not
    part of that suite).
 
+## Reader display settings
+
+Reading pages follow the reader's display settings instead of inventing their
+own:
+
+- **Fast page turn** (`SETTINGS.fastPageTurn`): the page is rendered B/W and
+  pushed through `DisplayRefreshContext::ContinuousReading` with
+  `GfxRenderer::setExperimentalReaderDu(true)`, i.e. the same single-phase DU
+  profile as the fast reader. The reader's 25 % B/W thresholds are applied
+  while the page is drawn. The periodic cadence can still promote a due page to
+  GC16, and the counters are consumed only by a real page turn.
+- **Water-ripple turn** (`SETTINGS.pageTurnEffect`): a sequential page turn
+  records its direction and the next page commit hands it to
+  `GfxRenderer::setPageTurnDirection()`. Initial paints, menus, notices and URL
+  changes clear the request; they are not turns.
+- Leaving the browser restores the renderer's default thresholds, clears the
+  page-turn direction and drops the DU experiment, so the next activity does
+  not inherit reader-only display state.
+
+## Text integrity
+
+- HTML Unicode spaces (U+00A0 and the U+2000–U+200A / U+202F / U+205F family)
+  are folded to ASCII spaces in `HtmlScanner`. The system font deliberately
+  omits them; a single `&nbsp;` used to make `resolveTextFontId()` drop the
+  whole line to the 8pt emergency face, which shrank footer navigation and
+  stranded link underlines in empty space.
+- `resolveTextFontId()` ignores zero-ink codepoints when counting missing
+  glyphs. A missing whitespace must never demote a line; this also protects
+  other invisible format characters from becoming a font-size bug.
+- A page line resolves its face once; `drawText()` and every per-link
+  `measureRange()` use that same id, so underlines cannot be measured with a
+  different fallback than the text.
+- Pagination and chapter-navigation containers (`pagination*`, `pager*`,
+  `chapter-nav`, `page-nav`, `prev-next`, …) are treated as reading controls
+  rather than chrome. Site-level `nav`/`footer`/`sidebar` and an article's
+  `article-nav` (adjacent articles/books, not chapter pages) are still removed.
+- Image-only anchors use their `alt` (or `title`) as the visible label, and an
+  anchor with no text and no label is dropped instead of drawing a zero-width
+  underline.
+
 ## Known limitations
 
-- Body text is drawn 1-bit with `UI_10`; it does not use the reader's 16-level
-  AA path yet. Body font size follows the UI font, not the reader setting.
+- Fast page turn is B/W by definition; the 16-level anti-aliased path is the
+  normal (non-fast) reading page.
 - A line may be a few pixels wider than measured when per-glyph fallback
   changes face mid-line; the content clip and a 6 px safety margin absorb it.
 - Heading lines are measured regular and drawn bold, so they can be clipped at
