@@ -256,8 +256,12 @@ jobs:
             PRERELEASE=(--prerelease)
           fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A combined cpyos-X.Y.Z release already carries the Read Pico notes;
+            # only a standalone plus tag owns the body.
             gh release upload "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" --clobber
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
+            if [[ "$TAG" == cpyos-plus-* ]]; then
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
+            fi
           else
             gh release create "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" \
               "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
