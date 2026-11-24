@@ -201,9 +201,9 @@ handles the Plus release path:
   `X.Y.Z-plus-testN`). Do not use the Read Pico `cpyos-X.Y.Z` tag for a Plus
   image. CloudZao is used only by the Plus; Read Pico keeps its own
   `OtaUpdater`/GitHub-Pages manifest path and is untouched by this workflow.
-- Required secret: `CLOUDZAO_RESOURCE_KEY` (written to the gitignored
-  `plus_resource_key.local` before configure; the same key is embedded for the
-  device OTA query).
+- No device-side secret is written: the partner API needs only the public
+  `integrationId`/`firmwareId` from `plus_cloudzao_ids.h`, so the workflow no
+  longer injects `plus_resource_key.local`.
 - Publishing credentials: `CLOUDZAO_ACCESS_TOKEN` preferred, or
   `CLOUDZAO_EMAIL` + `CLOUDZAO_PASSWORD`. Optional variables:
   `CLOUDZAO_FIRMWARE_ID`, `CLOUDZAO_HARDWARE_MODEL_ID`,

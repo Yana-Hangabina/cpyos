@@ -10,10 +10,10 @@
 //   {"chip_model_name":"esp32s3","board":{"type":"Metalio E-Ink4 Plus"},
 //    "application":{"name":"脆皮鸭CPYOS"}}
 //
-// The developer resource key is the same credential used by the resource
-// popup; it is read from PLUS_RESOURCE_KEY / /.crosspoint/resource_key and is
-// never logged. The response's has_update means "a firmware exists", so the
-// client compares firmware.version with the running app version itself.
+// The partner API needs no secret: the request carries the public
+// integrationId/firmwareId. The response's has_update means "a firmware
+// exists", so the client compares firmware.version with the running app version
+// itself.
 //
 // The firmware is downloaded to the card and then written by the same
 // firmware_flash path the SD update page uses (validated image, inactive OTA

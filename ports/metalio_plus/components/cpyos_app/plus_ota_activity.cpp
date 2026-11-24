@@ -124,7 +124,7 @@ bool PlusOtaActivity::ensureWifi() {
 void PlusOtaActivity::startJob(const Job job) {
   if (worker_ != nullptr) return;
   if (!plus_ota::configured() && job == Job::Check) {
-    setError("此构建未配置开发者资源密钥（plus_resource_key.local）");
+    setError("此构建未配置 CloudZao 产品标识");
     return;
   }
   if (!ensureWifi()) {

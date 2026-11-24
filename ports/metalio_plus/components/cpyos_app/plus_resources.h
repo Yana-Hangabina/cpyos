@@ -15,11 +15,9 @@
 //   POST   /xiaozhi/api/firmware-resources/push-resources/next
 //   DELETE /xiaozhi/api/firmware-resources/push-resources
 //   POST   /xiaozhi/api/firmware-ota/check  (plus_ota.cpp)
-// The developer key is sent as X-Resource-Key; it is never logged. The key is
-// read from PLUS_RESOURCE_KEY (injected from the gitignored
-// plus_resource_key.local) or, when that is absent, from
-// /.crosspoint/resource_key on the SD card. The same key now authenticates the
-// community firmware OTA query; there is no separate X-OTA-Key.
+// Device calls carry no secret: integrationId/firmwareId are public identifiers
+// and the partner API issues per-device tokens after mini-program pairing. There
+// is no X-Resource-Key, X-OTA-Key or access-token file any more.
 
 namespace plus_resources {
 

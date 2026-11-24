@@ -198,20 +198,6 @@ idf_component_register(
              espressif__esp_websocket_client espressif__cjson 78__esp-opus-encoder 78__esp-opus
              esp_psram nvs_flash esp_hw_support)
 
-# Developer resource key (CloudZao). Protocol 1.1 uses this one credential for
-# the resource popup and the community firmware OTA check (X-Resource-Key); there
-# is no separate X-OTA-Key on the Plus. Kept in a gitignored file so it is never
-# committed or logged.
-set(PLUS_RESOURCE_KEY_FILE "${CMAKE_CURRENT_LIST_DIR}/plus_resource_key.local")
-if(EXISTS "${PLUS_RESOURCE_KEY_FILE}")
-    file(READ "${PLUS_RESOURCE_KEY_FILE}" PLUS_RESOURCE_KEY_VALUE)
-    string(STRIP "${PLUS_RESOURCE_KEY_VALUE}" PLUS_RESOURCE_KEY_VALUE)
-    if(PLUS_RESOURCE_KEY_VALUE)
-        message(STATUS "CPYOS Plus: developer resource key loaded from plus_resource_key.local")
-        target_compile_definitions(${COMPONENT_LIB} PRIVATE PLUS_RESOURCE_KEY="${PLUS_RESOURCE_KEY_VALUE}")
-    endif()
-endif()
-
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     ARDUINO=10800
     CPYOS_PLUS_VENDOR_OTA=1
