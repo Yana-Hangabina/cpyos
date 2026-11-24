@@ -141,7 +141,7 @@ def check_image(root, path, target, release):
     return blob, desc, notes
 
 
-def check_data_manifest(root):
+def check_data_manifest(root, partitions=None, no_core=False):
     """The blobs described by build/data_manifest.txt must be the blobs on disk."""
     manifest = root / 'build' / 'data_manifest.txt'
     if not manifest.is_file():
@@ -170,8 +170,15 @@ def check_data_manifest(root):
     # blob check above is what they exercise.
     generator = root / 'scripts' / 'generate_data_manifest.py'
     if generator.is_file():
-        check = subprocess.run([sys.executable, str(generator), '--check', '--repo', str(root)],
-                               capture_output=True, text=True)
+        command = [sys.executable, str(generator), '--check', '--repo', str(root)]
+        # The staleness test must use the same layout the manifest was generated
+        # with; the XIP builds use partitions_readpico_xip.csv and omit the UI
+        # font core that rides inside app0.
+        if partitions:
+            command += ['--partitions', partitions]
+        if no_core:
+            command += ['--no-core']
+        check = subprocess.run(command, capture_output=True, text=True)
         if check.returncode != 0:
             detail = (check.stderr or check.stdout).strip().splitlines()
             fail('build/data_manifest.txt is stale (' + (detail[-1] if detail else 'no output') +
@@ -375,6 +382,9 @@ def main(argv=None):
     parser.add_argument('--dist', help='packaged output directory to verify as well')
     parser.add_argument('--release', action='store_true', help='reject a -dirty image')
     parser.add_argument('--no-data', action='store_true', help='skip the data manifest/blob check')
+    parser.add_argument('--partitions', help='partition csv the data manifest was generated with '
+                                             '(default: the generator\'s own default)')
+    parser.add_argument('--no-core', action='store_true', help='manifest omits the UI font core blob')
     parser.add_argument('--pdf-firmware', help='readpico_pdf firmware.bin whose ELF must match '
                                               'the staged site/pdf-engine image')
     args = parser.parse_args(argv)
@@ -390,7 +400,7 @@ def main(argv=None):
     image_sha = hashlib.sha256(blob).hexdigest()
 
     if not args.no_data:
-        notes += check_data_manifest(root)
+        notes += check_data_manifest(root, args.partitions, args.no_core)
     if args.dist:
         notes += check_dist(Path(args.dist), args.target, target, image_sha, blob)
     notes += check_pdf_engine(root, args.pdf_firmware, bool(args.pdf_firmware))
