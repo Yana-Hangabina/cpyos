@@ -1,3 +1,15 @@
+> **2026-11-24 迁移（当前实现）**：CloudZao 已退役旧的
+> `admin.metalio.world/xiaozhi/api/firmware-ota/check` 与
+> `/firmware-resources/*`（实测 HTTP 410 `partner_api_retired`）。
+> 设备 OTA 和资源现在使用
+> `https://claw.cloudzao.cn/xiaozhi/api/partner/v1`：
+> `POST /updates/check`（`integrationId`/`firmwareId`/`currentVersion`）、
+> `POST /pairings`（六位码）、`POST /device-tokens`（轮询/刷新）、
+> `GET /deliveries` 和 `POST /deliveries/<id>/acknowledgements`。
+> **不再使用 `X-Resource-Key` 调这些设备接口**；`integrationId`/`firmwareId`
+> 是公开标识，编进 BIN。站点上传仍用邮箱/密码登录（不需要 `CLOUDZAO_ACCESS_TOKEN`）。
+> 下文旧接口说明仅保留作迁移历史。
+
 # Plus developer resources (CloudZao)
 
 Status: implemented, build/flash-verified, and the live API was exercised with
@@ -5,79 +17,60 @@ the real key and the device's station MAC on 2026-11-17 (`/next` returned
 `code=0` with the mini-program's pushed wallpapers). The remaining pass is the
 on-device UI walk-through (open the page, download one item, confirm the ack).
 
-## Credential
+## Credentials (partner API)
 
-CloudZao protocol 1.1 uses **one** developer resource key for the resource
-popup and the community firmware OTA query:
+Device-facing calls need **no secret**. `integrationId` and `firmwareId` are
+public identifiers compiled into the image
+(`components/cpyos_app/plus_cloudzao_ids.h`); the partner API issues per-device
+tokens after the user completes the mini-program pairing.
 
-| Credential | Header | Purpose |
+| Credential | Where it lives | Purpose |
 |---|---|---|
-| Developer resource key | `X-Resource-Key` | Device binding code, book/badge/font list, download acknowledgement, community OTA check |
+| `integrationId`, `firmwareId` | compiled constants (public) | identify the product on every device call |
+| access / refresh token | `/.crosspoint/cloudzao.json` on the card | `Authorization: Bearer` for deliveries and acks |
+| pairing `activationCode` + `deviceCode` | shown on screen, posted to `/pairings` | bind this device once |
 
-The old `X-OTA-Key` / `plus_ota_key.local` path is no longer used on the Plus.
+The token file is obfuscated at rest (XOR + base64 with the device MAC, the same
+scheme as the JJWXC cookie jar and Wi-Fi credentials) and is never logged: logs
+carry only lengths, HTTP status codes and business codes. Tokens are refreshed
+before expiry (`POST /device-tokens/refresh`); a `401/403` invalidates them and
+the page asks for a new pairing.
 
-The resource key is kept outside Git:
+The old `X-Resource-Key` / `plus_resource_key.local` path and
+`CLOUDZAO_ACCESS_TOKEN` for the site are **retired**. No key is embedded in the
+image any more, so a published binary carries no credential.
 
-`ports/metalio_plus/components/cpyos_app/plus_resource_key.local`
+## Protocol used (partner API)
 
-- Ignored by the root `.gitignore` (`*.local*`).
-- Mode `0600`.
-- Injected by `components/cpyos_app/CMakeLists.txt` as `PLUS_RESOURCE_KEY`.
-- Never printed by the firmware. Logs contain only the key **source** and
-  length (`RES ... key ... chars`), never the value.
-- Building with the key embeds it in the firmware image. Treat any image built
-  with `plus_resource_key.local` as a credential-bearing artifact; rotate the
-  key if it leaves your control.
-- For rotation without a rebuild, a valid `mpr_...` key can also be placed at
-  `/.crosspoint/resource_key` on the card. The SD key is used only when the
-  compiled key is absent or malformed.
-
-Do not commit the local file, paste the key into a report/log, or put it in a
-download URL. The CloudZao service key and OTA key have independent lifecycles.
-
-## Protocol used
-
-Base: `https://admin.metalio.world/xiaozhi`
+Base: `https://claw.cloudzao.cn/xiaozhi/api/partner/v1`
 
 | Operation | Request |
 |---|---|
-| Community OTA check | `POST /api/firmware-ota/check` with `X-Resource-Key`, `Device-Id`, JSON `board/type + chip_model_name + application/name`; optional `X-OTA-Channel: test` |
-| Binding / activation code | `POST /api/firmware-resources/ota` with `X-Resource-Key`, `Device-Id`, JSON `application.version` |
-| Pending resources | `POST /api/firmware-resources/push-resources/next` with `X-Resource-Key`, `Device-Id` |
-| Download acknowledgement | `DELETE /api/firmware-resources/push-resources` with JSON `{"taskId":"..."}` |
+| Bi-device pairing | `POST /pairings` `{integrationId, firmwareId, hardwareId}` → `activationCode`, pairing expiry, poll interval |
+| Poll pairing / token exchange | `POST /device-tokens` `{pairingId, deviceCode}` → `409` pending, `410` expired, `429` slow down; success returns access/refresh tokens and expiries |
+| Refresh | `POST /device-tokens/refresh` `{refreshToken}` |
+| Pending resources | `GET /deliveries` with the bearer token |
+| Acknowledgement | `POST /deliveries/<id>/acknowledgements` (2xx/204 = acked) |
 
-The list and ack responses use `code == 0` for business success even when HTTP is
-200. The binding endpoint uses upstream raw JSON and places the code at
-`activation.code` (six digits, string). A missing `activation.code` means the
-device may already be bound; it does not by itself prove that resource queries
-will succeed.
+`hardwareId` is the Wi-Fi station MAC in lowercase `aa:bb:cc:dd:ee:ff`
+(`plus_resources::deviceId()`), and it is the identity the mini-program binds.
+The factory/base eFuse MAC differs on ESP32-S31 (bench unit: base + 4); sending
+it yields `500 设备不存在或尚未绑定用户` even though the binding is fine.
 
-### Device identity: use the Wi-Fi station MAC
+Business answers are HTTP status codes; there is no `code:0` envelope:
 
-The vendor firmware and the mini-program bind a device by its **Wi-Fi station
-MAC** (`esp_read_mac(..., ESP_MAC_WIFI_STA)`), not by `esp_efuse_mac_get_default()`.
-On ESP32-S31 these are different: the factory/base MAC and the station MAC can
-differ by several addresses (the bench unit's station MAC is base + 4). Sending
-the base MAC to `/push-resources/next` produced this exact live response:
+| HTTP | Meaning in `plus_resources` |
+|---|---|
+| 200 | success |
+| 404 / 409 / 410 | not found / conflict / pairing expired |
+| 401 / 403 | token invalid → re-pair |
+| 429 | rate limited; wait the advertised interval |
+| 5xx | server error; retry later, never in a tight loop |
 
-```
-code=500 msg="设备不存在或尚未绑定用户"
-```
-
-while the same key and request with the station MAC returned `code=0` and the
-mini-program's pushed wallpapers. This was the root cause of “the mini-program
-says bound, the device still says Bind device”; the binding itself was fine.
-`plus_ota::deviceId()` now uses the station MAC for both `Device-Id` and
-`Client-Id` and the vendor board type `metalio-e-ink4-plus`.
-
-Do not “fix” an unbound answer by retrying a different number of MAC addresses:
-read the real station MAC. `Device-Id` and `Client-Id` must be consistent.
-
-Files are downloaded from the **signed URL returned in the list**, without
-`X-Resource-Key` or `Device-Id`. The firmware downloads to a temporary file,
-checks the advertised size and SHA-256, atomically replaces the destination, and
-only then sends the acknowledgement. An acknowledgement failure leaves the file
-in place and marks the row as not acknowledged; tapping it again reuses the
+Downloaded files come from the signed URL in the delivery, without any header.
+The firmware writes a temporary file, checks the advertised size and SHA-256,
+atomically replaces the destination, and only then acks. An ack failure keeps
+the file and marks the row as not acknowledged; tapping it again reuses the
 verified file and retries only the ack.
 
 ## Destinations and formats
@@ -150,43 +143,29 @@ If the list returns `code=401`, the key is invalid/rotated; do not retry in a
 loop. If it reports an unbound device, generate a new binding code and complete
 the platform binding first.
 
-## Community firmware OTA query (protocol 1.1)
+## Community firmware OTA query (partner API)
 
-`plus_ota.cpp` now uses the same developer resource key and the documented
-request shape:
+`plus_ota.cpp` posts the public identifiers; no key, no channel header, no
+device MAC:
 
 ```http
-POST https://admin.metalio.world/xiaozhi/api/firmware-ota/check
-X-Resource-Key: <developer resource key>
-Device-Id: <Wi-Fi station MAC>
+POST https://claw.cloudzao.cn/xiaozhi/api/partner/v1/updates/check
 Content-Type: application/json
 
-{"board":{"type":"Metalio E-Ink4 Plus"},"chip_model_name":"esp32s3",
- "application":{"name":"脆皮鸭CPYOS"}}
+{"integrationId":"<public>","firmwareId":"<public>","currentVersion":"0.8.0-e4p"}
 ```
 
-- The platform registers this product under the **vendor** board name
-  `Metalio E-Ink4 Plus` and chip model `esp32s3`; the silicon is ESP32-S31 but
-  the OTA service matches the registered board row.
-- `application.version` is deliberately **omitted**: including it turns the
-  query into an exact-version lookup. Without it the service returns the
-  highest reviewed stable version, or the highest stable/test version when
-  `X-OTA-Channel: test` is sent.
-- A successful response always has `has_update: true`; it means “a firmware
-  record exists”, not “it is newer than the device”. `plus_ota` compares
-  `firmware.version` with `esp_app_desc.version` (numeric components, with a
-  prerelease suffix rule) before offering an install.
-- Fields parsed: `firmware.version`, `firmware.url`, `firmware.size`,
-  `firmware.firmware_name`, `firmware.version_status`, `firmware.remark`,
-  `firmware.firmware_id`, `firmware.version_id`, and `product.name`.
-- Live probe with the real key on 2026-11-18 (test channel):
-  `firmware.version = 0.3.1-plus-test1`, `version_status = test`,
-  `size = 7,490,960`, `firmware_name = 脆皮鸭CPYOS`. The stable channel returns
-  404 until a stable version is published; that is a normal “no stable release”
-  answer, not an auth failure.
-- `X-OTA-Key` / `plus_ota_key.local` is no longer used. If the key is absent the
-  page says the build has no developer resource key; it does not make an
-  unauthenticated request.
+- `currentVersion` is `esp_app_desc.version`; the service answers with the
+  release it would serve this product.
+- Response `updateAvailable` plus `release.version` / `downloadUrl` /
+  `sizeBytes`. `plus_ota` still compares `release.version` with the running
+  version itself (numeric parts, prerelease suffix ordering) and refuses an
+  image larger than the inactive OTA slot.
+- A 404 means “no firmware published for this product/channel”, not an auth
+  failure. There is no `X-OTA-Channel` any more: test builds are published as a
+  separate version and chosen by the service, not by a header.
+- Install path is unchanged: download to the card, validate, write the inactive
+  slot through `firmware_flash` and switch otadata.
 
 ### Publishing a Plus release
 
