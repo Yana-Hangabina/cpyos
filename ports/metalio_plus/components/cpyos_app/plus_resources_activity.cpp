@@ -936,7 +936,11 @@ bool PlusResourcesActivity::handleBindGuideInput() {
     return true;
   }
   if (tapped && hit(bind_retry_rect_, tapX, tapY)) {
+    // "重试" must produce a NEW code: the old one may already be dead on the
+    // platform even though this device still polls it.
+    plus_resources::discardPairing();
     bind_guide_ = false;
+    retry_pairing_ = false;
     startBind();
     return true;
   }

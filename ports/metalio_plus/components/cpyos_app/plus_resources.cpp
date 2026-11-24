@@ -528,6 +528,16 @@ const char* keyValue() { return ""; }
 const char* deviceId() { return plus_ota::deviceId(); }
 const char* currentVersion() { return plus_ota::currentVersion(); }
 
+void discardPairing() {
+  loadTokens();
+  g_tokens.device_code.clear();
+  g_tokens.activation_code.clear();
+  g_tokens.pairing_exp = 0;
+  g_tokens.last_poll_ms = 0;
+  saveTokens();
+  resLog("pairing discarded");
+}
+
 BindResult bindDevice() {
   BindResult result;
   loadTokens();
@@ -583,7 +593,9 @@ BindResult bindDevice() {
       result.code = g_tokens.activation_code;
       return result;
     }
-    if (r.status == 410) {
+    if (r.status == 410 || r.status == 404 || r.status == 400) {
+      // The pairing session is gone (consumed/expired/unknown): a fresh code is
+      // the only way forward, so fall through and request one.
       g_tokens.device_code.clear();
       g_tokens.activation_code.clear();
       g_tokens.pairing_exp = 0;

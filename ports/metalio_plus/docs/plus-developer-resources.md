@@ -88,6 +88,24 @@ the client caps the retained list at 48 entries and the response body at 32 KiB.
 
 ## UI and test path
 
+After flashing an app image, also write the data partition so the UI language
+pack, emoji and the reading core match the new offsets:
+
+```bash
+# one command: both app slots + every data blob (including the reading core)
+# add --skip-backup only on a unit whose 16 MiB backup is already verified
+bash ports/metalio_plus/scripts/flash_dev.sh [--port /dev/cu.usbmodemXXXX]
+
+# or separately
+python3 scripts/generate_data_manifest.py \
+    --partitions ports/metalio_plus/partitions_plus_ota.csv \
+    --out build/data_manifest_plus.txt
+python3 ports/metalio_plus/scripts/flash_plus_data.py
+```
+
+An app-only flash leaves the old data layout in place; the device then shows
+missing-glyph prompts and an English-only UI.
+
 - Settings → System → **Device resources** (Plus shell builds only).
 - The page is a status surface first: on entry it quietly checks the server
   (using an already-connected STA, or the last saved network). A successful

@@ -4,7 +4,7 @@
 # 16 MiB, and sharing the table keeps the OTA slot sizes, the spiffs pack
 # offsets and the release manifests the same. The 6.375 MiB app slots follow the
 # UI font subset; the 3 MiB data partition carries the compressed reading core
-# at +0x180000, released to SD on first boot.
+# at +0x15C000, released to SD on first boot.
 #
 # The legacy partitions.csv in this directory is a single 10 MiB app with no
 # ota_1; it cannot OTA and must not be used for the product image.

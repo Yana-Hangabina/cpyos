@@ -85,6 +85,11 @@ const char* keyValue();
 const char* deviceId();
 const char* currentVersion();
 
+// Drop the stored pairing session (deviceCode/activation code) without touching
+// tokens. Used by the guide's "retry": a code that the mini-program already
+// rejected can otherwise be shown forever because the device keeps polling it.
+void discardPairing();
+
 // Blocking; call from a worker task. The caller must ensure the STA link.
 BindResult bindDevice();
 // Blocking; call from a worker task.

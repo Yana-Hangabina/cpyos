@@ -555,6 +555,37 @@ def verify_app_header(port: str, baud: str, offset: int) -> None:
             "while tapping POWER) and restore the 16 MiB backup.")
 
 
+DATA_FILES = ("pinyin.dat", "web_pack.dat", "hyphen.dat", "i18n_pack.dat", "emoji.dat", "cjk_core.dat")
+
+
+def ensure_data_artifacts() -> bool:
+    """Make sure every data blob (including the reading core) exists.
+
+    generate_data_manifest.py builds emoji.dat and cjk_core.dat from the
+    committed sources and writes the manifest the flasher plans from; pinyin,
+    hyphen, i18n and web come from the app build (or the offline generators).
+    Returns False when a required blob is still missing, so a flash never
+    silently leaves the device without the core font.
+    """
+    build = REPO / "build"
+    if all((build / name).exists() for name in DATA_FILES):
+        return True
+    manifest = REPO / "scripts" / "generate_data_manifest.py"
+    if manifest.exists():
+        subprocess.run([sys.executable, str(manifest),
+                        "--partitions", "ports/metalio_plus/partitions_plus_ota.csv",
+                        "--out", "build/data_manifest_plus.txt"], cwd=str(REPO), check=False)
+    missing = [name for name in DATA_FILES if not (build / name).exists()]
+    if missing:
+        print("error: missing data blobs: " + ", ".join(missing), file=sys.stderr)
+        print("build the app first, or run:", file=sys.stderr)
+        print("  python3 scripts/generate_data_manifest.py \\", file=sys.stderr)
+        print("      --partitions ports/metalio_plus/partitions_plus_ota.csv \\", file=sys.stderr)
+        print("      --out build/data_manifest_plus.txt", file=sys.stderr)
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -584,11 +615,16 @@ def main() -> int:
     parser.add_argument("--skip-efuse-check", action="store_true",
                         help="skip the secure-boot/flash-encryption eFuse check (dangerous)")
     parser.add_argument("--backup", type=Path, help="read the full 16 MiB flash first")
+    parser.add_argument("--skip-backup", action="store_true",
+                        help="explicit opt-out for a unit that already has a verified 16 MiB "
+                             "backup (development iteration); never use it for a first install")
     parser.add_argument("--reuse-backup", type=Path, metavar="PATH",
                         help="use an existing 16 MiB factory backup instead of copying flash again "
                              "(it is still checked for size and hashed)")
     args = parser.parse_args()
 
+    if args.layout != VENDOR_LAYOUT and not args.no_data and not ensure_data_artifacts():
+        return 1
     if args.layout == VENDOR_LAYOUT and not args.no_data:
         if not any((args.pinyin, args.hyphen, args.i18n, args.emoji, args.core)):
             print("note: --layout vendor writes only the app slots; data packs are skipped")
@@ -603,10 +639,12 @@ def main() -> int:
         print(f"  0x{offset:06X}  {path}  ({path.stat().st_size:,} B)")
     if args.dry_run:
         return 0
-    if not args.backup and not args.reuse_backup:
+    if args.skip_backup and (args.backup or args.reuse_backup):
+        raise SystemExit("--skip-backup cannot be combined with --backup/--reuse-backup")
+    if not args.skip_backup and not args.backup and not args.reuse_backup:
         raise SystemExit("a full 16 MiB --backup (or --reuse-backup PATH) is mandatory before "
                          "writing any slot (the stock firmware is not in this repository)")
-    if args.reuse_backup:
+    if args.reuse_backup and not args.skip_backup:
         digest = check_reuse_backup(args.reuse_backup)
         print(f"reusing backup {args.reuse_backup} ({IMAGE_SIZE} B) sha256 {digest}")
 
@@ -615,7 +653,7 @@ def main() -> int:
     preflight(port, args.baud, args.layout, force_layout=args.force_layout,
               skip_efuse_check=args.skip_efuse_check)
 
-    if args.backup:
+    if args.backup and not args.skip_backup:
         if args.backup.exists():
             raise SystemExit(f"{args.backup} exists; refusing to overwrite a backup")
         result = esptool(["--port", port, "--baud", args.baud, "read_flash", "0",
