@@ -22,6 +22,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+FONT_CORE = ROOT / "assets" / "fonts" / "CPYOSHanSansSC-Core.ttf"
 FONT_8105 = ROOT / 'assets' / 'fonts' / 'CPYOSHanSansSC-Regular-8105.ttf'
 UI_TTF = ROOT / 'assets' / 'fonts' / 'CPYOSHanSansSC-UI.ttf'
 UI_CARRIER = ROOT / 'assets' / 'fonts' / 'cpyos_han_sans.def'
@@ -137,7 +138,7 @@ class SystemFontPackTest(unittest.TestCase):
         # Deliberately does not import the generator: the core carrier is plain
         # zlib, so this test runs on hosts without fontTools (the release
         # manifest rebuilds the core the same way).
-        raw = FONT_8105.read_bytes()
+        raw = FONT_CORE.read_bytes()
         crc = zlib.crc32(raw) & 0xFFFFFFFF
         compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
         packed = compressor.compress(raw) + compressor.flush()

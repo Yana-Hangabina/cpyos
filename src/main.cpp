@@ -1738,6 +1738,29 @@ void loop() {
   renderer.setFadingFix(SETTINGS.fadingFix);
   renderer.setUiFullRefreshInterval(SETTINGS.getUiRefreshInterval());
 
+  // The status chrome reads the cached battery level, so the sample has to
+  // happen here on the main task (the render task must never touch the PMU
+  // bus). Nothing else polls it during normal navigation, and the capsule
+  // stayed empty for the whole session without this.
+  static unsigned long lastBatterySampleMs = 0;
+  static uint16_t lastBatteryShown = 0xFFFF;
+  if (millis() - lastBatterySampleMs >= 1000) {
+    lastBatterySampleMs = millis();
+    powerManager.getBatteryPercentage();
+    if (powerManager.batteryPercentageKnown()) {
+      const uint16_t shown = powerManager.batteryDisplayPercent();
+      if (shown != lastBatteryShown) {
+        const bool first = lastBatteryShown == 0xFFFF;
+        lastBatteryShown = shown;
+        // A level change repaints the chrome that shows it, except inside the
+        // reader where a page repaint would interrupt reading.
+        if (!first && !activityManager.isReaderActivity()) {
+          activityManager.requestUpdate(false);
+        }
+      }
+    }
+  }
+
   // The ROM console does not depend on Arduino USB CDC's connection state.
   if ((Serial || FREEINK_LOG_TRANSPORT == FREEINK_LOG_TRANSPORT_ROM_PRINTF) && millis() - lastMemPrint >= 10000) {
     const auto heap = HalMemory::getInternalHeap();

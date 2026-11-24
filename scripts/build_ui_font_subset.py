@@ -12,8 +12,12 @@ family cannot draw (Vietnamese, Czech/Polish/Turkish diacritics, Hebrew,
 Arabic, ...).  It is registered as a supplement at the UI sizes, so a Czech
 label picks this face while Chinese labels stay on the CJK face.
 
-Tier 1 (data partition): the full 8,105-character core, compressed, released to
-SD on first boot and used as the reader face.
+Tier 1 (data partition): the reading core, committed as
+CPYOSHanSansSC-Core.ttf (GB2312 level-1 + every UI codepoint + ASCII), compressed
+into build/cjk_core.dat, released to SD on first boot and used as the reader
+face.  It is smaller than the 8,105 family because the XIP layout's data
+partition only leaves ~768 KiB for the compressed carrier; rare characters stay
+available through the downloadable font packs.
 
 All carriers use the same CPFZ container as scripts/build_system_font_pack.py:
 
@@ -44,6 +48,7 @@ import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CJK_SOURCE = ROOT / "assets" / "fonts" / "CPYOSHanSansSC-Regular-8105.ttf"
+CORE_SOURCE = ROOT / "assets" / "fonts" / "CPYOSHanSansSC-Core.ttf"
 WORLD_SOURCE = ROOT / "site" / "fonts" / "CPYOSWorldScripts.ttf"
 TRANSLATIONS = ROOT / "lib" / "I18n" / "translations"
 ALMANAC = ROOT / "lib" / "EpdFont" / "scripts" / "cn_almanac_chars.txt"
@@ -260,7 +265,7 @@ def _carrier(raw: bytes) -> bytes:
 
 def build(*, core: bool = True, core_only: bool = False) -> dict[str, bytes]:
     if core_only:
-        return {str(CORE_DAT): _carrier(CJK_SOURCE.read_bytes())}
+        return {str(CORE_DAT): _carrier(CORE_SOURCE.read_bytes())}
     from fontTools.ttLib import TTFont
 
     cjk = TTFont(str(CJK_SOURCE))
@@ -297,7 +302,9 @@ def build(*, core: bool = True, core_only: bool = False) -> dict[str, bytes]:
         str(UI_CHARS): ("\n".join(chr(cp) for cp in sorted(ui_cjk)) + "\n").encode("utf-8"),
     }
     if core:
-        outputs[str(CORE_DAT)] = _carrier(CJK_SOURCE.read_bytes())
+        # The reader face is the committed level-1 subset, not the 8,105
+        # family: the compressed carrier must fit the XIP data partition.
+        outputs[str(CORE_DAT)] = _carrier(CORE_SOURCE.read_bytes())
     return outputs
 
 

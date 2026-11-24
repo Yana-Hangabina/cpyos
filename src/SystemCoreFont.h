@@ -17,7 +17,7 @@
 namespace system_core_font {
 
 // Partition-relative offset, read by scripts/generate_data_manifest.py.
-inline constexpr uint32_t kPartitionOffset = 0x180000;
+inline constexpr uint32_t kPartitionOffset = 0x15C000;
 
 inline constexpr const char* kFamilyName = "CPYOSCJKCore";
 inline constexpr const char* kDir = "/fonts/CPYOSCJKCore";

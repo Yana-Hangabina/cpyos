@@ -64,8 +64,9 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 | `pinyin.dat` | `0xDF0000` |
 | `web_pack.dat` | `0xE46000` |
 | `hyphen.dat` | `0xE80000` |
-| `i18n_pack.dat` | `0xEF0000` |
-| `emoji.dat` | `0xF50000` |
+| `i18n_pack.dat` | `0xED6000` |
+| `emoji.dat` | `0xF2D000` |
+| `cjk_core.dat` | `0xF4C000`（阅读字体核心，首次开机释放到 SD） |
 
 偏移量以包内 `FLASH.md` 和 `build/data_manifest.txt` 为准；分区表或数据包布局变化时本文档会过时。校验：
 
@@ -82,8 +83,8 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \
   0xC10000 readpico-pdfmod.bin \
   0xDF0000 pinyin.dat 0xE46000 web_pack.dat \
-  0xE80000 hyphen.dat 0xEF0000 i18n_pack.dat \
-  0xF50000 emoji.dat
+  0xE80000 hyphen.dat 0xED6000 i18n_pack.dat \
+  0xF2D000 emoji.dat 0xF4C000 cjk_core.dat
 ```
 
 ★ **0.8.0 的完整安装不写 app1**（由 `boot_app0.bin` 选中 app0）；从下一个版本起，升级清单会同时写 app0 与 app1，手动刷写也要照做：设备做过 OTA 后 otadata 会选中 app1，只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。
@@ -120,6 +121,7 @@ https://gh-proxy.com/https://github.com/Yana-Hangabina/cpyos/releases/latest/dow
 - `pinyin.dat`：拼音输入与书名搜索；
 - `hyphen.dat`：11 种语言断词；
 - `i18n_pack.dat`：33 种 UI 语言；
+- `cjk_core.dat`：3,500 常用字阅读字体核心（压缩），首次开机释放到 `/fonts/CPYOSCJKCore`；
 - `web_pack.dat`：文件传输 / 设置网页；
 - `emoji.dat`：Noto Emoji 单色子集，正文与段评的 emoji 回退。
 

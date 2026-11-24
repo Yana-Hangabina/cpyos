@@ -132,13 +132,13 @@ jobs:
           python3 scripts/generate_hyphenation_db.py
           python3 -m pip download pypinyin==0.55.0 --no-deps --dest /tmp/pypinyin-wheel
           python3 scripts/generate_pinyin_db.py /tmp/pypinyin-wheel/*.whl
-          python3 scripts/generate_data_manifest.py             --partitions partitions_readpico_xip.csv --no-core
+          python3 scripts/generate_data_manifest.py             --partitions partitions_readpico_xip.csv
 
       - name: Verify the image and data manifest
         run: |
           python3 scripts/verify_release_artifacts.py --release \
             --firmware .pio/build/readpico_pdf_jjwxc/firmware.bin \
-            --partitions partitions_readpico_xip.csv --no-core
+            --partitions partitions_readpico_xip.csv
 
       - name: Assemble the release bundle
         run: |

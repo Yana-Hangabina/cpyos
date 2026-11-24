@@ -31,7 +31,7 @@
 // Partition-relative offset of the pack inside data/spiffs. Single source of
 // truth: scripts/generate_data_manifest.py reads this constant (as text) to
 // build data_manifest.txt, so the manifest and the loader cannot drift.
-inline constexpr uint32_t I18N_PACK_PARTITION_OFFSET = 0x100000;
+inline constexpr uint32_t I18N_PACK_PARTITION_OFFSET = 0x0E6000;
 
 #if defined(CROSSPOINT_I18N_PACK)
 

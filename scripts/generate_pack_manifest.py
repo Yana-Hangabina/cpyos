@@ -31,6 +31,7 @@ ASSETS = {
     'hyphen': 'hyphen.dat',
     'i18n': 'i18n_pack.dat',
     'emoji': 'emoji.dat',
+    'core': 'cjk_core.dat',
 }
 
 
