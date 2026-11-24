@@ -115,12 +115,17 @@ jobs:
           test -f src/jjwxc/app/JjwxcActivity.cpp
 
       - name: Build Read Pico (XIP PDF + private book source)
-        run: pio run -e readpico_pdf_jjwxc
+        run: |
+          set -euo pipefail
+          # compiledb rewrites .pio/build (it has wiped a fresh image before),
+          # so run it FIRST and let the real build produce firmware.elf last.
+          pio run -t compiledb -e readpico_pdf_jjwxc
+          pio run -e readpico_pdf_jjwxc
 
       - name: Build the paired PDF engine
         run: |
           set -euo pipefail
-          pio run -t compiledb -e readpico_pdf_jjwxc
+          test -f .pio/build/readpico_pdf_jjwxc/firmware.elf
           python3 scripts/build_pdf_module.py             --firmware-elf .pio/build/readpico_pdf_jjwxc/firmware.elf
 
       - name: Generate data packs
