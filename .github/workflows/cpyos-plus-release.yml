@@ -236,8 +236,14 @@ jobs:
           CLOUDZAO_PRODUCT_NAME: ${{ vars.CLOUDZAO_PRODUCT_NAME }}
         run: |
           set -euo pipefail
+          # CloudZao caps a version remark at 500 characters. Prefer the short
+          # market-specific note; fall back to the release notes only for a
+          # standalone plus tag.
+          SHORT="docs/releases/plus-$BASE.cloudzao.txt"
           NOTES="docs/releases/plus-$BASE.md"
-          if [ -f "$NOTES" ]; then
+          if [ -f "$SHORT" ]; then
+            REMARK=(--remark-file "$SHORT")
+          elif [ -f "$NOTES" ]; then
             REMARK=(--remark-file "$NOTES")
           else
             REMARK=(--remark "CPYOS Plus $APP_VERSION")
