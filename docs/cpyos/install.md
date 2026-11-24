@@ -2,16 +2,17 @@
 
 本文只面向 **Read Pico（小纸 Pico，RDP-G01-W）**。CPYOS 的预编译包不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）、**Metalio E-INK4 Plus（4.7″，ESP32-S31）** 或其它 CrossMux 目标。Plus 的 SoC、分区表、面板接口和电源拓扑都与 Read Pico 不同，刷错会变砖。
 
-## 0. 字体分层版本（app0 6.375 MiB 槽 + 3 MiB 数据分区）必须完整安装
+## 0. 0.8.0 的 XIP 布局必须完整安装
 
-从这一版起，Read Pico 的 app0/app1 槽从 7.19 MiB 缩到 6.375 MiB，数据分区从 1.5 MiB 扩到
-3 MiB，新增的压缩阅读字体 `cjk_core.dat` 位于数据分区 `+0x180000`。分区表变了，**不能**用
-OTA 升级：新布局的数据地址会落在旧设备 app1 槽内。请使用网页完整安装（或
-`exp/flash_device.sh`）刷写一次；完成后的后续版本可以继续 OTA（应用槽偏移不再变化）。
+Read Pico 的 0.8.0 使用新分区：app0/app1 各 **6.0 MiB**、独立 PDF 引擎分区 `pdfmod`
+（1.875 MiB）、数据分区 **2.0 MiB**。分区表变了，**不能**用 OTA 升级：新布局的数据地址会落在
+旧设备 app1 槽内，只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。请使用官网的网页
+完整安装；从源码刷写时用
+`python3 scripts/flash_pdf_xip.py --port /dev/cu.usbmodemXXXX --full`（写分区表、app0、PDF
+引擎与全部数据包）。安装完成后的后续版本可以继续 OTA（应用槽偏移不再变化）。
 
-没有 SD 卡也能完成安装：系统 UI 使用 app0 内的 190 KB 字形子集，阅读器在找不到核心字体时
-会回落到 UI 子集，并通过缺字提示提供 `cjk-core` 字体扩展下载。插入 SD 卡后首次开机，固件会
-把核心字体释放到 `/fonts/CPYOSCJKCore/`。
+系统 UI 与阅读字体都在 app0 内（可缩放 CJK 字族），不再需要 0.7.0 的 `cjk_core.dat`；缺字时可
+安装字体扩展包。
 
 ## 0. 刷机前：整片备份
 
@@ -46,7 +47,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 | **首次安装 / 恢复** | 出厂固件、CrossMux 1.6.5、分区表不是 CPYOS 布局 | 写 bootloader、分区表、boot_app0、app 和五个数据包；要求擦除芯片 |
 | **从 CPYOS 升级** | 已经在运行 CPYOS 0.1.0 或更新版本 | 只写 app 和五个数据包；保留 NVS 与分区表 |
 
-首次安装会重建分区表（7.19 MiB app 槽 + 1.5 MiB 数据分区）。网页刷机不会删除 SD 卡里的书和 `/.crosspoint` 设置，但会擦除芯片上的 NVS（Wi-Fi 凭据等）。
+首次安装会重建分区表（6.0 MiB app 槽 + 1.875 MiB PDF 引擎分区 + 2.0 MiB 数据分区）。网页刷机不会删除 SD 卡里的书和 `/.crosspoint` 设置，但会擦除芯片上的 NVS（Wi-Fi 凭据等）。
 
 ## 2. 完整安装包
 
@@ -58,12 +59,13 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX \
 | `readpico-partitions.bin` | `0x8000` |
 | `readpico-boot_app0.bin` | `0xE000` |
 | `readpico-firmware.bin` | `0x10000` |
-| `readpico-app1.bin` | `0x740000`（升级/仅 app 清单会写） |
-| `pinyin.dat` | `0xE70000` |
-| `web_pack.dat` | `0xEC6000` |
-| `hyphen.dat` | `0xF00000` |
-| `i18n_pack.dat` | `0xF70000` |
-| `emoji.dat` | `0xFD0000` |
+| `readpico-app1.bin` | `0x610000`（本版完整安装不写，留作手动恢复） |
+| `readpico-pdfmod.bin` | `0xC10000`（PDF 引擎分区） |
+| `pinyin.dat` | `0xDF0000` |
+| `web_pack.dat` | `0xE46000` |
+| `hyphen.dat` | `0xE80000` |
+| `i18n_pack.dat` | `0xEF0000` |
+| `emoji.dat` | `0xF50000` |
 
 偏移量以包内 `FLASH.md` 和 `build/data_manifest.txt` 为准；分区表或数据包布局变化时本文档会过时。校验：
 
@@ -78,10 +80,10 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
   write_flash \
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \
   0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \
-  0x740000 readpico-app1.bin \
-  0xE70000 pinyin.dat 0xEC6000 web_pack.dat \
-  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \
-  0xFD0000 emoji.dat
+  0xC10000 readpico-pdfmod.bin \
+  0xDF0000 pinyin.dat 0xE46000 web_pack.dat \
+  0xE80000 hyphen.dat 0xEF0000 i18n_pack.dat \
+  0xF50000 emoji.dat
 ```
 
 ★ **升级时两个 app 槽都要写**：设备做过 OTA 后 otadata 会选中 app1，而网页刷机无法读取 otadata 判断活动槽；只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。`manifest-upgrade.json` / `manifest-app.json` 已经同时写 app0 与 app1，手动刷写也要照做。首次安装由 `boot_app0.bin` 选中 app0，不需要 app1。
@@ -89,6 +91,9 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
 成功判据是日志里的 **`Hash of data verified.`**，不是退出码。
 
 ## 3. 设备内 OTA
+
+★ **0.8.0 是布局迁移版本，没有 OTA 清单**：请使用第 1、2 节的完整安装。安装 0.8.0 之后，
+下一个版本会恢复正常 OTA（其清单同时写 app0 与 app1）。
 
 ★ **0.2.1 及更早版本请使用官网网页刷机升级到 0.7.0 或更新版本**，不要依赖设备内 OTA：这些版本的清单仍在 GitHub Pages，部分网络无法访问，设备会一直显示检查更新失败或极慢。网页刷机「从 CPYOS 升级」/完整包会同时写 app0、app1 与五个数据包；升级一次后即可正常使用设备 OTA。
 
