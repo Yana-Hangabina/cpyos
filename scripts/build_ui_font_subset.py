@@ -234,6 +234,9 @@ def _subset(src: pathlib.Path, cps: set[int], *, layout: bool = False,
     options.name_legacy = True
     options.notdef_outline = True
     options.recalc_bounds = False
+    # Deterministic bytes: a wall-clock timestamp in head/name would make two
+    # runs (and CI vs the committed assets) differ without any glyph change.
+    options.recalc_timestamp = False
     options.hinting = False
     options.drop_tables = list(options.drop_tables) + ["DSIG"]
     if not layout:
