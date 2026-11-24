@@ -9,6 +9,7 @@
 #include "activities/Activity.h"
 #include "util/Dictionary.h"
 #include "util/SelectionText.h"
+#include "vocabulary/VocabularyStore.h"
 
 // Word selection over the current reader page: Left/Right step through words
 // in reading order, Up/Down jump rows, Confirm looks the word up and opens
@@ -23,13 +24,14 @@ class DictionaryWordSelectActivity final : public Activity {
  public:
   explicit DictionaryWordSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                         std::unique_ptr<Page> page, int marginLeft, int marginTop,
-                                        bool selectOnly = false)
+                                        bool selectOnly = false, VocabularyContext vocabulary = {})
       : Activity("DictionaryWordSelect", renderer, mappedInput),
         ownedPage(std::move(page)),
         page(ownedPage.get()),
         marginLeft(marginLeft),
         marginTop(marginTop),
-        selectOnly(selectOnly) {}
+        selectOnly(selectOnly),
+        vocabulary_(std::move(vocabulary)) {}
 
   // Phrase lookup (upstream c201af43): no picker and no page — onEnter() runs the
   // lookup directly, walking the candidate ladder when the whole phrase is not a
@@ -51,6 +53,8 @@ class DictionaryWordSelectActivity final : public Activity {
 
   void onEnter() override;
   void loop() override;
+  // Serial-only: short Back, so a host can walk a lookup chain and return.
+  void debugBack() override;
   void render(RenderLock&&) override;
 
  private:
@@ -88,6 +92,7 @@ class DictionaryWordSelectActivity final : public Activity {
   const int marginLeft = 0;
   const int marginTop = 0;
   const bool selectOnly = false;
+  VocabularyContext vocabulary_;
   int fontId = 0;
   int lineHeight = 0;
 

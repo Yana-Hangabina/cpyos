@@ -9,6 +9,7 @@
 #include <string>
 
 #include "KOReaderCredentialStore.h"
+#include <HalPowerManager.h>
 
 int KOReaderSyncClient::lastHttpCode = 0;
 
@@ -80,6 +81,11 @@ bool insufficientHeap() {
 }  // namespace
 
 KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
+  // Sync is a page the user waits on; no input happens during the handshake, so
+  // the governor would otherwise drop to 80 MHz mid-TLS (same rule as every
+  // download page: cases/test_download_power_locks).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   lastHttpCode = 0;
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
@@ -111,6 +117,11 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
 }
 
 KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
+  // Sync is a page the user waits on; no input happens during the handshake, so
+  // the governor would otherwise drop to 80 MHz mid-TLS (same rule as every
+  // download page: cases/test_download_power_locks).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   lastHttpCode = 0;
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
@@ -150,6 +161,11 @@ KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
 
 KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& documentHash,
                                                           KOReaderProgress& outProgress) {
+  // Sync is a page the user waits on; no input happens during the handshake, so
+  // the governor would otherwise drop to 80 MHz mid-TLS (same rule as every
+  // download page: cases/test_download_power_locks).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   lastHttpCode = 0;
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");
@@ -231,6 +247,11 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
 }
 
 KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgress& progress) {
+  // Sync is a page the user waits on; no input happens during the handshake, so
+  // the governor would otherwise drop to 80 MHz mid-TLS (same rule as every
+  // download page: cases/test_download_power_locks).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   lastHttpCode = 0;
   if (!KOREADER_STORE.hasCredentials()) {
     LOG_DBG("KOSync", "No credentials configured");

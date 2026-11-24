@@ -92,7 +92,7 @@ esp_err_t sendXml(httpd_req_t* req, int status, const std::string& body) {
 }
 
 esp_err_t optionsHandler(httpd_req_t* req) {
-    httpd_resp_set_hdr(req, "DAV", "1,2");
+    httpd_resp_set_hdr(req, "DAV", "1, 2");
     httpd_resp_set_hdr(req, "Allow",
                        "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK");
     return httpd_resp_send(req, nullptr, 0);
@@ -101,7 +101,7 @@ esp_err_t optionsHandler(httpd_req_t* req) {
 esp_err_t propfindHandler(httpd_req_t* req) {
     drainBody(req);
     std::string logical;
-    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
+    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
     struct stat st = {};
     if (stat(web_transfer::paths::toReal(logical).c_str(), &st) != 0) {
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "not found");
@@ -139,7 +139,7 @@ esp_err_t propfindHandler(httpd_req_t* req) {
 
 esp_err_t getHandler(httpd_req_t* req) {
     std::string logical;
-    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
+    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
     struct stat st = {};
     const std::string real = web_transfer::paths::toReal(logical);
     if (stat(real.c_str(), &st) != 0 || S_ISDIR(st.st_mode)) {
@@ -168,7 +168,10 @@ esp_err_t getHandler(httpd_req_t* req) {
 
 esp_err_t putHandler(httpd_req_t* req) {
     std::string logical;
-    if (!logicalFor(req, logical) || logical == "/") {
+    if (!logicalFor(req, logical)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
+    }
+    if (logical == "/") {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
     }
     const std::string real = web_transfer::paths::toReal(logical);
@@ -210,7 +213,10 @@ esp_err_t putHandler(httpd_req_t* req) {
 
 esp_err_t deleteHandler(httpd_req_t* req) {
     std::string logical;
-    if (!logicalFor(req, logical) || logical == "/") {
+    if (!logicalFor(req, logical)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
+    }
+    if (logical == "/") {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
     }
     const std::string real = web_transfer::paths::toReal(logical);
@@ -223,7 +229,10 @@ esp_err_t deleteHandler(httpd_req_t* req) {
 
 esp_err_t mkcolHandler(httpd_req_t* req) {
     std::string logical;
-    if (!logicalFor(req, logical) || logical == "/") {
+    if (!logicalFor(req, logical)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
+    }
+    if (logical == "/") {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
     }
     const std::string real = web_transfer::paths::toReal(logical);
@@ -243,7 +252,10 @@ esp_err_t mkcolHandler(httpd_req_t* req) {
 esp_err_t copyMoveHandler(httpd_req_t* req, bool move) {
     drainBody(req);
     std::string logical;
-    if (!logicalFor(req, logical) || logical == "/") {
+    if (!logicalFor(req, logical)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
+    }
+    if (logical == "/") {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
     }
     std::string destination;
@@ -251,8 +263,11 @@ esp_err_t copyMoveHandler(httpd_req_t* req, bool move) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "destination required");
     }
     std::string target;
-    if (!pathFromDestination(destination, target) || !web_transfer::paths::safe(target)) {
+    if (!pathFromDestination(destination, target)) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad destination");
+    }
+    if (!web_transfer::paths::safe(target)) {
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden destination");
     }
     std::string overwrite;
     const bool allowOverwrite = !headerValue(req, "Overwrite", overwrite) || overwriteAllowed(overwrite.c_str());
@@ -304,7 +319,7 @@ esp_err_t copyMoveHandler(httpd_req_t* req, bool move) {
 esp_err_t lockHandler(httpd_req_t* req) {
     drainBody(req);
     std::string logical;
-    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad path");
+    if (!logicalFor(req, logical)) return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "forbidden path");
     const std::string body =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><D:prop xmlns:D=\"DAV:\"><D:lockdiscovery>"
         "<D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>"

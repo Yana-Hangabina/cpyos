@@ -34,7 +34,7 @@ void PlusOtaActivity::onEnter() {
   Activity::onEnter();
   LOG_INF("OTA", "page: local=%s id=%s channel=%s configured=%d", plus_ota::currentVersion(), plus_ota::deviceId(),
           channel_ == plus_ota::Channel::Test ? "test" : "stable", plus_ota::configured() ? 1 : 0);
-  if (!plus_ota::configured()) setError("this build has no OTA key");
+  if (!plus_ota::configured()) setError("此构建未配置 CloudZao 产品标识");
   requestUpdate();
 }
 
@@ -124,7 +124,7 @@ bool PlusOtaActivity::ensureWifi() {
 void PlusOtaActivity::startJob(const Job job) {
   if (worker_ != nullptr) return;
   if (!plus_ota::configured() && job == Job::Check) {
-    setError("this build has no OTA key (plus_ota_key.local)");
+    setError("此构建未配置开发者资源密钥（plus_resource_key.local）");
     return;
   }
   if (!ensureWifi()) {
@@ -322,6 +322,11 @@ void PlusOtaActivity::render(RenderLock&&) {
       std::snprintf(buf, sizeof(buf), "发现新版本  %s  (%u KB)", info_.version.c_str(),
                     static_cast<unsigned>(info_.size / 1024));
       renderer.drawText(UI_12_FONT_ID, x, y, buf, true, EpdFontFamily::BOLD);
+      y += line12 + 6;
+      if (!info_.versionStatus.empty()) {
+        std::snprintf(buf, sizeof(buf), "版本状态  %s", info_.versionStatus.c_str());
+        renderer.drawText(UI_10_FONT_ID, x, y, buf);
+      }
       break;
     case State::Downloading: {
       const size_t done = progressBytes_.load();

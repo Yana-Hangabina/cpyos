@@ -6,23 +6,26 @@
 #include <SecureHttpClient.h>
 #include <esp_app_desc.h>
 #include <esp_mac.h>
+#include <esp_ota_ops.h>
 
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
 #include "network/FirmwareFlasher.h"
 #include "network/HttpDownloader.h"
-
-#ifndef PLUS_OTA_KEY
-#define PLUS_OTA_KEY ""
-#endif
+#include "plus_cloudzao_ids.h"
 
 namespace plus_ota {
 namespace {
 
-constexpr const char* kCheckUrl = "https://admin.metalio.world/xiaozhi/api/firmware-ota/check";
+constexpr const char* kCheckPath = "/updates/check";
+// The OTA service registers the Plus under the vendor board name and the
+// esp32s3 chip model (the platform's hardware-model row), even though the
+// silicon is ESP32-S31. The resource/binding service uses different strings;
+// do not share these constants with plus_resources.cpp.
 constexpr const char* kBoard = "Metalio E-Ink4 Plus";
-constexpr const char* kChip = "esp32s31";
+constexpr const char* kChip = "esp32s3";
 constexpr const char* kApp = "脆皮鸭CPYOS";
 
 std::string g_deviceId;
@@ -30,9 +33,13 @@ std::string g_deviceId;
 const char* deviceIdCached() {
   if (g_deviceId.empty()) {
     uint8_t mac[6] = {0};
-    if (esp_efuse_mac_get_default(mac) == ESP_OK) {
+    // The vendor firmware and the activation mini-program identify a device by
+    // its Wi-Fi station MAC, not by the eFuse base MAC. On ESP32-S31 those
+    // differ (the STA MAC is base + 4 here), so reading eFuse directly makes
+    // the resource service believe the bound device is a different one.
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
       char buf[18];
-      std::snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4],
+      std::snprintf(buf, sizeof(buf), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4],
                     mac[5]);
       g_deviceId = buf;
     } else {
@@ -49,54 +56,68 @@ std::string describeHttp(int http, const std::string& body) {
     case 200:
       return {};
     case 400:
-      return "request rejected (400): " + body;
+      return "请求无效（400）：" + body;
     case 401:
-      return "OTA key missing or rejected (401)";
+      return "开发者资源密钥缺失或已失效（401）";
     case 404:
-      return "firmware not found for this board/name (404): " + body;
+      return "没有可用的固件版本（404）：" + body;
     case 409:
-      return "OTA disabled or download unavailable (409): " + body;
+      return "OTA 已关闭或下载地址不可用（409）：" + body;
     default:
       return (http > 0 ? ("HTTP " + std::to_string(http) + ": ") : std::string("no response: ")) + body;
   }
 }
 
-}  // namespace
-
-namespace {
-// The key may also live on the card (/.crosspoint/ota_key), so a key obtained
-// later does not require a firmware rebuild. Read once, trimmed, never logged.
-std::string g_sdKey;
-bool g_sdKeyLoaded = false;
-
-const char* activeKey() {
-  if (std::strlen(PLUS_OTA_KEY) > 0) return PLUS_OTA_KEY;
-  if (!g_sdKeyLoaded) {
-    g_sdKeyLoaded = true;
-    if (Storage.exists("/.crosspoint/ota_key")) {
-      HalFile f = Storage.open("/.crosspoint/ota_key", O_RDONLY);
-      if (f) {
-        char buf[160] = {0};
-        const int n = f.read(buf, sizeof(buf) - 1);
-        f.close();
-        if (n > 0) {
-          std::string key(buf, static_cast<size_t>(n));
-          while (!key.empty() && (key.back() == '\n' || key.back() == '\r' || key.back() == ' ')) key.pop_back();
-          if (key.rfind("fw_ota_", 0) == 0) {
-            g_sdKey = std::move(key);
-            LOG_INF("OTA", "using the key from /.crosspoint/ota_key (%u chars)", static_cast<unsigned>(g_sdKey.size()));
-          } else {
-            LOG_ERR("OTA", "ignoring /.crosspoint/ota_key: not an fw_ota_ key");
-          }
-        }
-      }
-    }
+// The endpoint's has_update is "this firmware exists", not "this is newer".
+// Compare the advertised version against the running app version instead.
+bool parseVersion(std::string text, int parts[4], std::string& prerelease) {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.erase(text.begin());
+  while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r' ||
+                           text.back() == '\n')) {
+    text.pop_back();
   }
-  return g_sdKey.c_str();
+  if (!text.empty() && (text.front() == 'v' || text.front() == 'V')) text.erase(text.begin());
+  const size_t cut = text.find_first_of("-+");
+  prerelease = cut == std::string::npos ? std::string() : text.substr(cut + 1);
+  if (cut != std::string::npos) text.resize(cut);
+  for (int i = 0; i < 4; ++i) parts[i] = 0;
+  int count = 0;
+  size_t pos = 0;
+  while (pos < text.size() && count < 4) {
+    if (!std::isdigit(static_cast<unsigned char>(text[pos]))) return false;
+    int value = 0;
+    while (pos < text.size() && std::isdigit(static_cast<unsigned char>(text[pos])) && value < 1000000) {
+      value = value * 10 + (text[pos] - '0');
+      ++pos;
+    }
+    parts[count++] = value;
+    if (pos < text.size() && text[pos] == '.') {
+      ++pos;
+      continue;
+    }
+    break;
+  }
+  return count > 0 && (pos == text.size() || text[pos] == '.');
 }
+
+bool versionIsNewer(const std::string& remote, const std::string& local) {
+  int rp[4], lp[4];
+  std::string rpre, lpre;
+  if (!parseVersion(remote, rp, rpre) || !parseVersion(local, lp, lpre)) {
+    return false;  // never advertise an update from an unparseable version
+  }
+  for (int i = 0; i < 4; ++i) {
+    if (rp[i] != lp[i]) return rp[i] > lp[i];
+  }
+  if (rpre == lpre) return false;
+  if (rpre.empty()) return true;   // release beats a prerelease
+  if (lpre.empty()) return false;
+  return rpre > lpre;
+}
+
 }  // namespace
 
-bool configured() { return std::strlen(activeKey()) > 0; }
+bool configured() { return plus_cloudzao::kIntegrationId[0] != '\0' && plus_cloudzao::kFirmwareId[0] != '\0'; }
 const char* currentVersion() {
   const esp_app_desc_t* app = esp_app_get_description();
   return app ? app->version : "?";
@@ -108,35 +129,33 @@ const char* appName() { return kApp; }
 
 Info check(const Channel channel) {
   Info info;
+  (void)channel;  // the partner API only serves reviewed stable versions
   if (!configured()) {
-    info.error = "this build has no OTA key (plus_ota_key.local)";
+    info.error = "this build has no CloudZao integration id";
     return info;
   }
-  JsonDocument doc;
-  doc["chip_model_name"] = kChip;
-  doc["board"]["type"] = kBoard;
-  doc["application"]["name"] = kApp;
+  JsonDocument request;
+  request["integrationId"] = plus_cloudzao::kIntegrationId;
+  request["firmwareId"] = plus_cloudzao::kFirmwareId;
+  request["currentVersion"] = currentVersion();
   std::string payload;
-  serializeJson(doc, payload);
+  serializeJson(request, payload);
 
   freeink::SecureHttpClient http;
   http.setInsecure();
   http.setTimeout(20000);
-  if (!http.begin(kCheckUrl)) {
+  const std::string url = std::string(plus_cloudzao::kBaseUrl) + kCheckPath;
+  if (!http.begin(url.c_str())) {
     info.error = "cannot open the OTA endpoint";
     return info;
   }
   http.addHeader("Accept", "application/json");
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-OTA-Key", activeKey());
-  http.addHeader("Device-Id", deviceIdCached());
-  if (channel == Channel::Test) http.addHeader("X-OTA-Channel", "test");
   const int code = http.POST(payload);
   const std::string body = http.getString();
   http.end();
   info.http = code;
-  LOG_INF("OTA", "check: http=%d body=%u B channel=%s", code, static_cast<unsigned>(body.size()),
-          channel == Channel::Test ? "test" : "stable");
+  LOG_INF("OTA", "partner check: http=%d body=%u B", code, static_cast<unsigned>(body.size()));
   if (code != 200) {
     info.error = describeHttp(code, body);
     return info;
@@ -148,16 +167,40 @@ Info check(const Channel channel) {
     info.error = std::string("bad JSON from the OTA service: ") + err.c_str();
     return info;
   }
-  info.version = resp["firmware"]["version"] | "";
-  info.url = resp["firmware"]["url"] | "";
-  info.firmwareName = resp["firmware"]["firmware_name"] | "";
-  info.size = resp["firmware"]["size"] | 0;
-  const bool has = resp["has_update"] | false;
+  const bool advertised = resp["updateAvailable"] | false;
+  const JsonVariantConst release = resp["release"];
+  if (release.is<JsonObjectConst>()) {
+    info.version = release["version"] | "";
+    info.url = release["downloadUrl"] | "";
+    info.size = release["sizeBytes"] | 0;
+  }
+  info.versionStatus = "latest";
+  info.firmwareName = kApp;
+  info.productName = kApp;
+  info.firmwareId = plus_cloudzao::kFirmwareId;
   info.ok = true;
-  info.hasUpdate = has && !info.version.empty() && info.version != currentVersion();
+  info.hasUpdate = advertised && !info.version.empty() && versionIsNewer(info.version, currentVersion());
+  if (info.hasUpdate) {
+    const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+    if (target == nullptr) {
+      info.ok = false;
+      info.hasUpdate = false;
+      info.error = "此分区表没有可用的非活动 OTA 槽";
+      return info;
+    }
+    if (info.size != 0 && info.size > target->size) {
+      info.ok = false;
+      info.hasUpdate = false;
+      info.error = "固件包大于非活动 OTA 槽（" + std::to_string(info.size) + " > " +
+                   std::to_string(target->size) + "），已拒绝安装";
+      LOG_ERR("OTA", "firmware does not fit the inactive slot: %u > %u",
+              static_cast<unsigned>(info.size), static_cast<unsigned>(target->size));
+      return info;
+    }
+  }
   if (!info.hasUpdate) {
-    LOG_INF("OTA", "no update: remote=%s local=%s has_update=%d", info.version.c_str(), currentVersion(),
-            has ? 1 : 0);
+    LOG_INF("OTA", "no update: remote=%s local=%s advertised=%d", info.version.c_str(), currentVersion(),
+            advertised ? 1 : 0);
   } else {
     LOG_INF("OTA", "update available: %s -> %s (%u B)", currentVersion(), info.version.c_str(),
             static_cast<unsigned>(info.size));

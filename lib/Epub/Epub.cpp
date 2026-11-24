@@ -4,6 +4,7 @@
 #include <GifImageLayout.h>
 #include <GifLimitedWriter.h>
 #include <GifToBmpConverter.h>
+#include <BookCachePrune.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -442,8 +443,16 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
   // Maximum CSS file size we'll attempt to parse (uncompressed)
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
-  // Minimum heap required before attempting CSS parsing
+  // Heap the parse may consume: scratch buffers plus the retained style map.
+  // A blanket 64 KB gate (the pre-typography rule) silently skipped the parse
+  // on a Read Pico opened from the library, where internal heap sits near 57 KB:
+  // borders, shading, page-break-before, ::first-letter drop caps and small caps
+  // are all CSS-driven, so every one of them quietly disappeared. Scale the
+  // requirement with the stylesheet instead; a large sheet still needs the full
+  // 64 KB, and an unknown size keeps the old conservative gate.
   constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  constexpr size_t CSS_PARSE_HEAP_BASE = 16 * 1024;
+  constexpr size_t CSS_PARSE_HEAP_PER_BYTE = 4;
 
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");
@@ -518,28 +527,30 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     }
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
-    // Check heap before parsing - CSS parsing allocates heavily
-    const uint32_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
-      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
-              MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+    // Check CSS file size before decompressing - skip files that are too large
+    size_t cssFileSize = 0;
+    const bool haveCssSize = getItemSize(cssPath, &cssFileSize);
+    if (haveCssSize && cssFileSize > MAX_CSS_FILE_SIZE) {
+      LOG_ERR("EBP", "CSS file too large (%zu bytes > %zu max), skipping: %s", cssFileSize, MAX_CSS_FILE_SIZE,
+              cssPath.c_str());
       if (parseResult == CssParser::ParseResult::Complete) {
         parseResult = CssParser::ParseResult::Partial;
       }
       continue;
     }
 
-    // Check CSS file size before decompressing - skip files that are too large
-    size_t cssFileSize = 0;
-    if (getItemSize(cssPath, &cssFileSize)) {
-      if (cssFileSize > MAX_CSS_FILE_SIZE) {
-        LOG_ERR("EBP", "CSS file too large (%zu bytes > %zu max), skipping: %s", cssFileSize, MAX_CSS_FILE_SIZE,
-                cssPath.c_str());
-        if (parseResult == CssParser::ParseResult::Complete) {
-          parseResult = CssParser::ParseResult::Partial;
-        }
-        continue;
+    // Check heap before parsing - CSS parsing allocates heavily
+    const size_t requiredHeap =
+        haveCssSize ? std::min(MIN_HEAP_FOR_CSS_PARSING, CSS_PARSE_HEAP_BASE + cssFileSize * CSS_PARSE_HEAP_PER_BYTE)
+                    : MIN_HEAP_FOR_CSS_PARSING;
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < requiredHeap) {
+      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu for %zu B), skipping: %s", freeHeap,
+              requiredHeap, cssFileSize, cssPath.c_str());
+      if (parseResult == CssParser::ParseResult::Complete) {
+        parseResult = CssParser::ParseResult::Partial;
       }
+      continue;
     }
 
     // Extract CSS file to temp location
@@ -910,18 +921,13 @@ bool Epub::loadSyncMetadata(SyncMetadata& metadata) {
 }
 
 bool Epub::clearCache() const {
-  if (!Storage.exists(cachePath.c_str())) {
-    LOG_DBG("EPB", "Cache does not exist, no action needed");
-    return true;
+  // Prune, do not rmtree: this directory also holds annotations.bin, bookmarks.bin and
+  // progress.bin, which are the reader's data and cannot be rebuilt.
+  const bool cleared = book_cache::pruneRegenerable(cachePath);
+  if (cleared) {
+    LOG_DBG("EPB", "Cache cleared successfully");
   }
-
-  if (!Storage.removeDir(cachePath.c_str())) {
-    LOG_ERR("EPB", "Failed to clear cache");
-    return false;
-  }
-
-  LOG_DBG("EPB", "Cache cleared successfully");
-  return true;
+  return cleared;
 }
 
 void Epub::setupCacheDir() const {

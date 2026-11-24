@@ -1,0 +1,17 @@
+{
+  "name": "ElfLoader",
+  "version": "2.1.0",
+  "description": "Espressif ELF loader 2.1.0, Xtensa subset for the readpico plugin runtime",
+  "license": "Apache-2.0",
+  "build": {
+    "srcDir": "src",
+    "srcFilter": [
+      "+<esp_elf.c>",
+      "+<esp_elf_symbol.c>",
+      "+<esp_elf_validate.c>",
+      "+<esp_elf_adapter.c>",
+      "+<arch/esp_elf_xtensa.c>"
+    ],
+    "flags": ["-Iinclude"]
+  }
+}

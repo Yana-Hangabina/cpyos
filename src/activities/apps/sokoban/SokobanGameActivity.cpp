@@ -168,7 +168,7 @@ void SokobanGameActivity::loop() {
     const auto& metrics = UITheme::getInstance().getMetrics();
     const Rect next = gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(),
                                           metrics.contentSidePadding, metrics.menuSpacing, metrics.menuRowHeight, 0, 1);
-    if (mappedInput.wasTapInRect(next.x, next.y, next.width, next.height)) {
+    if (mappedInput.wasTapInRect(next)) {
       if (currentLevel + 1 < totalLevels) {
         loadLevel(currentLevel + 1);
         scheduleSave();
@@ -213,7 +213,7 @@ void SokobanGameActivity::loop() {
     const Rect select =
         gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(), metrics.contentSidePadding,
                             metrics.menuSpacing, metrics.menuRowHeight, 0, 1);
-    if (mappedInput.wasTapInRect(select.x, select.y, select.width, select.height)) {
+    if (mappedInput.wasTapInRect(select)) {
       loadLevel(selectedLevel);
       scheduleSave();
       requestUpdate();
@@ -343,11 +343,11 @@ void SokobanGameActivity::handleInput() {
   const Rect levelButton =
       gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(), metrics.contentSidePadding,
                           metrics.menuSpacing, metrics.menuRowHeight, 1, 2);
-  if (mappedInput.wasTapInRect(undoButton.x, undoButton.y, undoButton.width, undoButton.height)) {
+  if (mappedInput.wasTapInRect(undoButton)) {
     undo();
     return;
   }
-  if (mappedInput.wasTapInRect(levelButton.x, levelButton.y, levelButton.width, levelButton.height)) {
+  if (mappedInput.wasTapInRect(levelButton)) {
     selectedLevel = currentLevel;
     const int visibleCount = getLevelSelectLayout(renderer, mappedInput.hasTouch()).visibleCount;
     scrollOffset = (selectedLevel / visibleCount) * visibleCount;

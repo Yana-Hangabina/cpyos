@@ -2,21 +2,22 @@
 
 // Vendor OTA (CloudZao Burner) for the Metalio E-Ink4 Plus.
 //
-// Protocol: POST https://admin.metalio.world/xiaozhi/api/firmware-ota/check
-//   X-OTA-Key: <personal key>          (compiled in from a local-only file)
-//   Device-Id: <MAC>                   (esp_efuse_mac_get_default, AA:BB:..)
-//   X-OTA-Channel: test                (only for the test channel)
-//   {"chip_model_name":"esp32s31","board":{"type":"Metalio E-Ink4 Plus"},
-//    "application":{"name":"CPYOS"}}
+// Protocol (CloudZao protocol 1.1): POST
+//   https://claw.cloudzao.cn/xiaozhi/api/partner/v1/updates/check
+//   X-Resource-Key: <developer resource key>
+//   Device-Id: <Wi-Fi station MAC>
+//   X-OTA-Channel: test                  (only for the test channel)
+//   {"chip_model_name":"esp32s3","board":{"type":"Metalio E-Ink4 Plus"},
+//    "application":{"name":"脆皮鸭CPYOS"}}
+//
+// The developer resource key is the same credential used by the resource
+// popup; it is read from PLUS_RESOURCE_KEY / /.crosspoint/resource_key and is
+// never logged. The response's has_update means "a firmware exists", so the
+// client compares firmware.version with the running app version itself.
 //
 // The firmware is downloaded to the card and then written by the same
 // firmware_flash path the SD update page uses (validated image, inactive OTA
 // slot, otadata switch), so OTA and SD update cannot drift apart.
-//
-// The key must never be committed or logged: it lives in
-// ports/metalio_plus/components/cpyos_app/plus_ota_key.local (gitignored) and
-// is injected by CMake as PLUS_OTA_KEY. Without it `configured()` is false and
-// the page explains that this build has no OTA credentials.
 
 #include <cstddef>
 #include <cstdint>
@@ -33,11 +34,16 @@ struct Info {
   std::string version;
   std::string url;
   std::string firmwareName;
+  std::string productName;
+  std::string versionStatus;  // latest / test
+  std::string remark;
+  std::string firmwareId;
+  std::string versionId;
   std::string error;          // human readable; NEVER contains the key
   size_t size = 0;
 };
 
-// False when this build has no PLUS_OTA_KEY (OTA page stays explanatory).
+// False when this build has no developer resource key (OTA page stays explanatory).
 bool configured();
 // Running app version (esp_app_desc).
 const char* currentVersion();

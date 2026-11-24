@@ -7,7 +7,7 @@
 #include "JjwxcSignInReminderPopup.h"
 #endif
 
-// Third main tab: a source directory, not a merged ranking (Pond v5 frame 08).
+// Third main tab: a source directory, not a merged ranking (refreshed UI frame 08).
 // A top row opens the way books arrive on the card (the web upload page), then
 // one card per source with its own status lamp and its real entry points
 // (JJWXC shows shelf / discover / search / login inline).

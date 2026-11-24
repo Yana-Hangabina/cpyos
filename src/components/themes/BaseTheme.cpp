@@ -11,6 +11,7 @@
 #include <PanelInsets.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -183,7 +184,7 @@ void BaseTheme::drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX,
 }
 
 void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const {
-  const bool charging = gpio.isUsbConnected();
+  const bool charging = powerManager.isBatteryCharging();
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   if (rect.width == UiHighDpiProfile::batteryWidth && rect.height == UiHighDpiProfile::batteryHeight) {
     constexpr int cavityWidth = 17;
@@ -220,10 +221,12 @@ void BaseTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t
 
 void BaseTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Left aligned: icon on left, percentage on right (reader mode)
-  const uint16_t percentage = powerManager.getBatteryPercentage();
+  // Chrome reads the cached level; the main loop owns sampling (one per second).
+  const bool known = powerManager.batteryPercentageKnown();
+  const uint16_t percentage = known ? powerManager.batteryDisplayPercent() : 0;
   const int y = rect.y + (UiHighDpiProfile::enabled ? 8 : 6);
 
-  if (showPercentage) {
+  if (showPercentage && known) {
     const auto percentageText = std::to_string(percentage) + "%";
     renderer.drawText(STATUS_NUMERIC_FONT_ID, rect.x + batteryPercentSpacing + rect.width, rect.y,
                       percentageText.c_str());
@@ -238,9 +241,16 @@ int BaseTheme::drawStatusBarBattery(const GfxRenderer& renderer, const int x, co
                                     const bool showPercent) const {
   const auto metrics = UITheme::getInstance().getMetrics();
   drawBatteryLeft(renderer, Rect{x, y, metrics.batteryWidth, metrics.batteryHeight}, showPercent);
+  return statusBarBatteryWidth(renderer, showPercent);
+}
+
+int BaseTheme::statusBarBatteryWidth(const GfxRenderer& renderer, const bool showPercent) const {
+  const auto metrics = UITheme::getInstance().getMetrics();
   int width = metrics.batteryWidth;
-  if (showPercent) {
-    const uint16_t percentage = powerManager.getBatteryPercentage();
+  // Keep this in step with drawBatteryLeft: the width must match the text that
+  // will actually be painted, and an unmeasured level paints no text at all.
+  if (showPercent && powerManager.batteryPercentageKnown()) {
+    const uint16_t percentage = powerManager.batteryDisplayPercent();
     width += batteryPercentSpacing +
              renderer.getTextWidth(STATUS_NUMERIC_FONT_ID, (std::to_string(percentage) + "%").c_str());
   }
@@ -278,12 +288,13 @@ bool BaseTheme::drawCoverThumbFill(const GfxRenderer& renderer, const Bitmap& bi
 
 void BaseTheme::drawBatteryRight(const GfxRenderer& renderer, Rect rect, const bool showPercentage,
                                  const int numericFontId) const {
-  const uint16_t percentage = powerManager.getBatteryPercentage();
+  const bool known = powerManager.batteryPercentageKnown();
+  const uint16_t percentage = known ? powerManager.batteryDisplayPercent() : 0;
   // NotoSans 12 digits and the cropped battery share their visible center at this offset.
   const int y = rect.y + (UiHighDpiProfile::enabled ? 8 : 6);
   const int gap = UiHighDpiProfile::enabled ? UiHighDpiProfile::controlGap : batteryPercentSpacing;
 
-  if (showPercentage) {
+  if (showPercentage && known) {
     const auto percentageText = std::to_string(percentage) + "%";
     const int textWidth = renderer.getTextWidth(numericFontId, percentageText.c_str());
     renderer.drawText(numericFontId, rect.x - textWidth - gap, rect.y, percentageText.c_str());
@@ -580,13 +591,18 @@ void BaseTheme::applyHeaderStatus(const GfxRenderer& renderer, freeink::ui::Head
   status.battery.text.font = freeink::ui::GfxRendererTarget::FONT_LABEL;
 
   status.showBattery = true;
-  const uint16_t percentage = powerManager.getBatteryPercentage();
+  // Cached level only: the main loop samples the gauge once per second. Read
+  // from the render task, this used to be the only sampling call on the Plus
+  // (and would have raced the loop's sample).
+  const bool batteryKnown = powerManager.batteryPercentageKnown();
+  const uint16_t percentage = batteryKnown ? powerManager.batteryDisplayPercent() : 0;
   status.battery.percent = static_cast<uint8_t>(percentage > 100 ? 100 : percentage);
-  status.battery.charging = gpio.isUsbConnected();
+  status.battery.charging = powerManager.isBatteryCharging();
   // Static label buffers: headers draw on the single render task, and the
   // strings only need to outlive the fui::header() call that consumes them.
   static char percentText[8];
-  if (SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS) {
+  if (batteryKnown &&
+      SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS) {
     snprintf(percentText, sizeof(percentText), "%u%%", static_cast<unsigned>(percentage));
     status.battery.label = percentText;
   }
@@ -682,6 +698,19 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
   // Battery + clock chrome and their title reserves live in the FreeInkUI
   // header component; this only fills the values from settings and metrics.
   applyHeaderStatus(renderer, props, upstreamStyle);
+  // A capsule theme (CPY) paints the status battery itself so it matches Home
+  // and the reader. The FUI glyph still reserves the title space, but paints in
+  // paper ink so only the theme's capsule is visible (device feedback: the
+  // control center and the reader menus showed a battery icon + "NN%" label
+  // beside a capsule on every other page).
+  const BaseTheme& theme = UITheme::getInstance().getTheme();
+  const bool capsuleBattery = theme.drawsHeaderBatteryCapsule();
+  if (capsuleBattery) {
+    props.status.battery.glyphWidth = static_cast<int16_t>(UITheme::getInstance().getMetrics().batteryWidth);
+    props.status.battery.label = nullptr;
+    props.status.battery.charging = false;
+    props.status.battery.color = fui::Color::White;
+  }
   // One source for the drawn band: the theme's own rect (already inside the
   // viewable insets) plus the aperture's corner clearance for the status line.
   const Rect bandRect = headerBand(rect, props);
@@ -720,6 +749,10 @@ void BaseTheme::drawHeaderWithStyle(const GfxRenderer& renderer, Rect rect, cons
     props.styles.normal.borderWidth = tokens.headerUnderline;
   }
   fui::header(ui.frame, band, props);
+  if (capsuleBattery) {
+    const bool showPercent = SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
+    theme.drawHeaderBatteryCapsule(renderer, bandRect, showPercent);
+  }
 }
 
 void BaseTheme::drawMainTabBar(const GfxRenderer&, Rect, MainTab) const {}
@@ -1206,31 +1239,36 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // Draw Progress Bar
   if (sb.showsProgressBar()) {
-#if FREEINK_DEVICE_EEGO_A4
-    // The bar's bottom edge is lifted 4 px so the bezel does not cover it
-    // (measured on device); horizontal span is untouched.
-    const int barMarginLeft = fillMargin ? 0 : orientedMarginLeft;
-    const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
-    const int progressBarMaxWidth = renderer.getScreenWidth() - barMarginLeft - barMarginRight;
-    const int progressBarY = renderer.getScreenHeight() - 4 - orientedMarginBottom - sb.progressBarHeightPx -
-                             paddingBottom + (fillMargin ? 1 : 0);
-#else
-    const int barMarginLeft = fillMargin ? 0 : orientedMarginLeft;
-    const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
-    const int progressBarMaxWidth = renderer.getScreenWidth() - barMarginLeft - barMarginRight;
-    const int progressBarY = renderer.getScreenHeight() - orientedMarginBottom - sb.progressBarHeightPx -
-                             paddingBottom + (fillMargin ? 1 : 0);
-#endif
     size_t progress;
     if (sb.progressBarMode == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
       progress = static_cast<size_t>(bookProgress);
     } else {
-      // Chapter progress
       progress = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) * 100 : 0;
     }
-    const int barWidth = progressBarMaxWidth * progress / 100;
-    const int barHeight = sb.progressBarHeightPx + (fillMargin ? orientedMarginBottom - 1 : 0);
-    renderer.fillRect(barMarginLeft, progressBarY, barWidth, barHeight, true);
+    if (BoardConfig::isEegoA4() && fillMargin && renderer.getOrientation() == GfxRenderer::Portrait) {
+      // EEGO A4 (upstream 4085981b): a slim line hugging the bottom bezel
+      // instead of a slab filling the inset; both ends stop where the rounded
+      // corners cut in.
+      constexpr int edgeGap = 7;
+      const int barY = screenHeight - edgeGap - sb.progressBarHeightPx - paddingBottom;
+      const int radius = UITheme::getInstance().getCornerRadius();
+      const int d = std::max(0, radius - edgeGap);
+      const int intrusion =
+          radius > 0 ? static_cast<int>(std::ceil(radius - std::sqrt(static_cast<float>(radius * radius - d * d)))) : 0;
+      const int barLeft = std::max(orientedMarginLeft, intrusion + 1);
+      const int barRight = renderer.getScreenWidth() - std::max(orientedMarginRight, intrusion + 1);
+      const int barWidth = std::max(0, barRight - barLeft) * static_cast<int>(std::min<size_t>(progress, 100)) / 100;
+      renderer.fillRect(barLeft, barY, barWidth, sb.progressBarHeightPx + edgeGap, true);
+    } else {
+      const int barMarginLeft = fillMargin ? 0 : orientedMarginLeft;
+      const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
+      const int progressBarMaxWidth = renderer.getScreenWidth() - barMarginLeft - barMarginRight;
+      const int progressBarY = renderer.getScreenHeight() - orientedMarginBottom - sb.progressBarHeightPx -
+                               paddingBottom + (fillMargin ? 1 : 0);
+      const int barWidth = progressBarMaxWidth * progress / 100;
+      const int barHeight = sb.progressBarHeightPx + (fillMargin ? orientedMarginBottom - 1 : 0);
+      renderer.fillRect(barMarginLeft, progressBarY, barWidth, barHeight, true);
+    }
   }
 
   // Draw Battery

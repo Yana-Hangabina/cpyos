@@ -39,10 +39,10 @@
 
 // ---- Pack-derived reader sizes. ----
 // CJK_PACK_SIGNATURE is crc32(assets/fonts/CPYOSHanSansSC-Regular-8105.ttf)
-// & 0xFFFF (0x4061). The point size lives in the low byte, so a
+// & 0xFFFF (0xE03B). The point size lives in the low byte, so a
 // pack with different metrics re-keys the section cache and pagination
 // rebuilds exactly once - no manual SECTION_FILE_VERSION bump.
-#define CJK_PACK_SIGNATURE (0x4061)
+#define CJK_PACK_SIGNATURE (0xE03B)
 #define CJK_READER_SIZE_FONT_ID(pt) (0x43000000 | (CJK_PACK_SIGNATURE << 8) | (pt))
 
 // Font ID 0 is reserved as the "not found" sentinel.
@@ -70,7 +70,7 @@ static_assert(CJK_UI_18_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(UI_HIGH_DPI_READER_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(CJK_PACK_SIGNATURE != 0, "Font ID collision with sentinel");
 static_assert(CJK_READER_SIZE_FONT_ID(10) != 0, "Font ID collision with sentinel");
-static_assert(CJK_READER_SIZE_FONT_ID(34) != 0, "Font ID collision with sentinel");
+static_assert(CJK_READER_SIZE_FONT_ID(40) != 0, "Font ID collision with sentinel");
 
 // Two ids that collide would silently draw one role in another's face.
 // The whole table is checked, including the pack-derived reader sizes.
@@ -124,6 +124,12 @@ constexpr bool idsUnique() {
       CJK_READER_SIZE_FONT_ID(32),
       CJK_READER_SIZE_FONT_ID(33),
       CJK_READER_SIZE_FONT_ID(34),
+      CJK_READER_SIZE_FONT_ID(35),
+      CJK_READER_SIZE_FONT_ID(36),
+      CJK_READER_SIZE_FONT_ID(37),
+      CJK_READER_SIZE_FONT_ID(38),
+      CJK_READER_SIZE_FONT_ID(39),
+      CJK_READER_SIZE_FONT_ID(40),
   };
   constexpr int kCount = static_cast<int>(sizeof(kIds) / sizeof(kIds[0]));
   for (int i = 0; i < kCount; ++i) {

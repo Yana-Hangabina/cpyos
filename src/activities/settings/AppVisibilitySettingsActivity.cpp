@@ -15,6 +15,9 @@ AppVisibilitySettingsActivity::AppVisibilitySettingsActivity(GfxRenderer& render
 
 void AppVisibilitySettingsActivity::onEnter() {
   UiListActivity::onEnter();
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  app_catalog::refreshPlugins();
+#endif
   dirty = false;
   waitForConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
@@ -22,7 +25,7 @@ void AppVisibilitySettingsActivity::onEnter() {
   rowItems.reserve(static_cast<size_t>(listCount()));
   for (int i = 0; i < listCount(); ++i) {
     fui::ListItem item;
-    item.label = I18N.get(app_catalog::titleId(i));
+    item.label = app_catalog::title(i);
     item.actionValue = static_cast<int16_t>(i);
     rowItems.push_back(item);
   }
@@ -30,6 +33,9 @@ void AppVisibilitySettingsActivity::onEnter() {
 
 void AppVisibilitySettingsActivity::onExit() {
   if (dirty) SETTINGS.saveToFile();
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  app_catalog::flushVisibility();
+#endif
   Activity::onExit();
 }
 

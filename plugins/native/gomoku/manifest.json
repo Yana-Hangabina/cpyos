@@ -1,0 +1,11 @@
+{
+  "id": "gomoku",
+  "name": "Gomoku",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "riscv32",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Two-player five-in-a-row on a 15x15 board.",
+  "author": "CPYOS"
+}

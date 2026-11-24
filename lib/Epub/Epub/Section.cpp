@@ -74,10 +74,30 @@ namespace {
 //             the way the non-hyphenated layout already did (upstream cb2a4c78)
 //   88 / 89 - CSS compound/id/descendant/child selectors and <pre> whitespace change
 //             which rules apply and how text is tokenized (upstream 0305aaa6, layout M1)
+//   89 / 90 - block-level CSS font-size changes line heights and per-line font ids,
+//             and TextBlock gained the 4-byte fontId field (layout M2)
+//   90 / 91 - blocks honour page-break-before/after, and a page hands trailing lines
+//             to the next one so it never ends with an orphan or opens with a widow,
+//             and a heading travels with the block it introduces (layout M3)
+//   91 / 92 - pages carry a border/shade box element for decorated blocks, so a cached
+//             page written without one would render the boxless layout (layout M4b)
+//   92 / 93 - a ::first-letter drop cap indents its block's first lines and adds a
+//             scaled glyph element, so an older page would render the plain layout (M6)
+//   93 / 94 - a line stores a per-word face slot table for inline font-size runs, so a
+//             page cached without it would draw the run at the block's size (M5b)
+//   94 / 95 - a decorated container no longer hands its box to the next sibling block,
+//             so pages cached with the leaked box must be rebuilt (layout M4b)
+//   95 / 96 - a drop cap stores its ink top (not the line baseline), so cached caps would
+//             still be drawn two lines high (layout M6)
+//   96 / 97 - an inline font-variant span marks its words small-caps, so cached lines
+//             written without that word style would render them in sentence case (M5c)
+//   97 / 98 - TrueType advances no longer round up before the final pixel snap, and
+//             headings are not hyphenated; both change cached line breaks
+//             (upstream d836ed4c + 4b6fdece)
 #ifdef ENABLE_CHINESE_VERSION
-constexpr uint8_t SECTION_FILE_VERSION = 89;
+constexpr uint8_t SECTION_FILE_VERSION = 98;
 #else
-constexpr uint8_t SECTION_FILE_VERSION = 88;
+constexpr uint8_t SECTION_FILE_VERSION = 97;
 #endif
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
@@ -526,7 +546,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
         ctxPtr->lut.push_back({position, paragraphIndex, listItemIndex, visibleTextOffset});
       },
       spec.embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, spec.imageRendering, std::move(tocAnchors),
-      popupFn, ctxPtr->cssParser, spec.collectTouchLinks);
+      popupFn, ctxPtr->cssParser, spec.collectTouchLinks, blockFontProvider_);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
     buildError_ = BuildError::OutOfMemory;
@@ -539,6 +559,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   ctx->parser->setTxtChapterBoundaries(txtChapterBoundaries);
   ctx->parser->setTextSpacing(spec.characterSpacing, spec.wordSpacingPercent);
   ctx->parser->setParagraphIndentSpaces(spec.paragraphIndentSpaces);
+  ctx->parser->setVerticalText(spec.verticalText);
   // Resolving the hyphenator is what makes a storage-loading build read a trie off
   // the card (see LanguageRegistry.cpp), so it is gated on the same flag that
   // decides whether breaks are ever computed. Hyphenation is off by default, and

@@ -40,6 +40,7 @@ typedef struct
 		struct {
 			int color_transform; /* Use -1 for unset */
 			int invert_cmyk; /* Use 1 for standalone JPEG files */
+			int gray; /* 1 = decode to one gray channel (Read Pico panel) */
 		} jpeg;
 		struct {
 			int smask_in_data;

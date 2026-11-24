@@ -1,5 +1,6 @@
 #include "ClearCacheActivity.h"
 
+#include <BookCachePrune.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -172,7 +173,7 @@ void ClearCacheActivity::clearCache() {
 
       file.close();  // Close before attempting to delete
 
-      if (Storage.removeDir(fullPath.c_str())) {
+      if (book_cache::pruneRegenerable(fullPath.c_str())) {
         clearedCount++;
       } else {
         LOG_ERR("CLEAR_CACHE", "Failed to remove: %s", fullPath.c_str());

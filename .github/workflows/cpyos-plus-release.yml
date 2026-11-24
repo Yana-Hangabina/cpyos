@@ -1,0 +1,264 @@
+name: CPYOS Plus Release
+
+# The Plus release is part of the same `cpyos-X.Y.Z` release as Read Pico: the
+# readpico workflow creates the GitHub release, this workflow adds the
+# e4plus image and publishes it to the CloudZao firmware market.  Standalone
+# `cpyos-plus-X.Y.Z[-testN]` tags remain supported for test builds.
+
+on:
+  push:
+    tags:
+      - 'cpyos-plus-*'
+      - 'cpyos-[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing plus tag, e.g. cpyos-plus-0.4.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cpyos-plus-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve tag and versions
+        env:
+          REF: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="$REF"
+          if [[ "$TAG" == cpyos-plus-* ]]; then
+            BASE="${TAG#cpyos-plus-}"
+          elif [[ "$TAG" == cpyos-[0-9]* ]]; then
+            BASE="${TAG#cpyos-}"
+          else
+            echo "::error::tag must be cpyos-X.Y.Z or cpyos-plus-X.Y.Z"
+            exit 1
+          fi
+          if [[ ! "$BASE" =~ ^([0-9]+\.[0-9]+\.[0-9]+)(-test[0-9]+)?$ ]]; then
+            echo "::error::$TAG is not a CPYOS semver release"
+            exit 1
+          fi
+          CORE="${BASH_REMATCH[1]}"
+          SUFFIX="${BASH_REMATCH[2]:-}"
+          if [ -n "$SUFFIX" ]; then
+            STATUS="test"
+            APP_VERSION="${CORE}-plus${SUFFIX}-e4p"
+          else
+            STATUS="latest"
+            APP_VERSION="${CORE}-e4p"
+          fi
+          git fetch --tags --force
+          git rev-parse --verify "refs/tags/$TAG^{commit}" >/dev/null
+          git checkout --detach "refs/tags/$TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "BASE=$BASE" >> "$GITHUB_ENV"
+          echo "STATUS=$STATUS" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+
+      - name: Check out ESP-IDF 6.1
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v6.1 --recursive --shallow-submodules \
+            https://github.com/espressif/esp-idf.git "$RUNNER_TEMP/esp-idf"
+          "$RUNNER_TEMP/esp-idf/install.sh" esp32s31
+          echo "IDF_PATH=$RUNNER_TEMP/esp-idf" >> "$GITHUB_ENV"
+          python3 ports/metalio_plus/scripts/patch_idf_cmake_quotes.py "$RUNNER_TEMP/esp-idf"
+
+      - name: Apply the freeink-sdk patches
+        run: |
+          set -euo pipefail
+          bash patches/freeink-sdk/apply.sh
+          bash patches/freeink-sdk-cff/apply.sh
+
+      - name: Check out the private JJWXC component
+        env:
+          JJWXC_DEPLOY_KEY: ${{ secrets.JJWXC_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$JJWXC_DEPLOY_KEY" ]; then
+            echo "::error::secrets.JJWXC_DEPLOY_KEY is not set; the Plus release must contain the JJWXC app"
+            exit 1
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$JJWXC_DEPLOY_KEY" > "$HOME/.ssh/jjwxc"
+          chmod 600 "$HOME/.ssh/jjwxc"
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/jjwxc -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc
+          test -f src/jjwxc/app/JjwxcActivity.cpp
+
+      - name: Build the Plus shell image
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          # The PDF reader is part of the release; its engine/assets are shipped
+          # as separate release assets (the app slot cannot hold MuPDF).  The
+          # firmware always reads the ROLLING index release (tag `pdf-engine`),
+          # never a single version's asset: that is what lets a device flashed
+          # with older firmware still find the newest engine for its class.
+          export CPYOS_PDF=1
+          export CPYOS_PDF_ENGINE_MANIFEST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/pdf-engine/plus-manifest-v2.txt"
+          cd ports/metalio_plus
+          rm -rf build_shell sdkconfig
+          CPYOS_PDF=1 CPYOS_PLUS_JJWXC=1 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
+            idf.py -B build_shell set-target esp32s31
+          CPYOS_PDF=1 CPYOS_PLUS_JJWXC=1 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
+            idf.py -B build_shell -DPROJECT_VER="$APP_VERSION" reconfigure build
+          python3 - "$APP_VERSION" <<'PY'
+          import struct, sys
+          path = "build_shell/cpyos_metalio_plus.bin"
+          data = open(path, "rb").read()
+          if data[0] != 0xE9 or struct.unpack_from("<I", data, 0x20)[0] != 0xABCD5432:
+              raise SystemExit("not an ESP app image: " + path)
+          version = data[0x30:0x50].split(b"\0", 1)[0].decode()
+          project = data[0x50:0x70].split(b"\0", 1)[0].decode()
+          if project != "cpyos_metalio_plus":
+              raise SystemExit("project is %r" % project)
+          if version != sys.argv[1]:
+              raise SystemExit("app version is %r, expected %r" % (version, sys.argv[1]))
+          limit = 0x660000
+          if len(data) > limit:
+              raise SystemExit("image is %d B; app slot is only %d B" % (len(data), limit))
+          print("app image ok: project=%s version=%s size=%d" % (project, version, len(data)))
+          PY
+
+      - name: Build the PDF engine and the asset bundle
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          SRC="$RUNNER_TEMP/mupdf-rv"
+          mkdir -p "$SRC"
+          curl -fsSL -o "$SRC/mupdf-src.tar.gz" \
+            https://mupdf.com/downloads/archive/mupdf-1.26.3-source.tar.gz
+          tar -xzf "$SRC/mupdf-src.tar.gz" -C "$SRC"
+          bash ports/metalio_plus/scripts/build_pdf_artifacts.sh \
+            --build build_shell \
+            --mupdf-src "$SRC/mupdf-1.26.3-source" \
+            --with-assets \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/plus-pdfmod.bin"
+
+      - name: Publish the engine entry into the rolling index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OLD="$RUNNER_TEMP/plus-manifest-v2.txt"
+          mkdir -p "$RUNNER_TEMP"
+          if gh release download pdf-engine --repo "$GITHUB_REPOSITORY" \
+               --pattern plus-manifest-v2.txt --dir "$RUNNER_TEMP" 2>/dev/null; then
+            MERGE=(--merge-into "$OLD")
+          else
+            MERGE=()
+          fi
+          python3 scripts/build_pdf_engine_manifest.py \
+            --firmware-elf "${PWD}/ports/metalio_plus/build_shell/cpyos_metalio_plus.elf" \
+            --pdfmod build/pdfmod-rv.bin \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/plus-pdfmod.bin" \
+            "${MERGE[@]}" --out "$RUNNER_TEMP/plus-manifest-v2.txt"
+          if ! gh release view pdf-engine --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create pdf-engine --repo "$GITHUB_REPOSITORY" \
+              --title "PDF engine index" \
+              --notes "Rolling compatibility index for the PDF engine updater. Do not delete." \
+              --prerelease
+          fi
+          gh release upload pdf-engine "$RUNNER_TEMP/plus-manifest-v2.txt" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Build the data-partition blobs
+        run: |
+          set -euo pipefail
+          python3 -m pip download --no-deps --quiet --dest /tmp/pywheel pypinyin==0.55.0
+          python3 scripts/generate_pinyin_db.py "$(ls /tmp/pywheel/pypinyin-*.whl)"
+          python3 scripts/generate_hyphenation_db.py
+          python3 scripts/build_web_pack.py
+          # The app build writes a pack whose key/content signatures match the
+          # compiled port_i18n header (--builtin-langs en,zh_cn). A pack built
+          # from the source tree's all-language header is rejected at boot.
+          cp ports/metalio_plus/build_shell/i18n_pack.dat build/i18n_pack.dat
+          python3 scripts/generate_data_manifest.py \
+            --partitions ports/metalio_plus/partitions_plus_ota.csv \
+            --out build/data_manifest_plus.txt
+
+      - name: Stage the release asset
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/cpyos-plus/$BASE"
+          cp ports/metalio_plus/build_shell/cpyos_metalio_plus.bin \
+            "dist/cpyos-plus/$BASE/cpyos-plus-$APP_VERSION.bin"
+          # Engine, assets and the one-line update manifest travel with the
+          # firmware so a Plus user can stage them on the SD card (the reader
+          # and its updater are in the image; MuPDF itself is not).
+          cp build/pdfmod-rv.bin "dist/cpyos-plus/$BASE/plus-pdfmod.bin"
+          cp build/pdf_full_assets.bin "dist/cpyos-plus/$BASE/plus-pdf-assets.bin"
+          cp build/pdf-engine-manifest.txt \
+            "dist/cpyos-plus/$BASE/plus-pdf-engine-manifest.txt"
+          # Data-partition blobs (i18n/web/pinyin/hyphen/emoji/reading core).
+          # The image runs without them, but the UI subset lacks the common
+          # Han reading face and 33 languages fall back to English; flash them
+          # with ports/metalio_plus/scripts/flash_plus_data.py.
+          cp build/pinyin.dat "dist/cpyos-plus/$BASE/pinyin.dat"
+          cp build/web_pack.dat "dist/cpyos-plus/$BASE/web_pack.dat"
+          cp build/hyphen.dat "dist/cpyos-plus/$BASE/hyphen.dat"
+          cp build/i18n_pack.dat "dist/cpyos-plus/$BASE/i18n_pack.dat"
+          cp build/emoji.dat "dist/cpyos-plus/$BASE/emoji.dat"
+          cp build/cjk_core.dat "dist/cpyos-plus/$BASE/cjk_core.dat"
+          cp build/data_manifest_plus.txt "dist/cpyos-plus/$BASE/data_manifest_plus.txt"
+          (cd "dist/cpyos-plus/$BASE" && sha256sum * > SHA256SUMS)
+
+      - name: Publish to the CloudZao firmware market
+        env:
+          CLOUDZAO_ACCESS_TOKEN: ${{ secrets.CLOUDZAO_ACCESS_TOKEN }}
+          CLOUDZAO_EMAIL: ${{ secrets.CLOUDZAO_EMAIL }}
+          CLOUDZAO_PASSWORD: ${{ secrets.CLOUDZAO_PASSWORD }}
+          CLOUDZAO_FIRMWARE_ID: ${{ vars.CLOUDZAO_FIRMWARE_ID }}
+          CLOUDZAO_HARDWARE_MODEL_ID: ${{ vars.CLOUDZAO_HARDWARE_MODEL_ID }}
+          CLOUDZAO_PRODUCT_NAME: ${{ vars.CLOUDZAO_PRODUCT_NAME }}
+        run: |
+          set -euo pipefail
+          NOTES="docs/releases/plus-$BASE.md"
+          if [ -f "$NOTES" ]; then
+            REMARK=(--remark-file "$NOTES")
+          else
+            REMARK=(--remark "CPYOS Plus $APP_VERSION")
+          fi
+          python3 ports/metalio_plus/scripts/publish_cloudzao_plus.py \
+            --firmware "dist/cpyos-plus/$BASE/cpyos-plus-$APP_VERSION.bin" \
+            --version "$APP_VERSION" \
+            --status "$STATUS" \
+            --flash-start-address 0x10000 \
+            "${REMARK[@]}"
+
+      - name: Create or update the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NOTES="docs/releases/plus-$BASE.md"
+          if [ -f "$NOTES" ]; then
+            NOTES_ARGS=(--notes-file "$NOTES")
+          else
+            NOTES_ARGS=(--notes "CPYOS Plus $APP_VERSION; published to the CloudZao firmware market.")
+          fi
+          PRERELEASE=()
+          if [ "$STATUS" = test ]; then
+            PRERELEASE=(--prerelease)
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
+          else
+            gh release create "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" \
+              "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
+          fi

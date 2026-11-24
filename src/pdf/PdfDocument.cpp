@@ -1,13 +1,29 @@
-#if defined(CROSSPOINT_MUPDF)
+// The in-app engine and the XIP engine are mutually exclusive: under
+// CROSSPOINT_PDF_XIP the code lives in the `pdfmod` partition and this
+// translation unit must compile to nothing (same contract as
+// PdfModuleEntry.cpp).  Without the XIP term here, a clean `readpico_pdf`
+// build links this file against libmupdf, which that env deliberately does
+// not link -- so the env only ever built by reusing a stale object file.
+#if defined(CROSSPOINT_MUPDF) && !defined(CROSSPOINT_PDF_XIP)
 
 #include "PdfDocument.h"
+#include "PdfLineJoin.h"
 
 #include "mupdf/fitz/glyph-cache.h"
 
+// The module build must not link against app symbols: HalStorage/heap/logging
+// resolve through the host table instead (PdfModuleHostGlue.h).
+#if defined(CROSSPOINT_PDF_MODULE)
+#include "PdfModuleHostGlue.h"
+#else
 #include <HalStorage.h>
 #include <Logging.h>
 #include <esp_debug_helpers.h>
 #include <esp_heap_caps.h>
+#endif
+#include "PdfRenderBudget.h"
+#include "PdfInk.h"
+#include "PdfDeadline.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -16,8 +32,6 @@
 #include <new>
 #include <vector>
 
-extern "C" uint8_t _ext_ram_bss_start[];
-extern "C" uint8_t _ext_ram_bss_end[];
 // Added by patches/mupdf/source/fitz/image.c (the trimmed MuPDF build): a hard
 // ceiling on decoded image bytes so a content-heavy page fails to a smaller
 // band budget instead of exhausting PSRAM. Not in the stock 1.26.3 headers.
@@ -36,6 +50,16 @@ constexpr int kPdfTileHeight = 384;
 // 112-page PDF; this buffer is allocated before the page is opened.
 uint8_t* gPdfTileBuffer = nullptr;
 size_t gPdfTileBufferSize = 0;
+
+// Per-page wall clock for the fallback ladder.  The app stops waiting at 75 s
+// and shows the card, but the worker would otherwise keep grinding rung after
+// rung (each re-opens the document), holding the sync slot so the NEXT page
+// waits for it.  90 s lets a page that would finish just past the wait still
+// land, and bounds the post-timeout work to seconds instead of minutes.
+constexpr uint32_t kLadderBudgetMs = 90000;
+uint32_t gLadderDeadlineMs = 0;  // 0 = no per-page budget
+
+bool ladderExpired() { return pdf_deadline::expired(gLadderDeadlineMs, millis()); }
 
 // --- Emergency reserve ------------------------------------------------------
 //
@@ -142,7 +166,7 @@ void* psramRealloc(void*, void* ptr, size_t size) {
       }
     }
     if (size >= 131072) {
-      logSerial.printf("[PDF] large realloc %u failed; caller backtrace:\n", static_cast<unsigned>(size));
+      LOG_ERR("PDF", "large realloc %u failed; caller backtrace:", static_cast<unsigned>(size));
       esp_backtrace_print(14);
     }
   }
@@ -317,30 +341,41 @@ bool writeBmpRows(HalFile& out, fz_context* ctx, fz_pixmap* pix, int width) {
 
 PdfDocument::PdfDocument(std::string path) : path_(std::move(path)) {}
 
+namespace {
+void logPsram(const char* step) {
+  LOG_ERR("PDF", "close %-18s psram free=%u largest=%u", step,
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+}
+}  // namespace
+
 PdfDocument::~PdfDocument() {
+  logPsram("enter");
   close();
+  logPsram("after close");
   reserveRelease();
+  logPsram("after reserve");
   if (gPdfTileBuffer) {
     heap_caps_free(gPdfTileBuffer);
     gPdfTileBuffer = nullptr;
     gPdfTileBufferSize = 0;
   }
+  logPsram("after tile buffer");
 }
 
 bool PdfDocument::load() {
-  // The MuPDF/FreeType .bss sections are linked into .ext_ram.bss (NOLOAD).
-  // The IDF startup does not zero that segment, so do it before the first
-  // MuPDF allocation.  A pure-image PDF otherwise hits random image-decoder
-  // tables and faults in fz_new_pixmap_from_page.
-  static bool extRamBssZeroed = false;
-  if (!extRamBssZeroed) {
-    const size_t extBssBytes = static_cast<size_t>(_ext_ram_bss_end - _ext_ram_bss_start);
-    LOG_ERR("PDF", "ext bss zero %u bytes", static_cast<unsigned>(extBssBytes));
-    std::memset(_ext_ram_bss_start, 0, extBssBytes);
-    extRamBssZeroed = true;
-  }
+  // The MuPDF/FreeType globals that must be zero live in this module's .bss, and
+  // the LOADER zeroes them through the alias and reads them back before calling
+  // the entry (PdfModuleRuntime).  An earlier version of this function also
+  // memset _ext_ram_bss_start here; that symbol is a linker LAYOUT symbol of the
+  // APP image (host_provides exported it), so every open zeroed the app's
+  // EXT_RAM_BSS_ATTR globals -- which after a Wi-Fi session hold live lwIP state,
+  // producing `assert xQueueSemaphoreTake ((pxQueue))` in tcpip_thread during the
+  // first page render. Never zero anything through an app layout symbol.
 
   close();
+  passwordRequired_ = false;
+  passwordWrong_ = false;
 
   fz_alloc_context alloc{nullptr, psramMalloc, psramRealloc, psramFree};
   LOG_ERR("PDF", "load %s psram free=%u largest=%u", path_.c_str(),
@@ -368,6 +403,19 @@ bool PdfDocument::load() {
     stream_->seek = seekHalFile;
     fz_register_document_handlers(ctx_);
     doc_ = fz_open_document_with_stream(ctx_, "pdf", stream_);
+    // Opening the stream succeeds for an encrypted document; page access then
+    // returns blank content while count_pages still works.  Authenticate here
+    // (empty string when no password was supplied) so the reader can ask for
+    // one instead of showing blank pages.  This was missing entirely: every
+    // password-protected PDF opened "successfully" and rendered white.
+    if (fz_needs_password(ctx_, doc_)) {
+      const char* supplied = password_.empty() ? "" : password_.c_str();
+      if (!fz_authenticate_password(ctx_, doc_, supplied)) {
+        passwordRequired_ = true;
+        passwordWrong_ = !password_.empty();
+        fz_throw(ctx_, FZ_ERROR_GENERIC, "password required");
+      }
+    }
     pageCount_ = fz_count_pages(ctx_, doc_);
     LOG_ERR("PDF", "opened: pages=%d psram free=%u largest=%u", pageCount_,
             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
@@ -375,7 +423,9 @@ bool PdfDocument::load() {
     ok = pageCount_ > 0;
   }
   fz_catch(ctx_) {
-    LOG_ERR("PDF", "load failed: %s", fz_caught_message(ctx_));
+    // A missing/rejected password is not a broken file; the reader turns it
+    // into the password prompt and keeps the message out of the log noise.
+    if (!passwordRequired_) LOG_ERR("PDF", "load failed: %s", fz_caught_message(ctx_));
     ok = false;
   }
   if (!ok) {
@@ -449,6 +499,7 @@ static bool renderTiles(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_irect 
   fz_pixmap* pix = nullptr;
   bool ok = false;
   int tilesDone = 0;
+  bool allBands = true;  // a budget break leaves a SHORT bmp: never call that a page
   fz_var(list);
   fz_var(pix);
   fz_var(ok);
@@ -511,6 +562,11 @@ static bool renderTiles(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_irect 
       if (!writeBmpRows(out, ctx, pix, width)) fz_throw(ctx, FZ_ERROR_GENERIC, "BMP row write failed");
       fz_drop_pixmap(ctx, pix);
       pix = nullptr;
+      if (ladderExpired()) {
+        LOG_ERR("PDF", "tiles: ladder budget reached after %d tiles", tilesDone);
+        allBands = false;
+        break;
+      }
       ++tilesDone;
       fz_empty_store(ctx);
       // The glyph cache holds rendered glyphs for every size on the page.  A
@@ -522,16 +578,22 @@ static bool renderTiles(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_irect 
               static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
               static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
     }
-    ok = true;
+    ok = allBands;
   }
   fz_catch(ctx) {
-    // The previous version only set ok=false, so the reader showed "page load
+    // The previous version only set ok=false, so the reader showed "page load"
     // error" while MuPDF's actual reason (allocation failure, broken image,
     // unsupported filter) never reached the serial log.  Always report it.
-    LOG_ERR("PDF", "tile render failed at tile %d/%d code=%d free=%u largest=%u", tilesDone + 1, fz_caught(ctx),
+    // Four conversions, four arguments.  The previous format asked for a tile
+    // total that this function never computed ("%d/%d"), so every field after
+    // it was shifted: the MuPDF error code printed as "tile 1/2", PSRAM free as
+    // "code=", the largest block as "free=" and an uninitialized vararg register
+    // as "largest=0".  It cost a crash hunt its real numbers -- see
+    // docs/engineering/pdf-xip-psram-init-incident-20261119.md section 8.
+    LOG_ERR("PDF", "tile render failed at tile %d code=%d free=%u largest=%u", tilesDone + 1, fz_caught(ctx),
             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-    logSerial.printf("[PDF] tile render reason: %s\n", fz_caught_message(ctx) ? fz_caught_message(ctx) : "(null)");
+    LOG_ERR("PDF", "tile render reason: %s", fz_caught_message(ctx) ? fz_caught_message(ctx) : "(null)");
     delay(20);
     ok = false;
   }
@@ -556,11 +618,11 @@ static bool renderTiles(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_irect 
 // (674x873 = 588 KB) instead of an unbounded number of image tiles.
 // Defined further down (needs the pixmap helpers); used by the render paths.
 namespace {
-void stretchContrast(fz_context* ctx, fz_pixmap* pix, int* outLow, int* outHigh);
+void stretchContrast(fz_context* ctx, fz_pixmap* pix, int* outLow, int* outHigh, float* outInk = nullptr);
 }
 
 static bool renderWholePage(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_irect bbox,
-                            const std::string& bmpPath, bool skipImages) {
+                            const std::string& bmpPath, bool skipImages, float* outInk = nullptr) {
   HalFile out;
   if (!Storage.openFileForWrite("PDF", bmpPath.c_str(), out)) return false;
 
@@ -574,14 +636,27 @@ static bool renderWholePage(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_ir
   fz_pixmap* pix = nullptr;
   fz_device* dev = nullptr;
   bool ok = false;
+  float ink = 0.0f;  // ink fraction of what was drawn (see pdf_ink)
   fz_var(pix);
   fz_var(dev);
   fz_var(ok);
+  // Step lines, deliberately surrounding every MuPDF call rather than only the
+  // ones that can fail.  The reader's 180 s worker deadline says *that* a
+  // render never returned; these say which call it is sitting in, which is the
+  // difference between a diagnosis and a guess.  A wedge is now recorded as
+  // "run_page start" with no "run_page done" -- that is MuPDF page execution,
+  // not the pixmap, not the SD write.
   fz_try(ctx) {
     if (!writeBmpHeader(out, width, height)) fz_throw(ctx, FZ_ERROR_GENERIC, "BMP header write failed");
+    LOG_ERR("PDF", "render step: bmp header written %dx%d", width, height);
     pix = fz_new_pixmap_with_bbox(ctx, fz_device_gray(ctx), bbox, nullptr, 0);
+    LOG_ERR("PDF", "render step: pixmap alloc pix=%d free=%u largest=%u", pix ? 1 : 0,
+            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+    if (!pix) fz_throw(ctx, FZ_ERROR_GENERIC, "whole-page pixmap allocation failed");
     fz_clear_pixmap_with_value(ctx, pix, 255);
     dev = fz_new_draw_device(ctx, ctm, pix);
+    LOG_ERR("PDF", "render step: draw device created, run_page start");
     auto savedFillImage = dev->fill_image;
     auto savedFillImageMask = dev->fill_image_mask;
     if (skipImages) {
@@ -597,7 +672,7 @@ static bool renderWholePage(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_ir
     }
     fz_close_device(ctx, dev);
     int lo = 0, hi = 255;
-    stretchContrast(ctx, pix, &lo, &hi);
+    stretchContrast(ctx, pix, &lo, &hi, outInk ? &ink : nullptr);
     LOG_ERR("PDF", "auto-levels %d..%d", lo, hi);
     LOG_ERR("PDF", "close_device done free=%u", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
     ok = writeBmpRows(out, ctx, pix, width);
@@ -609,13 +684,14 @@ static bool renderWholePage(fz_context* ctx, fz_page* page, fz_matrix ctm, fz_ir
     LOG_ERR("PDF", "full-page render failed code=%d free=%u largest=%u", fz_caught(ctx),
             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-    logSerial.printf("[PDF] full-page reason: %s\n", fz_caught_message(ctx) ? fz_caught_message(ctx) : "(null)");
+    LOG_ERR("PDF", "full-page reason: %s", fz_caught_message(ctx) ? fz_caught_message(ctx) : "(null)");
     delay(20);
     ok = false;
   }
   fz_drop_pixmap(ctx, pix);
   out.close();
   if (!ok) Storage.remove(bmpPath.c_str());
+  if (outInk) *outInk = ok ? ink : 0.0f;
   return ok;
 }
 
@@ -721,7 +797,7 @@ namespace {
 // 0..255 range, which on a 16-level panel reads as grey instead of black; the
 // same page re-mapped so its darkest ink is 0 and its paper is 255 reads crisp.
 // Percentile clipping keeps a few stray pixels from flattening the whole page.
-void stretchContrast(fz_context* ctx, fz_pixmap* pix, int* outLow, int* outHigh) {
+void stretchContrast(fz_context* ctx, fz_pixmap* pix, int* outLow, int* outHigh, float* outInk) {
   const int w = fz_pixmap_width(ctx, pix);
   const int h = fz_pixmap_height(ctx, pix);
   const int stride = fz_pixmap_stride(ctx, pix);
@@ -750,6 +826,8 @@ void stretchContrast(fz_context* ctx, fz_pixmap* pix, int* outLow, int* outHigh)
   }
   if (outLow) *outLow = low;
   if (outHigh) *outHigh = high;
+  if (outInk) *outInk = pdf_ink::inkFromHistogram(hist, static_cast<unsigned>(low),
+                                                   static_cast<unsigned>(high), total);
   if (high - low < 24) return;  // already contrasty (or blank)
 
   unsigned char lut[256];
@@ -803,6 +881,13 @@ bool PdfDocument::extractText(int pageNo, std::vector<std::string>& paragraphs, 
   fz_var(page);
   fz_var(text);
   fz_var(ok);
+  // How many text blocks produced a paragraph, so the summary line states the extraction
+  // shape without the option's opinion folded into it.  With the option OFF this must read
+  // "N blocks -> N paragraphs" on every page: the device-side proof that the setting reached
+  // the engine.  That claim used to live only in a comment while the bench hook wrote
+  // SETTINGS and stopped, so the engine kept splitting behind a switched-off option.
+  // Function scope because the summary prints after the try/catch.
+  size_t blocksEmitted = 0;
   fz_try(ctx_) {
     page = fz_load_page(ctx_, doc_, pageNo);
     text = fz_new_stext_page_from_page(ctx_, page, nullptr);
@@ -812,6 +897,8 @@ bool PdfDocument::extractText(int pageNo, std::vector<std::string>& paragraphs, 
 
   if (ok && text) {
     size_t total = 0;
+    // Reused across the blocks of this page so the walk allocates once, not per block.
+    std::vector<pdf_join::LineRecord> records;
     for (fz_stext_block* block = text->first_block; block && total < kMaxReflowChars; block = block->next) {
       if (block->type == FZ_STEXT_BLOCK_IMAGE) {
         // A single figure or table means the bitmap path wins: reflowing would
@@ -820,11 +907,44 @@ bool PdfDocument::extractText(int pageNo, std::vector<std::string>& paragraphs, 
         continue;
       }
       if (block->type != FZ_STEXT_BLOCK_TEXT) continue;
-      std::string para;
+      // MuPDF groups evenly-spaced hard-wrapped lines into ONE block -- measured on a
+      // Chinese page built for this: four separately inserted 16-character lines came
+      // back as one block with four lines.  Gluing such a block without looking at the
+      // line boxes therefore merges two adjacent paragraphs into a single run, and once
+      // the break is gone no app-side rule (`pdf_merge`) can restore it.  So ask the
+      // geometry where the paragraphs of this block begin, and honour that.
+      //
+      // One record per line, in MuPDF's order, because `paragraphStarts()` indexes into
+      // the same sequence twice below.  `records` is declared outside the block loop so a
+      // page holds one buffer that grows once, rather than allocating per block.
+      records.clear();
+      const size_t paragraphsBeforeBlock = paragraphs.size();
       for (fz_stext_line* line = block->u.t.first_line; line; line = line->next) {
+        pdf_join::LineRecord record;
+        record.box = pdf_join::LineBox{line->bbox.x0, line->bbox.y0, line->bbox.x1, line->bbox.y1};
+        // A line whose only characters are blanks is invisible on the page but has a
+        // small box: as text it is nothing, as geometry it reads as a colossal shortfall.
+        // Both would be wrong, so it is reported as a break and contributes no characters.
+        for (fz_stext_char* ch = line->first_char; ch && !record.printable; ch = ch->next) {
+          record.printable = !pdf_join::isBlankCp(ch->c);
+        }
+        records.push_back(record);
+      }
+      const std::vector<int> starts = pdf_join::paragraphStarts(records, splitParagraphs_);
+      size_t startAt = 0;
+      std::string para;
+      size_t index = 0;
+      for (fz_stext_line* line = block->u.t.first_line; line; line = line->next, ++index) {
+        if (!records[index].printable) continue;
         std::string lineText;
         for (fz_stext_char* ch = line->first_char; ch; ch = ch->next) appendUtf8(lineText, ch->c);
-        if (lineText.empty()) continue;
+        while (startAt < starts.size() && starts[startAt] < static_cast<int>(index)) ++startAt;
+        if (!para.empty() && startAt < starts.size() && starts[startAt] == static_cast<int>(index)) {
+          // The geometry says this line begins a paragraph: close the current one, which
+          // is what the app then lays out as a new <p>.
+          paragraphs.push_back(std::move(para));
+          para.clear();
+        }
         if (!para.empty()) {
           if (para.back() == '-') {
             para.pop_back();  // hyphenated line break
@@ -838,10 +958,17 @@ bool PdfDocument::extractText(int pageNo, std::vector<std::string>& paragraphs, 
         if (total >= kMaxReflowChars) break;
       }
       if (!para.empty()) paragraphs.push_back(std::move(para));
+      if (paragraphs.size() > paragraphsBeforeBlock) ++blocksEmitted;
       if (paragraphs.size() >= 400) break;
     }
   }
 
+  // One line per extraction, printed by the engine itself: the paragraphing it produced and
+  // whether the reader's option was in force.  The app-side `reflow merge:` line only appears
+  // when the option is on, so without this there was no observable off-state.
+  LOG_INF("PDF", "reflow engine: %u blocks -> %u paragraphs split=%s",
+          static_cast<unsigned>(blocksEmitted), static_cast<unsigned>(paragraphs.size()),
+          splitParagraphs_ ? "on" : "off");
   fz_drop_stext_page(ctx_, text);
   fz_drop_page(ctx_, page);
   fz_purge_glyph_cache(ctx_);
@@ -849,6 +976,8 @@ bool PdfDocument::extractText(int pageNo, std::vector<std::string>& paragraphs, 
   fz_shrink_store(ctx_, 0);
   return ok && !paragraphs.empty();
 }
+
+void PdfDocument::setParagraphSplit(bool enabled) { splitParagraphs_ = enabled; }
 
 bool PdfDocument::writeBlankBmp(const std::string& bmpPath, int maxWidth, int maxHeight) {
   if (maxWidth <= 0 || maxHeight <= 0) return false;
@@ -866,6 +995,12 @@ bool PdfDocument::writeBlankBmp(const std::string& bmpPath, int maxWidth, int ma
 }
 
 bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int maxWidth, int maxHeight, bool cover) {
+  // One budget for the whole page build, ladder included: the app stops waiting
+  // at 75 s, and this is what keeps the worker from grinding on after that.
+  struct LadderScope {
+    LadderScope() { gLadderDeadlineMs = millis() + kLadderBudgetMs; }
+    ~LadderScope() { gLadderDeadlineMs = 0; }
+  } ladderScope;
   if (!ctx_ || !doc_ || pageNo < 0 || pageNo >= pageCount_ || maxWidth <= 0 || maxHeight <= 0) return false;
 
   // Large PDFs hold decoded image tiles for the page just rendered: after a
@@ -875,8 +1010,16 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
   // 0.6 s, so do it *before* rendering instead of after a failure: every large
   // page then starts from the same ~5.8 MB instead of inheriting the previous
   // page's leftovers and failing the first attempt.
-  if (pageCount_ > 32) {
-    const size_t reserve = static_cast<size_t>(maxWidth) * static_cast<size_t>(maxHeight) + (4u << 20);
+  // Margins come from the PSRAM this device has, not from this device's numbers
+  // (PdfRenderBudget.h; the 8 MB values are reproduced exactly, so nothing
+  // changes here -- a smaller board stops being handed impossible reserves).
+  const pdf_render_budget::Budget budget =
+      pdf_render_budget::forPsram(static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_SPIRAM)));
+  {
+    // Not `pageCount_ > 32`: a two-page document can hold a page that needs
+    // more memory than a hundred text pages.  The condition is the memory
+    // itself, which is what this branch is about.
+    const size_t reserve = static_cast<size_t>(maxWidth) * static_cast<size_t>(maxHeight) + budget.prepReserve;
     if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) < reserve) {
       LOG_ERR("PDF", "render %d: prep reset (free=%u reserve=%u)", pageNo + 1,
               static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
@@ -952,13 +1095,23 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
     // working margin (see renderWholePage).  Tiles remain the low-memory path.
     const size_t outBytes = static_cast<size_t>(bbox.x1 - bbox.x0) * static_cast<size_t>(bbox.y1 - bbox.y0);
     const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    if (freeNow > outBytes + (1536u << 10)) {
-      LOG_ERR("PDF", "render %d: full-page attempt out=%u free=%u", pageNo + 1, static_cast<unsigned>(outBytes),
-              static_cast<unsigned>(freeNow));
+    // The full-page pixmap is ONE allocation.  Total free space says nothing
+    // about whether it can be satisfied; the largest contiguous block does.
+    // Choosing this rung on free-space alone walked into a MuPDF call that
+    // never returned (measured: free 1.42 MB but largest 573 KB for a 1.09 MB
+    // pixmap, and the render job was still running 180 s later with nothing in
+    // the log).  Tiles are the path that works in that shape, so that is what
+    // the comparison must select.
+    const size_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (freeNow > outBytes + budget.fullPageSlack && largestNow > outBytes + budget.pixmapSlack) {
+      LOG_ERR("PDF", "render %d: full-page attempt out=%u free=%u largest=%u", pageNo + 1,
+              static_cast<unsigned>(outBytes), static_cast<unsigned>(freeNow),
+              static_cast<unsigned>(largestNow));
       ok = renderWholePage(ctx_, page, ctm, bbox, bmpPath, false);
     } else {
-      LOG_ERR("PDF", "render %d: tiled attempt out=%u free=%u", pageNo + 1, static_cast<unsigned>(outBytes),
-              static_cast<unsigned>(freeNow));
+      LOG_ERR("PDF", "render %d: tiled attempt out=%u free=%u largest=%u", pageNo + 1,
+              static_cast<unsigned>(outBytes), static_cast<unsigned>(freeNow),
+              static_cast<unsigned>(largestNow));
       ensureTileBuffer(maxWidth);
       ok = renderTiles(ctx_, page, ctm, bbox, kPdfTileHeight, bmpPath, false, useDisplayList_);
     }
@@ -968,7 +1121,11 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
     LOG_ERR("PDF", "render %d failed: %s", pageNo + 1, fz_caught_message(ctx_));
     ok = false;
   }
-  if (!rendered && haveLayout && page && pageCount_ > 32) {
+  // Same reasoning as the prep reset: this fallback exists because PSRAM is
+  // fragmented by what the previous page left behind, so the trigger is the
+  // memory, not the number of pages in the file.
+  if (!rendered && haveLayout && page &&
+      heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) < budget.stripGate) {
     // Large PDFs can accumulate 3 MB+ page resources plus image caches. Drop
     // the old page/context and reopen the document so the strip retry starts
     // from a defragmented PSRAM heap instead of the failed full-page state.
@@ -1024,6 +1181,11 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
     };
     const auto attempt = [&](const char* label, bool whole, bool skipImages, float factor, bool lowQuality = false,
                              int bandHeight = kPdfTileHeight) -> bool {
+      if (ladderExpired()) {
+        LOG_ERR("PDF", "render %d: ladder budget reached before %s at %.0f%%", pageNo + 1, label,
+                factor * 100.0f);
+        return false;
+      }
       if (!resetContext()) return false;
       if (lowQuality) {
         // Antialiasing allocates scratch pixmaps per glyph and per path.  Off,
@@ -1040,7 +1202,17 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
               skipImages ? "skipped" : "on", static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
       bool r;
       if (whole) {
-        r = renderWholePage(ctx_, page, aCtm, aBbox, bmpPath, skipImages);
+        float ink = 0.0f;
+        r = renderWholePage(ctx_, page, aCtm, aBbox, bmpPath, skipImages, skipImages ? &ink : nullptr);
+        if (r && skipImages && pdf_ink::blank(ink)) {
+          // Skipping the images emptied the page: on a scan that IS the page.
+          // A white sheet would be the silent failure the card exists to
+          // replace, so this pass did not succeed -- continue the ladder.
+          LOG_ERR("PDF", "render %d: %s at %.0f%% rendered blank (ink %.3f%%); images were the content",
+                  pageNo + 1, label, factor * 100.0f, ink * 100.0f);
+          Storage.remove(bmpPath.c_str());
+          r = false;
+        }
       } else {
         ensureTileBuffer(maxWidth);
         r = renderTiles(ctx_, page, aCtm, aBbox, bandHeight, bmpPath, skipImages, useDisplayList_);
@@ -1099,12 +1271,11 @@ bool PdfDocument::renderPageToBmp(int pageNo, const std::string& bmpPath, int ma
   fz_purge_glyph_cache(ctx_);
   fz_empty_store(ctx_);
   fz_shrink_store(ctx_, 0);
-  // Raw serial line on purpose: LOG_ERR from the worker after a successful
-  // image-heavy render is sometimes dropped in transit, and this line is the
-  // per-page verdict used by the serial tests.
-  logSerial.printf("[PDF] render %d end ok=%d free=%u largest=%u\n", pageNo + 1, ok ? 1 : 0,
-                   static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-                   static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+  // The per-page verdict used by the serial tests rides the same host log line
+  // as every other message; the module has no direct Serial object.
+  LOG_ERR("PDF", "render %d end ok=%d free=%u largest=%u", pageNo + 1, ok ? 1 : 0,
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
   return ok;
 }
 

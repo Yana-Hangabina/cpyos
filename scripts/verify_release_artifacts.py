@@ -37,6 +37,7 @@ Usage:
 
 import argparse
 import hashlib
+import re
 import json
 import struct
 import subprocess
@@ -248,6 +249,125 @@ def check_dist(dist, target_id, target, image_sha, image_blob):
     return notes
 
 
+ELF_SHA256_OFFSET = 0xB0  # esptool --elf-sha256-offset: sha256(linked ELF) in the image
+PDF_ENGINE_DIR = "site/pdf-engine"
+PDF_ENGINE_MANIFEST = "manifest-v2.txt"
+PDF_MODULE_MAGIC = 0x31504D43  # "CPM1"
+
+
+def _header_constant(name):
+    """One integer from the module headers -- the same source the device compiles."""
+    root = Path(__file__).resolve().parent.parent / "src" / "pdf"
+    for path in (root / "PdfModuleApi.h", root / "PdfModuleHost.h"):
+        match = re.search(rf"{name}\s*=\s*(0x[0-9A-Fa-f]+|\d+)[uU]?", path.read_text())
+        if match:
+            return int(match.group(1), 0)
+    fail(f"{name} not found in src/pdf/PdfModuleApi.h or PdfModuleHost.h")
+
+
+def _platformio_pdf_manifest_url():
+    text = (Path(__file__).resolve().parent.parent / "platformio.ini").read_text()
+    match = re.search(r'CPYOS_PDF_ENGINE_MANIFEST_URL=[\\"]+(https?://[^"\\\\\s]+)', text)
+    return match.group(1) if match else None
+
+
+def check_pdf_engine(root, pdf_firmware, staged_required):
+    """Refuse to publish a staged PDF engine that this firmware cannot load.
+
+    The manifest is a rolling index (PDFENG2); the staged channel must carry a
+    line for THIS build's compatibility class, and that line must describe the
+    blob next to it.  The runtime rule is engineAbi/hostApi/layoutKey, but a
+    published engine should also have been linked from this firmware's ELF, so
+    the build id is checked here (publishing side only).
+    """
+    site = root / PDF_ENGINE_DIR
+    manifest = site / PDF_ENGINE_MANIFEST
+    if not manifest.exists():
+        if staged_required:
+            fail("no staged PDF engine, but --pdf-firmware was given; nothing to publish")
+        return ["pdf engine: not staged (in-app engine updates unavailable)"]
+    if not staged_required:
+        fail(f"{PDF_ENGINE_DIR} is staged but no --pdf-firmware was given; the engine cannot "
+             "be verified against a firmware, so publishing it is refused")
+
+    image = Path(pdf_firmware).read_bytes()
+    if len(image) < ELF_SHA256_OFFSET + 32:
+        fail("PDF firmware image is too short to carry its ELF SHA-256 at 0xB0")
+    want_build = image[ELF_SHA256_OFFSET:ELF_SHA256_OFFSET + 32]
+
+    want_magic = _header_constant("kPdfModuleMagic")
+    want_version = _header_constant("kPdfModuleVersion")
+    want_abi = _header_constant("kPdfModuleAbiVersion")
+    want_major = _header_constant("kPdfModuleHostApiMajor")
+    want_minor = _header_constant("kPdfModuleHostApiMinor")
+    repo = Path(__file__).resolve().parent.parent
+    api = (repo / "src" / "pdf" / "PdfModuleApi.h").read_text()
+    keys = re.findall(r"kPdfModuleLayoutKey\s*=\s*(0x[0-9A-Fa-f]+)u;", api)
+    if len(keys) < 2:
+        fail("kPdfModuleLayoutKey literals not found")
+    want_layout = int(keys[1], 16)  # readpico uses the flash mapping
+
+    lines = [ln.strip() for ln in manifest.read_text().splitlines() if ln.strip()]
+    if not lines or lines[0] != "PDFENG2":
+        fail(f"{PDF_ENGINE_MANIFEST} is not a PDFENG2 index")
+    selected = None
+    for line in lines[1:]:
+        f = line.split("\t")
+        if len(f) != 9:
+            fail(f"{PDF_ENGINE_MANIFEST} line does not have 9 fields: {line!r}")
+        if int(f[3]) == want_abi and int(f[4]) == want_major and int(f[5]) <= want_minor \
+                and int(f[6], 16) == want_layout:
+            selected = f
+            break
+    if selected is None:
+        fail(f"{PDF_ENGINE_MANIFEST} has no entry for engineAbi={want_abi} "
+             f"hostApi<={want_major}.{want_minor} layout=0x{want_layout:08X}")
+
+    url, size_text, sha, _, _, _, _, rev_text, build_text = selected
+    size = int(size_text)
+    rev = int(rev_text)
+    name = url.rsplit("/", 1)[-1]
+    blob_path = site / name
+    if not blob_path.is_file():
+        fail(f"{PDF_ENGINE_MANIFEST} points at {name!r}, which is not staged in {PDF_ENGINE_DIR}/")
+    engine = blob_path.read_bytes()
+    if len(engine) != size:
+        fail(f"staged {name} is {len(engine)} bytes but the manifest says {size}")
+    if hashlib.sha256(engine).hexdigest() != sha.lower():
+        fail(f"staged {name} sha256 does not match {PDF_ENGINE_MANIFEST}")
+
+    magic = int.from_bytes(engine[0:4], "little")
+    version = int.from_bytes(engine[4:6], "little")
+    abi = int.from_bytes(engine[6:8], "little")
+    host_api = int.from_bytes(engine[8:12], "little")
+    layout = int.from_bytes(engine[12:16], "little")
+    engine_rev = int.from_bytes(engine[64:68], "little")
+    build = engine[68:100]
+    if magic != want_magic or version != want_version:
+        fail(f"staged {name} is not a v{want_version} PDF engine image")
+    if abi != want_abi or (host_api >> 16) != want_major or (host_api & 0xFFFF) > want_minor \
+            or layout != want_layout:
+        fail(f"staged {name} declares a different compatibility class "
+             f"(abi={abi} host={host_api >> 16}.{host_api & 0xFFFF} layout=0x{layout:08X})")
+    if engine_rev != rev:
+        fail(f"staged {name} carries rev {engine_rev} but the manifest says {rev}")
+    if build != want_build:
+        fail(f"staged {name} was linked from another ELF (build id {build.hex()[:12]}.., "
+             f"firmware {want_build.hex()[:12]}..); rebuild and restage it")
+    if build.hex() != build_text.lower():
+        fail(f"{PDF_ENGINE_MANIFEST} build id does not match the staged blob")
+
+    base_url = _platformio_pdf_manifest_url()
+    if base_url:
+        directory = base_url.rsplit("/", 1)[0] + "/"
+        if not url.startswith(directory):
+            fail(f"{PDF_ENGINE_MANIFEST} url {url!r} is not served from the directory the "
+                 f"firmware looks in ({directory})")
+
+    return [f"pdf engine: {name} ({len(engine)} bytes, rev {rev}) matches this firmware "
+            f"(ABI {abi}, host API {want_major}.{want_minor}, layout 0x{want_layout:08X})"]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Verify that release artifacts describe one build.')
     parser.add_argument('--target', default='readpico', help='target id from scripts/nightly_targets.py')
@@ -255,6 +375,8 @@ def main(argv=None):
     parser.add_argument('--dist', help='packaged output directory to verify as well')
     parser.add_argument('--release', action='store_true', help='reject a -dirty image')
     parser.add_argument('--no-data', action='store_true', help='skip the data manifest/blob check')
+    parser.add_argument('--pdf-firmware', help='readpico_pdf firmware.bin whose ELF must match '
+                                              'the staged site/pdf-engine image')
     args = parser.parse_args(argv)
 
     if args.target not in nightly_targets.TARGETS:
@@ -271,6 +393,7 @@ def main(argv=None):
         notes += check_data_manifest(root)
     if args.dist:
         notes += check_dist(Path(args.dist), args.target, target, image_sha, blob)
+    notes += check_pdf_engine(root, args.pdf_firmware, bool(args.pdf_firmware))
 
     print(f'Verified {args.target} artifacts ({len(notes)} checks):')
     for note in notes:

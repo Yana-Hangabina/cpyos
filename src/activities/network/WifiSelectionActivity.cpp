@@ -44,7 +44,7 @@ constexpr fui::ActionId ACTION_PROMPT = 3;
 constexpr fui::ActionId ACTION_CANCEL = 4;
 constexpr fui::ActionId ACTION_RETURN = 5;
 
-// --- Pond v5 Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
+// --- refreshed UI Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
 // Units are device px on the 684-wide UI frame: 20 top radius, 2 px border,
 // 48x4 grabber, 54 header, 88 rows, 90 footer. The heights are state
 // properties, not animations: each change is one FULL paint.
@@ -131,6 +131,25 @@ void abandonCellularBringUp() {
   }
 }
 #endif  // CROSSPOINT_PLUS_PORT
+
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+// The Wi-Fi sheet only shows the generic wl_status_t (6 = WL_DISCONNECTED), which
+// cannot distinguish a wrong password from an auth/assoc timeout. Log the real
+// disconnect reason once so a field report says "reason=201/202/15/..." instead
+// of only "connection timeout". The Plus compatibility layer has no Arduino
+// onEvent API and already logs the IDF disconnect reason in WiFi.cpp.
+void installWifiReasonLogger() {
+  static bool installed = false;
+  if (installed) return;
+  installed = true;
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      LOG_DBG("WIFI", "station disconnected reason=%u",
+              static_cast<unsigned>(info.wifi_sta_disconnected.reason));
+    }
+  });
+}
+#endif
 
 int signalBarsForRssi(const int32_t rssi) {
   if (rssi >= -55) return 4;
@@ -354,6 +373,10 @@ void WifiSelectionActivity::onEnter() {
   captureBackdrop();
   NetworkStartup::logMemory("WifiSelectionActivity enter");
   NetworkStartup::prepare(renderer);
+  NetworkStartup::hold();
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+  installWifiReasonLogger();
+#endif
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
@@ -468,12 +491,14 @@ void WifiSelectionActivity::onExit() {
   WiFi.scanDelete();
   LOG_DBG("WIFI", "Free heap after scanDelete: %d bytes", ESP.getFreeHeap());
 
-  // Parents that own the session (web server, JJWXC, WeRead, OTA, downloads)
-  // manage the connection themselves and pass keepRadioOnExit=true. The
-  // "connect and leave" entry points pass false: nothing after this activity
-  // uses the link, and an idle associated STA both draws power and blocks the
-  // power manager's downclock.
-  if (!keepRadioOnExit_) NetworkStartup::releaseRadio();
+  // Release the sheet's own hold first; the idle timer then starts at this
+  // point. Normal screens (keepRadioOnExit=true) let it expire after the
+  // configured quiet period. Sleep/standby/debug screens request the immediate
+  // teardown instead.
+  NetworkStartup::releaseHold();
+  // A cancelled/failed sheet has no link worth keeping; only a successful
+  // association gets the idle grace period.
+  if (!keepRadioOnExit_ || WiFi.status() != WL_CONNECTED) NetworkStartup::releaseRadio();
 
   NetworkStartup::logMemory("WiFi selection exit end");
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
@@ -850,7 +875,13 @@ void WifiSelectionActivity::attemptConnection() {
     showNetworkError();
     return;
   }
-  WiFi.disconnect(true, true);  // Abort any in-progress SDK auto-connect and clear NVS-saved SSID
+  // Do NOT call WiFi.disconnect(true, true) before begin(). This core's
+  // signature is disconnect(wifioff, eraseap, timeout): true,true turns the
+  // station off and asks to erase the NVS AP. On a fresh WiFi.mode(WIFI_STA)
+  // the station is not started yet, so the erase path also returns early with
+  // "STA not started! You must call begin first."; the first join can then sit
+  // at status 6 until the 7 s sheet timeout. persistent(false) already prevents
+  // NVS saves, and begin() replaces the config in RAM.
   delay(100);
 
   // Scan all channels so networks with multiple APs use the strongest matching
@@ -869,11 +900,15 @@ void WifiSelectionActivity::attemptConnection() {
     LOG_ERR("WIFI", "Failed to read station MAC for hostname");
   }
 
+  // Arduino returns wl_status_t; the Plus compatibility layer returns int.
+  // Keep it int and log it as such so both targets compile.
+  int beginStatus = static_cast<int>(WL_DISCONNECTED);
   if (selectedRequiresPassword && !enteredPassword.empty()) {
-    WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
+    beginStatus = WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
   } else {
-    WiFi.begin(selectedSSID.c_str());
+    beginStatus = WiFi.begin(selectedSSID.c_str());
   }
+  LOG_DBG("WIFI", "begin returned status=%d", beginStatus);
 }
 
 void WifiSelectionActivity::checkConnectionStatus() {

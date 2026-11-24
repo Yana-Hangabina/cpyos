@@ -1,0 +1,11 @@
+{
+  "id": "2048",
+  "name": "2048",
+  "version": "1.1.0",
+  "api": 1,
+  "arch": "riscv32",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Pilot native plugin: swipe or d-pad to merge tiles.",
+  "author": "CPYOS"
+}

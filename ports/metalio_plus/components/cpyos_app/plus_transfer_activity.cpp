@@ -157,7 +157,7 @@ void PlusTransferActivity::loop() {
   }
 
   if (actionsVisible && hotspotRect.width > 0 &&
-      mappedInput.wasTapInRect(hotspotRect.x, hotspotRect.y, hotspotRect.width, hotspotRect.height)) {
+      mappedInput.wasTapInRect(hotspotRect)) {
     if (hotspotOn) {
       stopHotspot();
     } else {
@@ -167,7 +167,7 @@ void PlusTransferActivity::loop() {
   }
 
   if (actionsVisible && usbRect.width > 0 &&
-      mappedInput.wasTapInRect(usbRect.x, usbRect.y, usbRect.width, usbRect.height)) {
+      mappedInput.wasTapInRect(usbRect)) {
     if (!usbConfirm) {
       usbConfirm = true;
       usbPromptAt = millis();

@@ -1,4 +1,4 @@
-#if defined(CROSSPOINT_MUPDF)
+#if defined(CROSSPOINT_MUPDF) && !defined(CROSSPOINT_PDF_XIP)
 
 #if !defined(BOARD_HAS_PSRAM) && !defined(CROSSPOINT_EMULATED)
 #error "CROSSPOINT_MUPDF is a PSRAM/readpico-only feature; do not enable it on C3"

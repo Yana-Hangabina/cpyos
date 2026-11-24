@@ -52,6 +52,19 @@ bool MappedInputManager::isNavDirectionSwapped() const {
          (orientation == GfxRenderer::PortraitInverted || orientation == GfxRenderer::LandscapeCounterClockwise);
 }
 
+bool MappedInputManager::areSidePageButtonsSwapped() const {
+  switch (renderer.getOrientation()) {
+    case GfxRenderer::Portrait:
+      return false;
+    case GfxRenderer::PortraitInverted:
+      return true;
+    case GfxRenderer::LandscapeClockwise:
+    case GfxRenderer::LandscapeCounterClockwise:
+      return SETTINGS.sideButtonFollowOrientation != 0;
+  }
+  return false;
+}
+
 MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button button) const {
   // Rows follow GfxRenderer::Orientation's declared order.
   static constexpr Button directions[][4] = {
@@ -113,9 +126,9 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       // Reader page navigation uses side buttons and can be swapped via settings.
       switch (sideLayout) {
         case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
+          return (gpio.*fn)(areSidePageButtonsSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
         case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
+          return (gpio.*fn)(areSidePageButtonsSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
         case CrossPointSettings::PREV_PREV:
           return (gpio.*fn)(HalGPIO::BTN_UP) || (gpio.*fn)(HalGPIO::BTN_DOWN);
         case CrossPointSettings::NEXT_NEXT:
@@ -127,9 +140,9 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       // Reader page navigation uses side buttons and can be swapped via settings.
       switch (sideLayout) {
         case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
+          return (gpio.*fn)(areSidePageButtonsSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
         case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
+          return (gpio.*fn)(areSidePageButtonsSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
         case CrossPointSettings::NEXT_NEXT:
           return (gpio.*fn)(HalGPIO::BTN_UP) || (gpio.*fn)(HalGPIO::BTN_DOWN);
         case CrossPointSettings::PREV_PREV:
@@ -310,10 +323,11 @@ bool MappedInputManager::isScreenTouchHeld(int& x, int& y) const {
 
 bool MappedInputManager::wasScreenTouchReleased() const { return gpio.wasTouchReleased(); }
 
-bool MappedInputManager::wasTapInRect(const int x, const int y, const int width, const int height) const {
+bool MappedInputManager::wasTapInRect(const Rect& rect) const {
   int tx = 0;
   int ty = 0;
-  return wasScreenTapped(tx, ty) && tx >= x && tx < x + width && ty >= y && ty < y + height;
+  return wasScreenTapped(tx, ty) && tx >= rect.x && tx < rect.x + rect.width && ty >= rect.y &&
+         ty < rect.y + rect.height;
 }
 
 bool MappedInputManager::listItemFromPoint(const int x, const int y, int& index, const int itemCount,
@@ -430,9 +444,15 @@ bool MappedInputManager::wasSwipeGeometry(int& sx, int& sy, int& ex, int& ey) co
 }
 
 bool MappedInputManager::wasPinch(float& scale) const {
+#if defined(SIMULATOR)
+  // The native input stub has no multi-touch contact list.
+  (void)scale;
+  return false;
+#else
   float nxCenter = 0.0f;
   float nyCenter = 0.0f;
   return gpio.wasMultiTouchPinch(scale, nxCenter, nyCenter);
+#endif
 }
 
 // Edge classification (which swipe counts as an edge gesture) lives in the

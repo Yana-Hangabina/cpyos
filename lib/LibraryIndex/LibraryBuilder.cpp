@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstring>
 #include <string_view>
+#include <strings.h>
 
 #include "LibraryIndexFile.h"
 #include "LibraryText.h"
@@ -193,6 +194,36 @@ void clearLibraryIndexDirty() {
 // shelf must agree, or a card written on a Mac shows every book twice and a
 // FAT "System Volume Information" or XTC "XTCache" folder gets indexed.
 bool isHiddenOrSidecar(const std::string_view name) { return FsHelpers::isProtectedPathComponent(name); }
+
+std::string_view normalizeLibraryRootAliases(std::string_view path) {
+  // Ignore leading separators and "." components, but leave named components intact.
+  while (!path.empty()) {
+    const size_t slash = path.find('/');
+    const std::string_view name = path.substr(0, slash);
+    if (!name.empty() && name != ".") break;
+    if (slash == std::string_view::npos) return {};
+    path.remove_prefix(slash + 1);
+  }
+  return path;
+}
+
+// Library-only exclusions: these root folders must stay reachable in the file
+// browser, but indexing them wastes a full walk (hundreds of font files) and
+// can surface non-book files on the shelf. Book folders (/JJWXC, /WeRead,
+// /BOOKS ...) are deliberately not listed here.
+bool isLibrarySkipped(const std::string_view path, const bool isNormalizedPath = false) {
+  constexpr std::string_view ROOTS[] = {"fonts", "dictionaries", "plugins", "sleep", "sleep-overlay"};
+  const std::string_view relativePath = isNormalizedPath ? path : normalizeLibraryRootAliases(path);
+  const std::string_view name = relativePath.substr(0, relativePath.find('/'));
+  for (const auto root : ROOTS) {
+    if (std::equal(name.begin(), name.end(), root.begin(), root.end(), [](const char a, const char b) {
+          return (a >= 'A' && a <= 'Z' ? static_cast<char>(a + ('a' - 'A')) : a) == b;
+        })) {
+      return true;
+    }
+  }
+  return false;
+}
 
 std::string stemOf(const std::string& name) {
   const size_t dot = name.find_last_of('.');
@@ -443,6 +474,7 @@ struct DedupFrame {
 
 void walk(WalkState& st, const std::string& path, const int depth) {
   if (st.failed || depth > LIBRARY_MAX_DEPTH || st.books >= CLIX_MAX_RECORDS) return;
+  if (isLibrarySkipped(path)) return;
 
   const uint16_t dedupBase = st.activeDedupCount;
   const DedupFrame dedupFrame{st, dedupBase};
@@ -1061,12 +1093,16 @@ bool emitIndex(const char* folderStagePath, WalkState& st, const uint16_t* order
 const char* libraryIndexPath() { return INDEX_PATH; }
 
 bool isLibraryBookFile(const std::string_view path) {
-  // The walk skips hidden (dot-prefixed) names, so it never lists a file inside
-  // a hidden folder. A lone "." names the folder itself.
+  // The walk skips hidden (dot-prefixed) names and library-only root folders,
+  // so it never lists a file inside a hidden folder or a font/plugin tree.
+  const std::string_view relativePath = normalizeLibraryRootAliases(path);
+  // The dictionary's export lives at the card root but is not a book.
+  if (relativePath.size() == 13 && strncasecmp(relativePath.data(), "Vocabulary.txt", 13) == 0) return false;
+  if (isLibrarySkipped(relativePath, true)) return false;
   size_t start = 0;
-  while (start < path.size()) {
-    const size_t slash = path.find('/', start);
-    const std::string_view name = path.substr(start, slash - start);
+  while (start < relativePath.size()) {
+    const size_t slash = relativePath.find('/', start);
+    const std::string_view name = relativePath.substr(start, slash - start);
     if (name.size() > 1 && name.front() == '.') return false;
     if (slash == std::string_view::npos) break;
     start = slash + 1;

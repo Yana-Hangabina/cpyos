@@ -62,6 +62,12 @@ class SdCardFontSystem {
   /// Release the resident SD font without changing the saved selection.
   void releaseLoadedFont(GfxRenderer& renderer);
 
+  /// Release only the SD/.cpfont families and Font Extras supplements.  The
+  /// vector reader face (in SYSTEM font pack builds this is the pack face that
+  /// reflow text draws with) stays loaded; releaseLoadedFont() would unload it
+  /// and leave ordinary CJK without glyphs.
+  void releaseSdFamilies(GfxRenderer& renderer);
+
 #if CROSSPOINT_VECTOR_FONTS
   /// Load every installed Font Extras fallback pack as an additive renderer
   /// fallback. Idempotent for the same family set, reader size and UI roles.

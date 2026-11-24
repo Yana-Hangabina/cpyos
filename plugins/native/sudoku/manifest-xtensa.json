@@ -1,0 +1,11 @@
+{
+  "id": "sudoku",
+  "name": "Sudoku",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "xtensa",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "A classic 9x9 puzzle.",
+  "author": "CPYOS"
+}

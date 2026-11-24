@@ -1,6 +1,7 @@
 #include "Cbz.h"
 
 #include <FsHelpers.h>
+#include <BookCachePrune.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
@@ -179,8 +180,8 @@ bool Cbz::renderPageToBmp(const int index, const std::string& destBmpPath, const
 void Cbz::setupCacheDir() const { Storage.mkdir(cachePath.c_str(), true); }
 
 bool Cbz::clearCache() const {
-  if (!Storage.exists(cachePath.c_str())) return true;
-  return Storage.removeDir(cachePath.c_str());
+  // Prune, do not rmtree: annotations/bookmarks/progress live here too (BookCachePrune.h).
+  return book_cache::pruneRegenerable(cachePath);
 }
 
 std::string Cbz::getCoverBmpPath() const { return cachePath + "/cover.bmp"; }

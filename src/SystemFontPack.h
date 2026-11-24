@@ -21,8 +21,20 @@ namespace system_font_pack {
 bool begin(GfxRenderer& renderer);
 
 // Register the wanted point sizes and release faces that are no longer needed.
-// Sizes outside 10..34 are ignored. Safe to call when the pack is not ready.
+// Sizes outside 10..40 are ignored. Safe to call when the pack is not ready.
 void configure(GfxRenderer& renderer, const uint8_t* pointSizes, size_t count);
+
+// Register one more point size without releasing the faces currently loaded, and
+// keep it pinned so a later configure() (a UI scale or reader size change) does not
+// drop it. Used by the reader's block-font provider (layout milestone M2): a cached
+// section keeps the face id it was laid out with, so that face must stay resident
+// while the section is readable. Returns false when the pack is not ready or the
+// size is outside 10..34. Callers bound how many sizes they pin.
+bool ensurePointSize(GfxRenderer& renderer, uint8_t pointSize);
+
+// Drop every pinned size. Faces still wanted by configure() stay; the rest are
+// released through the next configure()/begin().
+void releasePinnedPointSizes();
 
 void release(GfxRenderer& renderer);
 bool ready();

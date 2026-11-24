@@ -1,0 +1,11 @@
+{
+  "id": "minesweeper",
+  "name": "Minesweeper",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "riscv32",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Nine-by-nine mine field.",
+  "author": "CPYOS"
+}

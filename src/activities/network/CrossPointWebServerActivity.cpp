@@ -683,7 +683,7 @@ void CrossPointWebServerActivity::renderStartingHotspot() const {
   }
 }
 
-// Pond v5 frame 14 (network & transfer). Everything on this page is live:
+// refreshed UI frame 14 (network & transfer). Everything on this page is live:
 // the network card only exists while a link is actually up, and the web card
 // only publishes a URL/QR while the server is running on this page. There is
 // no U-disk row, no 5 GHz claim and no per-source sync timestamp because the
@@ -714,8 +714,10 @@ void CrossPointWebServerActivity::renderTransferPage() {
   // Current-network card, always present (frame 14): when nothing is up it
   // says so instead of vanishing and leaving only a dead transfer card.
   {
-    const int cardH = compact ? 112 : 148;
     const int cardPad = 20;
+    // Title, SSID and the meta/join line plus padding. The old 112/148 pair was
+    // tuned to the pre-typography line heights and clipped the third line.
+    const int cardH = cardPad + smallLine + 10 + titleLine + 8 + smallLine + cardPad;
     GUI.drawCardFrame(renderer, Rect{static_cast<int16_t>(innerX), static_cast<int16_t>(y), static_cast<int16_t>(cardW),
                                      static_cast<int16_t>(cardH)},
                       false);
@@ -725,6 +727,10 @@ void CrossPointWebServerActivity::renderTransferPage() {
 
     const std::string ssid =
         staUp ? std::string(WiFi.SSID().c_str()) : (apUp ? connectedSSID : std::string(tr(STR_NOT_CONNECTED)));
+    // A stale address is worse than none: the link can drop after the page was
+    // painted (reproduced 2026-11-20: `[WEBACT] WiFi not connected` for 49 s
+    // while this card kept showing the address it had when the server started,
+    // and the phone had nothing to open).  Only a live association may print one.
     const std::string ipText = staUp ? [] {
       const IPAddress ip = WiFi.localIP();
       char buf[16];
@@ -754,7 +760,9 @@ void CrossPointWebServerActivity::renderTransferPage() {
 
   // Web-transfer card. The URL and QR exist only while this page owns a
   // running server; otherwise the card says so instead of showing a dead link.
-  const bool running = state == WebServerActivityState::SERVER_RUNNING && webServer && webServer->isRunning();
+  const bool addressUsable = (staUp || apUp) && !connectedIP.empty() && connectedIP != "0.0.0.0";
+  const bool running =
+      state == WebServerActivityState::SERVER_RUNNING && webServer && webServer->isRunning() && addressUsable;
   const int cardPad = 20;
   const int qrSize = compact ? 96 : 140;
   const int headerY = y + cardPad;
@@ -788,7 +796,21 @@ void CrossPointWebServerActivity::renderTransferPage() {
     renderer.drawText(SMALL_FONT_ID, qrX,
                       qrY + qrSize + 4, renderer.truncatedText(SMALL_FONT_ID, tr(STR_SCAN_QR_HINT), qrSize).c_str());
   } else {
-    renderer.drawText(SMALL_FONT_ID, innerX + cardPad, headerY + smallLine + 10, tr(STR_NOT_RUNNING));
+    // Distinguish "no address yet" from "server stopped": the user's remedy is
+    // different, and both used to read the same terse line.
+    const bool serverUp = state == WebServerActivityState::SERVER_RUNNING && webServer && webServer->isRunning();
+    const char* reason = nullptr;
+    if (serverUp && !addressUsable) {
+      reason = staUp || apUp ? tr(STR_NOT_CONNECTED) : tr(STR_JOIN_NETWORK);
+    } else {
+      reason = tr(STR_NOT_RUNNING);
+    }
+    renderer.drawText(SMALL_FONT_ID, innerX + cardPad, headerY + smallLine + 10, reason);
+    if (serverUp && !addressUsable) {
+      const std::string hint = renderer.truncatedText(SMALL_FONT_ID, tr(STR_CONNECT_WIFI_HINT),
+                                                      std::max(1, cardW - 2 * cardPad));
+      renderer.drawText(SMALL_FONT_ID, innerX + cardPad, headerY + smallLine + 10 + smallLine + 4, hint.c_str());
+    }
   }
   y += cardH + gap;
 

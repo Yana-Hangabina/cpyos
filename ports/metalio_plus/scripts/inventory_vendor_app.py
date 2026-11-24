@@ -76,10 +76,10 @@ DISPOSITIONS: dict[str, tuple[str, str]] = {
     "mcp_server.h": ("not-applicable", "Vendor MCP service; depends on the vendor AI cloud."),
     "model_path.h": ("not-applicable", "Vendor AI model paths; the S31 build has no AFE/wake word."),
     "ota.cc": ("not-ported",
-               "Vendor cloud OTA needs plus_ota_key.local and burner.cloudzao.com; CPYOS OTA stays "
-               "disabled (no Plus release channel). Device-side SD image flashing writes the inactive "
-               "app slot through the shared SdFirmwareUpdateActivity/flash path."),
-    "ota.h": ("not-ported", "See ota.cc: vendor cloud OTA only; CPYOS flashes images from SD."),
+               "CPYOS has its own plus_ota client for CloudZao protocol 1.1 (X-Resource-Key at "
+               "/api/firmware-ota/check); the vendor source is not copied. Device-side SD image flashing "
+               "writes the inactive app slot through the shared SdFirmwareUpdateActivity/flash path."),
+    "ota.h": ("not-ported", "See ota.cc: CPYOS uses plus_ota and the CloudZao protocol 1.1 endpoints."),
     "ota_ignore.cc": ("not-ported", "Vendor OTA helper; no consumer in CPYOS."),
     "ota_ignore.h": ("not-ported", "Vendor OTA helper; no consumer in CPYOS."),
     "settings.cc": ("replaced", "Vendor settings replaced by CPYOS CrossPointSettings (JSON on SD)."),

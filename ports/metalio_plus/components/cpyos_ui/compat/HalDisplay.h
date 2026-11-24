@@ -8,6 +8,9 @@ class HalDisplay {
  public:
   using Controller = BoardConfig::DisplayController;
   Controller getController() const;
+  // There is no runtime panel probe in the vendor driver subset; About falls
+  // back to the board table's displayController name when this is null.
+  const char* getControllerName() const;
 
   using GrayscaleMode = freeink::GrayscaleMode;
   using GrayscaleCapabilities = freeink::GrayscaleCapabilities;

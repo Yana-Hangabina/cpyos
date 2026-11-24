@@ -47,6 +47,8 @@ class DictionaryDefinitionActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  // Serial-only: short Back, so a host can walk a lookup chain and return.
+  void debugBack() override;
   void render(RenderLock&&) override;
 
  private:

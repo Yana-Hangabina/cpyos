@@ -1,0 +1,11 @@
+{
+  "id": "chinese-chess",
+  "name": "Chinese Chess",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "xtensa",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Two-player Xiangqi with the classic board.",
+  "author": "CPYOS"
+}

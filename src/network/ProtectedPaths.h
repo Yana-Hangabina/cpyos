@@ -12,8 +12,23 @@
 // match, so the stores' temp/backup siblings are covered too.
 namespace protectedpaths {
 
-inline constexpr const char* SENSITIVE_FILES[] = {"/.crosspoint/wifi.json", "/.crosspoint/opds.json",
-                                                  "/.crosspoint/koreader.json"};
+inline constexpr const char* SENSITIVE_FILES[] = {
+    "/.crosspoint/wifi.json",
+    "/.crosspoint/opds.json",
+    "/.crosspoint/koreader.json",
+    // CPYOS private component: session cookie jar, device/reader id and the
+    // payment / cache keys are all equivalent to passwords.
+    "/.crosspoint/jjwxc/cookies",
+    "/.crosspoint/jjwxc/device",
+    "/.crosspoint/jjwxc/account",
+    "/.crosspoint/jjwxc/credentials",
+    "/.crosspoint/jjwxc/signin",
+    "/.crosspoint/jjwxc/paykey",
+    "/.crosspoint/jjwxc/cachekey",
+    // Installed font-pack state is device-local; the manifest itself is public.
+    "/.crosspoint/font_extras/installed-v2.txt",
+    "/.crosspoint/font_extras/installed.txt",
+};
 
 // SdFat also opens a name by its generated 8.3 alias (".crosspoint" is
 // CROSSP~1), which no spelling check can map back to the long name.

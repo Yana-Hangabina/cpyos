@@ -59,6 +59,63 @@ The firmware validates the name (single path component, `[A-Za-z0-9._-]`,
 ≤63 chars) and caps a CMap at 512 KB.  One CMap is cached in PSRAM; MuPDF
 parses it immediately, so replacing the cache on the next miss is safe.
 
+## 2b. Grayscale JPEG decode (Read Pico panel)
+
+The panel is 16-level gray, but libjpeg was decoding colour JPEGs to RGB and
+MuPDF then converted them to the gray draw device.  That peak is 3x larger than
+needed.  The PDF module now asks libjpeg for one channel:
+
+- `include/mupdf/fitz/compressed-buffer.h`: `jpeg.gray` flag.
+- `source/pdf/pdf-image.c`: when a JPEG image is 3-component, has no explicit
+  `/Decode`, is not an image mask and has no colour key, the image colorspace is
+  switched to DeviceGray and `jpeg.gray=1`; otherwise it stays colour, so the
+  filter and the tile stride always agree.
+- `source/fitz/compressed-buffer.c` / `filter-dct.c`: pass the flag to
+  `fz_open_dctd`, which sets `cinfo.out_color_space = JCS_GRAYSCALE` for
+  RGB/YCbCr.  CMYK and 4-component images are left alone.
+- `source/fitz/load-jpeg.c`: the standalone JPEG loader uses the same global
+  switch (`fz_set_dct_grayscale(1)`, called by `PdfDocument::load`).
+
+This cuts decoded image bytes for colour scans by roughly 3x.  It does **not**
+by itself make a vector-heavy page fit: page 41 of the stress book used to
+exhaust PSRAM because its embedded font buffers, not its images, were the
+working set.  Section 2d (out-of-core fonts) removes that peak; the reader then
+reflows the page.  Pages whose vector content alone exceeds PSRAM still fail
+cleanly and keep the retry page.
+
+## 2c. Rebuilding the archives
+
+```bash
+curl -L -o /tmp/mupdf-1.26.3-source.tar.gz \
+  https://mupdf.com/downloads/archive/mupdf-1.26.3-source.tar.gz
+tar -C patches/mupdf -xzf /tmp/mupdf-1.26.3-source.tar.gz
+bash patches/mupdf/build_mupdf_xtensa.sh        # runs prepare_source.sh first
+# install the rebuilt archives
+cp patches/mupdf/build/xtensa_nocjk/libmupdf*.a patches/mupdf/prebuilt/
+```
+
+`prepare_source.sh` overlays `patches/mupdf/source/` and `include/` onto the
+fetched tree and filters `resources/fonts/urw/*.cff` out of `FONT_BIN`
+(`TOFU_BASE14` alone does not drop them).  The source tree and build output are
+ignored by git; only the overlays and `prebuilt/` are tracked.
+
+## 2d. Out-of-core embedded fonts (page 41)
+
+Large embedded font programs were the memory hog on vector-heavy pages: the
+PDF loader decompressed them into `fz_buffer`s that stayed in PSRAM.  The
+module now streams fonts whose compressed `/Length` is at least 64 KiB to
+`/.crosspoint/pdf_font_cache/<hash>.fnt` in 4 KiB chunks and creates the
+FreeType face with a custom `FT_Stream` (`cp_pdf_font_cache_*` host callbacks
+implemented in `src/pdf/PdfFontCache.cpp`).  Small fonts keep the in-memory
+path.  If SD is missing or the cache cannot be written, the loader falls back
+to the original buffer path.
+
+Overlay files: `source/pdf/pdf-font.c`, `source/fitz/font.c`, and
+`include/mupdf/fitz/...` changes; `PdfFontCache.cpp` is linked into the app and
+its symbols are force-linked in `[env:readpico_pdf]` (`-Wl,--undefined=...`).
+The cache is keyed by an FNV-1a hash of the decompressed program; it survives
+reader restarts, so repeated pages and retries do not re-decompress fonts.
+
 ## 3. Build flags (Xtensa)
 
 ```sh

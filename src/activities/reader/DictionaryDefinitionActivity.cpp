@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <utility>
 
 #include "CrossPointSettings.h"
 #include "DictionaryWordSelectActivity.h"
@@ -73,14 +74,8 @@ bool DictionaryDefinitionActivity::prepareDefinition(Definition& next, const boo
   if (htmlDefinition && !forcePlain && next.text.size() <= MAX_STYLED_HTML_BYTES && layoutHtmlPages(next)) return true;
   if (htmlDefinition) {
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
-    // htmlToPlainText allocates a second text-sized buffer; refuse while the
-    // previous definition's release has not paid for it yet.
-    if (ESP.getFreeHeap() < next.text.size() + 1 + HEAP_HEADROOM ||
-        ESP.getMaxAllocHeap() < next.text.size() + 1) {
-      LOG_ERR("DICT", "Low heap for plain definition (%u bytes)", static_cast<unsigned>(next.text.size() + 1));
-      return false;
-    }
-    next.text = htmlToPlainText(next.text, DICTIONARY_PLAIN_HEADWORD_MARKER);
+    // The converter compacts in place; no second text-sized buffer is allocated.
+    next.text = htmlToPlainText(std::move(next.text), DICTIONARY_PLAIN_HEADWORD_MARKER);
   }
   return wrapText(next);
 }
@@ -468,6 +463,15 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
   requestUpdate();
 }
 
+void DictionaryDefinitionActivity::debugBack() {
+  // Short Back: step one definition back; the first one exits to the picker.
+  if (lookup && lookup->depth > 0) {
+    navigateDefinition(true);
+  } else {
+    finish();
+  }
+}
+
 void DictionaryDefinitionActivity::loop() {
   if (initialLayoutFailed) {
     if (millis() - messageTime >= MESSAGE_DURATION_MS) finish();
@@ -504,18 +508,18 @@ void DictionaryDefinitionActivity::loop() {
   }
 
   const int totalPages = content.totalPages;
-  // Same tap zones as the reader page turns: left third = previous page,
-  // the rest = next. Back is the usual left-edge swipe.
-  int tx = 0;
-  int ty = 0;
-  if (mappedInput.wasScreenTapped(tx, ty)) {
-    if (tx < renderer.getScreenWidth() / 3) {
-      if (content.currentPage > 0) {
+  // Definitions have no reader menu, so the centre tap also turns pages. Use
+  // the shared reader gesture decoding so swipes and the user's tap/side
+  // settings behave exactly as in the book.
+  const ReaderUtils::TouchPageTurn turn = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, false,
+                                                                           /*reserveReaderMenuTap=*/false);
+  if (turn.prev || turn.next) {
+    const bool canTurn = turn.prev ? content.currentPage > 0 : content.currentPage + 1 < totalPages;
+    if (canTurn) {
+      if (turn.prev)
         content.currentPage--;
-        requestUpdate();
-      }
-    } else if (content.currentPage + 1 < totalPages) {
-      content.currentPage++;
+      else
+        content.currentPage++;
       requestUpdate();
     }
     return;

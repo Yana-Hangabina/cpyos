@@ -128,7 +128,8 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   std::vector<std::string> labels;
   labels.reserve(sizes.size());
   for (const uint8_t pt : sizes) {
-    labels.push_back(std::to_string(pt) + " pt");
+    const bool native = readerFontPointSizeIsNative(registry, SETTINGS.sdFontFamilyName, pt);
+    labels.push_back(std::to_string(pt) + " pt" + (native ? "" : tr(STR_FONT_SYSTEM_SUFFIX)));
   }
 
   SettingInfo s;
@@ -147,8 +148,16 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
     return 0;
   };
 
-  s.valueSetter = [sizes](uint8_t v) {
-    if (v < sizes.size()) SETTINGS.fontPointSize = sizes[v];
+  s.valueSetter = [sizes, registry](uint8_t v) {
+    if (v >= sizes.size()) return;
+    const uint8_t pt = sizes[v];
+    if (registry && !readerFontPointSizeIsNative(registry, SETTINGS.sdFontFamilyName, pt)) {
+      // A fixed .cpfont ships no such bitmap; keep the requested size and move
+      // the body to the built-in scalable face instead of snapping down.
+      SETTINGS.useBuiltinReaderFontAt(pt);
+    } else {
+      SETTINGS.fontPointSize = pt;
+    }
   };
 
   return s;
@@ -264,7 +273,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 
     std::vector<SettingInfo> v;
     // Rows appended by the batches below (see invariant 2 above the function).
-    // 103 is every unconditional row; guards add one row per row they enable:
+    // 107 is every unconditional row; guards add one row per row they enable:
     //   !CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS  deep-sleep style + image rows
     //   FREEINK_CAP_FRONTLIGHT          restore light on wake
     //   CROSSPOINT_FONT_PACK_EMBEDDED   UI font scale
@@ -274,7 +283,7 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     //   FREEINK_DEVICE_READPICO         page turn effect + fast page turn
     //   CROSSPOINT_CAP_BUZZER_FEEDBACK  buzzer source + pitch + strength
     //   CROSSPOINT_PLUS_PORT            Bluetooth audio action
-    constexpr size_t entryCount = 103
+    constexpr size_t entryCount = 107
 #if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
                                   + 2
 #endif
@@ -530,11 +539,15 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         SettingInfo::Enum(StrId::STR_READER_MENU_STYLE, &CrossPointSettings::readerMenuStyle,
                           {StrId::STR_MENU_STYLE_LIST, StrId::STR_MENU_STYLE_TOOLBAR}, "readerMenuStyle",
                           StrId::STR_CAT_READER),
+        SettingInfo::Toggle(StrId::STR_SAVE_VOCABULARY_LOOKUPS, &CrossPointSettings::vocabularyHistoryEnabled,
+                            "vocabularyHistoryEnabled", StrId::STR_CAT_READER),
+    });
+    v.insert(v.end(), {
+        SettingInfo::Action(StrId::STR_VIEW_VOCABULARY, SettingAction::VocabularyHistory),
         // 翻页方向（左右对调）。枚举而不是开关：两个选项各自有名字，"从左到右 / 从右到左"
         // 比"开 / 关"更能说明对调后是什么样子 —— 同样按 imageScaling 的写法。
         // 放在阅读分类而不是控制分类：它是"这本书怎么翻"的阅读行为，和它旁边的阅读菜单样式
         // 同类；控制分类里那些是手势类型本身。
-        // / Page-turn direction (mirrored). An enum rather than a toggle because the two
         // / Page-turn direction (mirrored). The two option labels name the gesture that
         // turns to the NEXT page (swipe left/tap right vs swipe right/tap left), because
         // "left to right / right to left" was read as a reading direction and contradicted
@@ -569,6 +582,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
+        SettingInfo::Toggle(StrId::STR_SIDE_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::sideButtonFollowOrientation,
+                            "sideButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
+    });
+    v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
@@ -623,6 +640,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
             StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
             {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
             "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
+        SettingInfo::Value(StrId::STR_WIFI_IDLE_TIMEOUT, &CrossPointSettings::wifiIdleTimeoutSeconds,
+                           {CrossPointSettings::WIFI_IDLE_TIMEOUT_MIN_SECONDS,
+                            CrossPointSettings::WIFI_IDLE_TIMEOUT_MAX_SECONDS,
+                            CrossPointSettings::WIFI_IDLE_TIMEOUT_STEP_SECONDS},
+                           "wifiIdleTimeoutSeconds", StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                             StrId::STR_CAT_SYSTEM),
     });

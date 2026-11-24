@@ -88,7 +88,7 @@ void Game2048Activity::loop() {
   const Rect newButton =
       gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(), metrics.contentSidePadding,
                           metrics.menuSpacing, metrics.menuRowHeight, 0, 1);
-  if (mappedInput.wasTapInRect(newButton.x, newButton.y, newButton.width, newButton.height)) {
+  if (mappedInput.wasTapInRect(newButton)) {
     if (gameOver_) {
       newGame();
       persistNow();

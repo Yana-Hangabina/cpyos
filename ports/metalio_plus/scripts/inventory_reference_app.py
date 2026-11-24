@@ -101,8 +101,8 @@ DISPOSITIONS: dict[str, tuple[str, str]] = {
 
 def default_tree() -> Path | None:
     for candidate in (REPO.parents[1] / "repos" / "kiikoread-rc110",
-                      REPO.parents[1] / ".scratch" / "metalio-research" / "rpr-rc110",
-                      REPO / ".scratch" / "metalio-research" / "rpr-rc110"):
+                      REPO.parents[1] / ".scratch" / "metalio-research" / "kiikoread-rc110",
+                      REPO / ".scratch" / "metalio-research" / "kiikoread-rc110"):
         if (candidate / "main").is_dir():
             return candidate
     return None

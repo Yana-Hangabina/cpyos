@@ -25,7 +25,8 @@ public:
   static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;
   static constexpr unsigned long IDLE_DOWNCLOCK_MS = 500;
   static constexpr unsigned long IDLE_LIGHT_SLEEP_MS = 1000;
-  static constexpr unsigned long BATTERY_POLL_MS = 1500;
+  // The vendor SOC policy averages one sample per second; poll at that cadence.
+  static constexpr unsigned long BATTERY_POLL_MS = 1000;
   static constexpr unsigned long LIGHT_SLEEP_SLICE_MS = 50;
   static constexpr unsigned long BUSY_SLEEP_SLICE_MS = 20;
 
@@ -105,8 +106,22 @@ public:
   // Should be called inside main loop() to handle the currentLockMode
   void startDeepSleep(HalGPIO &gpio) const;
 
-  // Get battery percentage (range 0-100)
+  // Get battery percentage (range 0-100). Polls the gauge when the 1 s throttle
+  // allows; the UI loop is its normal caller. The chrome must use
+  // batteryDisplayPercent() so sampling never depends on a repaint.
   uint16_t getBatteryPercentage() const;
+
+  // Cached display level, no sampling: safe to call from the render task.
+  uint16_t batteryDisplayPercent() const;
+
+  // False only until the first valid level has been seen in this session (or a
+  // standby wake is recalibrating after a level was already shown). The chrome
+  // then draws an empty capsule with no digits instead of a placeholder.
+  bool batteryPercentageKnown() const;
+
+  // True while the gauge reports a charging current and the pack is not full
+  // (vendor rule: no bolt at 100 %).
+  bool isBatteryCharging() const;
 
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for

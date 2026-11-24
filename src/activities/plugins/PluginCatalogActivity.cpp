@@ -35,6 +35,7 @@
 #include "util/PluginPickerLayout.h"
 #include "util/QrUtils.h"
 #include "util/StringUtils.h"
+#include <HalPowerManager.h>
 
 namespace fui = freeink::ui;
 
@@ -293,6 +294,7 @@ bool PluginCatalogActivity::loadManifest() {
 }
 
 bool PluginCatalogActivity::loadBrowseListIndex(int& status) {
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   status = 200;  // no index configured is a successful no-op
   if (manifest.browseListsUrl.empty() || manifest.isXmlList()) return true;
 
@@ -435,6 +437,10 @@ PluginCatalogActivity::PluginCatalogActivity(GfxRenderer& renderer, MappedInputM
 PluginCatalogActivity::~PluginCatalogActivity() = default;
 
 int PluginCatalogActivity::apiRequest(const pluginhttp::RequestSpec& req, String& out) {
+  // Same rule as CatalogActivity::downloadFile: a page is waiting on this
+  // response and generates no input, so the governor would otherwise drop to
+  // 80 MHz mid-request.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   return pluginhttp::request(session.get(), req.url, req.method, req.body, req.headers, out, MAX_API_RESPONSE);
 }
 
@@ -654,6 +660,7 @@ bool PluginCatalogActivity::refreshCredentialToken() {
 }
 
 bool PluginCatalogActivity::fetchBrowseResponse() {
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   loadConfig();
   if (!loadToken() && !(manifest.hasPasswordGrant() && refreshCredentialToken())) {
     state = State::NO_TOKEN;
@@ -847,6 +854,12 @@ bool PluginCatalogActivity::parseBrowseResponse() {
   }
   hasMore = window.hasMore(paging);
   computeInstallStatus();
+  // Updates first, otherwise keep the feed's order (upstream #4319). A larger
+  // catalogue can put the update on a later page upstream; our in-memory rows
+  // are one page, so a stable partition is enough here.
+  std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+    return a.hasUpdate && !b.hasUpdate;
+  });
   return true;
 }
 
@@ -875,8 +888,8 @@ void PluginCatalogActivity::computeInstallStatus() {
     if (deserializeJson(doc, raw, DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
       installed = doc["version"] | "";
     }
-    item.status =
-        PluginLocations::isNewerVersion(item.version, installed) ? tr(STR_UPDATE_AVAILABLE) : tr(STR_INSTALLED);
+    item.hasUpdate = PluginLocations::isNewerVersion(item.version, installed);
+    item.status = item.hasUpdate ? tr(STR_UPDATE_AVAILABLE) : tr(STR_INSTALLED);
   }
 }
 

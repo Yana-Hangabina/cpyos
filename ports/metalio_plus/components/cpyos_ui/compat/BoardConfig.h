@@ -735,7 +735,7 @@ struct MicConfig {
 // 0x11, its own register map and accelerometer-only (no gyroscope). Both are
 // appended last so every existing enumerator keeps its value.
 enum class RtcType : uint8_t { None, Pcf8563, Pcf85063, Ds3231, Rx8130, Rx8010, Cw32L010Pmu };
-enum class ImuType : uint8_t { None, Lsm6ds3, Qmi8658, Sc7a20h };
+enum class ImuType : uint8_t { None, Lsm6ds3, Qmi8658, Sc7a20h, Bmi270 };
 
 // On-board I2C sensors sharing one bus (e.g. the Sticky's RTC + temp/humidity +
 // IMU on SDA1/SCL0, the same bus as its fuel gauge). Each addr is 0 when that
@@ -876,6 +876,17 @@ struct BoardProfile {
   // Native image grayscale capability; omitted by legacy aggregate profiles.
   uint8_t grayscaleLevels = 4;
   HapticConfig haptic = {};
+  // Shared UI chrome metrics (upstream BoardProfile). Defaults preserve the
+  // historical rectangular layout; a port can opt in per profile.
+  int8_t headerOffsetY = 0;
+  uint8_t cornerRadius = 0;
+  int8_t tabBarOffsetY = 0;
+  uint8_t tabBarHeightPct = 100;
+  uint8_t tabBarWidthPct = 100;
+  uint8_t wifiMaxTxPower = 0;
+  bool usbDetectActiveHigh = true;
+  int8_t statusBarOffsetY = 0;
+  uint8_t bottomCornerRadius = 0;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,

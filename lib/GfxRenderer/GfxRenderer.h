@@ -86,6 +86,10 @@ class GfxRenderer {
   static constexpr size_t BW_BUFFER_CHUNK_SIZE = 8000;  // 8KB chunks to allow for non-contiguous memory
   static constexpr uint8_t MAX_SYNTHETIC_BOLD_PIXELS = 3;
 
+  // Shared body of the two scaled-glyph entries; `y` is a baseline unless yIsTop.
+  bool drawScaledCodepointAt(const EpdFontFamily& fontFamily, uint32_t codepoint, int x, int y, int scale256,
+                             EpdFontFamily::Style style, bool black, bool yIsTop) const;
+
   HalDisplay& display;
   mutable uint8_t* grayscale16Buffer = nullptr;
   RenderMode renderMode;
@@ -364,6 +368,10 @@ class GfxRenderer {
   int getScreenWidth() const;
   int getScreenHeight() const;
   void tapToLogical(float nx, float ny, int& outX, int& outY) const;
+  // Inverse of tapToLogical for the current orientation: normalised touch
+  // coordinates that land on the given logical pixel. Used by the serial tap
+  // injector so host-driven checks hit the same geometry a finger would.
+  void logicalToTap(int lx, int ly, float& nx, float& ny) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH,
                      DisplayRefreshContext context = DisplayRefreshContext::Normal) const;
   // Force the next displayBuffer() to use `mode`, overriding its argument once.
@@ -408,8 +416,17 @@ class GfxRenderer {
 
   // Idle rail release; the main loop calls it once per pass under a try-lock.
   // True when the panel's HV rails were dropped (image stays; next push re-raises).
+#if defined(SIMULATOR)
+  // The native panel stub has no rails to drop and no scan statistics.
+  bool idlePowerTick(uint32_t) const { return false; }
+  void takePanelPushStats(uint32_t* frames, uint64_t* us) const {
+    if (frames) *frames = 0;
+    if (us) *us = 0;
+  }
+#else
   bool idlePowerTick(uint32_t nowMs) const { return display.idlePowerTick(nowMs); }
   void takePanelPushStats(uint32_t* frames, uint64_t* us) const { display.takePanelPushStats(frames, us); }
+#endif
   // Presentation epoch: bumped when the activity (screen) changes. A gray commit
   // may only be skipped when the frame did not change AND we already presented a
   // frame for this screen -- otherwise a preempted paint leaves a stale snapshot
@@ -424,6 +441,12 @@ class GfxRenderer {
     if (bandSnapshot_ != nullptr) std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
     presentedEpoch_ = contentEpoch_;
   }
+  // A band push diffs against bandSnapshot_, which describes the glass, not the
+  // screen session. After an activity switch the glass still shows the previous
+  // screen while the snapshot may coincidentally match the new framebuffer, so a
+  // band push would leave the old screen up (keyboard entry after Home). Only a
+  // presentation within the current epoch makes a diff meaningful.
+  bool presentedThisSession() const { return presentedEpoch_ == contentEpoch_; }
   // True when displayBufferAsync() genuinely overlaps: panel defers and
   // fadingFix isn't forcing the blocking path. Callers can skip overlap
   // scaffolding (e.g. whole-plane grayscale buffers) when false.
@@ -550,6 +573,10 @@ class GfxRenderer {
   void maskRoundedRectOutsideCorners(int x, int y, int width, int height, int radius, Color color = Color::White) const;
   void fillRect(int x, int y, int width, int height, bool state = true) const;
   void fillRectDither(int x, int y, int width, int height, Color color) const;
+  // 1-bit approximation of a background tone: ink level 1..15 (0 = nothing,
+  // 15 = solid). Cheap vertical stripes rather than per-pixel dithering; a book
+  // background this renderer can honour is light, so the coarse steps suffice.
+  void fillRectShade(int x, int y, int width, int height, uint8_t level) const;
   // Modal scrim that FADES the covered area instead of darkening it: one pixel
   // in four keeps its ink, the rest goes to white (both planes, same 2x2 grid,
   // in physical space so it needs no per-pixel rotation). Adding black can only
@@ -667,6 +694,22 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Drop-cap primitive (layout milestone M6): draws one codepoint scaled by
+  // scale256 (256 = 1:1, clamped to 1..4x) at the given baseline, sampling the
+  // glyph with bilinear coverage so the 16-level canvas keeps its edge tones.
+  // Returns false when the face has no bitmap (a missing glyph stays unrendered
+  // and the caller draws the plain character instead).
+  bool drawScaledCodepoint(const EpdFontFamily& fontFamily, uint32_t codepoint, int x, int baselineY, int scale256,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR, bool black = true) const;
+  // Same primitive with `topY` anchoring the glyph's ink top instead of its baseline.
+  // A drop cap spans several lines: a 3x glyph drawn from the line's baseline would rise
+  // two lines above it and collide with whatever precedes the paragraph.
+  bool drawScaledCodepointTop(const EpdFontFamily& fontFamily, uint32_t codepoint, int x, int topY, int scale256,
+                              EpdFontFamily::Style style = EpdFontFamily::REGULAR, bool black = true) const;
+  // Ink box of the same scaled codepoint, so the layout can reserve exactly the space
+  // drawScaledCodepoint will cover. False means "no glyph", and no cap is laid out.
+  bool getScaledCodepointMetrics(int fontId, uint32_t codepoint, int scale256, EpdFontFamily::Style style,
+                                 int& width, int& height) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

@@ -1,6 +1,7 @@
 #include "CatalogActivity.h"
 
 #include <Arduino.h>
+#include <HalPowerManager.h>
 #include <FontCacheManager.h>
 #include <FreeInkUIIcon.h>
 #include <Logging.h>
@@ -171,6 +172,9 @@ void CatalogActivity::onDownloadProgress(const size_t downloaded, const size_t t
 HttpDownloader::DownloadError CatalogActivity::downloadFile(const std::string& url, const std::string& dest,
                                                             const std::string& user, const std::string& password,
                                                             const std::vector<HttpDownloader::Header>& headers) {
+  // Full speed for the transfer: no input happens during a download, so the
+  // governor would otherwise drop to 80 MHz and the file crawls.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   downloadProgress = downloadTotal = 0;
   lastRenderedPercent = -1;
   lastProgressUpdateMs = 0;

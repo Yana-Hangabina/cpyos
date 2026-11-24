@@ -116,6 +116,7 @@ class PluginCatalogActivity final : public CatalogActivity {
     std::string version;  // catalog version (tracksInstalls only)
     std::string status;   // computed install/update badge shown in the row value
     bool isDir = false;   // a container/folder (navigable), not a downloadable file
+    bool hasUpdate = false;  // catalog version is newer than the installed one
     // Bundle download only: base URL + relative file paths for this item.
     std::string base;
     std::vector<std::string> files;

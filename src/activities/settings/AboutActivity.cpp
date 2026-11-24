@@ -4,7 +4,9 @@
 #include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalDisplay.h>
 #include <HalFrontlight.h>
+#include <HalStorage.h>
 #include <HalTiltSensor.h>
 #include <esp_mac.h>
 
@@ -21,6 +23,7 @@ enum MenuItem {
   ITEM_FIRMWARE,
   ITEM_CHIP,
   ITEM_FLASH,
+  ITEM_SD,
   ITEM_DISPLAY,
   ITEM_RESOLUTION,
   ITEM_TOUCH,
@@ -36,7 +39,8 @@ enum MenuItem {
 // data, part numbers) stay identical on every unit, only the labels localise.
 static constexpr StrId kAboutLabelKeys[AboutActivity::ITEM_COUNT] = {
     StrId::STR_ABOUT_DEVICE,     StrId::STR_ABOUT_FIRMWARE,   StrId::STR_ABOUT_CHIP,
-    StrId::STR_ABOUT_FLASH,      StrId::STR_ABOUT_DISPLAY,    StrId::STR_ABOUT_RESOLUTION,
+    StrId::STR_ABOUT_FLASH,      StrId::STR_ABOUT_SD,         StrId::STR_ABOUT_DISPLAY,
+    StrId::STR_ABOUT_RESOLUTION,
     StrId::STR_ABOUT_TOUCH,      StrId::STR_ABOUT_FRONTLIGHT, StrId::STR_ABOUT_RTC,
     StrId::STR_ABOUT_IMU,        StrId::STR_ABOUT_MAC,
 };
@@ -88,8 +92,10 @@ const char* touchControllerName(const BoardConfig::TouchController c) {
       return "CST816S";
     case BoardConfig::TouchController::Cst836u:
       return "CST836U";
+    // Tma525c exists in newer freeink-sdk revisions; the pinned submodule in
+    // this tree predates it, so the switch falls through to the "?" default.
   }
-  return nullptr;
+  return "?";
 }
 }  // namespace
 
@@ -116,7 +122,24 @@ void AboutActivity::onEnter() {
   rowValues_[ITEM_CHIP] = buf;
   snprintf(buf, sizeof(buf), "%u MB", static_cast<unsigned>(ESP.getFlashChipSize() / (1024u * 1024u)));
   rowValues_[ITEM_FLASH] = buf;
-  rowValues_[ITEM_DISPLAY] = displayControllerName(BoardConfig::ACTIVE.displayController);
+  uint64_t sdTotal = 0, sdFree = 0;
+  if (Storage.getSpace(sdTotal, sdFree) && sdTotal > 0) {
+    constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+    if (sdTotal >= static_cast<uint64_t>(kGiB)) {
+      snprintf(buf, sizeof(buf), "%.1f / %.1f GB", (sdTotal - sdFree) / kGiB, sdTotal / kGiB);
+    } else {
+      snprintf(buf, sizeof(buf), "%.0f / %.0f MB", (sdTotal - sdFree) / (1024.0 * 1024.0),
+               sdTotal / (1024.0 * 1024.0));
+    }
+    rowValues_[ITEM_SD] = buf;
+  } else {
+    rowValues_[ITEM_SD] = "?";
+  }
+  if (const char* runtime = display.getControllerName()) {
+    rowValues_[ITEM_DISPLAY] = runtime;
+  } else {
+    rowValues_[ITEM_DISPLAY] = displayControllerName(BoardConfig::ACTIVE.displayController);
+  }
   snprintf(buf, sizeof(buf), "%ux%u", static_cast<unsigned>(BoardConfig::ACTIVE.displayWidth),
            static_cast<unsigned>(BoardConfig::ACTIVE.displayHeight));
   rowValues_[ITEM_RESOLUTION] = buf;

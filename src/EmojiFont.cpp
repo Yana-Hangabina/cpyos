@@ -188,6 +188,11 @@ bool reload(GfxRenderer& renderer, const uint8_t pointSize) {
   ttfSize_ = 0;
   return install(renderer, pointSize);
 }
+void release(GfxRenderer& renderer) {
+  unregister(renderer);
+  ttfBytes_.reset();
+  ttfSize_ = 0;
+}
 void setPointSize(GfxRenderer& renderer, const uint8_t pointSize) { (void)install(renderer, pointSize); }
 uint8_t pointSize() { return pointSize_; }
 int fontId() { return fontId_; }
@@ -199,6 +204,7 @@ int fontId() { return fontId_; }
 namespace emoji_font {
 bool begin(GfxRenderer&, uint8_t) { return false; }
 bool reload(GfxRenderer&, uint8_t) { return false; }
+void release(GfxRenderer&) {}
 void setPointSize(GfxRenderer&, uint8_t) {}
 uint8_t pointSize() { return 0; }
 int fontId() { return 0; }

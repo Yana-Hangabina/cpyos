@@ -5,6 +5,7 @@
 
 #include <array>
 
+#include "components/Rect.h"
 #include "util/HomeButtonInput.h"
 
 class GfxRenderer;
@@ -81,7 +82,9 @@ class MappedInputManager {
   // (which wasScreenTapped never reports). InputSnapshot builders forward it
   // off-target so FreeInkUI routing clears its pressed-element state.
   bool wasScreenTouchReleased() const;
-  bool wasTapInRect(int x, int y, int width, int height) const;
+  // Pass the same Rect the control was drawn with: the hit test and the paint
+  // then cannot drift apart, and a wrong rectangle is visible at the call site.
+  bool wasTapInRect(const Rect& rect) const;
   bool wasListItemTapped(int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
                          bool hasSubtitle) const;
   bool wasListItemTouchedDown(int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
@@ -160,6 +163,9 @@ class MappedInputManager {
   const GfxRenderer& renderer;
 
   Button mapScreenDirection(Button button) const;
+  // Side page keys (Up/Down) follow the landscape orientation only when the
+  // "Orient Side Buttons" setting is on; portrait-inverted always swaps.
+  bool areSidePageButtonsSwapped() const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
   bool bleEdge(const std::array<bool, kButtonCount>& edges, Button button) const;

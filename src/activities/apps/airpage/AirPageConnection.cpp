@@ -276,14 +276,16 @@ bool AirPageConnection::startWifiAssociation() {
 
   WiFi.persistent(false);
   NetworkStartup::setMode(renderer_, WIFI_STA);
-  WiFi.disconnect(true, true);
   delay(100);
   if (credential->password.empty()) {
     WiFi.begin(credential->ssid.c_str());
   } else {
     WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
   }
-  ownsWifi_ = true;
+  if (!ownsWifi_) {
+    NetworkStartup::hold();
+    ownsWifi_ = true;
+  }
   wifiAttemptStartedMs_ = millis();
   state_ = State::WifiConnecting;
   return true;
@@ -295,6 +297,7 @@ void AirPageConnection::teardownWifi() {
   delay(100);
   WiFi.mode(WIFI_OFF);
   esp_wifi_deinit();
+  NetworkStartup::releaseHold();
   ownsWifi_ = false;
 }
 

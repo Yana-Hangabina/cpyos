@@ -76,9 +76,22 @@ enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 // list-style-type — only None and Disc (bullet) are relevant for rendering
 enum class CssListStyleType : uint8_t { Disc = 0, None = 1 };
 
+// Border line decoration. The e-ink renderer can only draw 1-4 px edges, so the
+// style is kept for layout decisions (dotted/dashed both degrade to a thin
+// edge); None means the side draws nothing.
+enum class CssBorderStyle : uint8_t { None = 0, Solid = 1, Double = 2, Dotted = 3, Dashed = 4 };
+
+// Widths resolve to whole panel pixels at parse time (1..4): the renderer can
+// only draw those, and keeping a CssLength here would grow every stored style by
+// 20 bytes, which the C3 heap cannot spare at MAX_UNIQUE_STYLES.
+struct CssBorderSide {
+  uint8_t widthPx = 0;
+  CssBorderStyle style = CssBorderStyle::None;
+};
+
 // Bitmask for tracking which properties have been explicitly set.
 //
-// Bit budget: 24 of 32 bits are used (0..23). The cache serializes this as a uint32_t, so a
+// Bit budget: 29 of 32 bits are used (0..28). The cache serializes this as a uint32_t, so a
 // future property can take bits 24..31 without moving the wire format. The 33rd property
 // needs a second word, a CSS cache bump and a matching decode change, so keep the count in
 // mind before adding one.
@@ -108,6 +121,12 @@ struct CssPropertyFlags {
   uint32_t pageBreakBefore : 1;   // 21
   uint32_t pageBreakAfter : 1;    // 22
   uint32_t preserveWhitespace : 1;  // 23
+  // Parsed by the M4 layout milestone; applied by the box element.
+  uint32_t borderTop : 1;           // 24
+  uint32_t borderRight : 1;         // 25
+  uint32_t borderBottom : 1;        // 26
+  uint32_t borderLeft : 1;          // 27
+  uint32_t shaded : 1;              // 28
 
   CssPropertyFlags()
       : textAlign(0),
@@ -133,13 +152,19 @@ struct CssPropertyFlags {
         smallCaps(0),
         pageBreakBefore(0),
         pageBreakAfter(0),
-        preserveWhitespace(0) {}
+        preserveWhitespace(0),
+        borderTop(0),
+        borderRight(0),
+        borderBottom(0),
+        borderLeft(0),
+        shaded(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || listStyleType || fontSize || smallCaps ||
-           pageBreakBefore || pageBreakAfter || preserveWhitespace;
+           pageBreakBefore || pageBreakAfter || preserveWhitespace || borderTop || borderRight || borderBottom ||
+           borderLeft || shaded;
   }
 
   void clearAll() {
@@ -148,6 +173,7 @@ struct CssPropertyFlags {
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = listStyleType = 0;
     fontSize = smallCaps = pageBreakBefore = pageBreakAfter = preserveWhitespace = 0;
+    borderTop = borderRight = borderBottom = borderLeft = shaded = 0;
   }
 };
 
@@ -155,7 +181,7 @@ struct CssPropertyFlags {
 // CssParser.cpp (CSS_DEFINED_BITS_MASK) must cover exactly these bits.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
-static_assert(sizeof(CssPropertyFlags) * 8 >= 24,
+static_assert(sizeof(CssPropertyFlags) * 8 >= 29,
               "CssPropertyFlags has fewer bits than properties; update bitfield widths");
 static_assert(sizeof(CssPropertyFlags) * 8 <= 32,
               "CssPropertyFlags must stay within the uint32_t cache field");
@@ -194,6 +220,15 @@ struct CssStyle {
   // white-space: pre / pre-wrap / break-spaces, or an HTML <pre> element. The chapter parser
   // honours this today (preserved indentation and hard line breaks); it never reaches layout.
   bool preserveWhitespace = false;
+  // Box decoration (M4). Widths stay as CssLength so the layout resolves them
+  // against the block's em size; the shade level is the ink the panel should
+  // dither (0 = white/no shade, 15 = black).
+  CssBorderSide borderTop;
+  CssBorderSide borderRight;
+  CssBorderSide borderBottom;
+  CssBorderSide borderLeft;
+  bool shaded = false;
+  uint8_t shadeLevel = 0;
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -296,6 +331,27 @@ struct CssStyle {
       preserveWhitespace = base.preserveWhitespace;
       defined.preserveWhitespace = 1;
     }
+    if (base.hasBorderTop()) {
+      borderTop = base.borderTop;
+      defined.borderTop = 1;
+    }
+    if (base.hasBorderRight()) {
+      borderRight = base.borderRight;
+      defined.borderRight = 1;
+    }
+    if (base.hasBorderBottom()) {
+      borderBottom = base.borderBottom;
+      defined.borderBottom = 1;
+    }
+    if (base.hasBorderLeft()) {
+      borderLeft = base.borderLeft;
+      defined.borderLeft = 1;
+    }
+    if (base.hasShaded()) {
+      shaded = base.shaded;
+      shadeLevel = base.shadeLevel;
+      defined.shaded = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -322,6 +378,11 @@ struct CssStyle {
   [[nodiscard]] bool hasPageBreakBefore() const { return defined.pageBreakBefore; }
   [[nodiscard]] bool hasPageBreakAfter() const { return defined.pageBreakAfter; }
   [[nodiscard]] bool hasPreserveWhitespace() const { return defined.preserveWhitespace; }
+  [[nodiscard]] bool hasBorderTop() const { return defined.borderTop; }
+  [[nodiscard]] bool hasBorderRight() const { return defined.borderRight; }
+  [[nodiscard]] bool hasBorderBottom() const { return defined.borderBottom; }
+  [[nodiscard]] bool hasBorderLeft() const { return defined.borderLeft; }
+  [[nodiscard]] bool hasShaded() const { return defined.shaded; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -337,6 +398,9 @@ struct CssStyle {
     verticalAlign = CssVerticalAlign::Baseline;
     listStyleType = CssListStyleType::Disc;
     smallCaps = pageBreakBefore = pageBreakAfter = preserveWhitespace = false;
+    borderTop = borderRight = borderBottom = borderLeft = CssBorderSide{};
+    shaded = false;
+    shadeLevel = 0;
     defined.clearAll();
   }
 };

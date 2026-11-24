@@ -1,7 +1,9 @@
 #include "Txt.h"
 
+#include <BookCachePrune.h>
 #include <FsHelpers.h>
 #include <JpegToBmpConverter.h>
+#include <BookCachePrune.h>
 #include <Logging.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -229,18 +231,12 @@ bool Txt::generateCoverBmp() const {
 }
 
 bool Txt::clearCache() const {
-  if (!Storage.exists(cachePath.c_str())) {
-    LOG_DBG("TXT", "Cache does not exist, no action needed");
-    return true;
+  // Prune, do not rmtree: annotations/bookmarks/progress live here too (BookCachePrune.h).
+  const bool cleared = book_cache::pruneRegenerable(cachePath);
+  if (cleared) {
+    LOG_DBG("TXT", "Cache cleared successfully");
   }
-
-  if (!Storage.removeDir(cachePath.c_str())) {
-    LOG_ERR("TXT", "Failed to clear cache");
-    return false;
-  }
-
-  LOG_DBG("TXT", "Cache cleared successfully");
-  return true;
+  return cleared;
 }
 
 bool Txt::readContent(uint8_t* buffer, size_t offset, size_t length) const {

@@ -8,9 +8,9 @@ the Metalio E-INK4 Plus port, which share `src/SystemFontPack.cpp`,
 
 | Tier | Asset | Where | Size | Used by |
 |---|---|---|---:|---|
-| 0 | `CPYOSHanSansSC-UI.ttf` / `cpyos_han_sans.def` | app0, inflated to PSRAM | 293,152 B TTF / 191,521 B carrier | every system UI role, 8–18pt |
+| 0 | `CPYOSHanSansSC-UI.ttf` / `cpyos_han_sans.def` | app0, inflated to PSRAM | 296,572 B TTF / 193,766 B carrier | every system UI role, 8–18pt |
 | 0b | `CPYOSWorldScripts-UI.ttf` / `cpyos_ui_ext.def` | app0, inflated to PSRAM | 49,152 B TTF / 25,333 B carrier | UI supplements for Vietnamese, Czech/Polish/Turkish, Hebrew, Arabic, … |
-| 1 | `CPYOSHanSansSC-Regular-8105.ttf` / `cjk_core.dat` | data/spiffs at `+0x180000`; released to `/fonts/CPYOSCJKCore/` | 2,553,580 B TTF / 1,638,942 B carrier | reader body text and book titles |
+| 1 | `CPYOSHanSansSC-Regular-8105.ttf` / `cjk_core.dat` | data/spiffs at `+0x180000`; released to `/fonts/CPYOSCJKCore/` | 2,555,704 B TTF / 1,640,306 B carrier | reader body text and book titles |
 | 2 | `CPYOSCJK.ttf` (font-extra) | SD | 10.4 MB | optional Ext-A/rare ideographs |
 | 3 | `CPYOSWorldScripts.ttf` (font-extra) | SD | 6.76 MB | optional full non-CJK book text |
 
@@ -18,8 +18,8 @@ The CJK UI subset covers the 35 translation catalogs, hard-coded UI string
 literals in `src/`, `lib/` **and the port's own activities**
 (`ports/metalio_plus/main`, `components/cpyos_app`, `components/cpyos_ui`), the
 lunar-calendar list and every non-Han glyph the source family already carried
-(kana, Cyrillic, Greek, punctuation, arrows, maths). That is 1,424 UI
-codepoints (1,487 glyph slots in the CJK face); it is sized to the UI, not to
+(kana, Cyrillic, Greek, punctuation, arrows, maths). That is 1,510 UI
+codepoints (1,511 glyph slots in the CJK face); it is sized to the UI, not to
 book text. `chars_ui.txt` is the coverage contract and
 `scripts/tests/test_system_font_pack.py` fails when a new UI string introduces
 a codepoint no face can draw.
@@ -81,7 +81,7 @@ The data partition grew from 1.5 MiB to 3 MiB by shrinking both OTA slots from
 |---|---|---|
 | app0 / app1 | `0x730000` each | `0x660000` each (6.375 MiB) |
 | spiffs | `0xe70000`, `0x180000` | `0xcd0000`, `0x320000` |
-| core carrier | — | spiffs `+0x180000`, 1,638,942 B |
+| core carrier | — | spiffs `+0x180000`, 1,640,306 B |
 
 The UI font shrank app0 by ~1.4 MB and the 8pt bitmap by 341 KB, so the image
 still has comfortable headroom in the smaller slot. `partitions.csv`,

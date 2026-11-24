@@ -60,7 +60,7 @@ constexpr ThemeMetrics makeValues() {
   // main bar's height comes from mainTabBarHeight() above.
   metrics.tabBarHeight = UiHighDpiProfile::enabled ? 96 : 60;
   metrics.tabSpacing = 8;
-  // Pond v5 mast: page label left, date/clock/battery right. 80 px replaces the
+  // refreshed UI mast: page label left, date/clock/battery right. 80 px replaces the
   // old 88 title + 48 status pair, giving the content the design's top edge.
   metrics.mainTabTitleHeight = UiHighDpiProfile::enabled ? 72 : 64;
 
@@ -208,6 +208,12 @@ class CpyTheme final : public UpstreamStyleTheme {
   // Reader status bar: use the same capsule as the header chrome, so the number
   // sits inside it there too. The rect's width/height are the pill metrics.
   int drawStatusBarBattery(const GfxRenderer& renderer, int x, int y, bool showPercent) const override;
+  // FUI-drawn headers (control center, reader menu, chapter list, dated
+  // sub-pages) get the same capsule instead of a battery glyph with the
+  // percentage label beside it.
+  bool drawsHeaderBatteryCapsule() const override { return true; }
+  void drawHeaderBatteryCapsule(const GfxRenderer& renderer, Rect band, bool showPercent) const override;
+  int statusBarBatteryWidth(const GfxRenderer& renderer, bool showPercent) const override;
 
  private:
   static Rect tabChipRect(const GfxRenderer& renderer, const Rect& band, const std::vector<TabInfo>& tabs, int index);

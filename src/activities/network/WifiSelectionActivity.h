@@ -197,11 +197,11 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void onComplete(bool connected);
 
  public:
-  // keepRadioOnExit: activities that use the connection after this one returns
-  // (JJWXC, WeRead, OTA, font/dictionary download, sync, the web server) keep it
-  // true. "Connect and leave" entry points (Home Wi-Fi chip, the settings Wi-Fi
-  // page, CMD:WIFI) pass false so a successful connect does not leave an idle STA
-  // drawing power and blocking the power manager's downclock.
+  // keepRadioOnExit: true is the normal path. The sheet holds the radio while
+  // open; on exit the STA stays available for NetworkStartup's idle timeout
+  // (SETTINGS.wifiIdleTimeoutSeconds, default 60 s) so a following screen can
+  // reuse the connection. false is the immediate path for sleep/standby and
+  // debug-only screens that must not leave the radio up.
   explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true,
                                  bool keepRadioOnExit = true);
   void onEnter() override;

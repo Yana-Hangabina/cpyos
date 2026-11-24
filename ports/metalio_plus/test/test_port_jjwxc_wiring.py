@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The private JJWXC opt-in must stay wired and must stay out of git."""
+"""The private JJWXC component must stay wired for local dev and out of git."""
 
 import subprocess
 import unittest
@@ -21,6 +21,7 @@ class JjwxcWiringTest(unittest.TestCase):
         self.assertIn("app/*.cpp", self.cmake)
         self.assertIn("protocol/src/*.cpp", self.cmake)
         self.assertIn("CROSSPOINT_BOOKSOURCE_JJWXC=1", self.cmake)
+        self.assertIn("IS_DIRECTORY", self.cmake)
 
     def test_default_build_does_not_require_the_private_tree(self):
         # The guarded block must come after the early return and must not be an
@@ -35,10 +36,11 @@ class JjwxcWiringTest(unittest.TestCase):
             capture_output=True, text=True, check=False)
         self.assertEqual(check.returncode, 0, "src/jjwxc must stay gitignored")
 
-    def test_readme_documents_the_opt_in(self):
+    def test_readme_documents_local_auto_enable(self):
         text = README.read_text(encoding="utf-8")
-        self.assertIn("CPYOS_PLUS_JJWXC=1", text)
-        self.assertIn("9,106,848", text)
+        self.assertIn("auto-enabled", text)
+        self.assertIn("CPYOS_PLUS_JJWXC=0", text)
+        self.assertIn("6,462,992", text)
 
 
 if __name__ == "__main__":

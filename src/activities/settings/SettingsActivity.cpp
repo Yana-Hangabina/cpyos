@@ -5,6 +5,10 @@
 #include "plus_charger.h"
 #endif
 #include "components/StatusCards.h"
+#if defined(CROSSPOINT_PDF_XIP)
+#include "PdfEngineUpdateActivity.h"
+#include "pdf/PdfModuleRuntime.h"
+#endif
 #if defined(CROSSPOINT_PLUS_PORT)
 #include <PlusCellular.h>
 #endif
@@ -30,6 +34,7 @@
 #include <cstring>
 
 #include "AboutActivity.h"
+#include "VocabularyActivity.h"
 #include "AppVisibilitySettingsActivity.h"
 #include "BluetoothSettingsActivity.h"
 #include "ButtonRemapActivity.h"
@@ -54,6 +59,7 @@
 #include "OpdsServerListActivity.h"
 #if defined(CPYOS_PLUS_VENDOR_OTA)
 #include "plus_ota_activity.h"
+#include "plus_resources_activity.h"
 #else
 #include "OtaUpdateActivity.h"
 #endif
@@ -134,6 +140,7 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     case SettingAction::DownloadFonts:
     case SettingAction::DownloadFontExtras:
     case SettingAction::ManageDictionaries:
+    case SettingAction::VocabularyHistory:
       return {StrId::STR_SET_GROUP_FONTS_DICTS, 4};
     case SettingAction::CustomiseStatusBar:
     case SettingAction::ReadingStatsSettings:
@@ -152,6 +159,7 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     case SettingAction::CheckForUpdates:
     case SettingAction::SdFirmwareUpdate:
     case SettingAction::ScreenRepair:
+    case SettingAction::PdfEngine:
     case SettingAction::Plugins:
     case SettingAction::KeyboardLayouts:
       return {StrId::STR_SET_GROUP_APPS_MAINTENANCE, 3};
@@ -562,9 +570,18 @@ void SettingsActivity::rebuildSettingsLists() {
   // Keep the existing CrossMux OTA proxy flow. Build-only boards compile this
   // UI but are intentionally absent from release assets in this sync.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+#if defined(CPYOS_PLUS_VENDOR_OTA)
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_DEVICE_RESOURCES, SettingAction::PlusResources));
+#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SCREEN_REPAIR, SettingAction::ScreenRepair));
+#if defined(CROSSPOINT_PDF_XIP)
+#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_PLUGINS, SettingAction::Plugins));
+#if defined(CROSSPOINT_PDF_XIP)
+  // Maintenance for a plugin-like component: updated from the network, never from a card.
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_PDF_ENGINE_UPDATE, SettingAction::PdfEngine));
+#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
@@ -1043,7 +1060,9 @@ void SettingsActivity::toggleCurrentSetting() {
       applyUiCjkFallbacks(renderer, SETTINGS.uiDensity != 0);
     }
   } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    const int8_t currentValue = SETTINGS.*(setting.valuePtr);
+    // Some value ranges exceed int8_t (Wi-Fi idle 0..240); keep the arithmetic
+    // in int so 240 does not wrap negative.
+    const int currentValue = SETTINGS.*(setting.valuePtr);
     if (currentValue + setting.valueRange.step > setting.valueRange.max) {
       SETTINGS.*(setting.valuePtr) = setting.valueRange.min;
     } else {
@@ -1118,24 +1137,17 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResultWith<OpdsServerListActivity>(resultHandler);
         break;
       case SettingAction::Network: {
-        auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false, false);
+        auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, false, true);
         if (!activity) {
           LOG_ERR("SETTINGS", "OOM: WifiSelectionActivity");
           return;
         }
-        startActivityForResult(std::move(activity), [](const ActivityResult&) {
+        startActivityForResult(std::move(activity), [this](const ActivityResult&) {
           SETTINGS.saveToFile();
-          // Every other WiFi consumer hands the radio to a session it owns;
-          // these rows only save credentials, so nothing here would ever
-          // release the driver's heap. The scan alone brings it up, so tear
-          // down whether or not the user joined a network.
-          if (WiFi.getMode() == WIFI_MODE_NULL) return;
-          WiFi.disconnect(false);
-          delay(30);
-          // Unlike the onExit() teardowns, this runs from the loop task with
-          // no lock held; the restart popup paints straight to the panel.
-          RenderLock lock;
-          silentRestartToSettings();
+          // Keep the connection for the idle timeout instead of restarting to
+          // reclaim the driver heap; My/Settings both use this same policy.
+          rebuildSettingsLists();
+          requestUpdate();
         });
 
         break;
@@ -1149,6 +1161,18 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::CheckForUpdates:
         openOtaUpdate();
         break;
+#if defined(CPYOS_PLUS_VENDOR_OTA)
+      case SettingAction::PlusResources:
+        releaseListsForMemoryHungryChild();
+        if (startActivityForResultWith<PlusResourcesActivity>([this](const ActivityResult&) {
+              rebuildSettingsLists();
+            })) {
+          return;
+        }
+        rebuildSettingsLists();
+        requestUpdate();
+        break;
+#endif
       case SettingAction::SdFirmwareUpdate:
         startActivityForResultWith<SdFirmwareUpdateActivity>(resultHandler);
         break;
@@ -1195,6 +1219,57 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ScreenRepair:
         startActivityForResultWith<ScreenRepairActivity>(resultHandler);
         break;
+#if defined(CROSSPOINT_PDF_XIP)
+      case SettingAction::PdfEngine: {
+        // The MuPDF engine lives in its own partition, so it can be replaced
+        // without re-flashing the device.  Two doors, one pairing rule: the
+        // image must have been built against *this* firmware ELF (its appTag is
+        // the ELF's SHA-256), and a mismatch is refused before the working
+        // engine on the partition is erased.
+        const auto installFromCard = [this] {
+          // Runs on the UI task (internal stack).  Whether a PDF document is
+          // still open is no longer a promise in a comment: installFromSdFile
+          // counts live handles and returns Busy before it erases anything.
+          const char* result = nullptr;
+          switch (pdf_module::installFromSdFile(pdf_module::defaultSdImagePath())) {
+            case pdf_module::InstallStatus::Ok:
+              result = tr(STR_DONE);
+              break;
+            case pdf_module::InstallStatus::Mismatch:
+              result = tr(STR_PDF_ENGINE_MISMATCH);
+              break;
+            case pdf_module::InstallStatus::NotFound:
+              result = tr(STR_PDF_ENGINE_NOT_FOUND);
+              break;
+            case pdf_module::InstallStatus::Busy:
+              result = tr(STR_TAP_TO_RETRY);
+              break;
+            case pdf_module::InstallStatus::BadHeader:
+            case pdf_module::InstallStatus::IoError:
+              result = tr(STR_UPDATE_FAILED);
+              break;
+          }
+          const char* kDoneOptions[1] = {tr(STR_OK_BUTTON)};
+          optionPopup.showMessage(tr(STR_PDF_ENGINE_UPDATE), result, kDoneOptions, 1, 0, [](int) {});
+          requestUpdate();
+        };
+        // Rebuilt per open, not static: tr() resolves against the current
+        // language, which the user can change on this very screen.
+        const char* kEngineOptions[2] = {tr(STR_CHECK_UPDATES), tr(STR_CANCEL)};
+        optionPopup.showMessage(tr(STR_PDF_ENGINE_UPDATE), "", kEngineOptions, 2, 0,
+                                [&](const int idx) {
+                                  if (idx != 0) return;
+                                  // Fetch + verify happen in a PSRAM-stack worker;
+                                  // the activity installs from its own internal
+                                  // stack once the download lands.
+                                  releaseListsForMemoryHungryChild();
+                                  if (!startActivityForResultWith<PdfEngineUpdateActivity>(resultHandler)) {
+                                    rebuildSettingsLists();
+                                    requestUpdate();
+                                  }
+                                });
+      } break;
+#endif
       case SettingAction::DownloadFonts:
         releaseListsForMemoryHungryChild();
         if (!startActivityForResultWith<FontDownloadActivity>(resultHandler)) {
@@ -1240,6 +1315,9 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::About:
         startActivityForResultWith<AboutActivity>(resultHandler);
+        break;
+      case SettingAction::VocabularyHistory:
+        startActivityForResultWith<VocabularyActivity>(resultHandler);
         break;
       case SettingAction::Plugins: {
         // The Plugins row is the global on/off switch for the SD plugin
@@ -1533,6 +1611,11 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return I18N.get(enumLabels[value]);
   }
   if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
+    if (setting.valuePtr == &CrossPointSettings::wifiIdleTimeoutSeconds) {
+      const uint8_t seconds = SETTINGS.wifiIdleTimeoutSeconds;
+      if (seconds == 0) return tr(STR_SLEEP_NEVER);
+      return std::to_string(seconds) + " s";
+    }
     if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
       if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
         return tr(STR_SLEEP_NEVER);

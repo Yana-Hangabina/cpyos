@@ -10,10 +10,14 @@
 #if !defined(SIMULATOR)
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
+#include <esp_memory_utils.h>
 #include <esp_wifi.h>
 #include <sdkconfig.h>
 #endif
 
+#include <atomic>
+
+#include "BackgroundWork.h"
 #include "BleInput.h"
 #include "CrossPointSettings.h"
 #include "SdCardFontSystem.h"
@@ -109,7 +113,88 @@ void prepare(GfxRenderer& renderer) {
 
 namespace {
 int g_timeSyncPauseDepth = 0;
+std::atomic<int> g_networkHolds{0};
+std::atomic<uint32_t> g_lastNetworkActivityMs{0};
+std::atomic<bool> g_idleReleaseEnabled{false};
+std::atomic<uint32_t> g_psCheckMs{0};
+std::atomic<bool> g_psVerified{false};
+
+// Modem sleep is a policy, not a one-shot request.
+//
+// With PS on, IDF gates PHY power on/off around beacon sleep and that path calls
+// `phy_track_pll_init()`, whose `esp_timer_create()` goes through
+// `ESP_ERROR_CHECK` -- it aborts the machine when the internal heap cannot satisfy
+// the allocation (measured on device: largest free block 820 B, `phy_common.c:118`,
+// `ESP_ERR_NO_MEM`).  The timer is created at a moment chosen by the power manager,
+// so no call site can guard it.
+//
+// Asking once at `WiFi.mode()` is not enough and the device proved it:
+// `esp_wifi_set_ps()` is rejected before the driver is started, and Arduino's own
+// connect path plus `WifiPowerSaveGuard`'s restore both write MIN_MODEM back later.
+// So re-assert here, on the idle path that already owns radio policy, and treat "I
+// asked for it once" as unverified.
+void enforceNoModemSleep(const uint32_t nowMs) {
+#if !defined(SIMULATOR)
+  const uint32_t last = g_psCheckMs.load(std::memory_order_relaxed);
+  if (static_cast<int32_t>(nowMs - last) < 1000) return;  // one driver call per second
+  g_psCheckMs.store(nowMs, std::memory_order_relaxed);
+  if (WiFi.getMode() == WIFI_MODE_NULL) return;
+  wifi_ps_type_t ps = WIFI_PS_MIN_MODEM;
+  if (esp_wifi_get_ps(&ps) != ESP_OK) return;  // driver not up yet; try again next tick
+  if (ps == WIFI_PS_NONE) {
+    // Say it once per radio session: "no error line" is not evidence that a
+    // mitigation is in force, and this one had already failed silently once.
+    if (!g_psVerified.exchange(true, std::memory_order_relaxed))
+      LOG_INF("NET", "modem sleep is off (verified on the idle path)");
+    return;
+  }
+  g_psVerified.store(false, std::memory_order_relaxed);
+  if (esp_wifi_set_ps(WIFI_PS_NONE) == ESP_OK) {
+    LOG_INF("NET", "modem sleep forced off (was %d)", static_cast<int>(ps));
+  } else if (WiFi.status() == WL_CONNECTED) {
+    LOG_ERR("NET", "cannot disable modem sleep; the PHY PLL timer abort stays possible");
+  }
+#endif
+}
 }  // namespace
+
+void noteActivity() {
+  g_lastNetworkActivityMs.store(millis(), std::memory_order_relaxed);
+  // Idle auto-release stays off: every teardown variant tried so far panics.
+  // g_idleReleaseEnabled.store(true, std::memory_order_relaxed);
+}
+
+void hold() {
+  g_networkHolds.fetch_add(1, std::memory_order_relaxed);
+  noteActivity();
+}
+
+void releaseHold() {
+  int count = g_networkHolds.load(std::memory_order_relaxed);
+  while (count > 0 && !g_networkHolds.compare_exchange_weak(count, count - 1, std::memory_order_relaxed)) {
+  }
+  // Start the quiet period at the end of the operation, not at its start.
+  noteActivity();
+}
+
+void pollIdle(const uint32_t nowMs) {
+  enforceNoModemSleep(nowMs);
+  if (!g_idleReleaseEnabled.load(std::memory_order_relaxed)) return;
+  if (WiFi.getMode() == WIFI_MODE_NULL) {
+    g_idleReleaseEnabled.store(false, std::memory_order_relaxed);
+    return;
+  }
+  // A web server / AP session owns the radio; never idle it out from under it.
+  if ((WiFi.getMode() & WIFI_MODE_AP) != 0) return;
+  if (g_networkHolds.load(std::memory_order_relaxed) > 0 || background_work::active()) return;
+  const uint8_t timeoutSeconds = SETTINGS.wifiIdleTimeoutSeconds;
+  if (timeoutSeconds == 0) return;  // 0 = never auto-release
+  const uint32_t last = g_lastNetworkActivityMs.load(std::memory_order_relaxed);
+  const int32_t elapsed = static_cast<int32_t>(nowMs - last);
+  if (elapsed < static_cast<int32_t>(timeoutSeconds) * 1000) return;
+  LOG_INF("NET", "WiFi idle %u s; releasing radio", static_cast<unsigned>(timeoutSeconds));
+  releaseRadio();
+}
 
 void suspendTimeSync() {
   if (g_timeSyncPauseDepth++ != 0) return;
@@ -126,13 +211,18 @@ void resumeTimeSync() {
 }
 
 void releaseRadio() {
+  g_idleReleaseEnabled.store(false, std::memory_order_relaxed);
+  // New radio session: the next verified tick has to say so again.
+  g_psVerified.store(false, std::memory_order_relaxed);
+  g_psCheckMs.store(0, std::memory_order_relaxed);
+  g_lastNetworkActivityMs.store(millis(), std::memory_order_relaxed);
 #if !defined(SIMULATOR)
 #if defined(CROSSPOINT_PLUS_PORT)
   // 4G: the compat layer reports the modem link as WIFI_STA (so the Arduino API
   // behaves), which means the teardown below would stop the data path the caller
-  // is about to use. "Connect and leave" entry points pass keepRadioOnExit=false
-  // and would silently kill the modem on exit. The modem is the configured
-  // transport and the boot path starts it, so releasing the radio leaves it up.
+  // is about to use. An immediate "release on exit" would silently kill the
+  // modem on exit. The modem is the configured transport and the boot path
+  // starts it, so releasing the radio leaves it up.
   if (plus_cellular_active()) {
     LOG_INF("NET", "releaseRadio: cellular link active, keeping the modem");
     return;
@@ -140,13 +230,120 @@ void releaseRadio() {
 #endif
   if (WiFi.getMode() == WIFI_MODE_NULL) return;
   LOG_INF("NET", "releasing radio (mode=%d)", static_cast<int>(WiFi.getMode()));
-  WiFi.disconnect(true);  // disconnect and power the station down
-  WiFi.mode(WIFI_OFF);
-  delay(30);
-  esp_wifi_deinit();
-  LOG_INF("NET", "radio released, mode=%d", static_cast<int>(WiFi.getMode()));
+  // Drop the association only.  Both esp_wifi_deinit() and WiFi.mode(WIFI_OFF)
+  // can tear down state that lwIP still references, and the failure is a panic
+  // inside tcpip_thread (`assert xQueueSemaphoreTake ((pxQueue))`, frames
+  // sys_mutex_lock <- tcpip_thread, reproduced 2026-11-20 with each variant).
+  // Staying associated-but-idle costs power; a dead network stack costs the
+  // session, so this stays conservative until a real drain condition exists.
+  // Without this the station re-associates within a second (Arduino's
+  // auto-reconnect), so the "release" measured status=6 forever.  setMode()
+  // turns it back on for the next feature that needs the network.
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false);
+  LOG_INF("NET", "radio released (association dropped, stack intact), mode=%d",
+          static_cast<int>(WiFi.getMode()));
   // The radio session ends here, so the SNTP hold that setMode() took can go.
   resumeTimeSync();
+#endif
+}
+
+static bool gDeepReleasePending = false;
+
+void requestDeepRelease() { gDeepReleasePending = true; }
+
+bool flushDeepRelease() {
+#if defined(SIMULATOR)
+  gDeepReleasePending = false;
+  return false;
+#else
+  if (!gDeepReleasePending) return false;
+  if (esp_ptr_external_ram(esp_cpu_get_sp())) return false;
+  gDeepReleasePending = false;
+  return releaseRadioDeep();
+#endif
+}
+
+bool releaseRadioDeep() {
+#if defined(SIMULATOR)
+  return false;
+#else
+  const uint32_t beforeFree =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const uint32_t beforeLargest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (WiFi.getMode() == WIFI_MODE_NULL) return true;
+  g_idleReleaseEnabled.store(false, std::memory_order_relaxed);
+  g_psVerified.store(false, std::memory_order_relaxed);
+  g_psCheckMs.store(0, std::memory_order_relaxed);
+  // Order matters: disconnect drops sockets/DHCP first, mode(WIFI_OFF) stops and
+  // deinits the driver and releases the netif, and the explicit esp_wifi_deinit()
+  // covers the case where mode() short-circuits because it already believed off.
+  // ★ This is a diagnostic/bench path now: the PDF reader stopped using it after
+  // a reproducible `Cache error` panic (2026-11-22) and went back to
+  // releaseRadio().  It remains callable from tasks whose stack is in PSRAM
+  // (CMD:WIFIDEINIT runs it from the main loop; the storage switch below exists
+  // because onEnter used to call it from the render task).  Internal-flash
+  // writes from a PSRAM stack trip
+  // IDF's cache guard (`esp_task_stack_is_sane_cache_disabled`), and Arduino's
+  // WiFi.mode() persists the mode to NVS while storage is FLASH.  Switching the
+  // driver to RAM storage first keeps this teardown entirely off internal flash;
+  // the mode is re-established by whatever network feature runs next anyway.
+  esp_wifi_set_storage(WIFI_STORAGE_RAM);
+  WiFi.disconnect(false, false);  // association only; wifioff=true would re-enter mode()
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_deinit();
+  // Put the driver back on flash storage: RAM storage applies to EVERY later
+  // config write, so leaving it on would silently stop new Wi-Fi credentials
+  // from being saved for the rest of the session (a connected-function bug that
+  // would only show up the next boot).  Setting it before the next init is fine.
+  esp_wifi_set_storage(WIFI_STORAGE_FLASH);
+  if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+    LOG_INF("NET", "deep radio release ran on a PSRAM stack; storage was RAM, no flash write");
+  }
+  resumeTimeSync();
+  const uint32_t afterFree =
+      heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  const uint32_t afterLargest =
+      heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  LOG_INF("NET", "deep radio release: mode=%d free %u->%u largest %u->%u",
+          static_cast<int>(WiFi.getMode()), static_cast<unsigned>(beforeFree),
+          static_cast<unsigned>(afterFree), static_cast<unsigned>(beforeLargest),
+          static_cast<unsigned>(afterLargest));
+  return true;
+#endif
+}
+
+bool canAffiliate(const bool verbose) {
+#if defined(SIMULATOR)
+  (void)verbose;
+  return true;  // no esp heap caps under the native stub
+#else
+  // What this is measured against, and what it is not:
+  //   * granted, and the association then succeeded, at internal free=22,511 with
+  //     largest=7,156 and DMA largest=5,620 (2026-11-20, after four PDF open/close
+  //     cycles in one session);
+  //   * `esp_wifi_init` returned ESP_ERR_NO_MEM at largest=7,668 while the reader
+  //     still held its page caches -- a *larger* largest block than the success case.
+  // So largest-free-block does not predict this, and every threshold built on it has
+  // been wrong twice, including one that refused a download whose radio was already
+  // connected. What the driver needs is total internal room for many small
+  // internal/DMA allocations, so that is what is measured. 12 KiB sits below every
+  // observed success and above the state where the driver had nothing to work with;
+  // it is an interpolation, not a boundary, and the driver's own error stays the
+  // authority -- a refused attempt is recoverable, a wrong guess here is only a
+  // slower "can't connect".
+  constexpr size_t kMinInternalFree = 12 * 1024;
+  const size_t freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (freeInternal >= kMinInternalFree) return true;
+  if (verbose) {
+    LOG_ERR("NET", "too little internal RAM for the radio: free=%u B (want %u B), largest=%u B, "
+                   "DMA largest=%u B",
+            static_cast<unsigned>(freeInternal), static_cast<unsigned>(kMinInternalFree),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)));
+  }
+  return false;
 #endif
 }
 
@@ -154,12 +351,32 @@ bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) {
   bleinput::stop();
   logMemory("after BLE stop");
   prepare(renderer);
+  // After prepare(): the reclaim above is frequently what makes room for the driver,
+  // so deciding before it refuses work that would have succeeded.
+  if ((mode & WIFI_MODE_STA) != 0 && !canAffiliate()) {
+    logMemory("radio refused");
+    return false;
+  }
   // A pending SNTP DNS callback is what makes lwIP assert when association
   // clears the DNS cache; hold the clock off for the whole radio session.
   const bool wasOff = WiFi.getMode() == WIFI_MODE_NULL;
   if (wasOff) suspendTimeSync();
+  WiFi.setAutoReconnect(true);  // releaseRadio() disables it; every session re-enables
   const bool started = WiFi.mode(mode);
+  if (started && (mode & WIFI_MODE_STA) != 0) {
+    // Kill the modem-sleep path before it can kill the device: with PS enabled,
+    // IDF toggles PHY power gating and calls phy_track_pll_init(), which creates
+    // its timer through ESP_ERROR_CHECK -- at a time chosen by the power manager,
+    // not by us.  Measured on device: that landed inside a PDF session holding
+    // 820 B of largest internal block and aborted the whole machine
+    // (`ESP_ERR_NO_MEM ... phy_common.c:118`).  Keeping PS off removes the code
+    // path entirely.  This call is only a head start -- it is rejected while the
+    // driver is still down, which is why enforceNoModemSleep() re-asserts it on the
+    // idle path.
+    WiFi.setSleep(false);
+  }
   if (!started && wasOff) resumeTimeSync();
+  if (started) noteActivity();
   logMemory(started ? "WiFi mode ready" : "WiFi mode failed");
   return started;
 }

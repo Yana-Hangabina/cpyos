@@ -321,6 +321,17 @@ class BaseTheme {
   // Capsule-style themes override this to match their header chrome (CPY: same pill
   // as the home header, percentage inside) instead of the classic outline + text.
   virtual int drawStatusBarBattery(const GfxRenderer& renderer, int x, int y, bool showPercent) const;
+  // True when the theme paints the header's status battery itself (CPY: the same
+  // capsule as the home mast) instead of FreeInkUI's battery glyph + "NN%" label.
+  // drawHeaderWithStyle() still reserves the capsule's width for the title run.
+  virtual bool drawsHeaderBatteryCapsule() const { return false; }
+  // Paints that capsule across the whole header band (CPY centres it vertically).
+  // Only called when drawsHeaderBatteryCapsule() is true; showPercent honours
+  // SETTINGS.hideBatteryPercentage.
+  virtual void drawHeaderBatteryCapsule(const GfxRenderer& renderer, Rect band, bool showPercent) const {}
+  // Width drawStatusBarBattery() will occupy, for a right-aligned cluster (the
+  // sub-page date header) that must place text before drawing.
+  virtual int statusBarBatteryWidth(const GfxRenderer& renderer, bool showPercent) const;
   virtual void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const;
   void drawButtonHintsWithStyle(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4, bool upstreamStyle) const;

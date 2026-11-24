@@ -196,6 +196,27 @@ void utf8AppendCodepoint(uint32_t cp, std::string& out) {
   }
 }
 
+uint32_t utf8UppercaseForSmallCaps(const uint32_t cp) {
+  if (cp >= 'a' && cp <= 'z') return cp - 0x20;
+  // Latin-1 Supplement: minus the multiplication sign (U+00D7), which has no case.
+  if (cp >= 0xE0 && cp <= 0xFE && cp != 0xF7) return cp - 0x20;
+  if (cp == 0xFF) return 0x178;  // y with diaeresis
+  if (cp == 0x131) return 'I';   // dotless i
+  if (cp == 0x17F) return 'S';   // long s
+  // Latin Extended-A pairs (uppercase even, lowercase odd), except the
+  // 0x139-0x148 range, where the alignment flips, and U+0130/U+0131 above.
+  if (cp >= 0x100 && cp <= 0x137 && (cp & 1) != 0) return cp - 1;
+  if (cp >= 0x14A && cp <= 0x177 && (cp & 1) != 0) return cp - 1;
+  if (cp >= 0x139 && cp <= 0x148 && (cp & 1) == 0) return cp - 1;
+  // Greek: alpha..omega, plus the final sigma.
+  if (cp >= 0x3B1 && cp <= 0x3C9 && cp != 0x3C2) return cp - 0x20;
+  if (cp == 0x3C2) return 0x3A3;
+  // Cyrillic: the main block and yo.
+  if (cp >= 0x430 && cp <= 0x44F) return cp - 0x20;
+  if (cp == 0x451) return 0x401;
+  return cp;
+}
+
 int utf8SafeTruncateBuffer(const char* buf, int len) {
   if (len <= 0) return 0;
 

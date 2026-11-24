@@ -21,7 +21,12 @@
 namespace {
 constexpr int SECTION_GAP = 10;
 constexpr int MONTH_HEADER_HEIGHT = 34;
-constexpr int SUMMARY_CARD_HEIGHT = 66;
+// The card stacks a value line (UI_12 bold) over a label line (UI_10). A fixed
+// 66 px clipped the label into the next row once the UI faces grew, so the height
+// follows the live font metrics with the old 66 px as the floor.
+int summaryCardHeight(const GfxRenderer& renderer) {
+  return std::max(66, renderer.getLineHeight(UI_12_FONT_ID) + renderer.getLineHeight(UI_10_FONT_ID) + 18);
+}
 constexpr int SUMMARY_CARD_GAP = 8;
 constexpr int HEATMAP_GRID_GAP = 6;
 constexpr int LEGEND_HEIGHT = 30;
@@ -51,13 +56,15 @@ struct HeatmapLayout {
   int legendTop;
   int cellWidth;
   int cellHeight;
+  int summaryCardHeight;
 };
 
 HeatmapLayout heatmapLayout(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int summaryTop = contentTop + MONTH_HEADER_HEIGHT + 4;
-  const int gridTop = summaryTop + (SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP) * 2 + SECTION_GAP;
+  const int cardHeight = summaryCardHeight(renderer);
+  const int gridTop = summaryTop + (cardHeight + SUMMARY_CARD_GAP) * 2 + SECTION_GAP;
   const int legendTop = renderer.getScreenHeight() - metrics.buttonHintsHeight - LEGEND_HEIGHT - 4;
   const int gridHeight = std::max(120, legendTop - gridTop - SECTION_GAP);
   return {metrics.contentSidePadding,
@@ -66,7 +73,8 @@ HeatmapLayout heatmapLayout(const GfxRenderer& renderer) {
           gridTop,
           legendTop,
           (renderer.getScreenWidth() - metrics.contentSidePadding * 2 - HEATMAP_GRID_GAP * 6) / 7,
-          (gridHeight - HEATMAP_GRID_GAP * 5) / 6};
+          (gridHeight - HEATMAP_GRID_GAP * 5) / 6,
+          cardHeight};
 }
 
 int heatmapCellAt(const HeatmapLayout& layout, const int x, const int y) {
@@ -534,19 +542,20 @@ void ReadingHeatmapActivity::render(RenderLock&&) {
                                        ? ReadingStatsAnalytics::formatDurationHm(monthSummary.bestDayReadingMs) + " (" +
                                              std::to_string(monthSummary.bestDayOfMonth) + ")"
                                        : ReadingStatsAnalytics::formatDurationHm(monthSummary.bestDayReadingMs);
-  drawMetricCard(renderer, Rect{layout.sidePadding, layout.summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
+  drawMetricCard(renderer, Rect{layout.sidePadding, layout.summaryTop, cardWidth, layout.summaryCardHeight},
                  tr(STR_MONTH_TOTAL), ReadingStatsAnalytics::formatDurationHm(monthSummary.totalReadingMs));
   drawMetricCard(
       renderer,
-      Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP, layout.summaryTop, cardWidth, SUMMARY_CARD_HEIGHT},
+      Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP, layout.summaryTop, cardWidth, layout.summaryCardHeight},
       tr(STR_DAYS_READ), std::to_string(monthSummary.daysRead));
   drawMetricCard(renderer,
-                 Rect{layout.sidePadding, layout.summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP, cardWidth,
-                      SUMMARY_CARD_HEIGHT},
+                 Rect{layout.sidePadding, layout.summaryTop + layout.summaryCardHeight + SUMMARY_CARD_GAP, cardWidth,
+                      layout.summaryCardHeight},
                  tr(STR_BEST_DAY), bestDayValue);
   drawMetricCard(renderer,
                  Rect{layout.sidePadding + cardWidth + SUMMARY_CARD_GAP,
-                      layout.summaryTop + SUMMARY_CARD_HEIGHT + SUMMARY_CARD_GAP, cardWidth, SUMMARY_CARD_HEIGHT},
+                      layout.summaryTop + layout.summaryCardHeight + SUMMARY_CARD_GAP, cardWidth,
+                      layout.summaryCardHeight},
                  tr(STR_STREAK), std::to_string(READING_STATS.getCurrentStreakDays()));
 
   for (int index = 0; index < 42; ++index) {

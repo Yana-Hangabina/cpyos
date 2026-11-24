@@ -88,17 +88,89 @@ oversized `book.bin` is closed and removed; the current call returns no entry,
 and the next normal EPUB load rebuilds it. This is a validation change only and
 does not alter the version-11 binary layout.
 
-**Manual Cache Clear** (safe operations):
+**Manual Cache Clear** (host-side, for development):
 ```bash
-# Delete ALL caches (forces full regeneration)
+# Force full regeneration of every book's pagination:
+#   DROPS HIGHLIGHTS, NOTES, BOOKMARKS AND READING POSITION.
+# The device's own "Clear Reading Cache" does not -- see the next section.
 rm -rf /path/to/sd/.crosspoint/
 
-# Delete specific book cache
+# Delete one book's cache
 rm -rf /path/to/sd/.crosspoint/epub_<hash>/
 
 # Keep progress, delete only rendered sections
 rm -rf /path/to/sd/.crosspoint/epub_<hash>/sections/
 ```
+
+## What a cache clear must keep
+
+The per-book cache directory (`epub_<hash>`, `pdf_<hash>`, `txt_<hash>`, …) holds two
+different kinds of file, and the readers used to treat them alike: every `clearCache()`
+ran `Storage.removeDir()` on the directory, which also contains the reader's own data.
+So 设置 → 清除阅读缓存 (which sweeps *every* book cache at once) and the per-book
+"清除分页缓存" both destroyed highlights, notes, bookmarks and reading position, and
+PDF lost them silently whenever the file's size or mtime changed.
+
+`lib/BookCache/BookCachePrune.h` now owns the rule, and
+`book_cache::pruneRegenerable()` executes it: enumerate the directory, delete every entry
+except the reader's own files, and **keep the directory itself** (every `setupCacheDir()`
+is mkdir-if-absent, so a surviving empty directory is not a state any reader misreads).
+
+Kept: `annotations.bin`, `annotations.txt`, `bookmarks.bin`, `progress.bin`, and their
+`.tmp`/`.bak`/`.part` siblings. Everything else in the directory is deleted.
+
+The rule is an allowlist of *user data*, not a denylist of cache names, deliberately: a
+new cache artifact defaulting to deletable costs one rebuild, whereas a new user file
+defaulting to deletable would be a data-loss bug nobody notices until a reader loses their
+highlights. Temp siblings are kept because `replaceFile()`/`ProgressFile` write
+`<name>.tmp` and rename it over the real file, so after a power loss mid-save the temp
+file can be the only copy of a reader's notes.
+
+★ **The sweep runs until a pass removes nothing.** Deleting entries while enumerating a
+directory is only safe if the iterator is *entry-positioned* (a freed dir entry is stepped
+over, which is how SdFat walks a directory). If it is *index-positioned*, every entry after
+a removal shifts down into the hole and a single pass silently clears about half the
+directory — which is exactly what the first version of this code did, caught by the
+in-memory filesystem in `test/book_cache_prune/stubs/`. One pass per halving, no allocation;
+a 32-pass cap bounds a filesystem that reports a removal it did not perform.
+
+Applied at all six drop sites: `Epub/Xtc/Cbz/Txt/Fb2::clearCache()`, the PDF and
+generated-EPUB branches of `clearBookCache()`, `ClearCacheActivity::clearCache()`, and
+`PdfReaderActivity::ensureCacheValid()`. Deliberate exceptions:
+
+- **Deleting a book** still removes the whole directory. The book is gone, so its notes go
+  with it; keeping them would strand data with nothing to attach to.
+- `Fb2`'s pre-generation drop of its own directory, and `WeReadBrowse::clearAllCaches()`
+  (`/.crosspoint/weread/browse-cache`), hold no reader data.
+- `CMD:PDFCACHE` (dev-only serial hook) still rmtrees, on purpose, to test a cold rebuild.
+- Sub-directory removals (`sections/`, `html/`) were always selective and are the pattern
+  this follows — `Txt::invalidateCache()` already wiped exactly those two, leaving
+  `progress.bin`, and the settings-page clear never got that treatment.
+
+The reader's anchors survive a rebuild because they address the *book*, not the cache:
+EPUB offsets index the extracted text, PDF re-matches the stored quote against the current
+lines (`QuoteAnchor.h`) and simply stops drawing when the text is gone, and PDF/EPUB
+progress is clamped to the spine/page count on load.
+
+★ Changing this also changed the confirmation text
+(`STR_CLEAR_CACHE_WARNING_2`), which used to promise "All reading progress will be lost!".
+Any translation edit changes `I18N_CONTENT_SIGNATURE` (the FNV is over every language's
+full string sequence, embedded languages included), so a firmware carrying it **must ship
+the matching `i18n_pack.dat`**: otherwise the device rejects the whole pack and the 34
+packed languages fall back to English. Key count is unchanged, so the failure mode is the
+content signature, not the "built for a different number of keys" rejection.
+
+Host regression: `sh test/book_cache_prune/run_book_cache_prune_test.sh` — the rule
+(51 checks) and the sweep against an in-memory filesystem (80 checks), 12 mutations in
+total, each pinned to its target by a marker comment the runner requires. The sweep suite
+runs both iterator models, and the fake's `reset()` clears every knob: a sticky failure
+that leaked between cases silently turned a transient-failure assertion into a
+stuck-entry one.
+
+Device check (one command, exercises the product path and SdFat's real cursor):
+`CMD:PRUNE <book path>` →
+`[ERR] CACHE: serial CMD:PRUNE ok=1 annotations 1->1 progress 1->1 meta 1->0 book 1->0`.
+The two directions on that line are the whole rule: derived blobs go, reader data stays.
 
 **When to Clear Cache**:
 - EPUB parsing errors after code changes to `lib/Epub/`

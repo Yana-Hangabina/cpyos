@@ -5,8 +5,12 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <SdCardFont.h>
+// Only the PSRAM-stack guard below needs these; keeping them unconditional
+// broke the host test build, which has no ESP headers.
+#if defined(BOARD_HAS_PSRAM)
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
+#endif
 
 #include <algorithm>
 #include <cstring>

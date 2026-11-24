@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -364,6 +365,7 @@ bool FontDownloadActivity::fetchAndParseManifest() {
     return false;
   }
   NetworkStartup::logMemory("font manifest request");
+  HalPowerManager::Lock manifestPowerLock(/*quiet=*/true);
   auto result = HttpDownloader::downloadToFile(manifestUrl, MANIFEST_TMP, nullptr);
   NetworkStartup::logMemory("font manifest request finished");
   if (result != HttpDownloader::OK) {
@@ -761,6 +763,10 @@ void FontDownloadActivity::finishDownloadProgress() {
 
 FontDownloadActivity::DownloadResult FontDownloadActivity::downloadFile(const ManifestFamily& family,
                                                                         const ManifestFile& file) {
+  // Without this the governor drops to 80 MHz between TLS records and a 2-3 MB
+  // font crawls (the OTA path measured 4 KB/s that way).  quiet: a render pass
+  // holding the lock is a cost, not an error.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   char fileName[128];
   const int fileNameLength =
       snprintf(fileName, sizeof(fileName), "%s_%u.cpfont", family.name.c_str(), static_cast<unsigned>(file.pointSize));

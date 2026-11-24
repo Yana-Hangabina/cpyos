@@ -26,8 +26,16 @@ namespace {
 constexpr const char* TAG = "PLUS-PWR";
 plus_battery_sample_t s_sample{};
 unsigned long s_lastPollMs = 0;
-plus_battery::PercentFilter s_percent;
+// Vendor display policy (docs/battery-soc-and-charge.md): voltage/current
+// estimate, 60 s average, 5 % one-way steps, full-confirm hysteresis and a 3 s
+// settle window. No use of the gauge's own (uncalibrated) SOC register.
+plus_battery::SocDisplayPolicy s_soc;
 bool s_lowWarned = false;
+// Chrome state: the last level the policy actually reported, and whether one
+// has ever been reported this session. The renderer reads these (never the
+// gauge), so a repaint can no longer decide whether sampling happens at all.
+int s_lastShownLevel = 100;
+bool s_everKnown = false;
 
 uint8_t s_lastFailure = static_cast<uint8_t>(HalPowerManager::LightSleepFailure::None);
 int s_lastError = 0;
@@ -173,12 +181,17 @@ bool readPowerKeyLowAtWake() {
 HalPowerManager powerManager;
 
 void HalPowerManager::begin() {
+    s_lastShownLevel = 100;
+    s_everKnown = false;
     plus_battery_sample_t sample{};
+    // Boot: the vendor policy waits 3 s for the load to settle before it shows a
+    // level, so start the window here even before the first sample.
+    s_soc.reset(millis());
     if (PlusBattery_Read(&sample)) {
         s_sample = sample;
         s_lastPollMs = millis();
-        ESP_LOGI(TAG, "BQ27220 %d mV %d mA %d%%", sample.millivolts, sample.milliamps,
-                 sample.soc_percent);
+        ESP_LOGI(TAG, "BQ27220 %d mV %d mA %d%% (chip SOC, not displayed)", sample.millivolts,
+                 sample.milliamps, sample.soc_percent);
     } else {
         ESP_LOGW(TAG, "BQ27220 not answering; battery percentage unavailable");
     }
@@ -194,37 +207,50 @@ void HalPowerManager::setPowerSaving(bool enable) {
 }
 
 uint16_t HalPowerManager::getBatteryPercentage() const {
-    if (millis() - s_lastPollMs >= BATTERY_POLL_MS) {
+    const uint32_t now = millis();
+    if (now - s_lastPollMs >= BATTERY_POLL_MS) {
+        s_lastPollMs = now;
         plus_battery_sample_t sample{};
-        if (PlusBattery_Read(&sample)) {
+        // Valid means "the gauge answered and the voltage is plausible"; the
+        // chip's own SOC register is deliberately NOT used (vendor doc: it is
+        // uncalibrated for this cell).
+        if (PlusBattery_Read(&sample) && sample.valid && sample.millivolts >= 2500 &&
+            sample.millivolts <= 5000) {
             s_sample = sample;
+            s_soc.update(static_cast<uint16_t>(sample.millivolts), sample.milliamps, now);
+        } else {
+            s_soc.noteReadFailure();
         }
-        s_lastPollMs = millis();
     }
-    if (!s_sample.valid) {
-        return 100;  // unknown: show full rather than a false empty warning
+    if (!s_soc.known()) {
+        // Not known yet (boot settle, or the gauge has missed three polls).
+        // Keep the last measured level: threshold checks see an honest value,
+        // and batteryPercentageKnown() (latched) decides whether the chrome
+        // draws it. Never substitute a fabricated 100 here: during the 3 s
+        // wake recalibration that would flash "100 %" on a half-empty pack.
+        return static_cast<uint16_t>(s_lastShownLevel < 0 ? 0 : s_lastShownLevel);
     }
-    // The BQ27220 reports a real state of charge. The voltage curve is only a
-    // fallback: Li-ion sits between 3.7 and 4.0 V for most of its range, so a
-    // millivolt-derived percentage reads ~100 % until the pack is nearly empty.
-    const int raw = (s_sample.soc_percent >= 0 && s_sample.soc_percent <= 100)
-                        ? s_sample.soc_percent
-                        : PlusBattery_PercentFromMillivolts(s_sample.millivolts);
-    // Vendor firmware applies a dead band to its voltage-derived SOC; the same
-    // idea keeps the status bar from flickering, and a critical pack still warns
-    // once (the vendor cuts the BATFET at 3.1 V; this port has no such cutoff
-    // yet, so the warning is the safety net).
-    const bool charging = PlusBattery_IsCharging();
-    if (raw <= 3 && !charging) {
+    const int level = s_soc.level();
+    s_lastShownLevel = level;
+    s_everKnown = true;
+    if (level <= 3 && !s_soc.charging()) {
         if (!s_lowWarned) {
             s_lowWarned = true;
-            ESP_LOGE(TAG, "battery critical: %d%% (%d mV); connect power", raw, s_sample.millivolts);
+            ESP_LOGE(TAG, "battery critical: %d%% (%d mV); connect power", level, s_sample.millivolts);
         }
-    } else if (raw > 8) {
+    } else if (level > 8) {
         s_lowWarned = false;
     }
-    return static_cast<uint16_t>(s_percent.update(raw));
+    return static_cast<uint16_t>(level);
 }
+
+uint16_t HalPowerManager::batteryDisplayPercent() const {
+    return static_cast<uint16_t>(s_lastShownLevel < 0 ? 0 : (s_lastShownLevel > 100 ? 100 : s_lastShownLevel));
+}
+
+bool HalPowerManager::batteryPercentageKnown() const { return s_everKnown; }
+
+bool HalPowerManager::isBatteryCharging() const { return s_everKnown && s_soc.charging(); }
 
 uint8_t HalPowerManager::lastLightSleepFailure() { return s_lastFailure; }
 
@@ -418,6 +444,10 @@ HalPowerManager::LightSleepWakeReason HalPowerManager::lightSleepFor(uint32_t se
         return LightSleepWakeReason::Failed;
     }
     setStage(13);
+    // Vendor policy: after a standby wake, hide the level again, let the wake
+    // load settle, then recalibrate (a multi-step jump is allowed because the
+    // pack may have charged or drained while the panel was parked).
+    s_soc.resetForWake(millis());
 
     // A bare GPIO2 wake is NOT a power key: the accelerometer shares that line,
     // and a key released inside the wake latency reads high here. Only an EXT1

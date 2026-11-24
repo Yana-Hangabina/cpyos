@@ -40,8 +40,36 @@ inline std::string urlDecode(const std::string& in) {
 inline bool safe(const std::string& logical) {
     if (logical.empty() || logical[0] != '/') return false;
     if (logical.find("..") != std::string::npos) return false;
-    if (logical.find("/.crosspoint") == 0 || logical == "/.crosspoint") return false;
+    if (logical.find('\\') != std::string::npos) return false;
+    // FAT is case-insensitive, so "/.CROSSPOINT" reaches the same directory.
+    {
+        size_t slash = logical.find('/', 1);
+        std::string first = logical.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
+        std::string lower;
+        lower.reserve(first.size());
+        for (char c : first) lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        if (lower.rfind(".crosspoint", 0) == 0) return false;
+    }
     if (logical.find("//") != std::string::npos) return false;
+    // FAT exposes ".crosspoint" through its 8.3 alias (CROSSP~1). Blocking the
+    // long name alone would let WebDAV/HTTP read the same settings and session
+    // files through the alias. Reject any segment that looks like that alias.
+    size_t start = 0;
+    while (start <= logical.size()) {
+        size_t slash = logical.find('/', start + 1);
+        std::string seg = logical.substr(start + 1, slash == std::string::npos ? std::string::npos : slash - start - 1);
+        if (!seg.empty()) {
+            std::string upper;
+            upper.reserve(seg.size());
+            for (char c : seg) upper.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+            if (upper.find('~') != std::string::npos && upper.rfind("CROSSP", 0) == 0) return false;
+            if (upper == "CROSSPOINT") return false;
+            // A collision-free 8.3 stem of the same directory.
+            if (upper.size() <= 12 && upper.rfind("CROSSPOI", 0) == 0) return false;
+        }
+        if (slash == std::string::npos) break;
+        start = slash;
+    }
     return true;
 }
 

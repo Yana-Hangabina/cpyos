@@ -128,7 +128,13 @@ void CpyTheme::drawBatteryPill(const GfxRenderer& renderer, const int right, con
   const int width = CpyMetrics::values.batteryWidth;
   const int height = CpyMetrics::values.batteryHeight;
   const int x = right - width;
-  const uint16_t percentage = powerManager.getBatteryPercentage();
+  // Read the cached level only: sampling belongs to the main loop (one sample
+  // per second, the cadence both SoC policies are designed around). Calling
+  // getBatteryPercentage() here used to make the pill's own "known" gate decide
+  // whether the HAL ever sampled, which dead-locked the Plus port at "--" (no
+  // caller, never known) and left Read Pico depending on a 15 s poll.
+  const bool known = powerManager.batteryPercentageKnown();
+  const uint16_t percentage = known ? powerManager.batteryDisplayPercent() : 0;
 
   renderer.drawRoundedRect(x, top, width, height, 2, height / 2, true);
 
@@ -139,12 +145,18 @@ void CpyTheme::drawBatteryPill(const GfxRenderer& renderer, const int right, con
   const int cavityHeight = height - inset * 2;
   const int filledWidth =
       std::clamp(static_cast<int>(percentage) * cavityWidth / 100, 0, cavityWidth);
-  if (filledWidth > 0) {
+  if (known && filledWidth > 0) {
     renderer.fillRoundedRect(cavityX, cavityY, filledWidth, cavityHeight, cavityHeight / 2, Color::Black);
   }
 
-  const bool charging = gpio.isUsbConnected();
-  if (showPercent) {
+  const bool charging = powerManager.isBatteryCharging();
+  // Never measured (boot, gauge absent): leave the capsule empty. A dash or a
+  // question mark reads as a flickering/misplaced glyph on e-ink, and a
+  // fabricated 0 % is worse than no number. This is also what the vendor
+  // firmware does (it clears the percentage label). Once any valid sample has
+  // been seen, batteryPercentageKnown() stays true for the session, so the
+  // number never blinks back to a placeholder on a single bad PMU frame.
+  if (showPercent && known) {
     char text[8];
     std::snprintf(text, sizeof(text), "%u", static_cast<unsigned>(percentage));
     // The numeric face only: the UI text faces render ~27px ink at high DPI,
@@ -155,7 +167,11 @@ void CpyTheme::drawBatteryPill(const GfxRenderer& renderer, const int right, con
     const int textY = top + (height - renderer.getLineHeight(fontId)) / 2;
     if (textWidth + 10 <= cavityWidth) {
       // Centered in the pill; the part over the fill redraws white at the
-      // fill boundary (two passes, second one clipped to the cavity).
+      // fill boundary (two passes, second one clipped to the cavity). Do not
+      // snap that boundary to the digit run: the digits are centred, so the
+      // black-on-white and white-on-black halves always meet at the glyph, and
+      // moving the bar instead would misreport the level by up to a digit
+      // width (~a quarter of the cavity).
       const int textX = x + (width - textWidth) / 2;
       renderer.drawText(fontId, textX, textY, text, true);
       if (filledWidth > 0) {
@@ -169,6 +185,12 @@ void CpyTheme::drawBatteryPill(const GfxRenderer& renderer, const int right, con
   if (charging) drawBatteryLightningBolt(renderer, x + inset + 1, top + (height - 14) / 2);
 }
 
+int CpyTheme::statusBarBatteryWidth(const GfxRenderer& renderer, const bool showPercent) const {
+  (void)renderer;
+  (void)showPercent;  // the percentage lives inside the pill, so the width is fixed
+  return CpyMetrics::values.batteryWidth;
+}
+
 int CpyTheme::drawStatusBarBattery(const GfxRenderer& renderer, const int x, const int y,
                                    const bool showPercent) const {
   // Same capsule as the header pill, so the reader's bar and the home chrome agree
@@ -179,6 +201,17 @@ int CpyTheme::drawStatusBarBattery(const GfxRenderer& renderer, const int x, con
   return CpyMetrics::values.batteryWidth;
 }
 
+void CpyTheme::drawHeaderBatteryCapsule(const GfxRenderer& renderer, const Rect band, const bool showPercent) const {
+  // The band may be short (the control center's 56px strip) or tall (the reader
+  // menu's 112px title band); centring matches CpyTheme::drawHeader, which is
+  // what the settings sub-pages paint, so every header shows one capsule in one
+  // place. Wrong on purpose would be anchoring to the old FreeInkUI status
+  // strip: that sits on the band's top row and would misalign the shorter band.
+  const int right = band.x + band.width - CpyMetrics::values.headerSidePadding;
+  const int top = band.y + (band.height - CpyMetrics::values.batteryHeight) / 2;
+  drawBatteryPill(renderer, right, top, showPercent);
+}
+
 void CpyTheme::fillBatteryIcon(const GfxRenderer& renderer, const Rect rect, const uint16_t percentage) const {
   // Rounded capsule fill for the bands that still compose their own battery
   // (reader status). The shell battery re-draws through drawBatteryPill.
@@ -187,7 +220,7 @@ void CpyTheme::fillBatteryIcon(const GfxRenderer& renderer, const Rect rect, con
   if (maxWidth <= 0 || height <= 0) return;
   const int filledWidth = std::clamp(static_cast<int>(percentage) * maxWidth / 100, 2, maxWidth);
   renderer.fillRoundedRect(rect.x + 2, rect.y + 2, filledWidth, height, height / 2, Color::Black);
-  if (gpio.isUsbConnected()) drawBatteryLightningBolt(renderer, rect.x + 4, rect.y + 2);
+  if (powerManager.isBatteryCharging()) drawBatteryLightningBolt(renderer, rect.x + 4, rect.y + 2);
 }
 
 void CpyTheme::applyCompactDensity(ThemeMetrics& metrics) const {
@@ -588,7 +621,7 @@ void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
   const int barCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), barDepth);
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
-  // Pond baseline: a shallow wave instead of a straight hairline. The active
+  // refreshed UI baseline: a shallow wave instead of a straight hairline. The active
   // item gets three ripple arcs behind its icon and a small duck on the top
   // edge; the bar itself stays 88 px so it stops eating the page.
   constexpr float kTwoPi = 6.2831853f;
@@ -831,7 +864,7 @@ void CpyTheme::drawEmptyState(const GfxRenderer& renderer, const Rect rect, cons
 
 void CpyTheme::drawSleepScreen(const GfxRenderer& renderer, const char* status, const char* bookTitle,
                                const int readPercent) const {
-  // Pond v5 frame 12: a night scene only. No current book, no reading stats
+  // refreshed UI frame 12: a night scene only. No current book, no reading stats
   // and no Wi-Fi line -- standby must not claim anything the device cannot
   // know while asleep (ALIGNMENT-AUDIT.md).
   (void)bookTitle;
@@ -979,7 +1012,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   {
-  // Pond v5 mast (design frame 01): one quiet row. Page label on the left,
+  // refreshed UI mast (design frame 01): one quiet row. Page label on the left,
   // date + clock + battery capsule on the right. No large serif page title:
   // the designed pages put their own display type in the content area.
   (void)masthead;

@@ -6,7 +6,7 @@ namespace plus_ai_key {
 namespace {
 constexpr const char* kBlocked[] = {
     "Boot",          "Sleep",         "Standby",      "WifiSelection", "KeyboardEntry",
-    "OtaUpdate",     "UsbDrive",      "PlusTransfer", "PlusOta",       "PlusCamera",
+    "OtaUpdate",     "UsbDrive",      "PlusTransfer", "PlusOta",       "PlusResources", "PlusCamera",
     "PowerOff",      "PlusVoiceMemo", "PlusBtAudio",
 };
 }  // namespace

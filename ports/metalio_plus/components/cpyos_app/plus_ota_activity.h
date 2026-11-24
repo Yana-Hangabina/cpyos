@@ -53,7 +53,7 @@ class PlusOtaActivity final : public Activity {
 
   State state_ = State::Idle;
   Job job_ = Job::None;
-  plus_ota::Channel channel_ = plus_ota::Channel::Test;  // test until the user asks for a release
+  plus_ota::Channel channel_ = plus_ota::Channel::Stable;
   plus_ota::Info info_;
   std::string error_;
   std::atomic<bool> workerDone_{false};

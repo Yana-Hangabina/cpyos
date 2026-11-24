@@ -501,8 +501,7 @@ void ImageViewerActivity::loop() {
 
   if (mappedInput.hasTouch()) {
     const Rect sleepCoverAction = sleepCoverActionRect(renderer);
-    if (mappedInput.wasTapInRect(sleepCoverAction.x, sleepCoverAction.y, sleepCoverAction.width,
-                                 sleepCoverAction.height)) {
+    if (mappedInput.wasTapInRect(sleepCoverAction)) {
       showSleepCoverOptions();
       return;
     }
@@ -511,7 +510,7 @@ void ImageViewerActivity::loop() {
     // like the Back key, and the persistent pager buttons step siblings.
     if (imageReady && UITheme::getInstance().usesCpyLayout()) {
       const Rect back = cpyBackRect(renderer);
-      if (mappedInput.wasTapInRect(back.x, back.y, back.width, back.height)) {
+      if (mappedInput.wasTapInRect(back)) {
         activityManager.goToFileBrowser(filePath);
         return;
       }
@@ -520,14 +519,14 @@ void ImageViewerActivity::loop() {
                            currentImageIndex < static_cast<int>(siblingImages.size()) - 1;
       if (hasPrevious) {
         const Rect p = cpyPagerPrevRect(renderer);
-        if (mappedInput.wasTapInRect(p.x, p.y, p.width, p.height)) {
+        if (mappedInput.wasTapInRect(p)) {
           openSibling(-1);
           return;
         }
       }
       if (hasNext) {
         const Rect p = cpyPagerNextRect(renderer);
-        if (mappedInput.wasTapInRect(p.x, p.y, p.width, p.height)) {
+        if (mappedInput.wasTapInRect(p)) {
           openSibling(1);
           return;
         }

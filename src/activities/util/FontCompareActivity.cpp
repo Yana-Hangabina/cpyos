@@ -10,6 +10,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "ReaderFontSizes.h"
 #include "SystemFontPack.h"
 #include "fontIds.h"
 
@@ -27,9 +28,8 @@ constexpr uint8_t kLegacyLevels[4] = {255, 170, 85, 0};
 
 void FontCompareActivity::onEnter() {
   Activity::onEnter();
-  pointSize_ = static_cast<uint8_t>(requestedPointSize_ > 0 ? requestedPointSize_ : SETTINGS.fontPointSize);
-  if (pointSize_ < 10) pointSize_ = 10;
-  if (pointSize_ > 34) pointSize_ = 34;
+  pointSize_ = readerClampPointSizeToDevice(
+      static_cast<uint8_t>(requestedPointSize_ > 0 ? requestedPointSize_ : SETTINGS.fontPointSize));
 
   {
     RenderLock lock;

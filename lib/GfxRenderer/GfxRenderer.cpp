@@ -1335,12 +1335,56 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   }
 }
 
+namespace {
+// Walks a small-caps run and reports each glyph's uppercase codepoint plus its
+// x offset from the run start; returns the run width. Measurement and drawing
+// both use this walk, so layout cannot disagree with the pixels. Kerning is
+// dropped deliberately (pair metrics would have to be rescaled in both paths,
+// and small caps is a Latin-only decoration); tracking still applies.
+template <typename Emit>
+int smallCapsRun(const EpdFontFamily& family, const char* text, const EpdFontFamily::Style baseStyle,
+                 const int8_t tracking, Emit&& emit) {
+  int width = 0;
+  bool first = true;
+  const uint8_t* cursor = reinterpret_cast<const uint8_t*>(text);
+  while (const uint32_t cp = utf8NextCodepoint(&cursor)) {
+    const uint32_t upper = utf8UppercaseForSmallCaps(cp);
+    EpdGlyph solid;
+    const EpdGlyph* glyph = family.getGlyphMetrics(upper, solid, baseStyle);
+    if (!first) width += tracking;
+    emit(upper, width);
+    if (glyph != nullptr && glyph != &solid) width += (fp4::toPixel(glyph->advanceX) * 3) / 4;
+    first = false;
+  }
+  return width;
+}
+}  // namespace
+
 void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const char* text, const bool black,
                            const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
                            const int8_t tracking) const {
   // cannot draw a NULL / empty string
   if (text == nullptr || *text == '\0') {
     return;
+  }
+
+  // CSS small caps: one contained branch, so every other text path is untouched.
+  if ((style & EpdFontFamily::SMALL_CAPS) != 0) {
+    const auto baseStyle = static_cast<EpdFontFamily::Style>(style & ~EpdFontFamily::SMALL_CAPS);
+    const int resolvedFontId = resolveTextFontId(fontId, text, baseStyle);
+    const auto family = fontMap.find(resolvedFontId);
+    if (family != fontMap.end()) {
+      // drawTextRun's `y` is the ascent top; the scaled primitive anchors on a baseline,
+      // so a top-anchored span used to rise one ascender into the line above.
+      const int baselineY = y + getFontAscenderSize(resolvedFontId);
+      smallCapsRun(family->second, text, baseStyle, tracking, [&](const uint32_t upper, const int offset) {
+        drawScaledCodepoint(family->second, upper, x + offset, baselineY, 192, baseStyle, black);
+      });
+      return;
+    }
+    // No resident face for this id: fall through to the normal path, which knows
+    // how to draw from an SD font's side tables. Better a plain glyph than a
+    // missing line.
   }
 
   // Weight rules, one place for all of them:
@@ -1903,6 +1947,38 @@ void GfxRenderer::drawPixelDither<Color::LightGray>(const int x, const int y) co
 template <>
 void GfxRenderer::drawPixelDither<Color::DarkGray>(const int x, const int y) const {
   drawPixel(x, y, (x + y) % 2 == 0);  // TODO: maybe find a better pattern?
+}
+
+void GfxRenderer::fillRectShade(const int x, const int y, const int width, const int height,
+                                const uint8_t level) const {
+  if (level == 0 || width <= 0 || height <= 0) return;
+  if (level >= 15) {
+    fillRect(x, y, width, height, true);
+    return;
+  }
+  const int x0 = std::max(x, clipLeft_), y0 = std::max(y, clipTop_);
+  const int x1 = std::min(x + width, clipRight_), y1 = std::min(y + height, clipBottom_);
+  if (x0 >= x1 || y0 >= y1) return;
+  if (grayscale16Buffer != nullptr) {
+    // A 16-level canvas takes the tone itself. The previous full-height stripe
+    // fill overlaid text with a vertical barcode and read far darker than the
+    // "light gray" the book asked for.
+    const uint8_t gray = static_cast<uint8_t>(level * 17);
+    for (int py = y0; py < y1; ++py) {
+      for (int px = x0; px < x1; ++px) drawGrayscale16Pixel(px, py, gray);
+    }
+    return;
+  }
+  // 1-bit pages: halftone dots. Continuous vertical lines look like a barcode
+  // and darken glyph strokes they cross, so every level is a dot lattice whose
+  // period follows the ink level (25% matches the LightGray dither elsewhere).
+  const int period = level <= 2 ? 4 : level <= 5 ? 3 : level <= 8 ? 2 : 0;
+  for (int py = y0; py < y1; ++py) {
+    for (int px = x0; px < x1; ++px) {
+      const bool ink = period == 0 ? ((px + py) & 1) == 0 : (px % period == 0 && py % period == 0);
+      if (ink) drawPixel(px, py, true);
+    }
+  }
 }
 
 void GfxRenderer::fillRectDither(const int x, const int y, const int width, const int height, Color color) const {
@@ -2737,7 +2813,12 @@ bool GfxRenderer::commitGrayscale16Area(int x, int y, int width, int height, con
                            clean);
   if (!committed) cancelNativeGray(display);
   grayscale16Buffer = nullptr;
-  if (committed) uiFastRefreshCount = 0;
+  if (committed) {
+    uiFastRefreshCount = 0;
+    // The glass now shows this frame; a later band diff is only meaningful
+    // within the same screen session.
+    noteFramePresented();
+  }
   return committed;
 }
 
@@ -2774,7 +2855,10 @@ bool GfxRenderer::commitGrayscale16Areas(const GrayAreaRect* areas, const int co
   const bool committed = commitNativeGrayAreas(display, physical, physicalCount, clean);
   if (!committed) cancelNativeGray(display);
   grayscale16Buffer = nullptr;
-  if (committed) uiFastRefreshCount = 0;
+  if (committed) {
+    uiFastRefreshCount = 0;
+    noteFramePresented();
+  }
   return committed;
 }
 
@@ -2823,6 +2907,7 @@ bool GfxRenderer::commitGrayscale16(bool clean) const {
     nextRefreshOverride = HalDisplay::FULL_REFRESH;
     nextRefreshOverrideFromGray = true;
   }
+  if (committed) noteFramePresented();
   return committed;
 }
 
@@ -3517,7 +3602,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
   // Band path: the caller opt-in'd (keyboard, list focus), the framebuffer is
   // complete, and only a strip changed -- push the strip instead of re-driving
   // the page. A FULL push keeps the full path so the sweep still resets the panel.
-  if (bandUpdates_ && bandSnapshot_ != nullptr && !s_bandSuspended &&
+  if (bandUpdates_ && bandSnapshot_ != nullptr && presentedThisSession() && !s_bandSuspended &&
       effectiveRefreshMode != HalDisplay::FULL_REFRESH && !fadingFix) {
     int bx = 0;
     int by = 0;
@@ -3570,6 +3655,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
       clearDirtyUnion();
       uiFastRefreshCount = 0;
       std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+      presentedEpoch_ = contentEpoch_;
       return true;
     };
     const bool haveChange = computeChangedBand(&bx, &by, &bw, &bh);
@@ -3584,6 +3670,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
         clearDirtyUnion();
       } else {
         LOG_DBG("GFX", "band: no change, push skipped");
+        presentedEpoch_ = contentEpoch_;
         return;
       }
     } else {
@@ -3626,6 +3713,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
             disarmScanWatchdog();
           }
           std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+          presentedEpoch_ = contentEpoch_;
           return;
         }
       }
@@ -3649,6 +3737,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
   if (bandSnapshot_ != nullptr && !s_bandSuspended) {
     std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
   }
+  presentedEpoch_ = contentEpoch_;
 #endif
   ++s_renderStats.pagePushes;
   s_renderStats.pageAreaPixels += static_cast<uint64_t>(panelWidth) * panelHeight;
@@ -3704,6 +3793,7 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, 
 #else
     display.displayBuffer(effectiveRefreshMode, fadingFix, context);
 #endif
+    noteFramePresented();
     return;
   }
 #ifdef SIMULATOR
@@ -3712,6 +3802,12 @@ void GfxRenderer::displayBufferAsync(const HalDisplay::RefreshMode refreshMode, 
 #else
   display.displayBufferAsync(effectiveRefreshMode, context);
 #endif
+  // The scan is in flight, but the submitted frame is fixed: snapshot it now so a
+  // band diff after waitRefreshComplete() compares against what will be on glass.
+  if (bandSnapshot_ != nullptr && !s_bandSuspended) {
+    std::memcpy(bandSnapshot_, frameBuffer, getBufferSize());
+  }
+  presentedEpoch_ = contentEpoch_;
 }
 
 void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
@@ -3940,6 +4036,32 @@ void GfxRenderer::tapToLogical(float nx, float ny, int& outX, int& outY) const {
   }
 }
 
+void GfxRenderer::logicalToTap(const int lx, const int ly, float& nx, float& ny) const {
+  int phyX = lx;
+  int phyY = ly;
+  switch (orientation) {
+    case Portrait:
+      phyY = panelHeight - 1 - lx;
+      phyX = ly;
+      break;
+    case PortraitInverted:
+      phyY = lx;
+      phyX = panelWidth - 1 - ly;
+      break;
+    case LandscapeClockwise:
+      phyX = panelWidth - 1 - lx;
+      phyY = panelHeight - 1 - ly;
+      break;
+    case LandscapeCounterClockwise:
+    default:
+      break;
+  }
+  if (phyX < 0) phyX = 0;
+  if (phyY < 0) phyY = 0;
+  ny = static_cast<float>(phyY) / static_cast<float>(panelHeight);
+  nx = static_cast<float>(phyX) / static_cast<float>(panelWidth);
+}
+
 // Translate a logical rect through rotateCoordinates and take the bounding
 // box of its four corners on the physical panel. Output coords are inclusive
 // and clamped. Returns false if the rect ends up fully off-panel.
@@ -4093,6 +4215,14 @@ int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::St
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
 #endif
+  if ((style & EpdFontFamily::SMALL_CAPS) != 0) {
+    const auto baseStyle = static_cast<EpdFontFamily::Style>(style & ~EpdFontFamily::SMALL_CAPS);
+    const auto family = fontMap.find(resolvedFontId);
+    if (family != fontMap.end()) {
+      return smallCapsRun(family->second, text, baseStyle, tracking, [](uint32_t, int) {});
+    }
+    // Fall through to the normal measurement for fonts resolved from SD tables.
+  }
 
   // Advance table fast-path for SD card fonts during layout.
   // No kerning/ligature lookup — consistent with previous metadataOnly behavior
@@ -4228,6 +4358,93 @@ int GfxRenderer::getTextHeight(int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
+bool GfxRenderer::drawScaledCodepoint(const EpdFontFamily& fontFamily, const uint32_t codepoint, const int x,
+                                      const int baselineY, const int scale256, const EpdFontFamily::Style style,
+                                      const bool black) const {
+  return drawScaledCodepointAt(fontFamily, codepoint, x, baselineY, scale256, style, black, /*yIsTop=*/false);
+}
+
+bool GfxRenderer::drawScaledCodepointTop(const EpdFontFamily& fontFamily, const uint32_t codepoint, const int x,
+                                         const int topY, const int scale256, const EpdFontFamily::Style style,
+                                         const bool black) const {
+  return drawScaledCodepointAt(fontFamily, codepoint, x, topY, scale256, style, black, /*yIsTop=*/true);
+}
+
+bool GfxRenderer::drawScaledCodepointAt(const EpdFontFamily& fontFamily, const uint32_t codepoint, const int x,
+                                        const int y, const int scale256, const EpdFontFamily::Style style,
+                                        const bool black, const bool yIsTop) const {
+  const int scale = std::clamp(scale256, 256, 1024);
+  EpdGlyph solidFallback;
+  const EpdGlyph* glyph = fontFamily.getGlyphMetrics(codepoint, solidFallback, style);
+  const EpdFontData* fontData = fontFamily.getData(style);
+  if (glyph == nullptr || fontData == nullptr) return false;
+  const auto scaled = [scale](const int value) { return (value * scale + 128) / 256; };
+  const int glyphTop = (glyph->top * scale) / 256;  // same truncation the baseline path always used
+  if (glyph == &solidFallback) {
+    const int w = scaled(glyph->width);
+    const int h = scaled(glyph->height);
+    const int top = yIsTop ? y : y - glyphTop;
+    if (w > 0 && h > 0) fillRect(x + scaled(glyph->left), top, w, h, black);
+    return true;
+  }
+  const uint8_t* bitmap = getGlyphBitmap(fontData, glyph);
+  const int srcW = glyph->width;
+  const int srcH = glyph->height;
+  if (bitmap == nullptr || srcW <= 0 || srcH <= 0) return false;
+
+  const int dstW = scaled(srcW);
+  const int dstH = scaled(srcH);
+  if (dstW <= 0 || dstH <= 0) return false;
+  const int dstX = x + (glyph->left * scale) / 256;
+  const int dstY = yIsTop ? y : y - glyphTop;
+  const auto coverageAt = [&](int sx, int sy) -> int {
+    sx = std::clamp(sx, 0, srcW - 1);
+    sy = std::clamp(sy, 0, srcH - 1);
+    const int pos = sy * srcW + sx;
+    if (fontData->is4Bit) return get4BitCoverage(bitmap, pos) * 17;
+    if (fontData->is2Bit) return get2BitCoverage(bitmap, pos) * 85;
+    return (bitmap[pos >> 3] & (0x80 >> (pos & 7))) != 0 ? 255 : 0;
+  };
+  // Fixed point 8.8: source coordinate = (dst + 0.5) * 256 / scale - 0.5.
+  const auto samplePos = [scale](const int dst) { return ((dst * 2 + 1) * 32768) / scale - 128; };
+  for (int dy = 0; dy < dstH; ++dy) {
+    const int syFp = samplePos(dy);
+    const int y0 = syFp >= 0 ? syFp >> 8 : -(((-syFp) + 255) >> 8);
+    const int fy = syFp - y0 * 256;
+    for (int dx = 0; dx < dstW; ++dx) {
+      const int sxFp = samplePos(dx);
+      const int x0 = sxFp >= 0 ? sxFp >> 8 : -(((-sxFp) + 255) >> 8);
+      const int fx = sxFp - x0 * 256;
+      const int top = coverageAt(x0, y0) * (256 - fx) + coverageAt(x0 + 1, y0) * fx;
+      const int bottom = coverageAt(x0, y0 + 1) * (256 - fx) + coverageAt(x0 + 1, y0 + 1) * fx;
+      const int coverage = (top * (256 - fy) + bottom * fy) >> 16;
+      const uint8_t level = static_cast<uint8_t>((coverage * 15 + 127) / 255);
+      if (grayscale16Buffer != nullptr) {
+        draw4BitGlyphPixel(*this, dstX + dx, dstY + dy, level, !black);
+      } else if (level >= 8) {
+        drawPixel(dstX + dx, dstY + dy, black);
+      }
+    }
+  }
+  return true;
+}
+
+bool GfxRenderer::getScaledCodepointMetrics(const int fontId, const uint32_t codepoint, const int scale256,
+                                            const EpdFontFamily::Style style, int& width, int& height) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) return false;
+  EpdGlyph solidFallback;
+  const EpdGlyph* glyph = fontIt->second.getGlyphMetrics(codepoint, solidFallback, style);
+  if (glyph == nullptr || glyph == &solidFallback) return false;
+  const int scale = std::clamp(scale256, 256, 1024);
+  const auto scaled = [scale](const int value) { return (value * scale + 128) / 256; };
+  // Measured from the pen, like drawScaledCodepoint draws it: the left bearing is part of
+  // the space the glyph occupies, so the reserved column ends at the ink's right edge.
+  width = scaled(glyph->width) + std::max(0, scaled(glyph->left));
+  height = scaled(glyph->height);
+  return width > 0 && height > 0;
+}
+
 void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y, const char* text, const bool black,
                                       const EpdFontFamily::Style style) const {
   // Cannot draw a NULL / empty string
@@ -4342,6 +4559,7 @@ void GfxRenderer::displayGrayscaleBase(HalDisplay::RefreshMode fallback, Display
 #else
   display.displayGrayscaleBase(fallback, fadingFix, context);
 #endif
+  noteFramePresented();
 }
 
 bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDisplay::RefreshMode fallback) const {
@@ -4355,6 +4573,7 @@ bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDispla
   }
   if (nextRefreshOverridePending) nextRefreshOverridePending = false;
   absoluteGrayPlanes = mode != HalDisplay::GrayscaleMode::Overlay;
+  noteFramePresented();
   return true;
 }
 
@@ -4430,6 +4649,7 @@ void GfxRenderer::copyGrayscaleMsbBuffers() const { display.copyGrayscaleMsbBuff
 void GfxRenderer::displayGrayBuffer() const {
   display.displayGrayBuffer(fadingFix);
   absoluteGrayPlanes = false;
+  noteFramePresented();
 }
 
 void GfxRenderer::setRenderMode(RenderMode mode) {

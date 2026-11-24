@@ -13,6 +13,7 @@ class Page;
 class GfxRenderer;
 class ChapterHtmlSlimParser;
 class CssParser;
+class BlockFontProvider;
 
 class Section {
  public:
@@ -22,6 +23,10 @@ class Section {
  private:
   BuildError buildError_ = BuildError::None;
   bool collectTouchLinks_ = false;
+  // Optional block-font resolver for CSS font-size (layout milestone M2). Not part of
+  // the cache key: the resolved ids are written per line, and a null provider simply
+  // lays every block out at the section font. Set by the reader before build.
+  BlockFontProvider* blockFontProvider_ = nullptr;
   std::shared_ptr<Epub> epub;
   const int spineIndex;
   GfxRenderer& renderer;
@@ -104,6 +109,7 @@ class Section {
   // forward-declared ChapterHtmlSlimParser, whose full definition is only visible in the .cpp.
   explicit Section(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer);
   ~Section();
+  void setBlockFontProvider(BlockFontProvider* provider) { blockFontProvider_ = provider; }
   bool loadSectionFile(const ReaderRenderSpec& spec);
   bool clearCache() const;
   bool createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr);

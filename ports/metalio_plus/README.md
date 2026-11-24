@@ -18,7 +18,7 @@
 > `partitions_plus_ota.csv` (`app0/app1 0x660000`, `spiffs@0xCD0000`).
 >
 > For the first hardware test use **`--layout vendor`** with the bring-up or
-> reader image (both fit 5 MiB). The full shell is 5.43 MB: it still does not
+> reader image (both fit 5 MiB). The full shell is 6.09 MB: it still does not
 > fit the stock 5 MiB slots, but it does fit the 6.375 MiB dual-OTA table. Writing app/data with the old hard-coded
 > `0x10000`/`0xE70000` commands would overwrite the vendor `model` and
 > `font_data` partitions and would not boot. The planner now reads the real
@@ -36,15 +36,15 @@ analysis says why, and what evidence would close each item.
 
 | Gap | Current state | Why / what would close it |
 |---|---|---|
-| Stock-layout compatibility / shell size | **Bring-up and reader only.** The vendor has two 5 MiB app slots; the full shell is 5.43 MB | The shell fits the CPYOS dual-OTA table (`-B build_shell2`, two 6.375 MiB slots). It does not fit the stock 5 MiB slots; the single-slot table is optional and gives more spiffs space. Never flash the shell at the stock layout; the planner refuses it |
+| Stock-layout compatibility / shell size | **Bring-up and reader only.** The vendor has two 5 MiB app slots; the full shell is 6.09 MB | The shell fits the CPYOS dual-OTA table (`-B build_shell2`, two 6.375 MiB slots). It does not fit the stock 5 MiB slots; the single-slot table is optional and gives more spiffs space. Never flash the shell at the stock layout; the planner refuses it |
 | Vendor-layout data packs | Not written on the stock table | The stock `model`/`resources`/`font_data` partitions are vendor-owned and the CPYOS loaders use offsets relative to the CPYOS spiffs base, which does not exist there. A partition-aware pack layout is a later port task |
 | Battery safety / power off | **Do not run on battery without a supervised test.** The charger stays read-only; a software 3.1 V cutoff pulses P1.3 (10 s grace) and the 3 s power card draws a themed "已关机" page before the PMU pulse | The vendor CX25601N UV/BATFET registers and cell parameters are still not written (no documented pack). Battery-only shutdown, cutoff and standby drain need one unplugged session (engineering gaps §2a) |
 | Light/deep sleep, PMU/EXT1 wake | **Light sleep verified on hardware** (2026-11-16): vendor park sequence (SD quiesce, TPS/bus, expander mask, P1.7 wake, EXT1 GPIO2 + timer, rail cut); clean USB-less session records `usb=0` then `previous-wake reason=1 stage=14` (power key) and `reason=0 stage=14` (timer). Open SD handles are parked (offset/cursor saved) and reopened, so standby over a book sleeps too. Deep sleep stays unimplemented (the vendor's "off" is the P1.3 pulse, not `esp_deep_sleep`) | Longer battery-only current curve; deep sleep is deliberately not added. The 浅睡 badge is the `sleepStateBadge` setting (default ON) |
-| OTA / SD full install | Serial `flash_metalio_plus.py` + device-side SD image flashing + the vendor OTA page. The vendor channel needs a personal key (`plus_ota_key.local`, absent) and CPYOS has no Plus release manifest yet | Publishing a Plus OTA manifest/slot rule is a release-pipeline task; the SD/HTTP path is usable today |
+| OTA / SD full install | Serial `flash_metalio_plus.py` + device-side SD image flashing + the vendor OTA page. Protocol 1.1 uses the **developer resource key** (`plus_resource_key.local` / `/.crosspoint/resource_key`) for both the resource popup and `/api/firmware-ota/check`; `X-OTA-Key`/`plus_ota_key.local` is retired. See `docs/plus-developer-resources.md` | Live test-channel query works (`0.3.1-plus-test1`); stable returns 404 until published. `.github/workflows/cpyos-plus-release.yml` publishes a `cpyos-plus-*` tag to the CloudZao market; secrets/vars are listed in `docs/plus-developer-resources.md` |
 | Audio (speaker) / AI voice | **Speaker, microphone, sound cues, Bluetooth audio, voice memo and the xiaozhi push-to-talk client are ported.** AI voice uses the official headers/hello/framing (v1/v2/v3) over `esp_websocket_client` + Opus, with a user-supplied server URL/token in `/.crosspoint/voice.json`; no wake word/AEC on S31 | See [docs/plus-audio.md](docs/plus-audio.md). Needs a real server + headset; WeChat remains cloud-only |
 | 4G + Wi-Fi dual mode | **Ported from the official firmware** (UART2 2 Mbaud framed UART-Ethernet, `iot_eth` + DHCP, `networkType` save+restart). This unit has no module (`present=0`), so only the Wi-Fi path is exercised. Audio and 4G coexist the vendor way: the BH1098 reset stops the modem, and a `cell-recover` task re-inits it after P14 rises | Needs a 4G unit: attach/DHCP/TLS, switching both ways, SIM/CSQ UI, audio+4G re-attach |
 | Frontlight | **Ported** (GPIO6/7, 10-bit 20 kHz) with the vendor 10 % PWM cap and a boot current probe; user confirmed light/brightness/warmth | Brightness ceiling is the vendor safe value; no auto-brightness |
-| WeChat mini-program bind/push | Not implemented | Vendor uses a cloud/WSS QR-session flow with a device token from its own cloud; there is no offline subset |
+| CloudZao developer resources | **Binding + BOOK/BADGE/FONT push implemented** through `X-Resource-Key`; a QR/code guide and `/push-resources/next` probe derive the bound state. The vendor WorkBuddy/account mini-program flows remain separate and are not claimed | Device-test on a real account; `.ebook`/`.ef` remain unsupported |
 | SD-card logging for user feedback | **Implemented** (`plus_log_mirror`): `boot.log` mirrors ESP_LOG/LOG_*, rotates above 192 KiB and masks credentials before writing | — |
 | Touch firmware upgrade | Not ported | Vendor upgrades FT6336U FW v03 at boot; driver is vendored, upgrade image is not |
 | Browser settings writes | `POST /api/settings` is writable (two-pass validation, credential keys refused, live frontlight); `/api/frontlight` applies directly. `/api/opds*` and `/api/wifi*` edit the same stores as the Settings pages (passwords never returned) | Device pass over LAN; Wi-Fi changes take effect on the next connect |
@@ -55,8 +55,8 @@ analysis says why, and what evidence would close each item.
 | Build | Contents | Image |
 |---|---|---|
 | default (`idf.py --preview build`) | Vendor BSP subset: TPS65185/TCA9555 power sequencing, E0470A14-AF epdiy output, FT6336U, 4-bit SDMMC, BQ27220 gauge, GC16 bring-up pattern | **396,800 B** (94 % of the 6.375 MiB port-OTA slot free) |
-| `CPYOS_SHELL_DEMO=1` (+ `CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1`) | **The full CPYOS activity shell**: `ActivityManager` + CPY theme + Home/Recent, Library, Settings, Apps, Reader, FileBrowser, image viewer, standby overlay driven by the Time-to-sleep setting, **plus all games, calculator, avatar, buddy, AirPage and PixelSwitch**. The shared web-server activity is replaced by a **native File Transfer / Calibre page** (same HTTP/WebDAV/WebSocket servers, port-81 upload, Calibre, the full plugin runner and the OPDS/Wi-Fi APIs); Wi-Fi/TLS/EPUB/book engine are the real ported implementations. EN+ZH embedded (+33 languages from the data-partition pack); CJK uses the real 14pt/16pt i18n faces with the wide 12pt GB2312 fallback | **5,912,656 B** (12 % free) |
-| `CPYOS_PLUS_JJWXC=1` (+ shell flags) | **Shell + the private JJWXC component**: the same image as above plus `src/jjwxc` (the private `cpyos-jjwxc` checkout). 27 sources, `CROSSPOINT_BOOKSOURCE_JJWXC=1`, JJWXC app reachable from My → Tools. The source is never in this repository; the build fails loudly if the directory is missing | **6,246,032 B** (6.6 % free; DIRAM 273,658 B / 54.3 %, 230,086 B free) |
+| `CPYOS_SHELL_DEMO=1` (+ `CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1`) | **The full CPYOS activity shell**: `ActivityManager` + CPY theme + Home/Recent, Library, Settings, Apps, Reader, FileBrowser, image viewer, standby overlay driven by the Time-to-sleep setting, **plus all games, calculator, avatar, buddy, AirPage and PixelSwitch**. The shared web-server activity is replaced by a **native File Transfer / Calibre page** (same HTTP/WebDAV/WebSocket servers, port-81 upload, Calibre, the full plugin runner and the OPDS/Wi-Fi APIs); Wi-Fi/TLS/EPUB/book engine are the real ported implementations. EN+ZH embedded (+33 languages from the data-partition pack); CJK uses the real 14pt/16pt i18n faces with the wide 12pt GB2312 fallback | **6,088,592 B** (9 % free in the 6.375 MiB slot; includes the developer-resource binding UI, font refresh, Wi-Fi TX/memory fix, protocol 1.1 OTA query and release-key wiring) |
+| Shell + private JJWXC (auto in a dev checkout) | **Shell + the private JJWXC component**: the same image as above plus `src/jjwxc` (the private `cpyos-jjwxc` checkout). An existing checkout is enabled automatically; `CPYOS_PLUS_JJWXC=0` opts out and `=1` requires it. 32 sources, `CROSSPOINT_BOOKSOURCE_JJWXC=1`, JJWXC app reachable from My → Tools. The source is never in this repository; a forced `=1` fails loudly if the directory is missing. A public-tag build has no checkout and therefore no private component | **6,462,992 B** (221,680 B free in the 6.375 MiB slot) |
 | `CPYOS_READER_DEMO=1` | BSP + renderer/fonts/input + **a usable reading demo**: a shelf listing up to 50 `.epub` files from the SD card (tap a row or use prev/next), then ZIP/OPF parse, `Section` layout and `Page` render (text, CSS, images) with the built-in CJK font; tap edges / swipe / cover keys turn pages and cross chapters, `Back` returns to the shelf. No activity shell, settings or network UI | **2,268,256 B** (66 % free) |
 | `CPYOS_UI_PROBE=1` | The above + real CPYOS `GfxRenderer`/CPY theme, 12pt CJK font, `I18n` (EN+ZH generated at configure time), `CrossPointSettings` + persistence, `FreeInkUI`, the FT6336U/cover-key input backend, **the complete book engine** (ZIP/miniz, EPUB, TXT, FB2, XTC, CBZ, expat, image codecs, library index) and an on-screen bring-up page that also scans the SD card through `library::buildLibraryIndex()`; the **home cover key runs a real Wi-Fi scan** (esp_wifi station + `esp_tls` for HTTPS clients) | **3,572,992 B** (47 % free) |
 
@@ -84,7 +84,7 @@ Resource baseline for the shell+JJWXC image (`idf.py --preview size`, 2026-11-15
 | FreeType + `TtfEpdFont` + `SdCardFontSystem` | **compile and link** (vector fonts, font packages loader) |
 | Book engine | **ported and linked**: ZIP/miniz, EPUB (OPF/nav/XHTML/CSS/hyphenation), TXT, FB2, XTC, CBZ, expat, JPEG/PNG/GIF decoders, `library::buildLibraryIndex()` |
 | CPYOS reader path | **demo ported** (`main/reader_demo.cpp`): discovery → EPUB → `Section` → `Page` → display, with tap/swipe/cover-key page turns and chapter crossing |
-| JJWXC (private component) | **opt-in** (`CPYOS_PLUS_JJWXC=1` + `src/jjwxc`): CMake adds `app/*.cpp` + `protocol/src/*.cpp`, include dirs and `CROSSPOINT_BOOKSOURCE_JJWXC=1`; missing source or zero files is a fatal configure error. Verified build: 27 sources, 345 `JjwxcActivity` symbols in the ELF, image 9,106,848 B. Never commit the private source; it is gitignored. Hardware paths untested |
+| JJWXC (private component) | **auto-enabled for local dev when `src/jjwxc` exists** (`CPYOS_PLUS_JJWXC=0` opts out, `=1` requires it): all three CMake files (`cpyos_app`, `cpyos_ui`, `main`) add `app/*.cpp` + `protocol/src/*.cpp`, include dirs, `CROSSPOINT_BOOKSOURCE_JJWXC=1` and the `privateSource()` link anchor. Missing source under a forced `=1`, or zero sources, is a fatal configure error. Verified build: 32 sources, 440 `JjwxcActivity` symbols, image 6,462,992 B. Never commit the private source; it is gitignored. Public-tag builds intentionally have no checkout and stay closed-source; the AppCatalog hides the tile instead of leaving a dead tap. Hardware paths untested |
 | Refresh modes | **honoured**: `FULL_REFRESH` keeps the GC16 conditioning pass, `HALF_REFRESH`/`FAST_REFRESH` use epdiy's differential GL16 (CPYOS's Read Pico promotes FAST to HALF for the same ghosting reason). Periodic full refreshes come from the shared policy, so ghosting is bounded by that cadence. `panel` vs `panel fast` is the on-device A/B; ghosting/legibility unverified |
 | CPYOS Activity shell | **ported** (`CPYOS_SHELL_DEMO`): ActivityManager + Home/Library/Settings/Apps/Reader/FileBrowser **and the full app set** (games, calculator, avatar, buddy, AirPage, PixelSwitch). The shared web-server/Calibre pages are replaced by `PlusTransferActivity` under `CROSSPOINT_PORT_NO_NETWORK_SHELL`: it starts `web_transfer` + `ws_upload`, shows the address and live upload progress, offers a two-tap **USB Drive** action (hands the card to a host; power-cycle to return) and releases the radio on exit |
 | CPYOS protected EPUB (`<book>.key`) | **ported**: the shared glue is built with a PSA backend (AES-128-CBC + SHA-1/SHA-256; the legacy RSA/PKCS#12 client helpers are refused). Boot logs `CPRO: PSA self-test ok (AES-128-CBC + SHA-256)` (or `failed`). Not verified on hardware |
@@ -98,7 +98,7 @@ Resource baseline for the shell+JJWXC image (`idf.py --preview size`, 2026-11-15
 | TLS clients | `WiFiClientSecure` uses IDF `esp_tls` (certificate bundle; `setInsecure()` supported). HTTPS activities that use wolfSSL directly still need a SecureNet replacement. |
 | USB mass storage | **ported** (`main/usb_msc.cpp`, `esp_tinyusb` 2.4): one LUN over the microSD card. `usbmsc on` detaches the app FAT/VFS without deinitializing the SDMMC host, pulls **ANA_SW (GPIO36) low** to route the S31 HS UTMI to TinyUSB (port 0 is the HS port on this single-OTG-port SoC), exposes the raw card, and freezes the activity loop; there is no remount path — power-cycle to restore. The USB-Serial/JTAG console may disappear while OTG owns the PHY. **Verified on hardware** (the Mac mounted the card and wrote a 7 MB file); one eject path left USB dead, so power-cycle is the recovery. A no-reboot reclaim path is documented as a remaining task |
 | BLE HID host | **ported and exercised on hardware** (`components/cpyos_ui/ble_keyboard_host.cpp`, IDF NimBLE) and wired into the shared CPYOS input stack: **Settings → Controls → Bluetooth** (shared `BluetoothSettingsActivity`) starts NimBLE, scans, connects (Just Works bonding), lists paired peers (forget supported) and disconnects; once enabled in settings the shell keeps the host alive in the reader automatically (the reference main-loop lifecycle, with the reader memory gate and a 2 s retry); keyboard boot reports + consumer-control (scan prev/next) are decoded into `KeyEvent` and routed through `BleInput`/`MappedInputManager` page-turn mapping. Reports with a Report ID prefix are handled; newly bonded peers persist in NVS (four slots, oldest evicted, addr/name in separate keys); keyboard held keys auto-repeat after 500 ms while consumer page keys are debounced to one page per 500 ms. A fresh map defaults Left/Right/PageUp/PageDown to page turns, the scan is active, and the NimBLE host allocates from PSRAM (`bt scan` listed 8 peers at 34.7 KB internal free). The last peer is reconnected after a drop (4 s, five attempts). Unknown HID usages and one-byte vendor codes reach the capture page; passkey entry is not produced. `bt on|off|scan` console diagnostics. The pure report-decoding helpers live in `components/cpyos_ui/ble_hid_decode.h` and have a host regression: `bash test/run_ble_hid_decode_test.sh` (ASan+UBSan; ASCII/shift, specials, press/held/replaced/rollover edges, 8- and 2-byte reports, 9-/3-byte Report ID stripping, consumer usages). Scan verified on the unit (`bt scan 5` listed 8 peers; the Bluetooth page shows scan/paired/map rows once enabled). Pairing a physical page-turner is the remaining untested part |
-| OTA | **hard-disabled** (`CPYOS_OTA_DISABLED`): the only published manifests target Read Pico, so check/install return "wrong device" instead of risking a cross-SoC flash |
+| OTA | **Vendor plus_ota enabled** (CloudZao protocol 1.1): `X-Resource-Key` + STA `Device-Id` at `/api/firmware-ota/check`, test channel via `X-OTA-Channel: test`; the client compares versions and writes the inactive OTA slot. The shared CrossMux `OtaUpdater` remains `CPYOS_OTA_DISABLED` because its manifests target Read Pico. Live test-channel query works; stable stays 404 until a stable version is published |
 | IMU (SC7A20H) | **ported**: the shared `Imu` driver runs on a real Arduino-`Wire` backend over the BSP I2C1 bus; the shell starts the tilt sensor and feeds motion page-turn (tilt/shake) each loop. Unverified on hardware |
 | Frontlight (cool/warm) | **Ported and confirmed by the user** (GPIO6/7, 20 kHz, vendor 10 % PWM cap): brightness/warmth controls work, `light 80 40` maps to the vendor 81/64 duties. `CMD:light` and `/api/frontlight` update the hardware live; the earlier "stub" note was stale |
 | Haptics (motor) | **ported**: the shell drives the TCA9555 P0.3 motor through the BSP's shadowed `..._motor_set()`. A new key/touch press starts one non-blocking pulse (35/50/70 ms for the weak/medium/strong settings, ≥100 ms apart, matching the vendor constants); "Off" stops it. The vendor drives pulses at 70 % soft-PWM; this port holds the line steady until polarity/feel is verified on hardware |
@@ -143,15 +143,54 @@ idf.py --preview build                    # BSP bring-up image
 CPYOS_UI_PROBE=1 idf.py --preview reconfigure build   # renderer + input page
 idf.py --preview reconfigure build                     # back to BSP-only
 
-# shell, optionally with the private JJWXC component (source must never be committed):
-git clone git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc   # inside repos/cpyos-public
+# shell; a local src/jjwxc checkout is auto-enabled (source must never be committed):
+git clone git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc   # local dev only
 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
-CPYOS_PLUS_JJWXC=1 idf.py --preview reconfigure build
-rm -rf src/jjwxc                                        # before any commit
+  idf.py --preview reconfigure build
+# CPYOS_PLUS_JJWXC=0 opts out; =1 forces the component and fails if missing.
+rm -rf src/jjwxc                                        # before any public commit
 
 # or build all four and copy UNTESTED-labelled images + hashes out:
 bash scripts/build_all.sh [output-dir]
 ```
+
+### PDF reader (opt-in)
+
+The shell can carry the shared PDF reader while the MuPDF engine stays out of
+app0.  Build with `CPYOS_PDF=1` (configure-time):
+
+```bash
+CPYOS_PDF=1 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
+  idf.py -B build_shell --preview reconfigure build
+```
+
+Two artifacts must be staged on the SD card; `scripts/stage_pdf_sd.py` copies
+them and verifies the digests:
+
+- `build/pdfmod-rv.bin` - the RISC-V engine, linked against this exact firmware
+  ELF (`scripts/build_pdf_module.py`; the recipe is in AGENTS.md section 67.14).
+- `build/pdf_full_assets.bin` - the font pack + 71 CMaps in one PFPK bundle
+  (`tools/gen_pdf_assets.py`).  The first PDF open expands it to
+  `/.crosspoint/font_pack.dat` + `/.crosspoint/cmaps/`.
+
+```bash
+python3 ports/metalio_plus/scripts/stage_pdf_sd.py --card /Volumes/SD \
+  --engine build/pdfmod-rv.bin --bundle build/pdf_full_assets.bin
+```
+
+The engine is paired with the running image through the ELF SHA at image
+offset `0xb0` (esptool writes it; do not use a version string).  Rebuild the
+engine whenever the app is rebuilt, then re-stage it.
+
+Serial checks: `pdfassets` (expand the bundle), `pdfengineurl <https-url>` (point
+the updater at a test server; empty clears it), `pdfengineupdate` (manifest ->
+download -> install, prints the state and install status).  The production
+manifest URL is pinned per release to
+`https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-plus-<ver>/plus-pdf-engine-manifest.txt`
+(a test build uses its own tag).  The release workflow builds and uploads
+`plus-pdfmod.bin`, `plus-pdf-assets.bin` and that manifest next to the firmware;
+copy the first two onto the card with `stage_pdf_sd.py` (rename the assets file
+to `pdf_assets.bin` when copying by hand).
 
 - The probe/reader/shell is selected at **configure** time, so toggling
   `CPYOS_UI_PROBE`/`CPYOS_READER_DEMO`/`CPYOS_SHELL_DEMO` needs `reconfigure`;
@@ -316,19 +355,84 @@ bring-up banner, restore the 16 MiB backup rather than flashing repeatedly. A
 full install can later write this project's bootloader, but that is a separate,
 riskier step.
 
-**Data packs are not written in vendor layout.** The stock spiffs partitions
-(`model`/`resources`/`font_data`) are vendor-owned, and the CPYOS loaders use
-partition-relative offsets from the CPYOS spiffs base (`0xCD0000` with the
-dual-OTA table, `0x9B0000` with the single-slot table), which does not exist on
-a stock unit. The bring-up/reader images run without them (pinyin,
-hyphenation, non-embedded languages and the bundled emoji face fall back). A
-vendor-layout pack scheme is a documented gap, not implemented here.
+**Data packs use the CPYOS spiffs layout, not the vendor one.** The stock
+spiffs partitions (`model`/`resources`/`font_data`) are vendor-owned and the
+CPYOS loaders read partition-relative offsets from the CPYOS spiffs base
+(`0xCD0000` with the dual-OTA table, `0x9B0000` with the single-slot table).
+The image runs without them, but the UI subset then lacks the common Han
+reading face and the 33 packed languages fall back to English. Build and flash
+them with:
 
-The full shell now fits the **dual-OTA** table as well (5,430,256 B against the
-6,375,040 B slot), because the UI font subset moved into app0 and the 8pt CJK
+```bash
+python3 scripts/generate_hyphenation_db.py
+python3 scripts/build_web_pack.py
+# the pack the app build itself wrote (matches the port_i18n key signature):
+cp ports/metalio_plus/build_shell/i18n_pack.dat build/i18n_pack.dat
+# pinyin needs the pinned wheel:
+python3 -m pip download --no-deps -d /tmp/pywheel pypinyin==0.55.0
+python3 scripts/generate_pinyin_db.py /tmp/pywheel/pypinyin-*.whl
+python3 scripts/generate_data_manifest.py \
+    --partitions ports/metalio_plus/partitions_plus_ota.csv \
+    --out build/data_manifest_plus.txt
+python3 ports/metalio_plus/scripts/flash_plus_data.py --dry-run   # inspect
+python3 ports/metalio_plus/scripts/flash_plus_data.py             # write
+```
+
+The manifest (also shipped with each release) covers pinyin, web pages,
+hyphenation, the i18n pack, the emoji face and the 1.64 MB compressed reading
+core at spiffs +`0x180000`; 63 KB of the 3.125 MiB partition stay free.
+`flash_plus_data.py` refuses blobs outside the partition and never touches the
+app/bootloader regions. `scripts/flash_plus_parity.sh` runs the whole bring-up
+(app0+app1, the six blobs, the engine upload and the managed install); rebuild
+`build/pdfmod-rv.bin` with `scripts/build_pdf_artifacts.sh` after every app
+build, because the engine is paired to the app ELF SHA at `+0xb0`.
+
+The current shell fits the **dual-OTA** table as well (6,088,592 B against the
+6,684,672 B slot), because the UI font subset moved into app0 and the 8pt CJK
 bitmap is no longer linked. The single-slot `partitions.csv` below is therefore
 optional; it is still useful when a build needs the larger 6.25 MiB spiffs
-partition.
+partition. The release CI builds against the dual-OTA table.
+
+### WebDAV / Calibre smoke test
+
+The Plus file-transfer server speaks WebDAV on port 80 and the Calibre plugin's
+WebSocket upload on 81. With the unit on the same LAN:
+
+```bash
+python3 ports/metalio_plus/scripts/webdav_smoke.py <device-ip>
+```
+
+It checks OPTIONS, PROPFIND depth 0, the forbidden 8.3/case aliases of
+`/.crosspoint`, a PUT/GET/DELETE round-trip and that port 81 is listening.
+
+### Release assets (what a Plus install needs)
+
+Every `cpyos-plus-*` release carries, next to the firmware:
+
+| Asset | Purpose | Where it goes |
+|---|---|---|
+| `cpyos-plus-<ver>.bin` | app image | app slot (CloudZao OTA writes this only) |
+| `plus-pdfmod.bin` | MuPDF engine, paired to that image's ELF SHA | `/.crosspoint/pdf/pdfmod.bin` on the card (or install from Settings) |
+| `plus-pdf-assets.bin` | font/CMap bundle for the engine | card root `/pdf_assets.bin`; installed at boot |
+| `plus-pdf-engine-manifest.txt` | one manifest line for this exact tag | consumed by the in-reader updater |
+| `pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core.dat` | data partition blobs | spiffs via `flash_plus_data.py` / `data_manifest_plus.txt` |
+
+CloudZao OTA writes **only** the app slot: languages other than EN/ZH, pinyin,
+hyphenation, the emoji face and the 8,105-glyph reading core stay absent until
+the data partition is flashed once (and again whenever those blobs change).
+
+### Deliberate differences from Read Pico (port audit)
+
+These are design or hardware consequences, not missing ports; everything else
+is meant to behave like Read Pico.
+
+| Area | Read Pico | Plus | Why |
+|---|---|---|---|
+| Bundled games | 2048/sokoban/gomoku/minesweeper/sudoku/chess | not built (`CROSSPOINT_PLUGIN_RUNTIME`) | the upstream catalog swaps built-in games for the plugin runtime on this target; games compiled but unreferenced are gc-sectioned |
+| File transfer | CrossPointWebServer: files, settings, plugins-run, WebDAV, Calibre mode | Plus `web_transfer`: files, its own `/settings`, browser-plugin runner (`/plugin` + `/api/plugin-jobs`), **WebDAV (11 methods)** and the **Calibre WebSocket upload on port 81**, plus USB MSC | same feature surface, different page names/UX; nothing is ported from CrossPointWebServer because the Plus httpd already implements the protocols |
+| PDF engine | flash XIP `pdfmod` partition | SD file loaded into PSRAM at fixed vaddrs | S31 has no spare flash partition in the CPYOS table; PSRAM is larger |
+| PDF reading font | embedded core carrier + UI subset | same, provisioned through the data partition | identical rule once `flash_plus_data.py` has run |
+| Refresh features | DU/wave/band updates on the E0470 LCD path | panel driver provides its own waveform/refresh policy | different panel/board controller |
 
 ### Font tiers on the Plus
 
@@ -430,10 +534,10 @@ both esptool verify wordings and a partition-table binary round-trip).
 | `partitions_plus_ota.csv` | dual `0x660000` OTA slots + 3 MiB `spiffs@0xCD0000` | Read Pico-compatible layout; the compressed core sits at spiffs+`0x180000` |
 | `partitions_vendor.csv` | `ota_0@0x80000` / `ota_1@0x580000` (5 MiB each) + `model`/`resources`/`font_data` | read-only reference for the stock preflight; never written by the planner |
 
-OTA is hard-disabled until hardware validation. With the CPYOS table a second
-OTA slot would cost capacity, and the first hardware tests use the vendor table
-and app slots directly. The CPYOS table must not be mixed with the vendor
-firmware or the Read Pico table.
+The CPYOS dual-OTA table is the release layout. `plus_ota` uses CloudZao
+protocol 1.1 and writes the inactive slot; the generic CrossMux `OtaUpdater`
+stays `CPYOS_OTA_DISABLED` because its manifests are Read Pico only. The CPYOS
+table must not be mixed with the vendor firmware or the Read Pico table.
 
 ## Hardware cautions (vendor + reference firmware)
 
@@ -522,10 +626,12 @@ The transfer page refuses the open SoftAP on this image (S31 beacon pool fault);
    Read Pico 44-tick water-ripple engine is not used; the same setting drives the
    vendor's `MODE_SPATIAL_WIPE_GL` (ten GL16 bands, one phase apart). Continuous
    reading with fast page turn uses `MODE_DU`. Optical result still needs eyes.
-4. **OTA / release** — the dual-OTA table now holds two 5.43 MB shell images
-   (6.375 MiB each), so the size blocker is gone. Updates still remain serial
-   (`scripts/flash_metalio_plus.py` / `flash_chunked.py`) until the port is
-   hardware-validated; every artifact stays `0.0.0-untested`.
+4. **OTA / release** — CloudZao protocol 1.1 query is implemented
+   (`plus_ota.cpp`), and the dual-OTA table holds two 6.375 MiB shell slots.
+   `.github/workflows/cpyos-plus-release.yml` builds a tagged Plus image,
+   publishes it to the CloudZao market, and creates the GitHub release. The
+   generic CrossMux `OtaUpdater` remains disabled; no Plus release/tag has been
+   created yet.
 
 ## Build artifacts (2026-11-09, untested)
 

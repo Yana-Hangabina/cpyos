@@ -26,6 +26,7 @@
 #include <new>
 #include <vector>
 
+#include "ReaderFontSizes.h"
 #include "SdCardFontSystem.h"
 #include "fontIds.h"
 
@@ -35,8 +36,10 @@ constexpr char kMagic[4] = {'C', 'P', 'F', 'P'};
 constexpr uint16_t kVersion = 1;
 constexpr size_t kHeaderSize = 32;
 // The reader can ask for any size in this set; UI roles only use 10..18. 18pt
-// stays for the old UI display role and 20..34 are reader-only.
-constexpr uint8_t kPointSizes[] = {8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34};
+// stays for the old UI display role and 20..40 are reader-only. The exact
+// intermediate points cost nothing until a reader face is registered; the
+// picker itself uses the shorter ladder in ReaderFontSizes.h.
+constexpr uint8_t kPointSizes[] = {8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};
 constexpr char kBuildMarker[] = "CROSSPOINT-SYSTEM-FONT-PACK-V1";
 #if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
 constexpr char kBackendMarker[] = "CROSSPOINT-SYSTEM-FONT-PACK-EMBEDDED-V1";
@@ -90,12 +93,21 @@ struct RegisteredFont {
   std::vector<int> fontIds;
   std::unique_ptr<TtfEpdFont> font;
   uint8_t pointSize = 0;
+  // True once the CJK_UI_*/NOTOSANS_* role ids for this size are registered.
+  // A block-only face (layout M2) starts false and is upgraded if configure()
+  // later wants the size for a UI role.
+  bool roleAliases = false;
 };
 
 Source g_source;
 std::vector<RegisteredFont> g_fonts;
 bool g_ready = false;
 bool g_fourBit = false;
+// Point sizes the reader's block-font provider asked to keep beyond the current
+// configure() set (layout milestone M2). Bounded by the caller; configure() ORs them
+// into its wanted mask so a UI scale change cannot release a face a cached section
+// still names.
+bool g_pinnedPointSizes[35] = {};
 
 // Preview faces are debug-only and deliberately live outside g_fonts, so a
 // later configure()/release() can never confuse them with a reader role.
@@ -158,7 +170,61 @@ unsigned long readSource(void* ctx, const unsigned long offset, unsigned char* b
   return esp_partition_read(source->partition, source->dataOffset + offset, buffer, count) == ESP_OK ? count : 0;
 }
 
-void registerAt(GfxRenderer& renderer, const uint8_t pointSize) {
+void addFaceId(GfxRenderer& renderer, RegisteredFont& entry, const int id) {
+  // main.cpp registers every built-in id before this runs. insertFont() refuses
+  // duplicates, so the real vector face would be silently ignored; drop the
+  // placeholder first (removeFont also clears fallbacks that point at it —
+  // typography::apply() rebinds them immediately afterwards).
+  renderer.removeFont(id);
+  renderer.insertFont(id, entry.font->family());
+  renderer.registerTtfFont(id, entry.font.get());
+  entry.fontIds.push_back(id);
+}
+
+// UI role ids (CJK_UI_*, NOTOSANS_*) this point size serves. Only configure()
+// needs them. A block-only face must not touch these ids: they may already be
+// bound as preferred fonts by typography::apply(), and removeFont() would drop
+// the binding.
+void addRoleAliases(GfxRenderer& renderer, RegisteredFont& entry) {
+  const uint8_t pointSize = entry.pointSize;
+  if (pointSize <= 16) {
+    addFaceId(renderer, entry, pointSize == 8    ? CJK_UI_8_FONT_ID
+                                   : pointSize == 10 ? CJK_UI_10_FONT_ID
+                                   : pointSize == 12 ? CJK_UI_12_FONT_ID
+                                   : pointSize == 14 ? CJK_UI_14_FONT_ID
+                                                     : CJK_UI_16_FONT_ID);
+  } else if (pointSize == 18) {
+    addFaceId(renderer, entry, CJK_UI_18_FONT_ID);
+  }
+  // The reader path asks for NOTOSANS_12/14/16/18; a selected reader size must
+  // keep its size. NOTOSERIF ids are aliased to the same single family because
+  // a no-PSRAM target cannot afford a second multi-MB face; without this they
+  // would fall back to the built-in 12pt bitmap and change size mid-book.
+  switch (pointSize) {
+    case 12:
+      addFaceId(renderer, entry, NOTOSANS_12_FONT_ID);
+      addFaceId(renderer, entry, NOTOSERIF_12_FONT_ID);
+      break;
+    case 14:
+      addFaceId(renderer, entry, NOTOSANS_14_FONT_ID);
+      addFaceId(renderer, entry, NOTOSERIF_14_FONT_ID);
+      break;
+    case 16:
+      addFaceId(renderer, entry, NOTOSANS_16_FONT_ID);
+      addFaceId(renderer, entry, NOTOSERIF_16_FONT_ID);
+      break;
+    case 18:
+      addFaceId(renderer, entry, NOTOSANS_18_FONT_ID);
+      addFaceId(renderer, entry, NOTOSERIF_18_FONT_ID);
+      break;
+    default:
+      break;
+  }
+}
+
+// `withRoleAliases` registers the UI role ids this size serves. configure() passes
+// true; a block-only size passes false (see addRoleAliases).
+void registerAt(GfxRenderer& renderer, const uint8_t pointSize, const bool withRoleAliases) {
   auto font = std::unique_ptr<TtfEpdFont>(new (std::nothrow) TtfEpdFont());
   if (!font) {
     LOG_ERR("SFP", "OOM: TtfEpdFont @%upt", static_cast<unsigned>(pointSize));
@@ -179,56 +245,32 @@ void registerAt(GfxRenderer& renderer, const uint8_t pointSize) {
   RegisteredFont entry;
   entry.font = std::move(font);
   entry.pointSize = pointSize;
-  const auto addId = [&](const int id) {
-    // main.cpp registers every built-in id before this runs. insertFont()
-    // refuses duplicates, so the real vector face would be silently ignored;
-    // drop the placeholder first (removeFont also clears fallbacks that point
-    // at it — typography::apply() rebinds them immediately afterwards).
-    renderer.removeFont(id);
-    renderer.insertFont(id, entry.font->family());
-    renderer.registerTtfFont(id, entry.font.get());
-    entry.fontIds.push_back(id);
-  };
-
-  if (pointSize <= 16) {
-    addId(pointSize == 8    ? CJK_UI_8_FONT_ID
-          : pointSize == 10 ? CJK_UI_10_FONT_ID
-          : pointSize == 12 ? CJK_UI_12_FONT_ID
-          : pointSize == 14 ? CJK_UI_14_FONT_ID
-                            : CJK_UI_16_FONT_ID);
-  } else if (pointSize == 18) {
-    addId(CJK_UI_18_FONT_ID);
+  // Reader faces get their own id for every size; UI roles below are only bound
+  // for 10..18, the reader asks for 20..34 directly.
+  if (pointSize >= 10) addFaceId(renderer, entry, CJK_READER_SIZE_FONT_ID(pointSize));
+  if (withRoleAliases) {
+    addRoleAliases(renderer, entry);
+    entry.roleAliases = true;
   }
-  // The reader path asks for NOTOSANS_12/14/16/18; a selected reader size must
-  // keep its size. NOTOSERIF ids are aliased to the same single family because
-  // a no-PSRAM target cannot afford a second multi-MB face; without this they
-  // would fall back to the built-in 12pt bitmap and change size mid-book.
-  switch (pointSize) {
-    case 12:
-      addId(NOTOSANS_12_FONT_ID);
-      addId(NOTOSERIF_12_FONT_ID);
-      break;
-    case 14:
-      addId(NOTOSANS_14_FONT_ID);
-      addId(NOTOSERIF_14_FONT_ID);
-      break;
-    case 16:
-      addId(NOTOSANS_16_FONT_ID);
-      addId(NOTOSERIF_16_FONT_ID);
-      break;
-    case 18:
-      addId(NOTOSANS_18_FONT_ID);
-      addId(NOTOSERIF_18_FONT_ID);
-      break;
-    default:
-      break;
-  }
-  // Reader faces get their own id for every size. UI roles above are only
-  // bound for 10..18; the reader asks for 20..34 directly.
-  if (pointSize >= 10) addId(CJK_READER_SIZE_FONT_ID(pointSize));
   g_fonts.push_back(std::move(entry));
 }
 
+}  // namespace
+
+namespace {
+// A pack whose content changes (font update) lands under a new CRC-named file;
+// the previous copy is dead weight of ~2.5 MB. Keep exactly the file this boot
+// uses and drop the rest, so repeated firmware updates cannot fill the card.
+void pruneStalePackFiles(const char* keepPath) {
+  if (!Storage.ready()) return;
+  constexpr const char* kDir = "/.crosspoint";
+  for (const String& name : Storage.listFiles(kDir, 200)) {
+    if (!name.startsWith("system_font_") || !name.endsWith(".dat")) continue;
+    const String full = String(kDir) + "/" + name;
+    if (full == keepPath) continue;
+    if (Storage.remove(full.c_str())) LOG_INF("SFP", "removed stale font pack %s", name.c_str());
+  }
+}
 }  // namespace
 
 namespace system_font_pack {
@@ -346,10 +388,13 @@ bool begin(GfxRenderer& renderer) {
 void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t count) {
   if (!g_ready || pointSizes == nullptr) return;
 
-  bool wanted[35] = {};
+  bool wanted[41] = {};
   for (size_t i = 0; i < count; ++i) {
     const uint8_t pt = pointSizes[i];
-    if (pt >= 8 && pt <= 34) wanted[pt] = true;
+    if (pt >= 8 && pt <= READER_MAX_POINT_SIZE) wanted[pt] = true;
+  }
+  for (uint8_t pt = 10; pt <= 34; ++pt) {
+    if (g_pinnedPointSizes[pt]) wanted[pt] = true;
   }
 
   // Release first so a scale change never holds old and new faces at once.
@@ -363,10 +408,34 @@ void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t co
   });
   for (const uint8_t pt : kPointSizes) {
     if (pt < 8 || !wanted[pt]) continue;
-    const bool loaded = std::any_of(g_fonts.begin(), g_fonts.end(),
-                                    [pt](const RegisteredFont& entry) { return entry.pointSize == pt; });
-    if (!loaded) registerAt(renderer, pt);
+    auto it = std::find_if(g_fonts.begin(), g_fonts.end(),
+                           [pt](const RegisteredFont& entry) { return entry.pointSize == pt; });
+    if (it == g_fonts.end()) {
+      registerAt(renderer, pt, /*withRoleAliases=*/true);
+    } else if (!it->roleAliases) {
+      // A block-only face (layout M2) was already loaded at this size; add the UI
+      // role ids now that a role wants it.
+      addRoleAliases(renderer, *it);
+      it->roleAliases = true;
+    }
   }
+}
+
+bool ensurePointSize(GfxRenderer& renderer, const uint8_t pointSize) {
+  if (!g_ready || pointSize < 10 || pointSize > 34) return false;
+  const bool loaded = std::any_of(g_fonts.begin(), g_fonts.end(),
+                                  [pointSize](const RegisteredFont& entry) { return entry.pointSize == pointSize; });
+  if (!loaded) registerAt(renderer, pointSize, /*withRoleAliases=*/false);
+  const bool ok = std::any_of(g_fonts.begin(), g_fonts.end(),
+                              [pointSize](const RegisteredFont& entry) { return entry.pointSize == pointSize; });
+  // Pin only a face that actually exists; a failed load must not make configure()
+  // keep asking for a size the pack could not build.
+  if (ok) g_pinnedPointSizes[pointSize] = true;
+  return ok;
+}
+
+void releasePinnedPointSizes() {
+  for (uint8_t pt = 10; pt <= 34; ++pt) g_pinnedPointSizes[pt] = false;
 }
 
 void release(GfxRenderer& renderer) {
@@ -378,6 +447,7 @@ void release(GfxRenderer& renderer) {
     }
   }
   g_fonts.clear();
+  releasePinnedPointSizes();
 #if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
   if (g_packBuffer != nullptr) {
     heap_caps_free(g_packBuffer);
@@ -417,7 +487,7 @@ void releasePreviewSlot(GfxRenderer& renderer, const int slot) {
 }  // namespace
 
 int registerPreviewFace(GfxRenderer& renderer, const uint8_t pointSize, const bool fourBit) {
-  if (!g_ready || pointSize < 10 || pointSize > 34) return 0;
+  if (!g_ready || pointSize < READER_MIN_POINT_SIZE || pointSize > READER_MAX_POINT_SIZE) return 0;
   const int slot = fourBit ? 1 : 0;
   releasePreviewSlot(renderer, slot);
 

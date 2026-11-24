@@ -582,7 +582,9 @@ void PlusVoiceMemoActivity::loop() {
     bool stop = mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
                 mappedInput.wasReleased(MappedInputManager::Button::Back);
 #if FREEINK_CAP_TOUCH
-    if (!stop && mappedInput.wasTapInRect(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight())) {
+    int tapX = 0;
+    int tapY = 0;
+    if (!stop && mappedInput.wasScreenTapped(tapX, tapY)) {
       stop = true; /* stopping is the only action this page has while recording */
     }
 #endif
@@ -607,8 +609,10 @@ void PlusVoiceMemoActivity::loop() {
       activityManager.goToApps();
       return;
     }
+    int tapX = 0;
+    int tapY = 0;
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-        mappedInput.wasTapInRect(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight())) {
+        mappedInput.wasScreenTapped(tapX, tapY)) {
       stopWorker();
       requestUpdate();
       return;

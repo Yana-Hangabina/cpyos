@@ -19,6 +19,7 @@
 #include "fontIds.h"
 #include "components/UITheme.h"
 #include "network/ProtectedPaths.h"
+#include <HalPowerManager.h>
 
 namespace {
 
@@ -366,6 +367,9 @@ bool deliverLine(const DrainManifest& mf, const std::string& lineText, std::stri
   }
 
   const auto run = [&](const std::string& tok) {
+    // Plugin events run from the UI loop; the request generates no input, so
+    // without this the governor drops to 80 MHz for its whole duration.
+    HalPowerManager::Lock powerLock(/*quiet=*/true);
     pluginhttp::Headers headers;
     headers.reserve(handler->req.headers.size());
     for (const auto& h : handler->req.headers) {

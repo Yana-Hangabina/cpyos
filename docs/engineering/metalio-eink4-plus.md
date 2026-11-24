@@ -161,9 +161,12 @@ PixelSwitch 全部参与编译（`CROSSPOINT_PORT_MINIMAL_APPS` 已移除）；�
 
 **仍未完成 / 明确阻断**（按价值排序）：
 
-1. **OTA**：`OtaUpdateActivity` 参与编译，但端口定义 `CPYOS_OTA_DISABLED`，`checkForUpdate`/`installUpdate`/
-   `installDataPacks` 一律返回 `WRONG_DEVICE_ERROR`——网络上现存的清单都指向 Read Pico（ESP32-S3），
-   装到本 SoC 上会变砖。`esp_ota` 写内部 flash，将来实现时必须放主任务（不能放 PSRAM 栈）。
+1. **OTA**：`OtaUpdateActivity` 的共享 CrossMux 清单路径仍定义 `CPYOS_OTA_DISABLED`，因为现有清单都指向
+   Read Pico；**Plus 的厂商 OTA 走独立 `plus_ota`**，已切换到 CloudZao protocol 1.1
+   （`X-Resource-Key` + STA `Device-Id` + `/api/firmware-ota/check`，测试通道
+   `X-OTA-Channel: test`），把 `firmware.version` 与本机版本比较后写非活动 OTA 槽。
+   `esp_ota` 写内部 flash 仍必须放主任务（不能放 PSRAM 栈）。实机查询测试通道已验证；
+   尚无 Plus 发版/tag。
 2. **完整网页服务 UI / Calibre Activity**：排除在外，前者需要 Arduino
    `WebServer`/`AsyncWebServer` 兼容层。Calibre 插件所依赖的 **WebSocket 上传协议**
    （端口 81）已按 `docs/webserver-endpoints.md` 实现（`main/ws_upload.cpp`），
@@ -198,7 +201,7 @@ PixelSwitch 全部参与编译（`CROSSPOINT_PORT_MINIMAL_APPS` 已移除）；�
 | USB | USB-Serial/JTAG | USB-Serial/JTAG + MSC | **HS UTMI + USJ，ANA_SW GPIO36** |
 | 前光 / 马达 / 音频 | 无 / 无 / 无 | 无 / 无 / 无 | **冷 GPIO6 + 暖 GPIO7 / TCA P0.3 / I²S + 外置 BT** |
 | 按键 | 触摸 + 3 电容键 | 触摸 + 扩展键 | **POWER P1.7、Vol± P1.0/P1.1、AI/BOOT GPIO61、玻璃虚拟键** |
-| 分区（rpr） | 4M+4M app，5M storage | 无专属表 | **5M+5M app，5.875M storage** |
+| 分区（kiikoread） | 4M+4M app，5M storage | 无专属表 | **5M+5M app，5.875M storage** |
 | 分区（厂商） | — | — | **model 400K、5M+5M app、resources 400K、font_data 5M** |
 
 ### 1.1 两套 Plus 分区表不能混用
@@ -249,7 +252,7 @@ PixelSwitch 全部参与编译（`CROSSPOINT_PORT_MINIMAL_APPS` 已移除）；�
 
 | 项 | 事实 |
 |---|---|
-| 本地参考 | `.scratch/rpr`，`4bd2b9e`（rc92），无 Metalio；rc110 复核树 `.scratch/metalio-research/rpr-rc110` |
+| 本地参考 | `.scratch/kiikoread`，`4bd2b9e`（rc92），无 Metalio；rc110 复核树 `.scratch/metalio-research/kiikoread-rc110` |
 | 上游 HEAD | `e893b1f`，`metalio-s31-v0.3.3-rc110` |
 | 总差异 | 1,204 个文件，+197,166 / −9,606 |
 | 引入提交 | `688b08e`（设备选择/OTA）→ `dc9c26c`（把 Metalio-S31 树并入主树）→ rc98…rc110 |
@@ -302,7 +305,7 @@ PixelSwitch 全部参与编译（`CROSSPOINT_PORT_MINIMAL_APPS` 已移除）；�
 
 ### 2.5 rc110 本地证据与 CPYOS 端口对照（2026-11-07 复核）
 
-本地参考树：`.scratch/metalio-research/rpr-rc110`（`metalio-s31-v0.3.3-rc110`）。以下每条都指向该树内的文件，
+本地参考树：`.scratch/metalio-research/kiikoread-rc110`（`metalio-s31-v0.3.3-rc110`）。以下每条都指向该树内的文件，
 「端口状态」只描述本仓库实际做了什么，**不把未移植的行为当作已支持**。
 
 | 主题 | rc110 的实现（证据） | CPYOS Plus 端口 |
@@ -495,22 +498,22 @@ UI / reader / settings 由 CPYOS 对应实现取代；**音频与 OTA 是仅有�
    写的是 `EPD_VCOM_MV 1200`；kiikoread 的 `boards/metalio47/kiiko_board_config.h`
    默认是 **3000 mV**，并注明“来自 Moku 对比测试，不是本台实测”。端口按厂商值写 **1200 mV**，
    没有做成 NVS 可配置项；两者都不是本机实测值，错误 VCOM 可能造成永久性显示损伤。
-   **不要把 rpr 的 3000 mV 直接套到本机**；首测保持短时，若画面明显异常先测量再持续使用。
+   **不要把 kiikoread 的 3000 mV 直接套到本机**；首测保持短时，若画面明显异常先测量再持续使用。
 2. **TPS65185 上电时序**：经 TCA9555 P0.0/P0.1/P0.2/P0.7 控制；上电后等待 PWR_GOOD，
    再开始扫描。掉电/复位顺序同样重要。
-3. **屏轨策略**：rpr 在每次输出后立即断电（`RAILS_IDLE_TIMEOUT_MS=0`），注释说明
+3. **屏轨策略**：kiikoread 在每次输出后立即断电（`RAILS_IDLE_TIMEOUT_MS=0`），注释说明
    “轨常上电会让白底在强光下发灰”。不要照搬 Pico 的 8 秒空闲掉轨。
 4. **波形**：Plus 使用厂家 2.0.76 完整 GL48，不做 Pico 的裁剪/文字相序调序；
    GC16/GL16 各 **48 相**、DU 20 相，帧周期约 **12 ms（≈83.3 Hz）**。
    `my_waveform_du14.h` 来源许可不明，默认不纳入发布。
 5. **面板修复**：Plus 用一次 `epd_clear_checked` 白底基线，不做 Pico 的盲刷多轮。
-6. **分区/启动**：厂商与 rpr 的 app 偏移不同；rpr `board.json` 的 bootloader offset 是
+6. **分区/启动**：厂商与 kiikoread 的 app 偏移不同；kiikoread `board.json` 的 bootloader offset 是
    **8192 (0x2000)**；厂商 `CONFIG_PARTITION_TABLE_OFFSET=0x8000`。必须选一套并固定。
 7. **USB**：S31 的 USB Serial/JTAG 与 HS MSC 使用不同 PHY；开启虚拟 U 盘前先安全弹出，
    否则烧录/文件系统可能异常。
 8. **SD**：4-bit SDMMC；FAT32；厂商资源在 `metalio/e-ink/`；卸载/切换 USB/待机恢复要
    先停新访问并等待事务结束。
-9. **NVS/OTA**：rpr 使用独立命名空间 `metalio_s31` / `metalio_lock` / `metalio_start`；
+9. **NVS/OTA**：kiikoread 使用独立命名空间 `metalio_s31` / `metalio_lock` / `metalio_start`；
    OTA 必须用 Plus 自己的 board tag/chip id（32），不能接受 Read Pico 的升级包。
 10. **不要复用 3.97″ Metalio E-Ink 4 的 SPI 引脚表。** 厂商 README 明确警告。
 

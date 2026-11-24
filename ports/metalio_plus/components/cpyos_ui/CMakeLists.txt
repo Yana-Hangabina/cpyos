@@ -119,6 +119,10 @@ idf_component_register(
         "${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/include"
         "${REPO_ROOT}/freeink-sdk/libs/network/JsonSax/src"
         "${REPO_ROOT}/freeink-sdk/libs/hardware/Imu/include"
+        # Imu.cpp includes <I2cBusLock.h> from the SDK's BoardConfig component;
+        # this port uses the compat/BoardConfig.h profile, so the real header
+        # still has to be on the include path.
+        "${REPO_ROOT}/freeink-sdk/libs/hardware/BoardConfig/include"
         "${REPO_ROOT}/freeink-sdk/libs/hardware/Rtc/include"
         "${REPO_ROOT}/freeink-sdk/libs/hardware/FrontlightManager/include"
         "${REPO_ROOT}/freeink-sdk/libs/display/FreeInkDisplay/include"
@@ -145,6 +149,7 @@ idf_component_register(
         "${REPO_ROOT}/freeink-sdk/libs/network/BleKeyboardHost/include"
         "${REPO_ROOT}/lib/Epub"
         "${REPO_ROOT}/lib/KOReaderSync"
+        "${REPO_ROOT}/lib/HttpHeader"
         "${REPO_ROOT}/freeink-sdk/libs/ui/FreeInkUI/include"
         "${REPO_ROOT}/freeink-sdk/libs/ui/FreeInkUI/src"
         "${REPO_ROOT}/src"
@@ -210,7 +215,17 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
 # BookSource.cpp in this component is the public registry; when the private
 # component is part of the build it must resolve booksource::privateSource()
 # instead of compiling the null stub. The symbol itself lives in cpyos_app.
+# Keep the same auto-detection as cpyos_app: the two component CMake files are
+# configured independently, so an explicit env flag is not the only signal.
+set(_cpyos_ui_jjwxc 0)
 if(DEFINED ENV{CPYOS_PLUS_JJWXC})
+    if(NOT "$ENV{CPYOS_PLUS_JJWXC}" STREQUAL "0")
+        set(_cpyos_ui_jjwxc 1)
+    endif()
+elseif(IS_DIRECTORY "${REPO_ROOT}/src/jjwxc")
+    set(_cpyos_ui_jjwxc 1)
+endif()
+if(_cpyos_ui_jjwxc)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CROSSPOINT_BOOKSOURCE_JJWXC=1)
 endif()
 

@@ -45,6 +45,8 @@ class KeyboardEntryActivity : public Activity {
   // Serial-only soak hook: inserts one character through the same path a touch
   // key press takes, so band-update behaviour can be exercised without a finger.
   void debugTypeChar() override;
+  // Serial-bench hook: finish the field with its current text, like the OK key.
+  void debugConfirm() override;
   bool wantsBandUpdates() const override { return true; }
   bool preventAutoSleep() override { return true; }
 

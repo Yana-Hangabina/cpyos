@@ -107,6 +107,11 @@ void ReaderActivity::onEnter() {
   }
 
   sdFontSystem.ensureLoaded(renderer);
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // ensureLoaded() can move a fixed .cpfont's unsupported size onto the
+  // built-in scalable ladder; make sure that face is registered before layout.
+  typography::apply(renderer, SETTINGS.uiFontScale);
+#endif
   applyInitialOrientation();
 
   if (!loadBook()) {

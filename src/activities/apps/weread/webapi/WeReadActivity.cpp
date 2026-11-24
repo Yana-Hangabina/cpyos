@@ -778,6 +778,7 @@ WeReadClient::Operation::Event WeReadActivity::stepOperation() {
   // A 1701-chapter download runs for tens of minutes with no input, so the
   // idle policy would otherwise drop the CPU to 80 MHz and stretch every TLS
   // round trip. The lock is scoped to one request/packaging step.
+  NetworkStartup::ActivityGuard networkGuard;
   HalPowerManager::Lock powerLock(/*quiet=*/true);
   // Rendering owns a second 8KB task and large display buffers. Serialize it
   // with each synchronous protocol step so TLS never competes with a refresh.

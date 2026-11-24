@@ -224,15 +224,15 @@ void BookReadingAdjustmentActivity::loop() {
   const Rect confirm =
       gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(), metrics.contentSidePadding,
                           metrics.menuSpacing, metrics.menuRowHeight, 2, 3);
-  if (mappedInput.wasTapInRect(minus.x, minus.y, minus.width, minus.height)) {
+  if (mappedInput.wasTapInRect(minus)) {
     adjustSelectedValue(-1);
     return;
   }
-  if (mappedInput.wasTapInRect(plus.x, plus.y, plus.width, plus.height)) {
+  if (mappedInput.wasTapInRect(plus)) {
     adjustSelectedValue(1);
     return;
   }
-  if (mappedInput.wasTapInRect(confirm.x, confirm.y, confirm.width, confirm.height)) {
+  if (mappedInput.wasTapInRect(confirm)) {
     if (selectedField == 1) {
       openDateSelection();
     } else {

@@ -152,7 +152,7 @@ void UpstreamStyleTheme::fillBatteryIcon(const GfxRenderer& renderer, Rect rect,
     BaseTheme::fillBatteryIcon(renderer, rect, percentage);
     return;
   }
-  const bool charging = gpio.isUsbConnected();
+  const bool charging = powerManager.isBatteryCharging();
 
   if (charging) {
     // Solid fill when charging so lightning bolt is visible

@@ -64,7 +64,7 @@ void FullScreenMessageActivity::paint() {
 
 void FullScreenMessageActivity::loop() {
   if (!retryable || retryRect_.width <= 0) return;
-  if (!mappedInput.wasTapInRect(retryRect_.x, retryRect_.y, retryRect_.width, retryRect_.height)) return;
+  if (!mappedInput.wasTapInRect(retryRect_)) return;
 
   LOG_INF("MAIN", "SD card retry requested");
   if (Storage.begin()) {

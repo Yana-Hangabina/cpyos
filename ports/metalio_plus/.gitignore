@@ -1,6 +1,11 @@
 # ESP-IDF build outputs for this port. The source tree references shared files
 # outside ports/; nothing here is a distributable image.
 build/
+# CloudZao credentials: OTA (fw_ota_) and developer resources (mpr_) are
+# separate and must never be committed. The compiled resource key is read from
+# plus_resource_key.local by components/cpyos_app/CMakeLists.txt.
+components/cpyos_app/plus_ota_key.local
+components/cpyos_app/plus_resource_key.local
 sdkconfig
 sdkconfig.old
 managed_components/

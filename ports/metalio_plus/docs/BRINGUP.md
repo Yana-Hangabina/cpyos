@@ -196,13 +196,17 @@ Triage:
 
 Boot starts with `plus boot: reset=<n> wake=<n>` (cold/watchdog/panic/brownout vs wake-up; compare with `slpinfo`), then logs `CPRO: PSA self-test ok (AES-128-CBC + SHA-256)`.
 
-To include the private JJWXC app, clone `cpyos-jjwxc` into `src/jjwxc` and add
-`CPYOS_PLUS_JJWXC=1` to the configure environment (the build fails if the
-directory is missing, and the source must be removed before any commit). The
-verified build is 27 sources / +376,288 B; first hardware checks are the app
-entry under **My → Tools**, the disclaimer, and that an offline cached book still
-opens. Account/login paths are the same private code as Read Pico, so treat them
-as untested until exercised on this board.
+To include the private JJWXC app, clone `cpyos-jjwxc` into `src/jjwxc`; an
+existing checkout is enabled automatically for local dev builds. Force/disable
+it with `CPYOS_PLUS_JJWXC=1` / `=0` (`=1` fails if the directory is missing).
+All three CMake files (`cpyos_app`, `cpyos_ui`, `main`) apply the same rule,
+including the `booksource::privateSource()` link anchor. The verified build is
+32 sources / image 6,462,992 B; first hardware checks are the app entry under
+**My → Tools**, the disclaimer, and that an offline cached book still opens.
+Account/login paths are the same private code as Read Pico, so treat them as
+untested until exercised on this board. A public-tag build has no checkout and
+therefore no private component; the AppCatalog hides the JJWXC tile in that
+case instead of leaving a dead tap.
 
 The read-only checklist can be driven automatically (it never flashes, reboots
 or writes files) **only against the shell image with a UART0 console** (GPIO58/59
@@ -481,9 +485,10 @@ default, and the bottom tab labels fit the screen.
 
 ## 1c. Product build composition (2026-11-10)
 
-- **Private JJWXC component**: opt in with `CPYOS_PLUS_JJWXC=1` and a checkout at
-  `src/jjwxc` (never committed). The component CMake already wires the sources,
-  include dirs and `CROSSPOINT_BOOKSOURCE_JJWXC=1`.
+- **Private JJWXC component**: auto-enabled for a local checkout at `src/jjwxc`
+  (never committed); `CPYOS_PLUS_JJWXC=0` opts out and `=1` requires it. The
+  component CMake wires the sources, include dirs, `CROSSPOINT_BOOKSOURCE_JJWXC`
+  for `cpyos_app`, `cpyos_ui` and `main`, plus the `privateSource()` anchor.
 - **Arduino `WebServer` compat**: `components/cpyos_ui/compat/WebServer.{h,cpp}`
   implements the small Arduino surface the JJWXC cookie-import page uses
   (on/onNotFound/begin/send/arg) on top of `esp_http_server`, so the import page
@@ -527,10 +532,10 @@ All four were invisible until the corresponding screen was opened:
    `ISource` adapter) was not in the component's glob, and the final link scans
    `cpyos_ui` after `cpyos_app`, so the reference would have been unresolvable.
    Fixed by compiling `JjwxcSource.cpp`, defining the macro for `cpyos_ui` when
-   `CPYOS_PLUS_JJWXC` is set, and anchoring `booksource::privateSource()` from
-   `shell_demo` (a main-object reference keeps the archive member from being
-   skipped). The 晋江 tile now opens the disclaimer and the app home instead of
-   doing nothing.
+   the private component is enabled (env flag or an existing `src/jjwxc`
+   checkout), and anchoring `booksource::privateSource()` from `shell_demo`
+   (a main-object reference keeps the archive member from being skipped). The
+   晋江 tile now opens the disclaimer and the app home instead of doing nothing.
 - Sizes (7.19 MiB OTA slot): shell without JJWXC 7,093,920 B; with JJWXC
   7,293,920 B (242,720 B free).
 
@@ -941,7 +946,7 @@ tap/log/screenshot round on this unit, not just a build.
 | Settings, themes, language pack, system/SD fonts, emoji | verified except one page | Display category paints each CJK label as two differently-sized runs (see above); every other category and the overview are clean |
 | Reading stats / games / calculator / standby overlay | verified | stats page, games, standby screen |
 | Deep sleep / light sleep / wake | **not ported** | the port only has the sleep *overlay*; PMU/host sleep handoff is a separate task |
-| OTA | **disabled** | port builds with `CPYOS_OTA_DISABLED=1`; device-side `flash <path>` writes the inactive slot instead |
+| OTA | **Plus vendor path implemented; shared CrossMux path disabled** | `plus_ota` uses CloudZao protocol 1.1 (`X-Resource-Key`, STA `Device-Id`, `/api/firmware-ota/check`) and writes the inactive OTA slot. The generic `OtaUpdater` stays `CPYOS_OTA_DISABLED` because its manifests target Read Pico. Live test-channel query verified; no Plus release/tag yet |
 | BLE page-turner | built, **unverified** | needs a BLE HID device |
 | USB mass storage | console only | `UsbDriveActivity` has **0** symbols; the port stock console `usbmsc on` works but there is no UI entry (parity gap) |
 
@@ -1115,7 +1120,7 @@ Hardware driver audit against the vendor BSP and kiikoread rc110 metalio47 (2026
 Four read-only audits (SD, kiikoread board diff, peripherals, display) were run
 against: the CloudZao vendor board support vendored in this port, the vendor SDK
 copy, and kiikoread rc110 `boards/metalio47` (the only reference that runs on
-this exact S31 board; it lives at `repos/kiikoread-rc110`, and `.scratch/rpr`
+this exact S31 board; it lives at `repos/kiikoread-rc110`, and `.scratch/kiikoread`
 is a compatibility symlink to it).
 
 Fixed in this round (build + on-device evidence where noted):

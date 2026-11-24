@@ -17,8 +17,8 @@ Each YAML file must contain:
 The English file is the reference. Missing keys in other languages are
 automatically filled from English, with a warning.
 
-By default the script scans the src/ and lib/ trees for STR_* references and
-reports any translation keys that are never used.  Pass --strip-unused to
+By default the script scans the src/, lib/ and ports/ trees for STR_* references
+and reports any translation keys that are never used.  Pass --strip-unused to
 omit those keys from the generated output entirely.
 
 Usage:
@@ -1418,7 +1418,9 @@ def main(
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
     default_output_dir = "lib/I18n/"
-    default_src_dirs = ["src", "lib"]
+    # Device ports keep their own user-facing strings; include them so a release
+    # build with --strip-unused does not delete keys used only by a port.
+    default_src_dirs = ["src", "lib", "ports"]
 
     if translations_dir is None:
         translations_dir = default_translations_dir
@@ -1626,7 +1628,7 @@ if __name__ == "__main__":
         nargs="+",
         metavar="DIR",
         default=None,
-        help="Source directories to scan for STR_* usage (default: src lib)",
+        help="Source directories to scan for STR_* usage (default: src lib ports)",
     )
     parser.add_argument(
         "--strip-unused",

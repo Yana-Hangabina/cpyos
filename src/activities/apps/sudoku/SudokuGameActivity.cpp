@@ -121,13 +121,13 @@ void SudokuGameActivity::handleInputWon() {
                                          metrics.contentSidePadding, metrics.menuSpacing, metrics.menuRowHeight, 0, 2);
   const Rect home = gameTouchActionRect(renderer.getScreenWidth(), renderer.getScreenHeight(),
                                         metrics.contentSidePadding, metrics.menuSpacing, metrics.menuRowHeight, 1, 2);
-  if (mappedInput.wasTapInRect(again.x, again.y, again.width, again.height) ||
+  if (mappedInput.wasTapInRect(again) ||
       mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const auto diff = difficulty;
     activityManager.replaceActivityWith<SudokuGameActivity>(diff, false);
     return;
   }
-  if (mappedInput.wasTapInRect(home.x, home.y, home.width, home.height) ||
+  if (mappedInput.wasTapInRect(home) ||
       mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.replaceActivityWith<SudokuMenuActivity>();
   }

@@ -13,6 +13,7 @@
 #include <string>
 
 #include "CrossPointSettings.h"
+#include "NetworkStartup.h"
 #include "SdCardFontSystem.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/SubpageLayout.h"
@@ -251,6 +252,7 @@ void WeReadBrowseActivity::startCache() {
 
 void WeReadBrowseActivity::stepLoad() {
   WeReadClient::Operation::Event event;
+  NetworkStartup::ActivityGuard networkGuard;
   {
     RenderLock renderBarrier(*this);
     if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();

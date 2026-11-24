@@ -65,7 +65,7 @@ class CssParser {
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // 13 - font-weight/font-style: inherit is preserved through the cascade (upstream 1bd323dd)
   // 14 - compound/id/context selectors and ::first-letter keys (upstream 0305aaa6, layout M1)
-  static constexpr uint8_t CSS_CACHE_VERSION = 14;
+  static constexpr uint8_t CSS_CACHE_VERSION = 15;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -251,4 +251,5 @@ class CssParser {
   static bool tryInterpretFontSize(std::string_view val, CssLength& out);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);
+  static uint8_t interpretBorderWidth(std::string_view val, CssBorderSide& out);
 };

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include <BookCachePrune.h>
 #include <Cbz.h>
 #include <Epub.h>
 #include <Fb2.h>
@@ -65,12 +66,11 @@ bool clearBookCache(const std::string& path) {
     const std::string epubCache =
         hasEpub ? Epub(fb2.getEpubPath(), "/.crosspoint").getCachePath() : std::string();
     cleared = fb2.clearCache();
-    if (!epubCache.empty() && Storage.exists(epubCache.c_str())) {
-      cleared = Storage.removeDir(epubCache.c_str()) && cleared;
+    if (!epubCache.empty()) {
+      cleared = book_cache::pruneRegenerable(epubCache) && cleared;
     }
   } else if (FsHelpers::hasPdfExtension(path)) {
-    const std::string cache = pdfCachePath(path);
-    if (Storage.exists(cache.c_str())) cleared = Storage.removeDir(cache.c_str());
+    cleared = book_cache::pruneRegenerable(pdfCachePath(path));
   } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
     cleared = Epub(path, "/.crosspoint").clearCache();
   } else {

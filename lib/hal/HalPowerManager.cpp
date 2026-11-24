@@ -23,6 +23,18 @@
 #include "HalGPIO.h"
 #include "Waveshare397Power.h"
 
+#if FREEINK_DEVICE_READPICO
+namespace {
+// Read Pico CW32L010 PMU protocol values (see the PMU docs' CONFIG/QUICK_BATTERY
+// register descriptions): the PMU forces the pack off below this voltage, and
+// its charge state uses the vendor enum. Kept here so the battery path never
+// hard-codes a magic number at the use site.
+constexpr uint16_t kPmuForcedOffMv = 3050;
+constexpr uint8_t kPmuChargeCharging = 2;
+constexpr uint8_t kPmuChargeFull = 3;
+}  // namespace
+#endif
+
 #if FREEINK_DEVICE_PAPERMONO
 #include <M5Pm1.h>
 #endif
@@ -490,7 +502,10 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   if (_batteryLastPollMs != 0 && (now - _batteryLastPollMs) < BATTERY_POLL_MS) return _batteryCachedPercent;
   _batteryLastPollMs = now;
   uint16_t percent = 0;
-  if (Waveshare397Power::readBatteryPercentage(percent)) _batteryCachedPercent = percent;
+  if (Waveshare397Power::readBatteryPercentage(percent)) {
+    _batteryCachedPercent = percent;
+    _batteryEverKnown = true;
+  }
   return _batteryCachedPercent;
 #endif
 
@@ -502,12 +517,59 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
     }
 
     _batteryLastPollMs = now;
+#if FREEINK_DEVICE_READPICO
+    // The CW32L010 PMU is the only battery source, and it already derives an SoC
+    // from its own OCV table (monotonic down when idle, held while charging,
+    // rebased on charge end / >500 mV jumps; about +/-10 points by design).
+    // Do NOT synthesize a second estimate from battery_mv here: when the PMU
+    // reported soc_valid=false this path used to swap in the host's millivolt
+    // table, so the status chrome alternated between two different estimators.
+    const BatteryTelemetry telemetry = readBatteryTelemetry();
+    if (!telemetry.valid || telemetry.millivolts == 0) {
+      // A transient PMU miss keeps the last shown value; before the first valid
+      // sample the chrome stays unknown and draws the capsule without digits.
+      return _batteryCachedPercent;
+    }
+    _batteryTelemetryValid = true;
+    _batteryChargeState = telemetry.chargeState;
+
+    // soc 0 is the protocol's "unknown" sentinel as much as it is an empty
+    // pack. Only accept it as a level below the PMU's forced-off voltage;
+    // otherwise the chrome is told the SoC is unknown.
+    uint16_t raw = telemetry.socPermille;
+    if (raw == 0) {
+      if (telemetry.millivolts >= kPmuForcedOffMv) {
+        // The PMU marks the SoC field unknown (not "empty"): keep the last
+        // known level on the chrome (the known flag is latched for the
+        // session) and do not feed the filter a fabricated 0.
+        static bool loggedUnknownSoc = false;
+        if (!loggedUnknownSoc) {
+          LOG_INF("PWR", "PMU reports SoC unknown; keeping the last level");
+          loggedUnknownSoc = true;
+        }
+        return _batteryCachedPercent;
+      }
+      raw = 0;  // genuinely empty; the filter's low bypass shows it at once
+    }
+
+    BatterySocFilter::Inputs in;
+    in.socPermille = raw;
+    in.millivolts = telemetry.millivolts;
+    in.charging = telemetry.chargeState == kPmuChargeCharging;
+    in.full = telemetry.chargeState == kPmuChargeFull;
+    in.low = telemetry.millivolts <= 3500 || raw <= 200;
+    _batteryEverKnown = true;
+    _batteryCachedPercent = (static_cast<int>(_batterySocFilter.update(in, static_cast<uint32_t>(now))) + 5) / 10;
+    return _batteryCachedPercent;
+#else
     uint16_t percent = 0;
     if (!battery.readPercentageChecked(percent)) {
       return _batteryCachedPercent;
     }
     _batteryCachedPercent = percent;
+    _batteryEverKnown = true;
     return _batteryCachedPercent;
+#endif
   }
 
   // smooth the battery %.
@@ -516,12 +578,41 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   } else {
     _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
   }
+  _batteryEverKnown = true;
   return _batteryCachedPercent / 10;
 }
 
 uint8_t HalPowerManager::lastLightSleepFailure() { return g_lastLightSleepFailure; }
 
 int HalPowerManager::lastLightSleepError() { return g_lastLightSleepError; }
+
+uint16_t HalPowerManager::batteryDisplayPercent() const {
+  int cached = _batteryCachedPercent;
+#if !FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  // Boards without an I2C gauge run the legacy ADC smoothing, which keeps its
+  // running average in tenths of a percent and only divides at the return.
+  if (BoardConfig::ACTIVE.batteryGauge.gaugeAddr == 0) cached /= 10;
+#endif
+  return static_cast<uint16_t>(cached < 0 ? 0 : (cached > 100 ? 100 : cached));
+}
+
+bool HalPowerManager::batteryPercentageKnown() const {
+  // Latched: one PMU frame with soc_valid=0 (the PMU rebases its SoC after a
+  // charge transition or a >500 mV jump) must not blank a level the reader
+  // already saw. Only a session that never got a valid reading stays unknown.
+  return _batteryEverKnown;
+}
+
+bool HalPowerManager::isBatteryCharging() const {
+#if FREEINK_DEVICE_READPICO
+  if (_batteryTelemetryValid) {
+    // A full pack stops counting as charging: the bolt would be a false claim
+    // while the charger sits in CV/terminated (vendor display rule).
+    return _batteryChargeState == kPmuChargeCharging && batteryDisplayPercent() < 100;
+  }
+#endif
+  return gpio.isUsbConnected();
+}
 
 HalPowerManager::BatteryTelemetry HalPowerManager::readBatteryTelemetry() const {
   BatteryTelemetry telemetry;

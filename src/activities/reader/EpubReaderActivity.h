@@ -19,9 +19,11 @@
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
+#include "ReaderBlockFonts.h"
 #include "ReaderFontPreview.h"
 #include "ReaderPageCache.h"
 #include "ReaderToolbarUi.h"
+#include "SelectionHold.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "activities/apps/weread/WeReadTimeSync.h"
 #endif
@@ -29,15 +31,20 @@
 #include "JjwxcSignInReminderPopup.h"
 #endif
 #include "components/OptionPopup.h"
+#include "util/SelectionText.h"
 #ifdef BOARD_HAS_PSRAM
 #include "booksource/PsramAllocator.h"
 #endif
 
 class TtfEpdFont;
+class ReaderBlockFonts;
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
+  // M2 block font-size resolver. Created with the first section of a reading
+  // session and dropped when the font settings (base size/family) change.
+  std::unique_ptr<ReaderBlockFonts> blockFonts;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   // Memo for currentTocIndex()'s sub-chapter lookup, which reads the section's
@@ -172,7 +179,7 @@ class EpubReaderActivity final : public ReaderActivity {
   enum class Overlay { None, Toolbar, Contents, Text, Bookmarks, More };
   Overlay overlay = Overlay::None;
   // One-shot first-run map of the reader's touch zones. It is a full-screen
-  // page of its own (Pond v5 frame 16), not a wash over the body text; it owns
+  // page of its own (refreshed UI frame 16), not a wash over the body text; it owns
   // input until dismissed once.
   bool gestureHintVisible = false;
   // A tap that opened the book can still be mid-release when the first frame
@@ -185,7 +192,7 @@ class EpubReaderActivity final : public ReaderActivity {
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
   void drawGestureHint();
-  // Reader chrome (Pond v5 frame 04): a two-line header at the top, a wave
+  // Reader chrome (refreshed UI frame 04): a two-line header at the top, a wave
   // progress band and the page numbers at the foot. One geometry helper feeds
   // both the layout reserve in renderBook() and the per-minute clock repaint,
   // so the three cannot drift apart.
@@ -294,14 +301,13 @@ class EpubReaderActivity final : public ReaderActivity {
   // Self-timed long press + drag selection. The SDK's long-press event is gated
   // on flags a previous pinch can leave set (touchMultiContactSequence), which
   // made it silently dead in the reading surface; timing it here from the live
-  // contact also gives us the drag-to-extend gesture for free.
-  bool pressTracking = false;
-  uint32_t pressStartMs = 0;
-  int16_t pressStartX = 0;
-  int16_t pressStartY = 0;
-  int16_t pressLastX = 0;
-  int16_t pressLastY = 0;
-  uint32_t pressLastHeldMs = 0;
+  // contact also gives us the drag-to-extend gesture for free.  The timing is the
+  // shared tracker in SelectionHold.h, so the PDF reader cannot drift from this.
+  selection_hold::Tracker selectionHold_;
+  // Drag repaint dedupe: a different question from "was this a hold", so it keeps
+  // its own pair instead of borrowing the tracker's last known point.
+  int16_t dragLastX = 0;
+  int16_t dragLastY = 0;
   bool selectionDragging = false;
   int selectionDragHandle = 0;  // 0 = none, 1 = start handle, 2 = end handle
   uint32_t selectionLastRedrawMs = 0;
@@ -361,12 +367,27 @@ class EpubReaderActivity final : public ReaderActivity {
   };
   bool snapshotSelection(SelectionSnapshot& out);
   void startPhraseLookup();
+  // Shared tail of a phrase lookup: close the overlay and hand the query to the
+  // word-select ladder. Both the selection chip and CMD:PHRASELOOKUP use it, so a
+  // serial check exercises the same path a finger does.
+  bool startPhraseLookupWithQuery(selection_text::PhraseQuery&& query);
   void extendSelectionTo(const AnnoWordRect& word);
   uint16_t selectionStartLine = 0;
   uint16_t selectionStartWord = 0;
   uint16_t selectionEndLine = 0;
   uint16_t selectionEndWord = 0;
   int selectionAnchorX = 0;  // keeps the column when moving between lines
+  // Returning from a dictionary lookup restores the highlight it was started
+  // from, provided the page did not change while the child activity was up.
+  struct SelectionRestore {
+    bool valid = false;
+    uint16_t page = 0;
+    uint16_t startLine = 0;
+    uint16_t startWord = 0;
+    uint16_t endLine = 0;
+    uint16_t endWord = 0;
+  };
+  SelectionRestore selectionRestore_;
   std::vector<AnnoWordRect> layoutPageWords(const Page& page, int fontId, int marginLeft, int marginTop);
   void beginSelection(int x, int y);
   void endSelection();
@@ -662,7 +683,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // skip the repaint.
   bool gotoChapterIndex(int target);
   std::string currentChapterTitle() const;
-  // Text panel cells (Pond v5 frame 05, strict 2x4 grid): font, size, line
+  // Text panel cells (refreshed UI frame 05, strict 2x4 grid): font, size, line
   // spacing, paragraph spacing, page margin, fast page turn, water ripple,
   // restore defaults. Every value here is backed by an existing setting.
   static constexpr int kTextPanelCells = 8;
@@ -770,6 +791,7 @@ class EpubReaderActivity final : public ReaderActivity {
   jjwxc_signin::ReminderPopup signInReminder_;
   bool signInReminderChecked_ = false;
 #endif
+  void debugLookupPhrase(const char* text) override;
   void debugDismissHint() override;
   void debugOpenJjwxcComment() override;
   void debugOpenFakeJjwxcComment() override;

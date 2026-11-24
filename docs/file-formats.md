@@ -103,6 +103,43 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Versions 91 / 92
+
+Pages gain a `TAG_PageBorderBox` element (layout milestone M4b): a block with CSS
+`border`/`background(-color)` decoration emits one box around its lines, so the box
+travels with the cached page instead of being recomputed by the reader. The element
+is written in page order just before its block's first line and serialises nine
+fields (position, size, the 0–15 background ink and four edge widths in pixels). A
+box cut by a page break becomes two boxes with the cut edge's width zeroed.
+
+`TextBlock` is unchanged: the box fields live in `BlockStyle` at layout time only and
+are not part of the serialised block style. Books without border or shade CSS emit no
+box at all, so their pages carry exactly the bytes they did at version 90/91 — the
+bump is only required because an old cache would show the undecorated layout.
+
+Version 91 is the Latin counter, 92 the CJK-capable one; the partial-build sentinels
+are derived (`0xFE - (version - 28)`), so suspended sections rebuild too. Progress
+and book metadata are untouched.
+
+### Versions 89 / 90
+
+Pagination is rebuilt because layout now honours CSS `font-size` at block level
+(upstream `0305aaa6`, layout milestone M2): headings, `font-size` rules such as
+`.title { font-size: 2em }`, and a sizing span that wraps a whole paragraph lay
+their lines out with that face, so line heights and measured widths change.
+
+Each serialised text line also gains one 4-byte field. `TextBlock` writes
+`BlockStyle::fontId` (`i32`, 0 = the section's reader font) after
+`characterSpacing`, so a cached page draws with the face it was laid out with.
+That field is the only byte-layout change; the rest of the block style is
+unchanged. The stylesheet cache (`css_rules.cache`) stays at version 14 — the
+CSS wire format did not change, only how the parser applies a value it already
+parsed.
+
+Version 89 is the Latin counter, 90 the CJK-capable one; the partial-build
+sentinels are derived (`0xFE - (version - 28)`), so suspended sections rebuild
+too. Progress and book metadata are untouched.
+
 ### Versions 88 / 89
 
 The byte layout is unchanged; pagination is rebuilt because the CSS cascade now
@@ -296,7 +333,9 @@ fn format_string(String s) {
 enum PageElementTag : u8 {
     TAG_PageLine = 1,
     TAG_PageImage = 2,
-    TAG_PageHorizontalRule = 3
+    TAG_PageHorizontalRule = 3,
+    // 4 is reserved for the drop-cap element (layout milestone M6).
+    TAG_PageBorderBox = 5
 };
 
 enum WordStyle : u8 {
@@ -383,6 +422,18 @@ struct PageHorizontalRule {
     u8 thickness;
 };
 
+struct PageBorderBox {
+    s16 xPos;
+    s16 yPos;
+    u16 width;
+    u16 height;
+    u8 shadeLevel; [[comment("Background ink, 0 = none, 15 = black")]]
+    u8 borderTop;
+    u8 borderRight;
+    u8 borderBottom;
+    u8 borderLeft;
+};
+
 struct PageElement {
     PageElementTag pageElementType;
     if (pageElementType == TAG_PageLine) {
@@ -391,6 +442,8 @@ struct PageElement {
         PageImage pageImage [[inline]];
     } else if (pageElementType == TAG_PageHorizontalRule) {
         PageHorizontalRule horizontalRule [[inline]];
+    } else if (pageElementType == TAG_PageBorderBox) {
+        PageBorderBox borderBox [[inline]];
     } else {
         std::error(std::format("Unknown page element type: {}", pageElementType));
     }

@@ -69,15 +69,28 @@ bool normalize(std::vector<Annotation>& list) {
     if (a.spineIndex != b.spineIndex) return a.spineIndex < b.spineIndex;
     return a.startOffset < b.startOffset;
   });
-  // Same chapter + same range = one annotation; the most recently written entry
-  // wins (so editing a note replaces it rather than leaving a stale duplicate).
+  // Same chapter + same range + same quoted text = one annotation; of a group of
+  // identical keys the last-written entry survives.
+  //
+  // The quote is in the key because the PDF reader anchors by LINE INDEX (a reflowed
+  // PDF page has no stable text offset): two different selections that land on one line
+  // share a range exactly, and keying on the range alone silently deleted one of them.
+  //
+  // Checked against the EPUB reader rather than assumed, since it shares this function.
+  // `commitSelection()` pushes an entry whose quote is derived from the same snapshot as
+  // its offsets, so re-highlighting one range still produces an identical
+  // (range, quote) pair and still collapses.  Edits and deletes go through explicit
+  // index-based `annotations_.erase()`, NOT through this dedupe -- so the earlier
+  // justification here ("editing a note relies on it") was wrong, and the key change
+  // cannot alter EPUB behaviour either way.  It only stops PDF losing annotations.
   std::vector<Annotation> deduped;
   deduped.reserve(list.size());
   for (size_t i = 0; i < list.size(); ++i) {
-    const bool lastOfGroup =
-        (i + 1 == list.size()) || !(list[i + 1].spineIndex == list[i].spineIndex &&
-                                   list[i + 1].startOffset == list[i].startOffset &&
-                                   list[i + 1].endOffset == list[i].endOffset);
+    const bool lastOfGroup = (i + 1 == list.size()) ||
+                             !(list[i + 1].spineIndex == list[i].spineIndex &&
+                               list[i + 1].startOffset == list[i].startOffset &&
+                               list[i + 1].endOffset == list[i].endOffset &&
+                               list[i + 1].quote == list[i].quote);
     if (lastOfGroup) deduped.push_back(std::move(list[i]));
   }
   list = std::move(deduped);

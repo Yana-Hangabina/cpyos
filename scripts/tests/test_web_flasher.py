@@ -69,6 +69,12 @@ class WebFlasherTest(unittest.TestCase):
         page = (output / 'index.html').read_text()
         self.assertIn('1.6.5-readpico-rc+1234567', page)
         self.assertIn('manifest.json', page)
+        # The dialog must follow the browser language: the shared UI script is
+        # inlined so the bundle stays a single page with no extra request.
+        self.assertIn('CPYOSFlasherUI', page)
+        self.assertIn('html[lang="en"] .zh', page)
+        self.assertIn('连接设备并刷写', page)
+        self.assertIn('Connect and install', page)
 
     def test_missing_asset_is_rejected(self):
         (self.dist / nightly_targets.asset_name('readpico', 'firmware.bin')).unlink()

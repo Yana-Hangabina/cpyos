@@ -295,6 +295,11 @@ void HalGPIO::update() {
   beginInput();
 #endif
   inputMgr.update();
+  // Synthetic taps: promote a queued tap for this frame only. Real release
+  // events also stay visible for a single input update, and several consumers
+  // (Back-gesture probe, then the activity) read them in the same frame.
+  debugTapActive = debugTapArmed;
+  debugTapArmed = false;
   const bool buttonActivity = inputMgr.wasPressed(BTN_BACK) || inputMgr.wasPressed(BTN_CONFIRM) ||
                               inputMgr.wasPressed(BTN_LEFT) || inputMgr.wasPressed(BTN_RIGHT) ||
                               inputMgr.wasPressed(BTN_UP) || inputMgr.wasPressed(BTN_DOWN);
@@ -358,7 +363,20 @@ bool HalGPIO::wasHomeKeyTapped() const { return inputMgr.wasHomeKeyTapped(); }
 
 bool HalGPIO::wasHomeKeyLongPressed() const { return inputMgr.wasHomeKeyLongPressed(); }
 
-bool HalGPIO::wasTouchTap(float& nx, float& ny) const { return inputMgr.wasTouchTap(nx, ny); }
+bool HalGPIO::wasTouchTap(float& nx, float& ny) const {
+  if (debugTapActive) {
+    nx = debugTapNx;
+    ny = debugTapNy;
+    return true;
+  }
+  return inputMgr.wasTouchTap(nx, ny);
+}
+
+void HalGPIO::debugQueueTouchTap(float nx, float ny) const {
+  debugTapNx = nx;
+  debugTapNy = ny;
+  debugTapArmed = true;
+}
 
 bool HalGPIO::wasTouchDown(float& nx, float& ny) const { return inputMgr.wasTouchPressedAt(nx, ny); }
 

@@ -109,6 +109,10 @@ class ReaderToolbarUi : public UiAppHost {
     // Button boards keep the theme's denser list row height (as every other
     // list does there); touch boards use FreeInkUI's finger-sized rows.
     bool denseRows = false;
+  // EPUB's text tool is the fixed 2x4 control grid. Readers that route the
+  // text tool to the full TextSettings page (PDF) offer a single list row
+  // instead; without this the grid drew eight copies of the same label.
+  bool textGrid = true;
   };
 
   struct Routed {

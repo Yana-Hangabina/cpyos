@@ -6,6 +6,10 @@ S="$HERE/mupdf-1.26.3-source"
 TC="${XTENSA_TOOLCHAIN:-$HOME/.platformio/packages/toolchain-xtensa-esp-elf/bin}"
 OUT="${MUPDF_OUT:-build/xtensa_nocjk}"
 
+# Overlay this project's source changes and trim built-in base-14 fonts (see
+# prepare_source.sh).  Works from a stock tarball and on incremental rebuilds.
+bash "$HERE/prepare_source.sh" "$S"
+
 make -C "$S" -j"${JOBS:-8}" OUT="$OUT" libs \
   CC="$TC/xtensa-esp32s3-elf-gcc" \
   CXX="$TC/xtensa-esp32s3-elf-g++" \

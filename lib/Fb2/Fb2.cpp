@@ -1,5 +1,6 @@
 #include "Fb2.h"
 
+#include <BookCachePrune.h>
 #include <Logging.h>
 #include <WeReadStore.h>
 
@@ -1345,8 +1346,7 @@ bool Fb2::writeNcxFile() const {
 }
 
 bool Fb2::clearCache() const {
-  bool success = true;
-  if (Storage.exists(cachePath.c_str())) success = Storage.removeDir(cachePath.c_str()) && success;
-  if (Storage.exists(legacyCachePath.c_str())) success = Storage.removeDir(legacyCachePath.c_str()) && success;
-  return success;
+  // Prune, do not rmtree: annotations/bookmarks/progress live here too (BookCachePrune.h).
+  bool success = book_cache::pruneRegenerable(cachePath);
+  return book_cache::pruneRegenerable(legacyCachePath) && success;
 }

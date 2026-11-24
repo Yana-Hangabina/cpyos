@@ -310,7 +310,7 @@ Applied 2 setting(s)
 
 Lists installed SD-card font families. On devices that load TTF/OTF/TTC files,
 these families appear with `sizes: [0]`. The `0` means that the font file has
-no fixed point size; the reader offers 12, 14, 16, and 18 pt.
+no fixed point size; the reader offers the 10–40 pt ladder.
 
 ```bash
 curl http://crosspoint.local/api/fonts

@@ -14,6 +14,7 @@
 
 #include "CrossPointSettings.h"
 #include "DictionaryDefinitionActivity.h"
+#include "vocabulary/VocabularyStore.h"
 #include "components/UITheme.h"
 
 namespace {
@@ -309,6 +310,10 @@ void DictionaryWordSelectActivity::performLookup() {
     // underneath on the stack. The query, not the headword, is what a re-lookup
     // replays: the displayed headword may be a stem or a synonym target.
     const std::string query = words[selected].text;
+    if (SETTINGS.vocabularyHistoryEnabled && vocabulary_.page != 0 &&
+        !VocabularyStore::append(vocabulary_, query, headword, definition, dict.definitionsAreHtml())) {
+      LOG_ERR("VOCAB", "Could not save successful dictionary lookup");
+    }
     auto activity = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(headword),
                                                                     std::move(definition),
                                                                     dict.definitionsAreHtml());
@@ -348,6 +353,15 @@ void DictionaryWordSelectActivity::performLookup() {
   }
   popupTime = millis();
   requestUpdate();
+}
+
+void DictionaryWordSelectActivity::debugBack() {
+  if (selectOnly) {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+  }
+  finish();
 }
 
 void DictionaryWordSelectActivity::loop() {

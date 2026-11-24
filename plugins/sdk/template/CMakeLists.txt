@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(cpyos_plugin_template)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../ports/metalio_plus/components/elf_loader/elf_loader.cmake")
+project_elf(cpyos_plugin_template)

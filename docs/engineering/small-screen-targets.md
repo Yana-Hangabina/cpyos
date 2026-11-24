@@ -48,6 +48,13 @@ portrait UI frame, so the pressure is the **content box** left after the status,
 title and tab bands — roughly 480×636 on Metalio and 552×604 on A4 versus
 684×1060 on Read Pico.
 
+Reader font sizes follow the same rule rather than a per-device setting:
+`readerPointRangeForPortraitHeight()` in `src/ReaderFontSizes.h` derives the maximum from
+the portrait panel height. Read Pico / Plus (1216 px) expose the full 10–40 pt
+ladder; the 3.97" A4 (768 px) and the 800 px panels cap at 26 pt, and a 1100 px
+panel caps at 36 pt. A future panel only needs its `BoardConfig` metrics; no
+new settings row or board-specific branch is required.
+
 The shared breakpoints live in
 [`src/components/ResponsiveUi.h`](../../src/components/ResponsiveUi.h):
 

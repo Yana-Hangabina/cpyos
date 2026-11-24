@@ -498,6 +498,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
   uint8_t sideButtonLayout = PREV_NEXT;
   uint8_t frontButtonFollowOrientation = 0;
+  uint8_t sideButtonFollowOrientation = 0;
+  // Append successful dictionary lookups to /Vocabulary.txt (upstream #4294).
+  uint8_t vocabularyHistoryEnabled = 0;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.
   uint8_t frontButtonBack = FRONT_HW_BACK;
@@ -530,6 +533,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t verticalBottomAlign = 0;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
   uint8_t sleepTimeoutMinutes = 10;
+  // How long a connected STA may stay idle before NetworkStartup::pollIdle()
+  // releases it. 0 = never auto-release; the UI exposes 0/30/.../240 s.
+  uint8_t wifiIdleTimeoutSeconds = 60;
   // How the reader keeps the status-bar clock current. A per-minute update is a
   // full-page scan on Read Pico, so the power-conscious default only refreshes it
   // when the page is redrawn anyway.
@@ -557,6 +563,24 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // more ghosting (the scheduled GC16 clean still runs).
   uint8_t fastPageTurn = 0;
   uint8_t hyphenationEnabled = 0;
+  // PDF reader only: rejoin hard-wrapped OCR lines and collapse blank runs
+  // before reflow (src/pdf/PdfLineMerge.h). Default off; it is a per-book
+  // readability toggle, not a global typographic preference.
+  // PDF reflow only. Default ON: the reported symptom is pages of ragged
+  // one-line "paragraphs" and runs of blanks, and an option that is off leaves
+  // that in place for every reader until they find the switch. Safe because the
+  // merge is conservative where it matters -- a short line (poetry, table of
+  // contents) still counts as a break, a sentence-final 。/.?! still stops the
+  // merge, and a one-block-per-paragraph extraction comes out byte-identical
+  // (test/pdf_line_merge pins all three, with mutation runs).  De-hyphenation is
+  // separately OFF in pdf_merge::Options, which is what makes this default safe:
+  // joining lines cannot fabricate a word, whereas gluing `and-` + `extraordinarily`
+  // did (docs/engineering/pdf-xip.md). The reader turns the option off per book from
+  // the PDF typography panel, row "智能合并断行".
+  // The fromJson fallback uses this same constant: a key that is simply absent
+  // from an older settings.json must mean "default", not "off".
+  static constexpr uint8_t kPdfSmartLineMergeDefault = 1;
+  uint8_t pdfSmartLineMerge = kPdfSmartLineMergeDefault;
 
   // Reader screen margin settings
   static constexpr uint8_t SCREEN_MARGIN_MIN = 5;
@@ -687,6 +711,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // One-shot first-run map of the reader's tap zones. Persisted so it appears
   // exactly once per device; there is deliberately no "show again" entry.
   uint8_t readerGestureHintSeen = 0;
+  // One-shot notice that the PDF reader turns the radio off while it is open
+  // (it never needs the network, and the Wi-Fi stack is what fragments the
+  // PSRAM that page rendering depends on).  Separate from the gesture hint:
+  // that one is about touch, this one is about a side effect on connectivity.
+  uint8_t pdfWifiHintSeen = 0;
   // Which gestures turn the page in each direction (PAGE_TURN_GESTURE).
   // Default to tap-or-swipe: a plain tap on the left/right third is the most
   // discoverable page turn on a touch panel. Users who mis-tap can switch
@@ -785,6 +814,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // The popup checkbox writes this same field, so every control agrees.
   uint8_t jjwxcSignInReminder = 0;
 
+  static constexpr uint8_t WIFI_IDLE_TIMEOUT_MIN_SECONDS = 0;  // 0 = disabled
+  static constexpr uint8_t WIFI_IDLE_TIMEOUT_MAX_SECONDS = 240;
+  static constexpr uint8_t WIFI_IDLE_TIMEOUT_STEP_SECONDS = 30;
+  static constexpr uint8_t DEFAULT_WIFI_IDLE_TIMEOUT_SECONDS = 60;
+
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;
   static constexpr uint8_t MAX_SLEEP_TIMEOUT_MINUTES = SLEEP_TIMEOUT_NEVER_MINUTES;
@@ -813,6 +847,12 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // profiles persist a built-in size; the high-density profile keeps the saved size
   // and resolves the available 12pt fallback without a settings migration.
   void clearSdFontFamily();
+
+  // Switch to the built-in scalable reader face at `pointSize`. Used when a
+  // fixed .cpfont family does not ship the size the user picked: the size stays,
+  // but the bitmap family no longer owns the page. Does not save; the settings
+  // editor owns the persistence point.
+  void useBuiltinReaderFontAt(uint8_t pointSize);
 
   // Resolved status-bar composition. Consumers read the spec; only settings
   // editors read the raw fields.

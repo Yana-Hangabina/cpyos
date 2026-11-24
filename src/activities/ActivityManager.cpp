@@ -18,7 +18,7 @@
 #include "BootTimings.h"
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/2048/Game2048Activity.h"
 #endif
 #if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
@@ -33,12 +33,12 @@
 #if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
 #include "apps/calculator/CalculatorActivity.h"
 #endif
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/sokoban/SokobanGameActivity.h"
 #endif
 #include "components/SubpageLayout.h"
 #ifdef ENABLE_CHINESE_VERSION
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/chinese-chess/ChineseChessMenuActivity.h"
 #endif
 #endif
@@ -49,10 +49,10 @@
 #endif
 #include "apps/weread/WeReadActivity.h"
 #endif
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/gomoku/GomokuMenuActivity.h"
 #endif
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/minesweeper/MinesweeperMenuActivity.h"
 #endif
 #if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
@@ -61,6 +61,11 @@
 #include "apps/reading-stats/ReadingStatsActivity.h"
 #include "apps/reading-stats/ReadingStatsMenuActivity.h"
 #include "apps/standby/StandbyActivity.h"
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+#include "apps/plugins/PluginActivity.h"
+#include "apps/plugins/PluginsActivity.h"
+#include "plugins/PluginManager.h"
+#endif
 #if defined(CROSSPOINT_PLUS_PORT)
 // Port-local page: the file lives in the Plus component (cpyos_app), which is
 // also what compiles this translation unit.
@@ -68,7 +73,7 @@
 #include "plus_voice_activity.h"
 #include "plus_voice_memo_activity.h"
 #endif
-#if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
+#if !defined(CROSSPOINT_PORT_MINIMAL_APPS) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "apps/sudoku/SudokuMenuActivity.h"
 #endif
 #if !defined(CROSSPOINT_PORT_MINIMAL_APPS)
@@ -629,6 +634,14 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   cancelIdleRender();
   mappedInput.resetHomeButtonInput();
+#if !defined(SIMULATOR)
+  // Same one-gesture-one-action rule as push: the finger that activated the
+  // previous screen must not also tap the incoming one (popup Cancel, panel
+  // Back, library -> reader).
+  gpio.clearTouchTapEvent();
+  mappedInput.suppressScreenTouch();
+#endif
+  standbyBackState = StandbyBackState::Idle;
   standbyBackState = StandbyBackState::Idle;
   if (deferredPush) {
     // A root replacement is the newer intent; do not let an older queued push
@@ -758,6 +771,21 @@ void ActivityManager::goToPlugins(bool showOpds) {
   replaceActivityWith<PluginCatalogActivity>(showOpds, /*rootMode=*/true);
 }
 
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+void ActivityManager::goToNativePlugins() { replaceActivityWith<PluginsActivity>(); }
+
+void ActivityManager::goToNativePlugin(const std::string& id) {
+  // Resolve by id instead of holding a scanned PluginInfo in the app catalog:
+  // the package may have been replaced or removed since the tile was drawn.
+  for (auto& info : native_plugins::scan()) {
+    if (info.id != id || !info.error.empty()) continue;
+    replaceActivityWith<PluginActivity>(std::move(info));
+    return;
+  }
+  goToFullScreenMessage("This plugin is no longer installed.");
+}
+#endif
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
@@ -841,6 +869,7 @@ void ActivityManager::goToReadingStatsMenu() { replaceActivityWith<ReadingStatsM
 
 void ActivityManager::goToReadingStats() { replaceActivityWith<ReadingStatsActivity>(); }
 
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
 void ActivityManager::goToSudoku() {
 #if defined(CROSSPOINT_PORT_MINIMAL_APPS)
   goToFullScreenMessage("This app is not ported to this hardware target yet.");
@@ -872,6 +901,7 @@ void ActivityManager::goToMinesweeper() {
   replaceActivityWith<MinesweeperMenuActivity>();
 #endif
 }
+#endif  // !CROSSPOINT_PLUGIN_RUNTIME
 
 void ActivityManager::goToPixelSwitch() {
 #if defined(CROSSPOINT_PORT_MINIMAL_APPS)
@@ -903,6 +933,7 @@ void ActivityManager::goToWoodfish() {
 #endif
 }
 
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
 void ActivityManager::goToGame2048() {
 #if defined(CROSSPOINT_PORT_MINIMAL_APPS)
   goToFullScreenMessage("This app is not ported to this hardware target yet.");
@@ -910,6 +941,7 @@ void ActivityManager::goToGame2048() {
   replaceActivityWith<Game2048Activity>();
 #endif
 }
+#endif  // !CROSSPOINT_PLUGIN_RUNTIME
 
 void ActivityManager::goToAirPage() {
 #if defined(CROSSPOINT_PORT_MINIMAL_APPS)
@@ -937,6 +969,9 @@ void ActivityManager::goToStandby() {
       (deferredPush && deferredPush->name == "Standby")) {
     return;
   }
+  LOG_INF("ACT", "standby requested from %s (stack=%zu held=%lu)",
+          currentActivity ? currentActivity->debugName() : "none", stackActivities.size(),
+          static_cast<unsigned long>(gpio.getPowerButtonHeldTime()));
   auto activity = makeUniqueNoThrow<StandbyActivity>(renderer, mappedInput);
   if (!activity) {
     LOG_ERR("ACT", "OOM: standby");
@@ -946,6 +981,7 @@ void ActivityManager::goToStandby() {
 }
 
 #ifdef ENABLE_CHINESE_VERSION
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
 void ActivityManager::goToChineseChess() {
 #if defined(CROSSPOINT_PORT_MINIMAL_APPS)
   goToFullScreenMessage("This app is not ported to this hardware target yet.");
@@ -953,6 +989,7 @@ void ActivityManager::goToChineseChess() {
   replaceActivityWith<ChineseChessMenuActivity>();
 #endif
 }
+#endif  // !CROSSPOINT_PLUGIN_RUNTIME
 #endif
 
 #ifdef ENABLE_CHINESE_VERSION
@@ -994,9 +1031,42 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   pendingAction = PendingAction::Push;
 }
 
+std::vector<std::string> ActivityManager::debugActivityNames() const {
+  std::vector<std::string> out;
+  if (currentActivity) out.push_back(currentActivity->debugName());
+  for (auto it = stackActivities.rbegin(); it != stackActivities.rend(); ++it)
+    if (*it) out.push_back((*it)->debugName());
+  return out;
+}
+
+bool ActivityManager::hasActivityNamed(const char* name) const {
+  if (name == nullptr) return false;
+  // ★ debugName() returns const char*; comparing it with == compares pointers.
+  // That made the old hasStackedActivity() permanently false (it "worked" only
+  // for the foreground test, which wraps the pointer in a std::string first).
+  if (currentActivity != nullptr && std::strcmp(currentActivity->debugName(), name) == 0) return true;
+  return hasStackedActivity(name);
+}
+
+bool ActivityManager::hasStackedActivity(const char* name) const {
+  if (name == nullptr) return false;
+  return std::any_of(stackActivities.begin(), stackActivities.end(),
+                     [name](const auto& activity) {
+                       return activity != nullptr && std::strcmp(activity->debugName(), name) == 0;
+                     });
+}
+
 void ActivityManager::popActivity() {
   cancelIdleRender();
   mappedInput.resetHomeButtonInput();
+#if !defined(SIMULATOR)
+  // Same one-gesture-one-action rule as push: the finger that activated the
+  // previous screen must not also tap the incoming one (popup Cancel, panel
+  // Back, library -> reader).
+  gpio.clearTouchTapEvent();
+  mappedInput.suppressScreenTouch();
+#endif
+  standbyBackState = StandbyBackState::Idle;
   standbyBackState = StandbyBackState::Idle;
   if (pendingAction.load() != PendingAction::None || pendingActivity) {
     // The activity that asked to pop is already being replaced or popped;

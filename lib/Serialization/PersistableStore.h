@@ -105,7 +105,9 @@ class PersistableStore : public PersistableStoreBase {
     // the line feeder for longer than its cushion if it lands mid-scan. Waiting
     // (bounded) for the scan in flight costs at most one frame and removes that
     // overlap; the barrier is a no-op on panels that never report a scan.
+#if !defined(SIMULATOR)
     display.waitForScanIdle();
+#endif
     std::lock_guard<std::mutex> lock(storeMutex);
     JsonDocument doc;
     static_cast<const T*>(this)->toJson(doc);

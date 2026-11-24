@@ -108,8 +108,32 @@ bool writeFile(const char* path, const void* data, size_t size) {
     return false;
   }
   if (!Storage.replaceFile(tmp, path)) {
-    Storage.remove(tmp);
-    return false;
+    // The Plus FAT rejects the remove+rename pair while the target exists (the
+    // engine installer sees the same thing). Retry with an explicit remove, and
+    // as a last resort overwrite in place: the caller re-validates size + CRC.
+    Storage.remove(path);
+    if (!Storage.rename(tmp, path)) {
+      HalFile src;
+      HalFile dst;
+      if (!Storage.openFileForRead("CORE", tmp, src) || !Storage.openFileForWrite("CORE", path, dst)) {
+        if (src) src.close();
+        Storage.remove(tmp);
+        return false;
+      }
+      uint8_t buffer[4096];
+      bool copied = true;
+      int got = 0;
+      while ((got = src.read(buffer, sizeof(buffer))) > 0) {
+        if (dst.write(buffer, static_cast<size_t>(got)) != got) {
+          copied = false;
+          break;
+        }
+      }
+      src.close();
+      dst.close();
+      Storage.remove(tmp);
+      if (!copied) return false;
+    }
   }
   return true;
 }

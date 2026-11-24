@@ -30,11 +30,24 @@ class PdfDocument {
   int pageCount() const { return pageCount_; }
   bool pageHasText(int page);
 
+  /// Password handling.  The password stays in RAM for this document only; it
+  /// is needed again whenever a page render resets and reopens the MuPDF
+  /// context.  Call setPassword() before load().
+  void setPassword(std::string password) { password_ = std::move(password); }
+  bool needsPassword() const { return passwordRequired_; }
+  bool wrongPassword() const { return passwordWrong_; }
+
   /// Extracts the page's text as paragraphs for the reflow path.  Returns false
   /// when there is no extractable text.  `hasImages` is set when the page draws
   /// images, in which case the caller must keep the bitmap rendering (figures
   /// and tables would be lost by reflowing).
   bool extractText(int page, std::vector<std::string>& paragraphs, bool& hasImages);
+
+  /// Whether extractText() may split one MuPDF text block into several paragraphs
+  /// (src/pdf/PdfLineJoin.h).  This is the reader's 智能合并断行 option; it is set
+  /// before load() and re-sent by load(), because opening a document -- including a
+  /// reopen after a wrong password -- creates fresh engine-side state.
+  void setParagraphSplit(bool enabled);
 
   struct OutlineEntry {
     std::string title;
@@ -64,11 +77,21 @@ class PdfDocument {
   void loadOutline();
 
   std::string path_;
+  std::string password_;
+  bool passwordRequired_ = false;
+  bool passwordWrong_ = false;
   fz_context* ctx_ = nullptr;
   fz_document* doc_ = nullptr;
   fz_stream* stream_ = nullptr;
   int pageCount_ = 0;
   bool useDisplayList_ = false;
+  bool splitParagraphs_ = true;  // matches SETTINGS.pdfSmartLineMerge's shipped default
+  // The bitmap path asks for the page's text to decide whether to crop white
+  // margins.  Reflow has usually just extracted the same page; reuse that
+  // result instead of paying a second 5–10 s stext pass (page 60 of the
+  // stress book was doing exactly that).
+  int lastTextPage_ = -1;
+  size_t lastTextChars_ = 0;
   std::vector<OutlineEntry> outline_;
 };
 

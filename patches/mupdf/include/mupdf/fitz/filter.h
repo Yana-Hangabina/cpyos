@@ -116,7 +116,7 @@ fz_stream *fz_open_rld(fz_context *ctx, fz_stream *chain);
 	jpegtables is an optional stream from which the JPEG tables
 	can be read. Use NULL if not required.
 */
-fz_stream *fz_open_dctd(fz_context *ctx, fz_stream *chain, int color_transform, int invert_cmyk, int l2factor, fz_stream *jpegtables);
+fz_stream *fz_open_dctd(fz_context *ctx, fz_stream *chain, int color_transform, int invert_cmyk, int gray, int l2factor, fz_stream *jpegtables);
 
 /**
 	faxd filter performs FAX decoding of data read from

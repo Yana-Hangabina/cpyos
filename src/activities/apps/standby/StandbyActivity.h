@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "StandbyFace.h"
 #include "activities/Activity.h"
 
-struct ActivityResult;
 
 /* Bench-only: paint the light-sleep badge on the standby face without parking
  * the CPU, so the badge's text and placement can be screenshotted over USB. */
@@ -48,6 +50,9 @@ class StandbyActivity final : public Activity {
     Delayed,
     WifiConnecting,
     ClockSyncing,
+    // Silent connection was attempted and failed (or no saved network was
+    // visible). The face says so instead of showing a permanent "Syncing…".
+    Unavailable,
   };
 
   enum class Phase : uint8_t {
@@ -78,10 +83,17 @@ class StandbyActivity final : public Activity {
 
   void startTimeSync();
   bool trySilentWifiConnect();
-  void promptForWifi();
-  void onWifiResult(const ActivityResult& result);
+  bool tryNextSilentCandidate();
   void beginClockSync();
   void pumpTimeSync();
   void stopTimeSyncWifi();
   void completeTimeSync();
+  void markTimeSyncUnavailable();
+
+  // Candidate networks discovered during the standby-only silent connect.
+  // Stored as plain pairs so this header does not pull the credential store
+  // (and ArduinoJson) into every translation unit.
+  std::vector<std::pair<std::string, std::string>> silentCandidates_;
+  size_t silentCandidateIndex_ = 0;
+  bool silentNetworkHold_ = false;
 };

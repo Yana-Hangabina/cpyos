@@ -125,6 +125,11 @@ void TextSettingsActivity::onEnter() {
     RenderLock lock(*this);
     sdFontSystem.ensureLoaded(renderer, false);
   }
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // A fixed family's fallback size needs its built-in face before the sample
+  // renders; typography::apply is a no-op when the face set is unchanged.
+  typography::apply(renderer, SETTINGS.uiFontScale);
+#endif
 
   metrics_ = UITheme::getInstance().getMetrics();
   // Everything below is measured from the safe rect: in landscape (or on a board
@@ -271,9 +276,12 @@ void TextSettingsActivity::rebuildSizeList() {
   currentSizeIndex_ = 0;
   for (const uint8_t pt : points) {
     // "pt" is deliberately not translated: it is the typographic unit symbol,
-    // written the same way in every language CrossPoint ships.
-    char label[12];
-    snprintf(label, sizeof(label), "%u pt", pt);
+    // written the same way in every language CrossPoint ships. A fixed
+    // .cpfont cannot rasterize the scalable tail, so those rows say they will
+    // use the built-in face; selecting one switches the family.
+    const bool native = readerFontPointSizeIsNative(registry_, SETTINGS.sdFontFamilyName, pt);
+    char label[32];
+    snprintf(label, sizeof(label), "%u pt%s", pt, native ? "" : tr(STR_FONT_SYSTEM_SUFFIX));
     if (pt == selectedPt) currentSizeIndex_ = static_cast<int>(sizes_.size());
     sizes_.push_back({label, pt});
   }
@@ -651,7 +659,14 @@ void TextSettingsActivity::drawFooter() {
     renderer.drawRoundedRect(rx, listTop_, rw, drawH, 2, 20, true);
   }
 
-  if (focusedRowHasNoPreview()) {
+  if (tab_ == Tab::Size && readerFontHasSystemSizeFallback(registry_, SETTINGS.sdFontFamilyName)) {
+    // The list marks fallback rows with the suffix; state once what that means.
+    // This is the only place the distinction matters, so it does not add a row
+    // (or another permanently-scrolling line) to the picker.
+    const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
+    const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
+    renderer.drawText(UI_10_FONT_ID, metrics_.previewPadding, capY, tr(STR_FONT_FIXED_NOTE));
+  } else if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     const int capY = afterHeader + usableHeight - captionHeight + metrics_.verticalSpacing;
     renderer.drawText(UI_10_FONT_ID, metrics_.previewPadding, capY, tr(STR_NOT_IN_PREVIEW));
@@ -759,13 +774,40 @@ void TextSettingsActivity::activateRow(int row) {
 void TextSettingsActivity::applySize(int listIndex) {
   RenderLock lock;
 
+  const uint8_t pointSize = sizes_[listIndex].pointSize;
+  const bool useSystemFace = !readerFontPointSizeIsNative(registry_, SETTINGS.sdFontFamilyName, pointSize);
+  if (useSystemFace) {
+    // Do not leave the Font tab naming a bitmap family that cannot render the
+    // chosen size. The size survives; the face becomes the built-in scalable one.
+    SETTINGS.useBuiltinReaderFontAt(pointSize);
+    int firstBuiltin = -1;
+    for (int i = 0; i < static_cast<int>(fonts_.size()); ++i) {
+      if (!fonts_[i].isBuiltin) continue;
+      if (firstBuiltin < 0) firstBuiltin = i;
+      if (fonts_[i].settingIndex == SETTINGS.fontFamily) {
+        currentFamilyIndex_ = i;
+        firstBuiltin = i;
+        break;
+      }
+    }
+    if (firstBuiltin >= 0 && (!fonts_[currentFamilyIndex_].isBuiltin)) currentFamilyIndex_ = firstBuiltin;
+  } else {
+    SETTINGS.fontPointSize = pointSize;
+  }
   currentSizeIndex_ = listIndex;
-  SETTINGS.fontPointSize = sizes_[listIndex].pointSize;
   if (SETTINGS.sdFontFamilyName[0] != '\0') SETTINGS.sdFontFlashPreload = 0;
   sdFontSystem.ensureLoaded(renderer);
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
   typography::apply(renderer, SETTINGS.uiFontScale);
 #endif
+  if (useSystemFace) {
+    // The Size tab now lists the built-in ladder; keep both tabs on the row the
+    // user just picked instead of leaving a stale index in the old family list.
+    rebuildSizeList();
+    rebuildRowItems();
+    tabNavs[static_cast<int>(Tab::Size)].selected = currentSizeIndex_ + 1;
+    tabNavs[static_cast<int>(Tab::Family)].selected = currentFamilyIndex_ + 1;
+  }
 }
 
 void TextSettingsActivity::confirmLayoutRow(int row) {

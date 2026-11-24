@@ -15,6 +15,7 @@
 #include "esp_memory_utils.h"
 #include "esp_psram.h"
 #include "esp_random.h"
+#include "esp_rom_sys.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -92,6 +93,10 @@ inline unsigned long micros() {
 
 inline void delay(unsigned long ms) {
   vTaskDelay(pdMS_TO_TICKS(ms));
+}
+
+inline void delayMicroseconds(unsigned long us) {
+  esp_rom_delay_us(static_cast<uint32_t>(us));
 }
 
 inline void yield() { taskYIELD(); }

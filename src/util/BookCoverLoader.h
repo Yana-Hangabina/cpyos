@@ -23,6 +23,10 @@ const CachedThumbFile* thumbFile(const std::string& path);
 // Best-effort: reads `path` into the cache (bounded size). Never fatal.
 const CachedThumbFile* cacheThumbFile(const std::string& path);
 void clearThumbFileCache();
+// Drop the failed-conversion memo: a book may have been replaced even when its
+// size did not change. Call after the library index changed or the card was
+// remounted; a reboot clears it implicitly.
+void clearCoverFailures();
 
 enum class CachedCoverState { Missing, Ready, Terminal };
 

@@ -16,7 +16,7 @@
 
 namespace {
 constexpr i2c_port_t kPort = I2C_NUM_1;
-constexpr int kTimeoutMs = 100;
+
 }  // namespace
 
 void TwoWire::beginTransmission(uint8_t address) {
@@ -35,11 +35,11 @@ uint8_t TwoWire::endTransmission(bool stop) {
     if (txLen_ == 0) {
         return 2;
     }
-    if (!metalio_i2c1_lock(kTimeoutMs)) {
+    if (!metalio_i2c1_lock(static_cast<int>(timeout_ms_))) {
         txLen_ = 0;
         return 2;
     }
-    const esp_err_t err = metalio_i2c1_transmit_locked(kPort, txAddr_, tx_, txLen_, kTimeoutMs);
+    const esp_err_t err = metalio_i2c1_transmit_locked(kPort, txAddr_, tx_, txLen_, static_cast<int>(timeout_ms_));
     metalio_i2c1_unlock();
     txLen_ = 0;
     return err == ESP_OK ? 0 : 2;
@@ -65,20 +65,20 @@ uint8_t TwoWire::requestFrom(uint8_t address, uint8_t len, bool) {
     if (len == 0 || len > kBufferSize) {
         return 0;
     }
-    if (!metalio_i2c1_lock(kTimeoutMs)) {
+    if (!metalio_i2c1_lock(static_cast<int>(timeout_ms_))) {
         return 0;
     }
     esp_err_t err;
     if (pendingWrite_ && txLen_ == 1 && address == txAddr_) {
         // Repeated start: register pointer then read.
-        err = metalio_i2c1_transmit_receive_locked(kPort, address, tx_, 1, rx_, len, kTimeoutMs);
+        err = metalio_i2c1_transmit_receive_locked(kPort, address, tx_, 1, rx_, len, static_cast<int>(timeout_ms_));
     } else if (pendingWrite_ && txLen_ > 0 && address == txAddr_) {
-        err = metalio_i2c1_transmit_locked(kPort, address, tx_, txLen_, kTimeoutMs);
+        err = metalio_i2c1_transmit_locked(kPort, address, tx_, txLen_, static_cast<int>(timeout_ms_));
         if (err == ESP_OK) {
-            err = metalio_i2c1_receive_locked(kPort, address, rx_, len, kTimeoutMs);
+            err = metalio_i2c1_receive_locked(kPort, address, rx_, len, static_cast<int>(timeout_ms_));
         }
     } else {
-        err = metalio_i2c1_receive_locked(kPort, address, rx_, len, kTimeoutMs);
+        err = metalio_i2c1_receive_locked(kPort, address, rx_, len, static_cast<int>(timeout_ms_));
     }
     metalio_i2c1_unlock();
     pendingWrite_ = false;

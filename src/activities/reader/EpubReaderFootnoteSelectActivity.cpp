@@ -120,7 +120,10 @@ bool EpubReaderFootnoteSelectActivity::drawHighlightWithSnapshot() {
   snapshotH = static_cast<int16_t>(hh);
   snapshotIdx = saved ? selected : -1;
 
-  renderer.fillRect(hx, hy, hw, hh, true);
+  // Outline, never a filled block: the reference text must stay readable under
+  // the highlight (upstream #4385 made the same point with a dithered fill; an
+  // outline needs no new renderer primitive and preserves antialiased glyphs).
+  renderer.drawRect(hx - 2, hy - 2, hw + 4, hh + 4, 2, true);
   // Draw a small marker (the footnote number) at the highlight position
   const char* number = footnoteLinks[selected].footnote->number;
   if (number[0]) {

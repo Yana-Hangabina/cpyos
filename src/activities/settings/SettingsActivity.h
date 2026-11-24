@@ -30,11 +30,13 @@ enum class SettingAction {
   RestoreSystemSettings,
   CheckForUpdates,
   SdFirmwareUpdate,
+  PlusResources,
   ScreenRepair,
   Language,
   DownloadFonts,
   DownloadFontExtras,
   ManageDictionaries,
+  VocabularyHistory,
   TextSettings,
   About,
   Plugins,
@@ -44,6 +46,9 @@ enum class SettingAction {
   StandbyImage,
   LightSleepImage,
   DeepSleepImage,
+  // readpico_pdf (XIP) only: install/update the MuPDF engine from an SD image
+  // without reflashing (row and dispatch guarded by CROSSPOINT_PDF_XIP).
+  PdfEngine,
   // Metalio E-INK4 Plus only: the BH1098G Bluetooth audio page (row guarded by
   // CROSSPOINT_PLUS_PORT in SettingsList.h).
   BluetoothAudio,

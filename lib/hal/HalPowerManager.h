@@ -9,6 +9,7 @@
 #include <cassert>
 
 #include "HalGPIO.h"
+#include "BatterySocFilter.h"
 
 class HalPowerManager;
 extern HalPowerManager powerManager;  // Singleton
@@ -19,6 +20,12 @@ class HalPowerManager {
 
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage (0-100)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
+  // Read Pico display filter (see BatterySocFilter.h): the PMU's SoC is the only
+  // source; this only keeps it steady. Every other board reports raw readings.
+  mutable BatterySocFilter _batterySocFilter;
+  mutable bool _batteryEverKnown = false;  // a valid level has been read this session
+  mutable bool _batteryTelemetryValid = false;
+  mutable uint8_t _batteryChargeState = 0;   // PMU charge_state of the last poll
 
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
@@ -70,8 +77,26 @@ class HalPowerManager {
   // Raw esp_err_t from the last light-sleep failure (0 when none).
   static int lastLightSleepError();
 
-  // Get battery percentage (range 0-100)
+  // Get battery percentage (range 0-100). Polls the gauge when the 1.5 s
+  // throttle allows, so callers that need a reading (low-battery guards, OTA)
+  // still work; chrome must use batteryDisplayPercent() instead so sampling
+  // stays on the main loop.
   uint16_t getBatteryPercentage() const;
+
+  // Cached display level, no sampling: safe to call from the render task.
+  uint16_t batteryDisplayPercent() const;
+
+  // False only until the first valid reading has been seen in this session.
+  // A transient PMU miss after that keeps the last known level instead of
+  // blinking a placeholder; the chrome draws an empty capsule (no digits) when
+  // this is false, matching the vendor firmware's cleared percentage label.
+  bool batteryPercentageKnown() const;
+
+  // True while the battery is actually taking charge (Read Pico: the PMU's
+  // charge-state says charging and the pack is not full). Falls back to USB
+  // presence on boards that do not report a charge state, so the bolt is never
+  // shown on a full pack.
+  bool isBatteryCharging() const;
 
   // Raw pack telemetry for diagnostics (mV / PMU SOC / charge state). `valid`
   // is false on boards without a PMU or when the read/CRC fails.

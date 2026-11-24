@@ -8,6 +8,9 @@ class HalDisplay {
  public:
   using Controller = BoardConfig::DisplayController;
   Controller getController() const;
+  // Runtime-identified controller (probe result), or nullptr when the panel
+  // never reported one. Static board profiles can lag behind runtime detection.
+  const char* getControllerName() const;
 
   using GrayscaleMode = freeink::GrayscaleMode;
   using GrayscaleCapabilities = freeink::GrayscaleCapabilities;

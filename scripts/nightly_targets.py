@@ -100,8 +100,8 @@ TARGETS = {
         'environments': {'nightly': 'readpico_nightly'},
         'supportedChannels': ['nightly'],
         'fullInstall': True,
-        # 7.19 MiB OTA slots for MuPDF; the C3 targets keep the shared 6.25 MiB table.
-        'partitionsCsv': 'partitions_readpico.csv',
+        # XIP PDF layout: 6.0 MiB app slots + 1.875 MiB pdfmod + 2.0 MiB spiffs.
+        'partitionsCsv': 'partitions_readpico_xip.csv',
     },
 }
 

@@ -154,6 +154,10 @@ void MyActivity::onEnter() {
   if (initialTab_ >= 0 && initialTab_ < kTabCount) tab_ = static_cast<Tab>(initialTab_);
   initialTab_ = -1;
   toolSelected_ = 0;
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  // Installed native plugins are part of the tool drawer, not a second launcher.
+  app_catalog::refreshPlugins();
+#endif
   storageKnown_ = HalStorage::getInstance().getSpace(storageTotalBytes_, storageFreeBytes_);
 #if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
   signInReminder_.maybeShow(renderer, mappedInput);
@@ -497,19 +501,19 @@ void MyActivity::drawTools() {
   if (toolSelected_ >= count) toolSelected_ = count > 0 ? count - 1 : 0;
   for (int i = 0; i < count; ++i) {
     const Rect cell = toolCellRect(i);
-    StrId title = StrId::STR_NONE_OPT;
+    const char* title = nullptr;
     UIIcon icon = UIIcon::File;
     const freeink::Icon* maskIcon = nullptr;
     if (i == 0) {
-      title = StrId::STR_JOIN_NETWORK;
+      title = tr(STR_JOIN_NETWORK);
       icon = UIIcon::Wifi;
     } else if (i == 1) {
-      title = StrId::STR_BROWSE_FILES;
+      title = tr(STR_BROWSE_FILES);
       icon = UIIcon::File;
     } else if (i < 2 + visibleApps) {
       const int appIndex = app_catalog::visibleToAppIndex(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers(), i - 2);
       if (appIndex < 0) continue;
-      title = app_catalog::at(appIndex).titleId;
+      title = app_catalog::title(appIndex);
       icon = app_catalog::at(appIndex).icon;
       // InxAppIcons has no UIIcon::Image entry (its switch falls through to
       // nullptr), so a catalog row that asks for the image glyph would draw no
@@ -530,7 +534,7 @@ void MyActivity::drawTools() {
       }
 #endif
     } else {
-      title = StrId::STR_PLUGIN_DIRECTORY;
+      title = tr(STR_PLUGIN_DIRECTORY);
       maskIcon = &icon_blocks_48;
     }
 
@@ -552,7 +556,7 @@ void MyActivity::drawTools() {
     } else {
       InxAppIcons::drawSized(renderer, icon, cell.x + (cell.width - kIconPx) / 2, iconY, kIconPx, false);
     }
-    const std::string label = renderer.truncatedText(UI_10_FONT_ID, I18N.get(title), cell.width - 8);
+    const std::string label = renderer.truncatedText(UI_10_FONT_ID, title, cell.width - 8);
     const int labelW = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
     renderer.drawText(UI_10_FONT_ID, cell.x + (cell.width - labelW) / 2, labelY, label.c_str());
   }
@@ -723,6 +727,9 @@ void MyActivity::drawSettings() {
 // ------------------------------------------------------------------- Loop --
 void MyActivity::activateTab(const Tab tab) {
   tab_ = tab;
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  if (tab == Tab::Tools) app_catalog::refreshPlugins();
+#endif
   requestUpdate();
 }
 
@@ -744,7 +751,7 @@ void MyActivity::openTool(const int index) {
   }
   if (index >= 2 && index < 2 + visibleApps) {
     const int appIndex = app_catalog::visibleToAppIndex(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers(), index - 2);
-    if (appIndex >= 0 && app_catalog::at(appIndex).open != nullptr) app_catalog::at(appIndex).open();
+    if (appIndex >= 0) app_catalog::activate(appIndex);
     return;
   }
   openSettingsCategory(3);
@@ -821,7 +828,7 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
       if (i == 0) {
         activityManager.pushActivity(
             std::make_unique<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false,
-                                                    /*keepRadioOnExit=*/false));
+                                                    /*keepRadioOnExit=*/true));
       } else if (i == 1) {
         activityManager.pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput));
       } else {
@@ -883,6 +890,15 @@ void MyActivity::debugConfirm() {
 }
 
 void MyActivity::loop() {
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  // Installing/removing through the plugin manager marks the catalog stale.
+  // Pop back into this page does not call onEnter(), so refresh here before a
+  // render can use the old row count.
+  if (tab_ == Tab::Tools && app_catalog::pluginsDirty()) {
+    app_catalog::refreshPlugins();
+    requestUpdate();
+  }
+#endif
 #if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
   if (signInReminder_.handleInput(mappedInput, [this] { requestUpdate(); })) return;
 #endif

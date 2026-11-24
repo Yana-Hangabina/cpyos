@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -824,6 +825,12 @@ bool AirPageActivity::consumeInputReleaseBarrier() {
 }
 
 void AirPageActivity::doFetch() {
+  // Full speed for the transfer: the governor drops to 80 MHz after
+  // three seconds without input, and a download produces none of its own
+  // (measured on the OTA path as ~4 KB/s).  quiet: a render pass holding
+  // the lock is a cost, not an error.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   if (!connection_.wifiConnected()) {
     applyConnectionEvent(connection_.handleWifiFailure());
     return;

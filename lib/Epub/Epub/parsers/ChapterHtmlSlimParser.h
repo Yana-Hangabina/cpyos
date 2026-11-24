@@ -12,14 +12,19 @@
 #include <vector>
 
 #include "Epub/FootnoteEntry.h"
+#include "Epub/PageBreakPolicy.h"
 #include "Epub/PageLink.h"
 #include "Epub/ParsedText.h"
+#include "Epub/blocks/BlockFontProvider.h"
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssStyle.h"
 
 class Page;
+class PageBorderBox;
+class PageDropCap;
+class PageElement;
 class GfxRenderer;
 class Epub;
 
@@ -36,6 +41,10 @@ class ChapterHtmlSlimParser {
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
   int italicUntilDepth = INT_MAX;
+  // Depth of an open h1-h6, INT_MAX outside one. Blocks started inside it are
+  // not hyphenated: a title split across lines mid-word reads badly.
+  int headingDepth = INT_MAX;
+  bool blockHyphenationEnabled() const { return hyphenationEnabled && headingDepth == INT_MAX; }
   // buffer for building up words from characters, will auto break if longer than this
   // leave one char at end for null pointer
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
@@ -65,6 +74,54 @@ class ChapterHtmlSlimParser {
   // cursor per cell, so the plain line count/bottom math does not describe them
   // (upstream 9a7e6b35).
   bool currentPageHasGridTable = false;
+  // Page-break carry state (layout milestone M3). A page hands whole trailing text
+  // lines to the next one so a paragraph never ends with an orphan or opens with a
+  // widow, and a heading travels with the block it introduces. See PageBreakPolicy.h
+  // for the decision itself; nothing here is serialized.
+  ParsedText* layoutParagraph = nullptr;  // block being laid out, if any
+  uint8_t paragraphLinesOnPage = 0;       // of that block, already on this page
+  uint8_t keepWithNextLines = 0;          // heading lines waiting for the next block
+  // Offsets of the page's trailing lines, and how many footnotes each already had
+  // when it was pushed, so carried lines restore the next page's start position and
+  // take their footnotes with them. Bounded by the carry limit: 30 bytes, no heap.
+  std::array<uint32_t, page_break_policy::kMaxCarriedLines> recentLineOffsets{};
+  std::array<uint8_t, page_break_policy::kMaxCarriedLines> recentFootnoteStarts{};
+  size_t recentLineCount = 0;
+  bool pendingPageBreak = false;  // a block just closed with page-break-after
+  // Box decoration of the block being laid out (layout milestone M4b). The element is
+  // appended just before the block's first line on a page -- after the page-break
+  // decision, so it never needs an existing element index shifted -- and its height is
+  // filled in when the block, or the part of it that fits, reaches its last line. At
+  // most one box per block per page; the box only exists in horizontal writing.
+  struct BorderBoxState {
+    PageBorderBox* element = nullptr;
+    int16_t top = 0;
+    uint8_t bottomEdge = 0;
+  } borderBox;
+  // The block's box was cut by a page break, so its continuation omits the top edge.
+  // Cleared when a new block starts laying out.
+  bool borderBoxContinues = false;
+  // Drop cap of the block being laid out (layout milestone M6). The block's first
+  // visible character becomes a scaled page element, and the block's first lines are
+  // laid out to its right. Everything here stays zero for a block whose ::first-letter
+  // rule does not ask for one, so plain paragraphs lay out exactly as before.
+  struct DropCapState {
+    uint32_t codepoint = 0;
+    char utf8[5] = {};
+    uint8_t utf8Len = 0;
+    uint16_t scale256 = 0;  // 0 = this block has no cap
+    uint16_t width = 0;     // scaled ink box of the glyph
+    uint16_t height = 0;
+    int32_t faceId = 0;  // 0 = the section's reader face
+    uint8_t lines = 0;   // text lines the glyph spans
+    bool letterPending = true;  // the block's first character is still to be taken
+    bool emitPending = false;   // the element still has to be placed on a page
+    PageDropCap* element = nullptr;
+    PageElement* line = nullptr;  // the PageLine the cap sits next to
+  } dropCap;
+  uint16_t pendingDropCapScale = 0;  // request of the element being opened
+  bool dropCapLogged = false;        // one line per section, not per paragraph
+  bool verticalText = false;  // boxes have no column mapping, so vertical layout emits none
   int fontId;
   float lineCompression;
   uint8_t extraParagraphSpacing;  // 0=off, 1..5=0.5x/0.75x/1x/1.25x/1.5x line height
@@ -80,6 +137,10 @@ class ChapterHtmlSlimParser {
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   const CssParser* cssParser;
+  // Optional: resolves a block's CSS font scale to a renderer face. Null keeps every
+  // block on `fontId` (reader size), which is what host tests and the dictionary
+  // preview use.
+  BlockFontProvider* blockFonts = nullptr;
   bool embeddedStyle;
   bool collectTouchLinks;
   uint8_t imageRendering;
@@ -101,10 +162,35 @@ class ChapterHtmlSlimParser {
     CssTextAlign textAlign = CssTextAlign::Left;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
+    bool hasSmallCaps = false, smallCaps = false;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
   CssStyle currentCssStyle;
+
+  // Whole-block sizing heuristic (upstream 0305aaa6): a sizing span that opens a block
+  // and holds all of its text sizes the whole block, e.g.
+  // <p><span class="big">Chapter One</span></p>. Body text following the span cancels
+  // it, because then only the span's own words should have been large. Parser-only:
+  // the resolved scale is folded into BlockStyle::fontScale when the block is laid out.
+  struct InlineSizeState {
+    float scale = 1.0f;
+    int depth = -1;  // outermost sizing span
+    bool valid = false;
+    bool open = false;
+  } inlineSize;
+
+  // Per-word faces (layout milestone M5b). An inline `font-size` that resolves to another
+  // face records it here for the words added while that element is open; the entries nest,
+  // so the innermost open run wins. Empty for a book without inline sizes.
+  struct InlineFontRun {
+    int depth = 0;
+    int32_t fontId = 0;
+    float scale = 1.0f;  // this run's size, the parent of a nested one
+  };
+  std::vector<InlineFontRun> inlineFontStack;
+  int32_t effectiveWordFontId = 0;
+  void beginInlineFontRun(const char* name, const CssStyle& cssStyle);
 
   // Open-element identities for descendant/child selector matching (upstream 0305aaa6).
   // Indexed by parser depth: entry [depth] is written when that element opens, so the valid
@@ -136,6 +222,7 @@ class ChapterHtmlSlimParser {
   bool effectiveTextAlignDefined = false;
   CssTextAlign effectiveTextAlign = CssTextAlign::Left;
   bool effectiveSup = false;
+  bool effectiveSmallCaps = false;
   bool effectiveSub = false;
   static constexpr size_t MAX_GRID_TABLE_COLUMNS = 4;
   static constexpr size_t MAX_GRID_TABLE_CELL_WORDS = 32;
@@ -238,6 +325,43 @@ class ChapterHtmlSlimParser {
   void setCurrentPageVisibleOffset(uint32_t offset);
   bool allocatePage();
   void makePages();
+  // Honour page-break-after from the block that just closed and page-break-before on
+  // the block about to place content. A break never emits a blank page.
+  void applyPendingPageBreak();
+  [[nodiscard]] page_break_policy::Carry linesToCarry() const;
+  [[nodiscard]] bool canCarry(size_t lines) const;
+  // Complete the page, moving its trailing `carry.lines` text lines and their link
+  // areas to the top of the next page with their spacing intact.
+  void breakPageCarryingLines(page_break_policy::Carry carry, uint32_t visibleOffset);
+  // Fold this element's font-size (or the browser default for <h1>..<h6>) into the
+  // block style, clamped to the reader's supported 0.5x..3x range.
+  void applyBlockFontScale(BlockStyle& blockStyle, const CssStyle& cssStyle, const char* tagName) const;
+  // Resolve the scale the block being laid out should use, and record the chosen face
+  // in its BlockStyle. Returns the font id to lay the block out with (always valid:
+  // falls back to the section font).
+  int prepareBlockFont(ParsedText& text, float scale);
+  // Append the block's box before its first line on this page; returns false only on OOM.
+  bool openBorderBox(const BlockStyle& blockStyle);
+  // Fill in the box height at the block's last line on this page; a `cutBottom` close
+  // is a page break and drops the bottom edge. A box left without lines is dropped.
+  void closeBorderBox(int16_t bottom, bool cutBottom);
+  void dropBorderBox();
+  // Read an element's ::first-letter font-size as a drop-cap request: at least twice the
+  // block's own size and clamped to the 2x..3x the primitive draws well.
+  void requestDropCap(const CssStyle& firstLetterStyle, float blockScale);
+  // Hand the pending request to the block that is about to start.
+  void applyPendingDropCap();
+  // Take the block's first visible character out of the pending word for the cap.
+  bool consumeDropCapLetter();
+  // Scaled ink box of the cap's glyph in one face, at the request's scale.
+  bool measureDropCapGlyph(int face, uint32_t codepoint, const char* utf8, size_t utf8Len, int& width,
+                           int& height) const;
+  // Resolve the cap's metrics against the face the block is laid out with and reserve
+  // its column. False leaves the block plain.
+  bool layoutDropCap(ParsedText& text, int layoutFontId, int lineHeight);
+  void resetDropCap();
+  // Face for a block scale, or 0 when the block keeps the section font.
+  int fontIdForScale(float scale) const;
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -262,7 +386,7 @@ class ChapterHtmlSlimParser {
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
       const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
-      const bool collectTouchLinks = false)
+      const bool collectTouchLinks = false, BlockFontProvider* blockFonts = nullptr)
 
       : epub(epub),
         filepath(filepath),
@@ -281,6 +405,7 @@ class ChapterHtmlSlimParser {
         completePageFn(completePageFn),
         popupFn(popupFn),
         cssParser(embeddedStyle ? cssParser : nullptr),
+        blockFonts(blockFonts),
         embeddedStyle(embeddedStyle),
         collectTouchLinks(collectTouchLinks),
         imageRendering(imageRendering),
@@ -295,6 +420,7 @@ class ChapterHtmlSlimParser {
   }
   void setTxtChapterBoundaries(bool enabled) { txtChapterBoundaries = enabled; }
   void setParagraphIndentSpaces(const uint8_t spaces) { paragraphIndentSpaces = spaces; }
+  void setVerticalText(const bool enabled) { verticalText = enabled; }
 
   // One-shot parse: builds every page before returning (begin + step* + finish).
   bool parseAndBuildPages();

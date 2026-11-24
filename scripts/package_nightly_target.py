@@ -33,12 +33,25 @@ STABLE_C3_SEGMENTS = (
     ('firmware', 'firmware.bin', 0x10000),
 )
 OTA_SEGMENT = (('firmware', 'firmware.bin', 0x10000),)
+# Each pre-app segment must stay inside its own flash region. A boot_app0 that
+# shrinks or grows silently breaks OTA selection; an oversized bootloader would
+# run into the partition table. (Upstream 27d54817 enforces the same bounds.)
+FULL_INSTALL_SEGMENT_LIMITS = {
+    'bootloader': 0x8000,   # 0x0000..0x7FFF, ends where the partition table starts
+    'partitions': 0x1000,   # 0x8000..0x8FFF
+    'boot_app0': 0x2000,    # 0xE000..0xFFFF, exactly the two OTA data sectors
+}
+
+
+def full_install_segment_limit(role):
+    """Maximum size of a fixed full-install segment, or None for the app."""
+    return FULL_INSTALL_SEGMENT_LIMITS.get(role)
 # Offsets/sizes are read from the target's own partition table (see
 # nightly_targets.TARGETS['partitionsCsv']), not pinned here: readpico grew to
 # 7.19 MiB slots for MuPDF while the shared partitions.csv kept 6.25 MiB, and a
 # second copy of the map is exactly the drift this check exists to catch.
 PARTITION_LAYOUT_ROWS = ('otadata', 'app0', 'app1')
-DATA_PARTITION_ROWS = ('spiffs',)
+DATA_PARTITION_ROWS = ('spiffs', 'pdfmod')
 FLASH_BYTES = 16 * 1024 * 1024
 
 
@@ -226,11 +239,17 @@ def package_target(root, target_id, channel, output):
             source = build / source_name
         destination = output / asset_name(target_id, source_name)
         copy_asset(source, destination)
+        size = destination.stat().st_size
+        limit = full_install_segment_limit(role)
+        if limit is not None and size > limit:
+            raise SystemExit(
+                f'{destination.name} is {size} bytes but its flash region is {limit}'
+            )
         assets.append({
             'role': role,
             'name': destination.name,
             'offset': offset,
-            'size': destination.stat().st_size,
+            'size': size,
             'sha256': sha256(destination),
         })
 

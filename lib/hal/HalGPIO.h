@@ -52,6 +52,13 @@ class HalGPIO {
   bool inputBegun = false;  // InputManager::begin() ran exactly once
   std::atomic<InputModality> inputModality{InputModality::Touch};
   bool inputModalityChanged = false;
+  // Synthetic tap injector (device diagnostics): armed from the serial console,
+  // visible to every wasTouchTap() consumer for exactly one update() frame, then
+  // dropped — the same lifetime a real release event has.
+  mutable bool debugTapArmed = false;
+  mutable bool debugTapActive = false;
+  mutable float debugTapNx = 0.0f;
+  mutable float debugTapNy = 0.0f;
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -120,6 +127,10 @@ class HalGPIO {
   bool wasHomeKeyTapped() const;
   bool wasHomeKeyLongPressed() const;
   bool wasTouchTap(float& nx, float& ny) const;
+  // Device test hook: queue one synthetic tap in normalised panel coordinates.
+  // The next wasTouchTap() reports it, so every touch path (including the ones
+  // routed through FreeInkUI) can be driven from the serial console.
+  void debugQueueTouchTap(float nx, float ny) const;
   bool wasTouchDown(float& nx, float& ny) const;
   // Raw release edge, reported even when the contact was not a tap (swipe end,
   // drag-off). Snapshot builders forward it so interaction routing can clear

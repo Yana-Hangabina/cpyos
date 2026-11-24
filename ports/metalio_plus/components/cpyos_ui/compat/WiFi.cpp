@@ -72,7 +72,12 @@ wifi_init_config_t leanInitConfig() {
     // With Wi-Fi/LWIP forced to internal RAM (SPIRAM_TRY_ALLOCATE_WIFI_LWIP=n)
     // the stock 16 static + 32 cached TX buffers consume ~77 KB and starve the
     // second static RX allocation. Four of each still cover one HTTP/TLS stream.
+    // The fresh sdkconfig may select DYNAMIC TX (32 buffers); setting only the
+    // static count is not enough because tx_buf_type stays dynamic. Force the
+    // static type the count belongs to, and keep the unused dynamic pool at zero.
+    cfg.tx_buf_type = 0;  // WIFI_TX_BUFFER_TYPE_STATIC
     cfg.static_tx_buf_num = 4;
+    cfg.dynamic_tx_buf_num = 0;
     cfg.cache_tx_buf_num = 4;
     cfg.mgmt_sbuf_num = 6;
     return cfg;
@@ -213,6 +218,11 @@ esp_err_t startRadio() {
         if ((started & kStartedBit) == 0) {
             ESP_LOGW(TAG, "STA_START not seen within 2 s; connecting anyway");
         }
+        // S31 profile (upstream BSP): modem sleep can starve TLS/HTTP bursts,
+        // keep the radio on 802.11b/g/n, and cap transmit power at 15 dBm.
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+        esp_wifi_set_max_tx_power(60);  // 15 dBm in 0.25 dBm units
         s_started = true;
     }
     return ESP_OK;

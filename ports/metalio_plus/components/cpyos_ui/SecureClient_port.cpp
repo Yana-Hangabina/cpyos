@@ -21,6 +21,11 @@
 
 namespace freeink {
 
+// SecureHttpClient uses this as a cheap preflight for the plain-HTTP path.
+// ESP-IDF's esp_tls performs the actual DNS/TLS resolution in connect(); an
+// empty host is the only input that can be rejected here.
+bool hostResolves(const char* host) { return host != nullptr && host[0] != '\0'; }
+
 namespace {
 constexpr const char* TAG = "PLUS-TLS";
 

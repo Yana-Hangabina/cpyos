@@ -2152,7 +2152,7 @@ void loop() {
           activity->debugOpenPanel(space > 0 ? cmd.substring(space + 1).toInt() : 1);
         }
       } else if (cmd.startsWith("READ")) {
-        String path = "/BOOKS/embedded-font-test.epub";
+        String path = "/test.epub";
         const int space = cmd.indexOf(' ');
         if (space > 0) path = cmd.substring(space + 1);
         activityManager.pushActivity(std::make_unique<EpubReaderActivity>(

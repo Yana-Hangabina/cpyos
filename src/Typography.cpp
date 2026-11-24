@@ -7,6 +7,7 @@
 #include <iterator>
 
 #include "CrossPointSettings.h"
+#include "ReaderFontSizes.h"
 #include "SystemFontPack.h"
 #include "UiScriptFont.h"
 #include "components/themes/BaseTheme.h"
@@ -135,7 +136,7 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
     // 8pt stays the built-in subset: it is the emergency fallback and must
     // never be replaced (a later scale change would otherwise leave no 8pt
     // family at all). Reader sizes above 18pt are loaded on demand too.
-    if (pt < 8 || pt > 34) return;
+    if (pt < 8 || pt > READER_MAX_POINT_SIZE) return;
     if (std::find(sizes, sizes + sizeCount, pt) != sizes + sizeCount) return;
     if (sizeCount < std::size(sizes)) sizes[sizeCount++] = pt;
   };
@@ -149,12 +150,12 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
   // Compact density draws SMALL at 8pt. Register the vector face there too;
   // the built-in 3,500-glyph bitmap is not linked on embedded builds.
   wantSize(8);
-  wantSize(SETTINGS.fontPointSize);
+  wantSize(readerClampPointSizeToDevice(SETTINGS.fontPointSize));
 #else
   // C3 has no PSRAM: one reader face at a time. The system UI keeps the
   // built-in 8pt CJK subset (its strings never contain unexpected glyphs);
   // the pack covers book text and titles at the reader size.
-  wantSize(SETTINGS.fontPointSize);
+  wantSize(readerClampPointSizeToDevice(SETTINGS.fontPointSize));
 #endif
   system_font_pack::configure(renderer, sizes, sizeCount);
   // Non-CJK UI scripts ride along as supplements at the same sizes.
@@ -181,7 +182,7 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
                        NOTOSERIF_14_FONT_ID, NOTOSERIF_16_FONT_ID}) {
     if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
   }
-  for (uint8_t pt = 10; pt <= 34; ++pt) {
+  for (uint8_t pt = 10; pt <= READER_MAX_POINT_SIZE; ++pt) {
     const int id = CJK_READER_SIZE_FONT_ID(pt);
     if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
   }

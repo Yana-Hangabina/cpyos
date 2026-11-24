@@ -38,12 +38,16 @@ ESP_WEB_TOOLS_VERSION = '10'
 MANIFEST_NAME = 'manifest.json'
 PAGE_NAME = 'index.html'
 
+# Shared with the project site: dialog localization plus the flash-stage
+# tracker. Inlined so the bundle stays one HTML file next to the binaries.
+UI_SCRIPT = Path(__file__).resolve().parent.parent / 'site' / 'flasher-ui.js'
+
 PAGE_TEMPLATE = '''<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{product} 固件刷写 / Firmware install</title>
+<title>{product}</title>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{ font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -55,34 +59,50 @@ PAGE_TEMPLATE = '''<!doctype html>
   code {{ font-family: ui-monospace, Menlo, monospace; }}
   .note {{ font-size: .9rem; color: #555; }}
   esp-web-install-button {{ display: block; margin-top: 1rem; }}
+  /* The copy follows the browser language (?lang=zh|en overrides). */
+  html[lang="en"] .zh, html[lang^="zh"] .en {{ display: none !important; }}
 </style>
+<script>
+{flasher_ui}
+</script>
+<script>
+  (function () {{
+    var zh = window.CPYOSFlasherUI && window.CPYOSFlasherUI.lang === 'zh';
+    document.documentElement.lang = zh ? 'zh-CN' : 'en';
+    document.title = zh ? '{product} 固件刷写' : '{product} firmware install';
+  }})();
+</script>
 <script type="module" src="https://unpkg.com/esp-web-tools@{esp_web_tools}/dist/web/install-button.js?module"></script>
 </head>
 <body>
-<h1>{product} 固件刷写</h1>
+<h1><span class="zh">{product} 固件刷写</span><span class="en">{product} firmware install</span></h1>
 <div class="version">{version} · {chip}</div>
 
 <div class="card">
-  <ol>
+  <ol class="zh">
     <li>用 USB-C 线把设备连到电脑（设备会以 <code>{port_hint}</code> 出现）。</li>
     <li>用 Chrome 或 Edge 打开本页，点下面的按钮，选择那个串口。</li>
     <li>等待写入完成，设备会自动重启。</li>
   </ol>
+  <ol class="en">
+    <li>Connect the device to this computer with a USB-C cable (it appears as <code>{port_hint}</code>).</li>
+    <li>Open this page in Chrome or Edge, click the button below, and pick that serial port.</li>
+    <li>Wait for the write to finish; the device restarts by itself.</li>
+  </ol>
   <esp-web-install-button manifest="{manifest}">
-    <button slot="activate">连接设备并刷写 / Connect and install</button>
-    <span slot="unsupported">这个浏览器不支持 Web Serial，请用桌面版 Chrome/Edge。<br>
-      This browser has no Web Serial support; use desktop Chrome or Edge.</span>
-    <span slot="not-allowed">页面必须是 https 或 localhost（file:// 不行）。<br>
-      The page must be served over https or from localhost.</span>
+    <button slot="activate"><span class="zh">连接设备并刷写</span><span class="en">Connect and install</span></button>
+    <span slot="unsupported" class="zh">这个浏览器不支持 Web Serial，请用桌面版 Chrome/Edge。</span>
+    <span slot="unsupported" class="en">This browser has no Web Serial support; use desktop Chrome or Edge.</span>
+    <span slot="not-allowed" class="zh">页面必须是 https 或 localhost（file:// 不行）。</span>
+    <span slot="not-allowed" class="en">The page must be served over https or from localhost.</span>
   </esp-web-install-button>
-  <p class="note">写入的是完整安装包（bootloader + 分区表 + 应用），不会动 NVS 里的设置，也不会整片擦除。<br>
-    This installs bootloader, partition table and the app; it does not erase NVS or the whole chip.</p>
+  <p class="note zh">写入的是完整安装包（bootloader + 分区表 + 应用），不会动 NVS 里的设置，也不会整片擦除。</p>
+  <p class="note en">This installs the bootloader, partition table and the app; it does not erase NVS or the whole chip.</p>
 </div>
 
-<p class="note">
-  SHA-256 (firmware): <code>{firmware_sha}</code><br>
-  没有浏览器刷机条件时，也可以把固件放到 TF 卡根目录，用设备上的「SD 卡固件更新」。
-</p>
+<p class="note">SHA-256 (firmware): <code>{firmware_sha}</code></p>
+<p class="note zh">没有浏览器刷机条件时，也可以把固件放到 TF 卡根目录，用设备上的「SD 卡固件更新」。</p>
+<p class="note en">Without Web Serial support, copy the firmware to the TF card root and use “SD card firmware update” on the device.</p>
 </body>
 </html>
 '''
@@ -106,6 +126,9 @@ def build(target_id, dist_dir, output_dir, root=None, manifest_name=MANIFEST_NAM
         fail(f'unknown target {target_id!r}; known: {sorted(nightly_targets.TARGETS)}')
     target = nightly_targets.TARGETS[target_id]
     root = Path(root) if root is not None else Path(__file__).resolve().parent.parent
+    if not UI_SCRIPT.is_file():
+        fail(f'{UI_SCRIPT} is missing; it localizes the esp-web-tools dialog')
+    flasher_ui = UI_SCRIPT.read_text(encoding='utf-8')
     partitions = package_nightly_target.verify_partition_csv(
         root, target.get('partitionsCsv', 'partitions.csv'))
 
@@ -154,6 +177,7 @@ def build(target_id, dist_dir, output_dir, root=None, manifest_name=MANIFEST_NAM
         port_hint='USB JTAG/serial debug unit',
         manifest=manifest_name,
         firmware_sha=sha256_file(firmware),
+        flasher_ui=flasher_ui,
     ))
     return manifest, output_dir
 

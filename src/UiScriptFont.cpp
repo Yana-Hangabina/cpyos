@@ -19,6 +19,7 @@
 #include <new>
 #include <vector>
 
+#include "ReaderFontSizes.h"
 #include "fontIds.h"
 
 namespace {
@@ -181,10 +182,10 @@ bool ready() { return g_ready; }
 
 void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t count) {
   if (!g_ready || pointSizes == nullptr) return;
-  bool wanted[35] = {};
+  bool wanted[41] = {};
   for (size_t i = 0; i < count; ++i) {
     const uint8_t pt = pointSizes[i];
-    if (pt >= 8 && pt <= 34) wanted[pt] = true;
+    if (pt >= 8 && pt <= READER_MAX_POINT_SIZE) wanted[pt] = true;
   }
   std::erase_if(g_fonts, [&](Registered& slot) {
     if (wanted[slot.pointSize]) return false;
@@ -193,7 +194,7 @@ void configure(GfxRenderer& renderer, const uint8_t* pointSizes, const size_t co
   });
   for (size_t i = 0; i < count; ++i) {
     const uint8_t pt = pointSizes[i];
-    if (pt < 8 || pt > 34) continue;
+    if (pt < 8 || pt > READER_MAX_POINT_SIZE) continue;
     const bool loaded = std::any_of(g_fonts.begin(), g_fonts.end(),
                                     [pt](const Registered& slot) { return slot.pointSize == pt; });
     if (loaded) {

@@ -69,7 +69,9 @@ void PlusCameraActivity::loop() {
   bool confirm = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
   if (!confirm && canCapture()) {
     // The page has no other control, so a tap anywhere is the shutter.
-    if (mappedInput.wasTapInRect(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight())) {
+    int tapX = 0;
+    int tapY = 0;
+    if (mappedInput.wasScreenTapped(tapX, tapY)) {
       confirm = true;
     }
   }

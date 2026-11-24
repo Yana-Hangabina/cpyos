@@ -1,0 +1,19 @@
+# Read Pico XIP PDF layout.  The normal table keeps 6.375 MiB OTA slots; this
+# table is used by the PDF builds and reserves a dedicated 1.875 MiB `pdfmod`
+# partition for the MuPDF engine.
+#
+# 2026-11-24: the app slots grew from 5.5/5.375 MiB to 6.0 MiB.  The merged
+# XIP PDF + JJWXC image is 5,930,259 B (5.655 MiB) and no longer fits the old
+# app0; 6.0 MiB leaves ~361 KB.  The space comes from the data partition
+# (3.125 -> 2.0 MiB; the five runtime blobs total ~1.32 MiB and the system
+# font is embedded in app0).  This is a layout change: existing 0.7.0 devices
+# must full-install, not OTA.
+#
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+app0,     app,  ota_0,   0x10000, 0x600000,
+app1,     app,  ota_1,   0x610000,0x600000,
+pdfmod,   data, 0x40,    0xC10000,0x1E0000,
+spiffs,   data, spiffs,  0xDF0000,0x200000,
+coredump, data, coredump,0xFF0000,0x10000,

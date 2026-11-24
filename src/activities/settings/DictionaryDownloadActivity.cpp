@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
 #include <Logging.h>
@@ -98,6 +99,7 @@ void DictionaryDownloadActivity::onExit() {
 }
 
 void DictionaryDownloadActivity::onWifiSelectionComplete(const bool success) {
+
   if (!success) {
     finish();
     return;
@@ -121,6 +123,10 @@ void DictionaryDownloadActivity::onWifiSelectionComplete(const bool success) {
 }
 
 bool DictionaryDownloadActivity::fetchAndParseManifest() {
+  // The transfer runs here, so the CPU lock lives here: no input happens during a
+  // download, the governor would drop to 80 MHz, and the file crawls (the OTA
+  // path measured ~4 KB/s that way).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   items_.clear();
   downloadingIndex_ = -1;
   char manifestUrl[192];
@@ -345,6 +351,10 @@ bool DictionaryDownloadActivity::commitInstall(const char* id) {
 
 DictionaryDownloadActivity::DownloadResult DictionaryDownloadActivity::downloadItem(ManifestItem& item,
                                                                                     const bool selectAfterInstall) {
+  // The transfer runs here, so the CPU lock lives here: no input happens during a
+  // download, the governor would drop to 80 MHz, and the file crawls (the OTA
+  // path measured ~4 KB/s that way).
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   uint64_t totalBytes = 0;
   uint64_t freeBytes = 0;
   if (!Storage.getSpace(totalBytes, freeBytes) || freeBytes < item.totalSize) {
@@ -453,6 +463,7 @@ DictionaryDownloadActivity::DownloadResult DictionaryDownloadActivity::downloadI
 }
 
 void DictionaryDownloadActivity::downloadSingle(const int itemIndex) {
+
   if (itemIndex < 0 || itemIndex >= static_cast<int>(items_.size())) return;
   currentFileTotal_ = items_[itemIndex].files.size();
   if (downloadItem(items_[itemIndex], true) == DownloadResult::Success) {

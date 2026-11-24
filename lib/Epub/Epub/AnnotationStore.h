@@ -13,6 +13,13 @@
 // chapter title are captured at creation time so the export file and the merged
 // list still read correctly if the book's markup is later repaginated.
 //
+// The PDF reader reuses this record with the offsets meaning PAGE-LOCAL LINE
+// INDICES, because a reflowed PDF page has no stable text offset. That makes the
+// range coarser than EPUB's — two selections on one line share a range — which is
+// why normalize() treats `quote` as part of an annotation's identity. Do not
+// "simplify" the key back to the range alone: it silently deletes one of the two
+// highlights. (test/annotation_store/)
+//
 // The codec is deliberately strict: a damaged file is rejected whole, never
 // guessed at. A wrong annotation range would underline the wrong sentence, which
 // is exactly the kind of silent corruption this project refuses to ship.

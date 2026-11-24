@@ -115,8 +115,14 @@ jobs:
           git clone --depth 1 git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc
           test -f src/jjwxc/app/JjwxcActivity.cpp
 
-      - name: Build Read Pico (with the private book source)
-        run: pio run -e readpico_jjwxc
+      - name: Build Read Pico (XIP PDF + private book source)
+        run: pio run -e readpico_pdf_jjwxc
+
+      - name: Build the paired PDF engine
+        run: |
+          set -euo pipefail
+          pio run -t compiledb -e readpico_pdf_jjwxc
+          python3 scripts/build_pdf_module.py             --firmware-elf .pio/build/readpico_pdf_jjwxc/firmware.elf
 
       - name: Generate data packs
         run: |
@@ -126,20 +132,23 @@ jobs:
           python3 scripts/generate_hyphenation_db.py
           python3 -m pip download pypinyin==0.55.0 --no-deps --dest /tmp/pypinyin-wheel
           python3 scripts/generate_pinyin_db.py /tmp/pypinyin-wheel/*.whl
-          python3 scripts/generate_data_manifest.py
+          python3 scripts/generate_data_manifest.py             --partitions partitions_readpico_xip.csv --no-core
 
       - name: Verify the image and data manifest
         run: |
           python3 scripts/verify_release_artifacts.py --release \
-            --firmware .pio/build/readpico_jjwxc/firmware.bin
+            --firmware .pio/build/readpico_pdf_jjwxc/firmware.bin
 
       - name: Assemble the release bundle
         run: |
           set -euo pipefail
           python3 scripts/build_cpyos_release.py \
             --version "$VERSION" \
-            --build-dir .pio/build/readpico_jjwxc \
-            --notes-json "docs/releases/$VERSION.ota.json"
+            --build-dir .pio/build/readpico_pdf_jjwxc \
+            --notes-json "docs/releases/$VERSION.ota.json" \
+            --full-install-only
+          cp build/pdfmod.bin "dist/cpyos/$VERSION/readpico-pdfmod.bin"
+          (cd "dist/cpyos/$VERSION" && rm -f SHA256SUMS && sha256sum * > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
@@ -166,6 +175,33 @@ jobs:
               --title "脆皮鸭 CPYOS $VERSION" \
               --notes-file "docs/releases/$VERSION.md" --latest
           fi
+
+      - name: Publish the Read Pico engine into the rolling index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OLD="$RUNNER_TEMP/readpico-manifest-v2.txt"
+          mkdir -p "$RUNNER_TEMP"
+          if gh release download pdf-engine --repo "$GITHUB_REPOSITORY" \
+               --pattern readpico-manifest-v2.txt --dir "$RUNNER_TEMP" 2>/dev/null; then
+            MERGE=(--merge-into "$OLD")
+          else
+            MERGE=()
+          fi
+          python3 scripts/build_pdf_engine_manifest.py \
+            --firmware-elf .pio/build/readpico_pdf_jjwxc/firmware.elf \
+            --pdfmod build/pdfmod.bin \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/readpico-pdfmod.bin" \
+            "${MERGE[@]}" --out "$RUNNER_TEMP/readpico-manifest-v2.txt"
+          if ! gh release view pdf-engine --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create pdf-engine --repo "$GITHUB_REPOSITORY" \
+              --title "PDF engine index" \
+              --notes "Rolling compatibility index for the PDF engine updater. Do not delete." \
+              --prerelease
+          fi
+          gh release upload pdf-engine "$RUNNER_TEMP/readpico-manifest-v2.txt" \
+            --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Assemble the Pages artifact
         run: |

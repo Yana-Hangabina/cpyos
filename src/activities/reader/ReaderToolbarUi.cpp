@@ -78,7 +78,7 @@ constexpr int16_t kContentsBadgeGlyph = 16;
 constexpr int16_t kContentsBadgeGap = 6;
 // Bookmarks: the tail is "45%  [x]" — the progress keeps its own column just
 // left of the delete button, so it needs a fixed reserve wide enough for 100%.
-constexpr int16_t kBookmarkValueW = UiHighDpiProfile::enabled ? 64 : 44;
+constexpr int16_t kBookmarkValueW = UiHighDpiProfile::enabled ? 96 : 76;
 // Fixed maintenance strip above the Contents list (604 x 88 in the design).
 constexpr int16_t kContentsUpdateH = UiHighDpiProfile::enabled ? 88 : 56;
 constexpr int16_t kContentsUpdateGap = UiHighDpiProfile::enabled ? 12 : 6;
@@ -387,7 +387,7 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
   const auto& tokens = screen.theme();
   const fui::Rect safe = screen.frame().safeRect();
   const int16_t side = tokens.spaceLg;
-  const bool textPanel = model_.activeTool == kTextTool;
+  const bool textPanel = model_.activeTool == kTextTool && model_.textGrid;
   const bool contents = model_.panel && model_.activeTool == 0;
 
   // refreshed UI frame 05: 20 px top corners, a 48x4 grabber 9 px below the free
@@ -888,13 +888,23 @@ void ReaderToolbarUi::buildPanel(UiScreen& screen) {
       // tail owns both the text and the button.
       const std::string progress = model_.rowValue ? model_.rowValue(index) : std::string();
       if (!progress.empty()) {
-        fui::TextStyle progressStyle = tokens.bodyText;
+        // "45%" fits bodyText; a CJK kind label ("高亮"/"笔记") is wider per
+        // glyph and ellipsized, so it uses the small face in the same column.
+        const bool percent = progress.back() == '%';
+        fui::TextStyle progressStyle = percent ? tokens.bodyText : tokens.smallText;
         progressStyle.bold = true;
         progressStyle.align = fui::TextAlign::Right;
         progressStyle.color = selected ? fui::Color::White : fui::Color::Black;
-        screen.target().text(
-            fui::Rect{static_cast<int16_t>(slotX - gap - kBookmarkValueW), rowY, kBookmarkValueW, rowH},
-            progress.c_str(), progressStyle);
+        // Size the column to the text, not to a constant: "45%" and a CJK kind
+        // label have very different advances, and a fixed width ellipsized one
+        // of them. Clamp so a very long kind never runs into the title.
+        int16_t valueW = std::max<int16_t>(
+            kBookmarkValueW,
+            static_cast<int16_t>(screen.target().measureText(progressStyle.font, progress.c_str(), progressStyle).width + 8));
+        const int16_t maxValueW = static_cast<int16_t>(slotX - gap - rowAreaX - 24);
+        valueW = std::min(valueW, std::max<int16_t>(kBookmarkValueW, maxValueW));
+        screen.target().text(fui::Rect{static_cast<int16_t>(slotX - gap - valueW), rowY, valueW, rowH},
+                             progress.c_str(), progressStyle);
       }
       const int16_t buttonY = static_cast<int16_t>(rowY + (rowH - buttonSize) / 2);
       screen.target().stroke(fui::Rect{slotX, buttonY, buttonSize, buttonSize}, ink, kContentsButtonBorder,

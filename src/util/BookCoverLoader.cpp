@@ -47,10 +47,79 @@ CachedCoverState checkCachedCover(const std::string& path, const bool emptyIsTer
 
 namespace {
 
+// A conversion that failed once cannot succeed again from the same bytes: the
+// cover is either missing, undecodable, or larger than the thumbnail budget.
+// Without this memo Home re-attempted the whole conversion on every entry (a
+// 3 s wait card on a slow card, per book). Keyed on the cover path plus the
+// container size and the override flag, because there is no mtime API; a book
+// replaced with an identically sized file therefore stays memoised until a
+// library rebuild or a reboot, which costs a missing thumbnail, never a wrong
+// one.
+struct FailureSlot {
+  std::string coverPath;
+  std::string bookPath;
+  uint64_t bookBytes = 0;
+  bool overridePresent = false;
+  uint32_t stamp = 0;
+};
+constexpr int kFailureSlots = 8;
+FailureSlot g_failureSlots[kFailureSlots];
+uint32_t g_failureStamp = 0;
+
+uint64_t bookFileSize(const std::string& bookPath) {
+  HalFile file;
+  if (!Storage.openFileForRead("COVER", bookPath, file)) return 0;
+  return file.fileSize64();
+}
+
+bool failureMemoised(const std::string& coverPath, const uint64_t bookBytes, const bool overridePresent) {
+  if (coverPath.empty()) return false;
+  for (auto& slot : g_failureSlots) {
+    if (slot.coverPath == coverPath && slot.bookBytes == bookBytes && slot.overridePresent == overridePresent) {
+      slot.stamp = ++g_failureStamp;
+      return true;
+    }
+  }
+  return false;
+}
+
+void rememberFailure(const std::string& coverPath, const std::string& bookPath, const uint64_t bookBytes,
+                     const bool overridePresent) {
+  if (coverPath.empty()) return;
+  FailureSlot* victim = &g_failureSlots[0];
+  for (auto& slot : g_failureSlots) {
+    if (slot.coverPath == coverPath) {
+      victim = &slot;
+      break;
+    }
+    if (slot.coverPath.empty()) {
+      victim = &slot;
+      break;
+    }
+    if (slot.stamp < victim->stamp) victim = &slot;
+  }
+  victim->coverPath = coverPath;
+  victim->bookPath = bookPath;
+  victim->bookBytes = bookBytes;
+  victim->overridePresent = overridePresent;
+  victim->stamp = ++g_failureStamp;
+}
+
+void forgetFailure(const std::string& coverPath) {
+  for (auto& slot : g_failureSlots) {
+    if (slot.coverPath == coverPath) slot.coverPath.clear();
+  }
+}
+
 template <typename Generate>
-std::string ensureCachedCover(const std::string& path, const bool emptyIsTerminal, bool* generated,
-                              Generate&& generate) {
+std::string ensureCachedCover(const std::string& path, const std::string& bookPath, const bool emptyIsTerminal,
+                              const bool overridePresent, bool* generated, Generate&& generate) {
   if (generated) *generated = false;
+  const uint64_t bookBytes = bookFileSize(bookPath);
+  if (failureMemoised(path, bookBytes, overridePresent)) {
+    LOG_DBG("COVER", "thumbnail %s: previous failure memoised", path.c_str());
+    return "";
+  }
   const CachedCoverState state = checkCachedCover(path, emptyIsTerminal);
   if (state == CachedCoverState::Ready) return path;
   if (state == CachedCoverState::Terminal) return "";
@@ -62,7 +131,11 @@ std::string ensureCachedCover(const std::string& path, const bool emptyIsTermina
   const bool ready = ok && checkCachedCover(path, emptyIsTerminal) == CachedCoverState::Ready;
   LOG_INF("COVER", "thumbnail %s in %ums: %s", ready ? "generated" : "FAILED",
           static_cast<unsigned>(millis() - started), path.c_str());
-  if (!ready) return "";
+  if (!ready) {
+    rememberFailure(path, bookPath, bookBytes, overridePresent);
+    return "";
+  }
+  forgetFailure(path);
   if (generated) *generated = true;
   return path;
 }
@@ -187,6 +260,11 @@ void clearThumbFileCache() {
     slot.file = {};
   }
   g_thumbTotal = 0;
+  clearCoverFailures();
+}
+
+void clearCoverFailures() {
+  for (auto& slot : g_failureSlots) slot = {};
 }
 
 std::string ensureThumbnail(const std::string& bookPath, const int height, bool* generated) {
@@ -196,8 +274,9 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
   if (FsHelpers::hasEpubExtension(bookPath)) {
     Epub epub(bookPath, "/.crosspoint");
     const std::string path = epub.getThumbBmpPath(height);
-    return ensureCachedCover(path, !epub.hasCoverOverride(), generated, [&]() {
-      if (!epub.load(true, true)) return false;
+    return ensureCachedCover(path, bookPath, !epub.hasCoverOverride(), epub.hasCoverOverride(), generated, [&]() {
+      // Rebuild a wiped thumbnail from the EPUB source instead of a full index.
+      if (!epub.load(false, true)) return epub.generateThumbBmpFromSource(height);
       epub.setupCacheDir();
       return epub.generateThumbBmp(height);
     });
@@ -206,7 +285,7 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
     const std::string path = xtc.getThumbBmpPath(height);
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!xtc.load()) return false;
       xtc.setupCacheDir();
       return xtc.generateThumbBmp(height);
@@ -216,7 +295,7 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
   if (FsHelpers::hasCbzExtension(bookPath)) {
     Cbz cbz(bookPath, "/.crosspoint");
     const std::string path = cbz.getThumbBmpPath(height);
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!cbz.load()) return false;
       cbz.setupCacheDir();
       return cbz.generateThumbBmp(height);
@@ -225,11 +304,13 @@ std::string ensureThumbnail(const std::string& bookPath, const int height, bool*
 
   if (FsHelpers::hasFb2Extension(bookPath)) {
     const Fb2 fb2(bookPath, "/.crosspoint");
-    if (!Storage.exists(fb2.getEpubPath().c_str())) return "";
-    Epub epub(fb2.getEpubPath(), "/.crosspoint");
+    const std::string epubPath = fb2.getEpubPath();
+    if (!Storage.exists(epubPath.c_str())) return "";
+    Epub epub(epubPath, "/.crosspoint");
     const std::string path = epub.getThumbBmpPath(height);
-    return ensureCachedCover(path, false, generated, [&]() {
-      if (!epub.load(true, true)) return false;
+    return ensureCachedCover(path, epubPath, false, false, generated, [&]() {
+      // Rebuild a wiped thumbnail from the EPUB source instead of a full index.
+      if (!epub.load(false, true)) return epub.generateThumbBmpFromSource(height);
       epub.setupCacheDir();
       return epub.generateThumbBmp(height);
     });
@@ -254,7 +335,7 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
   if (FsHelpers::hasEpubExtension(bookPath)) {
     Epub epub(bookPath, "/.crosspoint");
     const std::string path = epub.getCoverBmpPath();
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!epub.load(true, true)) return false;
       epub.setupCacheDir();
       if (title) *title = epub.getTitle();
@@ -266,7 +347,7 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
     const std::string path = xtc.getCoverBmpPath();
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!xtc.load()) return false;
       xtc.setupCacheDir();
       if (title) *title = xtc.getTitle();
@@ -278,7 +359,7 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
   if (FsHelpers::hasCbzExtension(bookPath)) {
     Cbz cbz(bookPath, "/.crosspoint");
     const std::string path = cbz.getCoverBmpPath();
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!cbz.load()) return false;
       cbz.setupCacheDir();
       if (title) *title = cbz.getTitle();
@@ -288,11 +369,12 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
 
   if (FsHelpers::hasFb2Extension(bookPath)) {
     const Fb2 fb2(bookPath, "/.crosspoint");
-    if (!Storage.exists(fb2.getEpubPath().c_str())) return "";
-    const Epub cached(fb2.getEpubPath(), "/.crosspoint");
+    const std::string epubPath = fb2.getEpubPath();
+    if (!Storage.exists(epubPath.c_str())) return "";
+    const Epub cached(epubPath, "/.crosspoint");
     const std::string path = cached.getCoverBmpPath();
-    return ensureCachedCover(path, false, generated, [&]() {
-      Epub epub(fb2.getEpubPath(), "/.crosspoint");
+    return ensureCachedCover(path, epubPath, false, false, generated, [&]() {
+      Epub epub(epubPath, "/.crosspoint");
       if (!epub.load(true, true)) return false;
       epub.setupCacheDir();
       if (title) *title = epub.getTitle();
@@ -304,7 +386,7 @@ std::string ensureFullCover(const std::string& bookPath, std::string* title, std
   if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
     Txt txt(bookPath, "/.crosspoint");
     const std::string path = txt.getCoverBmpPath();
-    return ensureCachedCover(path, false, generated, [&]() {
+    return ensureCachedCover(path, bookPath, false, false, generated, [&]() {
       if (!txt.load()) return false;
       txt.setupCacheDir();
       if (title) *title = txt.getTitle();

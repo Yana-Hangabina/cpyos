@@ -41,6 +41,12 @@ int main() {
     // Decoding happens before validation in the server: %2e%2e must not slip through
     expect(!safe(urlDecode("/%2e%2e/etc")), "encoded traversal rejected");
     expect(!safe(urlDecode("/.crosspoint%2Fcookies")), "encoded private dir rejected");
+    expect(!safe("/.CROSSPOINT/cookies"), "uppercase private dir rejected");
+    expect(!safe("/.CrOsSpOiNt"), "mixed-case private dir rejected");
+    expect(!safe("/CROSSP~1/cookies"), "8.3 alias of the private dir rejected");
+    expect(!safe("/crossp~1"), "8.3 alias, lowercase, rejected");
+    expect(!safe("/CROSSPOI/jjwxc/cookies"), "collision-free 8.3 stem rejected");
+    expect(safe("/Books/crosspoint-guide.epub"), "ordinary long name accepted");
 
     // Mapping stays under the SD root
     expect(toReal("/") == "/sdcard", "root maps");

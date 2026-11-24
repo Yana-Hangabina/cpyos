@@ -1,0 +1,11 @@
+{
+  "id": "template",
+  "name": "Template",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "riscv32",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Minimal CPYOS native plugin.",
+  "author": "CPYOS"
+}

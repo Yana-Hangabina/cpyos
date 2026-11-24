@@ -285,14 +285,16 @@ bool PixelSwitchActivity::startSavedWifiAssociation() {
 
   WiFi.persistent(false);
   NetworkStartup::setMode(renderer, WIFI_STA);
-  WiFi.disconnect(true, true);
   delay(100);
   if (pass.empty()) {
     WiFi.begin(ssid.c_str());
   } else {
     WiFi.begin(ssid.c_str(), pass.c_str());
   }
-  broughtWifiUp_ = true;
+  if (!broughtWifiUp_) {
+    NetworkStartup::hold();
+    broughtWifiUp_ = true;
+  }
   return true;
 }
 
@@ -302,6 +304,7 @@ void PixelSwitchActivity::teardownOwnedWifi() {
   delay(100);
   WiFi.mode(WIFI_OFF);
   esp_wifi_deinit();
+  NetworkStartup::releaseHold();
   broughtWifiUp_ = false;
 }
 

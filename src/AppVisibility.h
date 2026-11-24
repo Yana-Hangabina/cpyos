@@ -40,6 +40,13 @@ enum class AppId : uint8_t {
   // WebSocket server. Appended, never reordered: 0..20 keep their persisted
   // bits, and 22..31 remain available.
   VoiceClient = 21,
+#endif
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  // Native ELF plugin picker. Only builds with the plugin runtime link it;
+  // every other target keeps its previous Count and bit table.
+  NativePlugins = 22,
+  Count = 23,
+#elif defined(CROSSPOINT_PLUS_PORT)
   Count = 22,
 #else
   Count = 20,

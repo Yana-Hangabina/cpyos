@@ -1,4 +1,5 @@
 #include "EpubReaderActivity.h"
+#include "AnnotationExport.h"
 #include "booksource/BookSource.h"
 #include "booksource/RowTail.h"
 #include "components/StatusCards.h"
@@ -24,6 +25,7 @@
 #include <SdCardFontCache.h>
 #include <SdCardFontSystem.h>
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#include "ReaderBlockFonts.h"
 #include "SystemFontPack.h"
 #include "Typography.h"
 #endif
@@ -85,6 +87,8 @@ extern "C" bool plus_embedded_font_enabled();
 #include "ReaderActivity.h"
 #include "ReaderFontSizes.h"
 #include "ReaderToolbarUi.h"
+#include "SelectionActionBar.h"
+#include "SelectionGeometry.h"
 #include "ReaderUtils.h"
 #include "ReadingStatsStore.h"
 #include "RecentBooksStore.h"
@@ -407,6 +411,12 @@ void EpubReaderActivity::onExit() {
   // A5: drop the book's embedded font (if any) before anything else is torn down,
   // so the renderer never keeps a pointer to a freed face.
   releaseEmbeddedFont();
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // M2 pinned up to three block-size faces for this session's cached sections.
+  // Clearing the pins lets the next configure() (reader re-entry or a UI scale
+  // change) release them.
+  system_font_pack::releasePinnedPointSizes();
+#endif
   if (footnoteDepth > 0 && epub) {
     const SavedPosition& origin = savedPositions[0];
     saveProgress(origin.spineIndex, origin.pageNumber, 0);
@@ -913,12 +923,21 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   orientedMarginTop = selectionMarginTop();
   orientedMarginLeft += SETTINGS.screenMargin;
 
+  VocabularyContext vocabulary;
+  if (epub) {
+    vocabulary.title = epub->getTitle();
+    vocabulary.author = epub->getAuthor();
+  }
+  vocabulary.chapter = currentChapterTitle();
+  vocabulary.page = static_cast<uint16_t>(section->currentPage + 1);
+  vocabulary.spine = static_cast<uint16_t>(currentSpineIndex);
+  if (currentPageVisibleOffset) vocabulary.startOffset = *currentPageVisibleOffset;
   startActivityForResultWith<DictionaryWordSelectActivity>(
       [this](const ActivityResult&) {
         READING_STATS.resumeSession();
         requestUpdate();
       },
-      std::move(page), orientedMarginLeft, orientedMarginTop);
+      std::move(page), orientedMarginLeft, orientedMarginTop, /*selectOnly=*/false, std::move(vocabulary));
 }
 
 #ifdef ENABLE_CHINESE_VERSION
@@ -1021,9 +1040,14 @@ bool EpubReaderActivity::handlePinchGesture() {
   int next = static_cast<int>(index);
   next += pinchScale >= 1.15f ? 1 : -1;
   next = std::clamp(next, 0, static_cast<int>(sizes.size()) - 1);
-  LOG_DBG("ERS", "pinch %.2f -> %u pt", pinchScale, static_cast<unsigned>(sizes[static_cast<size_t>(next)]));
-  if (sizes[static_cast<size_t>(next)] == SETTINGS.fontPointSize) return true;  // at the end of the range
-  SETTINGS.fontPointSize = sizes[static_cast<size_t>(next)];
+  const uint8_t nextPt = sizes[static_cast<size_t>(next)];
+  LOG_DBG("ERS", "pinch %.2f -> %u pt", pinchScale, static_cast<unsigned>(nextPt));
+  if (nextPt == SETTINGS.fontPointSize) return true;  // at the end of the range
+  if (!readerFontPointSizeIsNative(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, nextPt)) {
+    SETTINGS.useBuiltinReaderFontAt(nextPt);
+  } else {
+    SETTINGS.fontPointSize = nextPt;
+  }
   // A pinch that repaginates with no visible acknowledgement reads as "nothing
   // happened" — show the resulting size for a moment.
   fontStepHintPointSize = SETTINGS.fontPointSize;
@@ -1041,22 +1065,11 @@ size_t countUtf8Codepoints(const char* text) {
   return count;
 }
 
-// Long press that opens a selection, and the finger travel that turns it into a
-// drag instead. 650 ms, not the SDK's 500 ms classifier: on a reading page a
-// normal "read the next line" tap frequently sits in the 500-600 ms band, and
-// the SDK trigger is stationary-only, so it opened selection on presses the
-// reader never meant as a hold. The SDK event is deliberately NOT consumed now;
-// this timer owns the gesture and suppresses the lift only after it fires.
-constexpr uint32_t kSelectionPressMs = 650;
-// Sampling drops frames: a press may only end after a gap a real lift produces,
-// otherwise the timer reset every few frames and the press could never complete.
-constexpr uint32_t kSelectionHoldGapMs = 150;
-// Travel beyond this is a swipe, not a press (about 5.5 mm on this panel; the
-// old 18 px was thinner than normal finger tremor, 80 px was loose enough that
-// a slow page-turn drag could still qualify as a hold).
-constexpr int kSelectionSlopPx = 64;
-// E-ink cannot follow a finger, so a drag repaints at most ~3x/second.
-constexpr uint32_t kSelectionRedrawMs = 320;
+// The long-press gesture, its travel allowance, the dropped-sample gap and the
+// drag repaint cap are all constants of the shared tracker in SelectionHold.h --
+// the PDF reader runs the same state machine, and these numbers must not exist
+// twice.
+
 constexpr int kAnnotationCardButtonH = 40;
 // Paragraph-comment bubbles are ~20-30 px wide/high; a finger target needs more.
 // Grow mostly away from the text: the bubble sits 3 px after the last glyph, so
@@ -1396,19 +1409,9 @@ std::vector<EpubReaderActivity::AnnoWordRect> EpubReaderActivity::layoutPageWord
 }
 
 int EpubReaderActivity::wordIndexAt(const std::vector<AnnoWordRect>& words, const int x, const int y) const {
-  int best = -1;
-  int bestDist = 0x7FFFFFFF;
-  for (size_t i = 0; i < words.size(); ++i) {
-    const auto& w = words[i];
-    if (x >= w.x && x < w.x + w.w && y >= w.y && y < w.y + w.h) return static_cast<int>(i);
-    const int dx = x < w.x ? w.x - x : (x > w.x + w.w ? x - (w.x + w.w) : 0);
-    const int dy = y < w.y ? w.y - y : (y > w.y + w.h ? y - (w.y + w.h) : 0);
-    if (dx + dy < bestDist) {
-      bestDist = dx + dy;
-      best = static_cast<int>(i);
-    }
-  }
-  return best;
+  // Single source of truth for the nearest-word rule, shared with the PDF
+  // reader (src/activities/reader/SelectionGeometry.h).
+  return selection_geom::nearest(words, x, y);
 }
 
 void EpubReaderActivity::updateSelectionDragTo(const int x, const int y) {
@@ -1427,31 +1430,28 @@ void EpubReaderActivity::updateSelectionDragTo(const int x, const int y) {
   const int hit = wordIndexAt(words, x, y);
   if (hit < 0) return;
   const auto& w = words[static_cast<size_t>(hit)];
-  const auto before = [](const uint16_t l1, const uint16_t w1, const uint16_t l2, const uint16_t w2) {
-    return l1 < l2 || (l1 == l2 && w1 < w2);
-  };
+  // The clamp (never cross the other end) lives in the shared geometry so the
+  // PDF reader drags by the same rule. The anchored end is whichever end the
+  // finger is NOT moving.
+  selection_geom::Range r{selectionStartLine, selectionStartWord, selectionEndLine, selectionEndWord};
   if (selectionDragHandle == 1) {
-    // Never cross the other end: clamp instead of swapping mid-drag, which would
-    // make the range flip under the finger.
-    if (before(selectionEndLine, selectionEndWord, w.line, w.word)) return;
-    if (w.line == selectionStartLine && w.word == selectionStartWord) return;
-    selectionStartLine = w.line;
-    selectionStartWord = w.word;
-    selectionAnchorLine = selectionEndLine;
-    selectionAnchorWord = selectionEndWord;
+    if (!selection_geom::moveStartTo(r, w.line, w.word)) return;
+    selectionStartLine = r.startLine;
+    selectionStartWord = r.startWord;
+    selectionAnchorLine = r.endLine;
+    selectionAnchorWord = r.endWord;
   } else {
-    if (before(w.line, w.word, selectionStartLine, selectionStartWord)) return;
-    if (w.line == selectionEndLine && w.word == selectionEndWord) return;
-    selectionEndLine = w.line;
-    selectionEndWord = w.word;
-    selectionAnchorLine = selectionStartLine;
-    selectionAnchorWord = selectionStartWord;
+    if (!selection_geom::moveEndTo(r, w.line, w.word)) return;
+    selectionEndLine = r.endLine;
+    selectionEndWord = r.endWord;
+    selectionAnchorLine = r.startLine;
+    selectionAnchorWord = r.startWord;
   }
   selectionAnchorX = w.x + w.w / 2;
   // E-ink cannot follow a finger; the cap keeps a drag from queuing a repaint per
   // pixel while still showing the range grow.
   const uint32_t now = millis();
-  if (now - selectionLastRedrawMs < kSelectionRedrawMs) return;
+  if (!selection_hold::repaintDue(now, selectionLastRedrawMs)) return;
   selectionLastRedrawMs = now;
   requestUpdate();
 }
@@ -1460,93 +1460,52 @@ bool EpubReaderActivity::handleSelectionTouch() {
   if (overlayPopup.isActive()) return false;
   // A selection that just closed must not start a new one under the same finger:
   // that is what made "delete highlight" appear to select a neighbouring word.
-  if (millis() - selectionClosedMs < 350) {
-    pressTracking = false;
+  if (millis() - selectionClosedMs < selection_hold::kClosedGuardMs) {
+    selectionHold_.reset();
     return true;
   }
-  const uint32_t now = millis();
-  int x = 0;
-  int y = 0;
-  const bool held = mappedInput.isScreenTouchHeld(x, y);
-
-  if (!selectionActive) {
-    // A real lift ends the press immediately. A quick tap that lands while the
-    // reader is blocked in a page render/scan would otherwise look like a
-    // 650 ms hold on the next loop pass (the release event arrives after the
-    // block) and open a selection instead of the intended tap/toolbar action.
-    // Only a genuinely missing sample (no release edge) may use the last-point
-    // fallback below.
-    int tapX = 0;
-    int tapY = 0;
-    if (mappedInput.wasScreenTouchReleased() || mappedInput.wasScreenTapped(tapX, tapY)) {
-      if (pressTracking) LOG_DBG("ERS", "selection: press ended by release");
-      pressTracking = false;
-      return false;
-    }
-    // The SDK's 500 ms classifier is intentionally not consumed: its threshold
-    // is short enough to catch ordinary reading taps, and consuming it would
-    // also suppress the contact before our longer timer could decide. Let the
-    // release become a normal tap if the finger lifts before kSelectionPressMs.
-    if (held) {
-      if (!pressTracking) {
-        pressTracking = true;
-        pressStartMs = now;
-        pressStartX = pressLastX = static_cast<int16_t>(x);
-        pressStartY = pressLastY = static_cast<int16_t>(y);
-        LOG_DBG("ERS", "selection: press start %d,%d", x, y);
-      }
-      pressLastHeldMs = now;
-      pressLastX = static_cast<int16_t>(x);
-      pressLastY = static_cast<int16_t>(y);
-      const int dx = x - pressStartX;
-      const int dy = y - pressStartY;
-      if (dx * dx + dy * dy > kSelectionSlopPx * kSelectionSlopPx) {
-        LOG_DBG("ERS", "selection: press cancelled (travel)");
-        pressTracking = false;  // genuine swipe
-        return false;
-      }
-      if (now - pressStartMs >= kSelectionPressMs) {
-        LOG_DBG("ERS", "selection: hold fired %d,%d", x, y);
-        pressTracking = false;
-        beginSelection(x, y);
-        // Consume the contact once the hold timer fired, even when no word was
-        // found: otherwise the still-down finger restarts the timer and the
-        // "no word" path repeats every 650 ms. A deliberate hold on blank space
-        // doing nothing is safer than a surprise page turn on the lift.
-        mappedInput.suppressScreenTouch();
-        selectionDragging = selectionActive;
-        selectionLastRedrawMs = now;
-        return selectionActive;
-      }
-      return false;
-    }
-    // No contact this frame. A real lift is followed by many empty frames, while
-    // a dropped sample is followed by contact again in a few ms — only the former
-    // may end the press, or the 520 ms timer restarts forever.
-    if (pressTracking && now - pressLastHeldMs < kSelectionHoldGapMs) return false;
-    // The panel can stop reporting a stationary finger entirely. If the press has
-    // already lasted long enough at its last known point, open the selection from
-    // there instead of dropping the gesture.
-    if (pressTracking && now - pressStartMs >= kSelectionPressMs) {
-      const int px = pressLastX;
-      const int py = pressLastY;
-      pressTracking = false;
-      LOG_DBG("ERS", "selection: hold fired from last point %d,%d", px, py);
-      beginSelection(px, py);
-      mappedInput.suppressScreenTouch();
-      selectionDragging = selectionActive;
-      selectionLastRedrawMs = now;
-      return selectionActive;
-    }
-    pressTracking = false;
-    return false;
+  if (selectionActive) {
+    // A selection is open: handleSelectionInput() owns the touch (handles + keys).
+    // This path is unreachable while selecting, but keep it explicit instead of
+    // duplicating the drag logic here — that duplication is what made the handles
+    // look "drag-less": the drag code sat behind an event that was always consumed
+    // first.
+    return true;
   }
 
-  // A selection is open: handleSelectionInput() owns the touch (handles + keys).
-  // This path is unreachable while selecting, but keep it explicit instead of
-  // duplicating the drag logic here — that duplication is what made the handles
-  // look "drag-less": the drag code sat behind an event that was always consumed
-  // first.
+  // One judgement, by the tracker the PDF reader shares: a real lift ends the press
+  // (and a quick tap stays a tap), travel is a swipe, a gap too short for a lift is a
+  // dropped sample, and a finger the panel stopped reporting still fires from its
+  // last known point.  See SelectionHold.h for why each of those exists.
+  int x = 0;
+  int y = 0;
+  int tapX = 0;
+  int tapY = 0;
+  const bool ended = mappedInput.wasScreenTouchReleased() || mappedInput.wasScreenTapped(tapX, tapY);
+  const bool held = mappedInput.isScreenTouchHeld(x, y);
+  const selection_hold::Contact contact{/*ended=*/ended, /*held=*/held, x, y};
+  const uint32_t now = millis();
+  const selection_hold::Verdict verdict = selectionHold_.update(contact, now);
+  if (verdict == selection_hold::Verdict::CancelledLift) {
+    LOG_DBG("ERS", "selection: press ended by release");
+    return false;
+  }
+  if (verdict == selection_hold::Verdict::CancelledTravel) {
+    LOG_DBG("ERS", "selection: press cancelled (travel)");
+    return false;
+  }
+  if (verdict != selection_hold::Verdict::Firing) return false;
+  LOG_DBG("ERS", "selection: hold fired %d,%d", selectionHold_.fireX(), selectionHold_.fireY());
+  beginSelection(selectionHold_.fireX(), selectionHold_.fireY());
+  // Consume the contact once the hold timer fired, even when no word was found:
+  // otherwise the still-down finger restarts the timer and the "no word" path
+  // repeats every kPressMs.  A deliberate hold on blank space doing nothing is
+  // safer than a surprise page turn on the lift.
+  mappedInput.suppressScreenTouch();
+  selectionDragging = selectionActive;
+  selectionLastRedrawMs = now;
+  // The frame is consumed either way now that the contact is suppressed -- the PDF
+  // reader always did, and routing a suppressed contact onwards buys nothing.
   return true;
 }
 
@@ -1671,18 +1630,8 @@ void EpubReaderActivity::endSelection() {
 }
 
 bool EpubReaderActivity::selectionCovers(const uint16_t line, const uint16_t word) const {
-  uint16_t aLine = selectionStartLine;
-  uint16_t aWord = selectionStartWord;
-  uint16_t bLine = selectionEndLine;
-  uint16_t bWord = selectionEndWord;
-  if (bLine < aLine || (bLine == aLine && bWord < aWord)) {
-    std::swap(aLine, bLine);
-    std::swap(aWord, bWord);
-  }
-  if (line < aLine || line > bLine) return false;
-  if (line == aLine && word < aWord) return false;
-  if (line == bLine && word > bWord) return false;
-  return true;
+  selection_geom::Range r{selectionStartLine, selectionStartWord, selectionEndLine, selectionEndWord};
+  return selection_geom::covers(r, line, word);
 }
 
 void EpubReaderActivity::drawSelection(const Page& page, const int fontId, const int marginLeft,
@@ -1744,33 +1693,26 @@ void EpubReaderActivity::drawSelection(const Page& page, const int fontId, const
 
   // Two handles, one per end. They are the only way to change the range: tapping
   // inside the range no longer silently shortens it, which was the part that read
-  // as arbitrary.
-  constexpr int kHandle = 24;
-  int hx[2];
-  int hy[2];
-  if (SETTINGS.verticalText != 0) {
-    // Vertical writing: the range runs down a column, so its two ends are above and
-    // below the text.
-    hx[0] = firstX + (firstW - kHandle) / 2;
-    hx[1] = lastX + (lastW - kHandle) / 2;
-    hy[0] = firstY - kHandle - 4;
-    hy[1] = lastY + lastH + 4;
-  } else {
-    hx[0] = firstX - kHandle - 4;
-    hx[1] = lastX + lastW + 4;
-    hy[0] = firstY + (lineHeight - kHandle) / 2;
-    hy[1] = lastY + (lineHeight - kHandle) / 2;
-  }
+  // as arbitrary.  The placement rule is shared with the PDF reader.
+  selection_geom::Ends ends;
+  ends.found = true;
+  ends.firstX = firstX;
+  ends.firstY = firstY;
+  ends.firstW = firstW;
+  ends.firstH = firstH;
+  ends.lastX = lastX;
+  ends.lastY = lastY;
+  ends.lastW = lastW;
+  ends.lastH = lastH;
+  const selection_geom::Handles handles =
+      selection_geom::handleGeometry(ends, SETTINGS.verticalText != 0, screenW, lineHeight);
   for (int i = 0; i < 2; ++i) {
-    int x = hx[i];
-    if (x < 2) x = 2;
-    if (x + kHandle > screenW - 2) x = screenW - 2 - kHandle;
-    renderer.fillRect(x, hy[i], kHandle, kHandle, false);
-    renderer.drawRect(x, hy[i], kHandle, kHandle, 2, true);
-    selectionHandleX[i] = static_cast<int16_t>(x);
-    selectionHandleY[i] = static_cast<int16_t>(hy[i]);
-    selectionHandleW[i] = kHandle;
-    selectionHandleH[i] = kHandle;
+    renderer.fillRect(handles.x[i], handles.y[i], handles.w[i], handles.h[i], false);
+    renderer.drawRect(handles.x[i], handles.y[i], handles.w[i], handles.h[i], 2, true);
+    selectionHandleX[i] = handles.x[i];
+    selectionHandleY[i] = handles.y[i];
+    selectionHandleW[i] = handles.w[i];
+    selectionHandleH[i] = handles.h[i];
   }
 }
 
@@ -1784,26 +1726,31 @@ bool EpubReaderActivity::handleSelectionHandleTouch() {
     return false;
   }
   if (!selectionDragging) {
-    // Handles first: they are the only way to adjust the range.
+    // Handles first: they are the only way to adjust the range. The hit box
+    // (handle grown by the slop margin) is shared with the PDF reader.
+    selection_geom::Handles handles;
     for (int i = 0; i < 2; ++i) {
-      if (selectionHandleW[i] <= 0) continue;
-      if (hx >= selectionHandleX[i] - 12 && hx < selectionHandleX[i] + selectionHandleW[i] + 12 &&
-          hy >= selectionHandleY[i] - 12 && hy < selectionHandleY[i] + selectionHandleH[i] + 12) {
-        selectionDragging = true;
-        selectionDragHandle = i + 1;
-        pressLastX = static_cast<int16_t>(hx);
-        pressLastY = static_cast<int16_t>(hy);
-        LOG_DBG("ERS", "selection: drag handle %d at %d,%d", i + 1, hx, hy);
-        return true;
-      }
+      handles.x[i] = selectionHandleX[i];
+      handles.y[i] = selectionHandleY[i];
+      handles.w[i] = selectionHandleW[i];
+      handles.h[i] = selectionHandleH[i];
+    }
+    const int hit = selection_geom::hitHandle(handles, hx, hy);
+    if (hit >= 0) {
+      selectionDragging = true;
+      selectionDragHandle = hit + 1;
+      dragLastX = static_cast<int16_t>(hx);
+      dragLastY = static_cast<int16_t>(hy);
+      LOG_DBG("ERS", "selection: drag handle %d at %d,%d", hit + 1, hx, hy);
+      return true;
     }
     // Not on a handle: swallow the press. A tap away from the handles ends the
     // selection (see handleSelectionInput); dragging elsewhere does nothing.
     return true;
   }
-  if (hx != pressLastX || hy != pressLastY) {
-    pressLastX = static_cast<int16_t>(hx);
-    pressLastY = static_cast<int16_t>(hy);
+  if (hx != dragLastX || hy != dragLastY) {
+    dragLastX = static_cast<int16_t>(hx);
+    dragLastY = static_cast<int16_t>(hy);
     updateSelectionDragTo(hx, hy);
   }
   return true;
@@ -1824,7 +1771,9 @@ bool EpubReaderActivity::handleSelectionInput() {
       endSelection();
       return true;
     }
-    if (millis() - selectionMenuOpenedMs < 250) return true;  // swallow the opening press
+    // The shared window, so the two readers cannot drift apart on this again; the literal
+    // used to live in this file only, which is why the PDF reader never had the guard.
+    if (!selection_hold::barAcceptsInput(millis(), selectionMenuOpenedMs)) return true;
     const bool leftKey = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightKey = mappedInput.wasReleased(MappedInputManager::Button::Right);
     if (leftKey || rightKey) {
@@ -1912,38 +1861,19 @@ bool EpubReaderActivity::handleSelectionInput() {
   const bool down = mappedInput.wasReleased(MappedInputManager::Button::Down);
   if (!left && !right && !up && !down) return true;
 
-  size_t focus = 0;
-  for (size_t i = 0; i < words.size(); ++i) {
-    if (words[i].line == selectionEndLine && words[i].word == selectionEndWord) {
-      focus = i;
-      break;
-    }
-  }
-  if (left) {
-    if (focus == 0) return true;
-    --focus;
-  } else if (right) {
-    if (focus + 1 >= words.size()) return true;
-    ++focus;
-  } else {
-    const int targetLine = static_cast<int>(selectionEndLine) + (up ? -1 : 1);
-    if (targetLine < 0) return true;
-    // Nearest word on the neighbouring line to the remembered column.
-    int best = -1;
-    int bestDist = 0x7FFFFFFF;
-    for (size_t i = 0; i < words.size(); ++i) {
-      if (words[i].line != static_cast<uint16_t>(targetLine)) continue;
-      const int centre = words[i].x + words[i].w / 2;
-      const int distance = centre > selectionAnchorX ? centre - selectionAnchorX : selectionAnchorX - centre;
-      if (distance < bestDist) {
-        bestDist = distance;
-        best = static_cast<int>(i);
-      }
-    }
-    if (best < 0) return true;
-    focus = static_cast<size_t>(best);
-  }
-  extendSelectionTo(words[focus]);
+  // The move itself is the shared rule (the PDF reader widens a selection with the
+  // same arithmetic): left/right walk reading order, up/down keep the column.
+  const int focus = selection_geom::indexOf(words, selectionEndLine, selectionEndWord);
+  const selection_geom::KeyStep step = left   ? selection_geom::KeyStep::Left
+                                       : right ? selection_geom::KeyStep::Right
+                                       : up    ? selection_geom::KeyStep::Up
+                                               : selection_geom::KeyStep::Down;
+  const int next = selection_geom::stepWord(words, focus, step, selectionAnchorX);
+  // -1 covers both page edges and a focus word that the page no longer has after a
+  // rebuild. Doing nothing is the only safe answer there: extending to index 0 would
+  // yank the selection to the first word of the page.
+  if (next < 0) return true;
+  extendSelectionTo(words[static_cast<size_t>(next)]);
   return true;
 }
 
@@ -2060,6 +1990,19 @@ void EpubReaderActivity::startPhraseLookup() {
           static_cast<unsigned>(snapshot.phrase.size()));
   // Drop the overlay before the child takes the screen (same contract as the
   // word picker), so Back returns to a plain page at the same position.
+  startPhraseLookupWithQuery(std::move(query));
+}
+
+bool EpubReaderActivity::startPhraseLookupWithQuery(selection_text::PhraseQuery&& query) {
+  selectionRestore_ = SelectionRestore{};
+  if (selectionActive && section) {
+    selectionRestore_.valid = true;
+    selectionRestore_.page = static_cast<uint16_t>(section->currentPage);
+    selectionRestore_.startLine = selectionStartLine;
+    selectionRestore_.startWord = selectionStartWord;
+    selectionRestore_.endLine = selectionEndLine;
+    selectionRestore_.endWord = selectionEndWord;
+  }
   endSelection();
   const bool started = startActivityForResultWith<DictionaryWordSelectActivity>(
       [this](const ActivityResult& result) {
@@ -2067,127 +2010,99 @@ void EpubReaderActivity::startPhraseLookup() {
         if (std::holds_alternative<DictionaryPickerRequest>(result.data)) {
           // The whole ladder missed: fall back to the page's word picker, which
           // is the same screen the dictionary menu opens.
+          selectionRestore_.valid = false;
           openDictionaryWordSelect();
           return;
         }
+        // Same page: put the highlight back so the reader can look another word
+        // up or act on the same passage without selecting it again.
+        if (selectionRestore_.valid && section && section->currentPage == selectionRestore_.page) {
+          selectionStartLine = selectionRestore_.startLine;
+          selectionStartWord = selectionRestore_.startWord;
+          selectionEndLine = selectionRestore_.endLine;
+          selectionEndWord = selectionRestore_.endWord;
+          selectionAnchorLine = selectionStartLine;
+          selectionAnchorWord = selectionStartWord;
+          selectionEditingIndex = -1;
+          selectionActive = true;
+          selectionMenuActive = true;
+          selectionMenuChoice = 0;
+          selectionMenuOpenedMs = millis();
+          selectionMenuDrawLogged = false;
+          selectionClosedMs = 0;
+        }
+        selectionRestore_.valid = false;
         requestUpdate();
       },
       std::move(query));
   if (!started) {
+    selectionRestore_.valid = false;
     toast_.show(tr(STR_NOT_AVAILABLE), millis());
     requestUpdate();
   }
+  return started;
+}
+
+void EpubReaderActivity::debugLookupPhrase(const char* text) {
+  // Serial-only (CMD:PHRASELOOKUP): the same ladder the selection chip runs, on a
+  // caller-given word, so a real dictionary hit needs no long press.
+  if (text == nullptr || *text == '\0') return;
+  std::string dictionaryBase;
+  if (!DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryBase)) {
+    showDictionaryMessage = true;
+    dictionaryMessageTime = millis();
+    LOG_DBG("ERS", "phrase: debug lookup but no usable dictionary");
+    requestUpdate();
+    return;
+  }
+  selection_text::PhraseQuery query;
+  query.text = selection_text::normalizePhrase(text);
+  if (!selection_text::hasLookupContent(query.text)) return;
+  LOG_DBG("ERS", "phrase: debug lookup of %u bytes", static_cast<unsigned>(query.text.size()));
+  startPhraseLookupWithQuery(std::move(query));
 }
 
 void EpubReaderActivity::drawSelectionMenu() {
   if (!selectionMenuActive) return;
   const int fontId = SETTINGS.getReaderFontId();
-  const int lineHeight = renderer.getLineHeight(fontId);
-  const int screenW = renderer.getScreenWidth();
-  // Compact chips, not full-width blocks: height follows the text, width follows
-  // the label. Nothing is filled, so no plane can leave a black slab behind.
-  const int chipH = lineHeight + 10;
-  const int padX = 26;
-  const int gap = 14;
-  // A new selection offers the lookup first (the most frequent action and the one
-  // the anti-double-tap guard protects). Editing an existing annotation keeps the
-  // old two chips: the stored quote is truncated at 120 bytes, so a lookup there
-  // would search the wrong text.
   const bool editing = selectionEditingIndex >= 0;
   const int chipCount = editing ? 2 : 3;
   const char* labels[3] = {editing ? tr(STR_DELETE) : tr(STR_LOOKUP), editing ? tr(STR_NOTE) : tr(STR_HIGHLIGHT),
                            tr(STR_NOTE)};
-  // CJK labels are drawn with a fallback face whose advance is wider than the
-  // primary face used to measure here, so leave slack or the text spills out.
-  int widths[3] = {0, 0, 0};
-  int totalW = gap * (chipCount - 1);
+  selection_bar::Hits hits{};
+  selection_bar::draw(renderer, fontId, labels, chipCount, selectionMenuChoice,
+                      SETTINGS.verticalText != 0, renderer.getScreenWidth(), renderer.getScreenHeight(),
+                      selectionFirstTopY, selectionLastBottomY, selectionFirstX, selectionLastX,
+                      selectionLastW, hits);
   for (int i = 0; i < chipCount; ++i) {
-    widths[i] = renderer.getTextAdvanceX(fontId, labels[i], EpdFontFamily::BOLD) + padX * 2 + 10;
-    totalW += widths[i];
-  }
-  const uint8_t radius = static_cast<uint8_t>(chipH / 2);
-  const auto drawChip = [&](const int x, const int y, const int w, const char* label, const bool active,
-                            const int idx) {
-    renderer.fillRoundedRect(x, y, w, chipH, radius, Color::White);
-    renderer.drawRoundedRect(x, y, w, chipH, active ? 3 : 2, radius, true);
-    const int textW = renderer.getTextAdvanceX(fontId, label, EpdFontFamily::BOLD);
-    renderer.drawText(fontId, x + (w - textW) / 2, y + (chipH - lineHeight) / 2, label, true, EpdFontFamily::BOLD);
-    selectionMenuHitX[idx] = static_cast<int16_t>(x);
-    selectionMenuHitY[idx] = static_cast<int16_t>(y);
-    selectionMenuHitW[idx] = static_cast<int16_t>(w);
-    selectionMenuHitH[idx] = static_cast<int16_t>(chipH);
-  };
-  // Keep the row inside screenW-12 whenever it fits there at all; only a row too
-  // wide for the panel starts at the left edge and overflows to the right.
-  const auto rowX = [&]() {
-    int x = std::max<int>(6, (screenW - totalW) / 2);
-    if (x + totalW > screenW - 6) x = std::max<int>(6, screenW - 6 - totalW);
-    return x;
-  };
-  if (SETTINGS.verticalText != 0) {
-    // Vertical writing. The stack is centred on the selection's vertical middle and
-    // hugs the selection's side: to the right of it (chips left-aligned against the
-    // column) or, when that would overflow, to its left (chips right-aligned). When
-    // neither side has room the chips fall back to a centred horizontal row.
-    int chipW = 0;
-    for (int i = 0; i < chipCount; ++i) chipW = std::max(chipW, widths[i]);
-    const int stackH = chipH * chipCount + 10 * (chipCount - 1);
-    const int selCenterY = (selectionFirstTopY + selectionLastBottomY) / 2;
-    const int maxStackY = renderer.getScreenHeight() - stackH - 56;  // clear of the status bar
-    int bx = selectionLastX + selectionLastW + 10;
-    if (bx + chipW > screenW - 6) {
-      bx = selectionFirstX - chipW - 10;
-      if (bx < 6) {
-        // No room on either side: centre the row on the selection's middle.
-        int x = rowX();
-        int y = selCenterY - chipH / 2;
-        if (y > renderer.getScreenHeight() - chipH - 56) y = renderer.getScreenHeight() - chipH - 56;
-        if (y < 8) y = 8;
-        for (int i = 0; i < chipCount; ++i) {
-          drawChip(x, y, widths[i], labels[i], i == selectionMenuChoice, i);
-          x += widths[i] + gap;
-        }
-        return;
-      }
-    }
-    int by = selCenterY - stackH / 2;
-    if (by > maxStackY) by = maxStackY;
-    if (by < 8) by = 8;
-    for (int i = 0; i < chipCount; ++i) {
-      drawChip(bx, by + i * (chipH + 10), widths[i], labels[i], i == selectionMenuChoice, i);
-    }
-  } else {
-    int barY = selectionLastBottomY + 10;
-    if (barY + chipH > renderer.getScreenHeight() - 8) barY = selectionFirstTopY - chipH - 10;
-    if (barY < 8) barY = 8;
-    int x = rowX();
-    for (int i = 0; i < chipCount; ++i) {
-      drawChip(x, barY, widths[i], labels[i], i == selectionMenuChoice, i);
-      x += widths[i] + gap;
-    }
+    selectionMenuHitX[i] = hits.x[i];
+    selectionMenuHitY[i] = hits.y[i];
+    selectionMenuHitW[i] = hits.w[i];
+    selectionMenuHitH[i] = hits.h[i];
   }
   if (!selectionMenuDrawLogged) {
     selectionMenuDrawLogged = true;
-    LOG_DBG("ERS", "selection: menu drawn h=%d chips=%d (sel %d..%d) vertical=%d", chipH, chipCount,
-            selectionFirstTopY, selectionLastBottomY, SETTINGS.verticalText);
+    LOG_DBG("ERS", "selection: menu drawn h=%d chips=%d (sel %d..%d) vertical=%d",
+            renderer.getLineHeight(fontId) + 10, chipCount, selectionFirstTopY, selectionLastBottomY,
+            SETTINGS.verticalText != 0);
   }
 }
 
 void EpubReaderActivity::extendSelectionTo(const AnnoWordRect& word) {
-  const auto before = [](const uint16_t l1, const uint16_t w1, const uint16_t l2, const uint16_t w2) {
-    return l1 < l2 || (l1 == l2 && w1 < w2);
-  };
-  // The anchored end never slides: whichever side the target falls on grows. That
-  // is what makes tapping left of the anchor extend left instead of translating
-  // the whole range.
-  if (before(word.line, word.word, selectionStartLine, selectionStartWord)) {
-    selectionStartLine = word.line;
-    selectionStartWord = word.word;
+  // The anchored end never slides: whichever side the target falls on grows, and
+  // the anchor moves to the far (fixed) end so the next tap extends from it.
+  // That rule lives in the shared geometry so the PDF reader extends identically.
+  selection_geom::Range r{selectionStartLine, selectionStartWord, selectionEndLine, selectionEndWord};
+  const bool growStart = selection_geom::before(word.line, word.word, selectionAnchorLine, selectionAnchorWord);
+  selection_geom::extendTo(r, selectionAnchorLine, selectionAnchorWord, word.line, word.word);
+  selectionStartLine = r.startLine;
+  selectionStartWord = r.startWord;
+  selectionEndLine = r.endLine;
+  selectionEndWord = r.endWord;
+  if (growStart) {
     selectionAnchorLine = selectionEndLine;
     selectionAnchorWord = selectionEndWord;
   } else {
-    selectionEndLine = word.line;
-    selectionEndWord = word.word;
     selectionAnchorLine = selectionStartLine;
     selectionAnchorWord = selectionStartWord;
   }
@@ -2268,31 +2183,16 @@ void EpubReaderActivity::promptEditAnnotation(const size_t index) {
 
 void EpubReaderActivity::exportAnnotations() {
   if (!epub) return;
-  // Human-readable date for the export header; an unset clock simply omits it
-  // rather than printing an epoch number.
-  char stamp[16] = "";
-  const time_t now = time(nullptr);
-  if (now > 0) {
-    // localtime_r, not localtime: newlib's localtime() needs a 2.5 KB
-    // thread-local buffer, and on the RISC-V port that TLS block is placed in
-    // every task stack (the 1 KB IPC task overflows and corrupts the heap).
-    tm local{};
-    if (localtime_r(&now, &local) != nullptr) strftime(stamp, sizeof(stamp), "%Y-%m-%d", &local);
-  }
-  const std::string body = annotations::formatExport(epub->getTitle(), stamp, annotations_);
-  const std::string path = epub->getCachePath() + "/annotations.txt";
-  HalFile file;
-  if (!Storage.openFileForWrite("ERS", path, file)) {
-    LOG_ERR("ERS", "annotations: cannot open %s for export", path.c_str());
+  // Everything but the toast is shared with the PDF reader: same file name (which the
+  // cache-clear keep list also has to know), same date stamp, same formatting.
+  std::string path;
+  const auto result =
+      annotation_export::write("ERS", epub->getCachePath(), epub->getTitle(), annotations_, path);
+  if (result == annotation_export::Result::Written || result == annotation_export::Result::ShortWrite) {
+    toast_.show(path.c_str(), millis());
+  } else {
     toast_.show(tr(STR_NOT_AVAILABLE), millis());
-    requestUpdate();
-    return;
   }
-  const size_t written = file.write(body.data(), body.size());
-  file.close();
-  LOG_DBG("ERS", "annotations exported: %u/%u bytes -> %s", static_cast<unsigned>(written),
-          static_cast<unsigned>(body.size()), path.c_str());
-  toast_.show(path.c_str(), millis());
   requestUpdate();
 }
 
@@ -3725,6 +3625,7 @@ void EpubReaderActivity::beginLoanTimeSync() {
       return;
     }
     status_card::showWait(renderer, tr(STR_SYNCING_TIME), nullptr, nullptr, -1, false, millis());
+    NetworkStartup::ActivityGuard networkGuard;
     const bool synced = trustedtime::syncNow(5000);
     // The sync is the only reason this screen started the radio; hand it back on
     // both outcomes (a failed sync offers a retry that opens the picker again).
@@ -3888,6 +3789,12 @@ void EpubReaderActivity::renderBook() {
       showBuildError();
       return;
     }
+    // CSS font-size at block level (layout M2). Created after the reader face is
+    // loaded (ReaderActivity::onEnter) so it can tell the pack from an SD family.
+    if (!blockFonts) {
+      blockFonts = makeUniqueNoThrow<ReaderBlockFonts>(renderer);
+    }
+    section->setBlockFontProvider(blockFonts.get());
 
 #if FREEINK_DEVICE_READPICO
     ++sectionGeneration_;
@@ -6021,8 +5928,12 @@ std::string EpubReaderActivity::textRowValue(int row) const {
       return I18N.get(kFamily[SETTINGS.fontFamily % CrossPointSettings::FONT_FAMILY_COUNT]);
     // Value rows keep the inline stepper affordance the panel strips for its
     // own minus/plus buttons (see stepValueText() in ReaderToolbarUi).
-    case 1:
-      return "- " + std::to_string(SETTINGS.fontPointSize) + " pt ＋";
+    case 1: {
+      const bool native =
+          readerFontPointSizeIsNative(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, SETTINGS.fontPointSize);
+      return "- " + std::to_string(SETTINGS.fontPointSize) + " pt" +
+             (native ? "" : tr(STR_FONT_SYSTEM_SUFFIX)) + " ＋";
+    }
     case 2:
       return std::string("- ") +
              I18N.get(kSpacingIds[SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT]) + " +";
@@ -6065,8 +5976,13 @@ void EpubReaderActivity::stepTextRow(const int row, const int delta) {
       while (index < sizes.size() && sizes[index] != current) ++index;
       if (index >= sizes.size()) index = 0;
       const int next = std::clamp(static_cast<int>(index) + delta, 0, static_cast<int>(sizes.size()) - 1);
-      if (sizes[static_cast<size_t>(next)] == SETTINGS.fontPointSize) return;
-      SETTINGS.fontPointSize = sizes[static_cast<size_t>(next)];
+      const uint8_t nextPt = sizes[static_cast<size_t>(next)];
+      if (nextPt == SETTINGS.fontPointSize) return;
+      if (!readerFontPointSizeIsNative(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, nextPt)) {
+        SETTINGS.useBuiltinReaderFontAt(nextPt);
+      } else {
+        SETTINGS.fontPointSize = nextPt;
+      }
       applyTextSettingLive();
       return;
     }
@@ -6143,7 +6059,10 @@ void EpubReaderActivity::showTextRowPopup(const int row) {
       if (sizes.empty()) return;
       std::vector<std::string> labels;
       labels.reserve(sizes.size());
-      for (const uint8_t size : sizes) labels.push_back(std::to_string(size) + " pt");
+      for (const uint8_t size : sizes) {
+        const bool native = readerFontPointSizeIsNative(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, size);
+        labels.push_back(std::to_string(size) + " pt" + (native ? "" : tr(STR_FONT_SYSTEM_SUFFIX)));
+      }
       const uint8_t cur = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
       int curIdx = 0;
       for (size_t i = 0; i < sizes.size(); ++i) {
@@ -6151,8 +6070,13 @@ void EpubReaderActivity::showTextRowPopup(const int row) {
       }
       overlayPopup.show(StrId::STR_FONT_SIZE, labels, curIdx, [this, sizes](int idx) {
         if (idx < 0 || idx >= static_cast<int>(sizes.size())) return;
-        if (SETTINGS.fontPointSize == sizes[idx]) return;
-        SETTINGS.fontPointSize = sizes[idx];
+        const uint8_t nextPt = sizes[idx];
+        if (SETTINGS.fontPointSize == nextPt) return;
+        if (!readerFontPointSizeIsNative(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName, nextPt)) {
+          SETTINGS.useBuiltinReaderFontAt(nextPt);
+        } else {
+          SETTINGS.fontPointSize = nextPt;
+        }
         SETTINGS.sdFontFlashPreload = 0;
         applyTextSettingLive();
       });
@@ -6418,6 +6342,13 @@ void EpubReaderActivity::debugActivateContentsRow(const int row) {
 }
 
 void EpubReaderActivity::debugConfirm() {
+  // Selection bar: CMD:PHRASE opens it, and a second Confirm activates the
+  // focused chip -- the only way to reach the dictionary from the host, since a
+  // 650 ms long press and a touch cannot be produced over serial.
+  if (selectionMenuActive) {
+    activateSelectionMenuChoice(selectionMenuChoice);
+    return;
+  }
   // Text grid: cells 1..4 open their value picker on Confirm, which is the
   // same path the device takes; nothing else is reproducible from serial.
   if (overlay == Overlay::Text && panelIndex >= 1 && panelIndex <= 4) {
@@ -7247,7 +7178,13 @@ void EpubReaderActivity::applyReaderTextSettings() {
   RenderLock lock;
   sdFontSystem.ensureLoaded(renderer);
   emoji_font::setPointSize(renderer, SETTINGS.fontPointSize);
+  // The section's cached per-line font ids were resolved against the old reader
+  // face; the next section build must resolve against the new one.
+  blockFonts.reset();
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // Drop the old block-size pins so the configure() below can release those faces;
+  // the next section build re-pins the sizes it actually needs.
+  system_font_pack::releasePinnedPointSizes();
   // A new point size needs its vector face before the page is laid out.
   typography::apply(renderer, SETTINGS.uiFontScale);
 #endif

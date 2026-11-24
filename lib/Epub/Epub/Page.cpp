@@ -56,6 +56,7 @@ bool Page::addLink(const char* href, const int16_t x, const int16_t y, const int
 }
 
 void Page::setVertical(const bool on, const int viewportWidth, const int colWidth) {
+  verticalWritingMode = on;
   if (!on) {
     for (auto& element : elements) {
       if (element->getTag() == TAG_PageLine) {
@@ -77,14 +78,23 @@ void Page::setVertical(const bool on, const int viewportWidth, const int colWidt
 }
 
 void PageLine::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  // A block laid out at a CSS font size draws with that face. The id is checked
+  // against the live font map: a section built in an earlier session can name a
+  // face this session has not loaded (or released), and falling back to the
+  // section font keeps the line readable instead of failing on a missing font.
+  int lineFontId = fontId;
+  const int blockFontId = block->getBlockStyle().fontId;
+  if (blockFontId != 0 && renderer.getFontMap().count(blockFontId) != 0) {
+    lineFontId = blockFontId;
+  }
   if (verticalMode) {
-    const int colW = verticalColW > 0 ? verticalColW : renderer.getLineHeight(fontId);
+    const int colW = verticalColW > 0 ? verticalColW : renderer.getLineHeight(lineFontId);
     const int col = colW > 0 ? yPos / colW : 0;
     const int colX = xOffset + verticalWidth - (col + 1) * colW;
-    block->renderVertical(renderer, fontId, colX, yOffset, colW);
+    block->renderVertical(renderer, lineFontId, colX, yOffset, colW);
     return;
   }
-  block->render(renderer, fontId, xPos + xOffset, yPos + yOffset);
+  block->render(renderer, lineFontId, xPos + xOffset, yPos + yOffset);
 }
 
 bool PageLine::serialize(HalFile& file) {
@@ -190,8 +200,126 @@ std::unique_ptr<PageHorizontalRule> PageHorizontalRule::deserialize(HalFile& fil
   return rule;
 }
 
+void PageBorderBox::renderBackground(GfxRenderer& renderer, const int xOffset, const int yOffset) const {
+  if (shadeLevel_ == 0) return;
+  renderer.fillRectShade(xPos + xOffset, yPos + yOffset, width_, height_, shadeLevel_);
+}
+
+void PageBorderBox::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  (void)fontId;
+  const int x = xPos + xOffset;
+  const int y = yPos + yOffset;
+  if (borderTop_ > 0) renderer.fillRect(x, y, width_, borderTop_, true);
+  if (borderBottom_ > 0) renderer.fillRect(x, y + height_ - borderBottom_, width_, borderBottom_, true);
+  if (borderLeft_ > 0) renderer.fillRect(x, y, borderLeft_, height_, true);
+  if (borderRight_ > 0) renderer.fillRect(x + width_ - borderRight_, y, borderRight_, height_, true);
+}
+
+bool PageBorderBox::serialize(HalFile& file) {
+  serialization::writePod(file, xPos);
+  serialization::writePod(file, yPos);
+  serialization::writePod(file, width_);
+  serialization::writePod(file, height_);
+  serialization::writePod(file, shadeLevel_);
+  serialization::writePod(file, borderTop_);
+  serialization::writePod(file, borderRight_);
+  serialization::writePod(file, borderBottom_);
+  serialization::writePod(file, borderLeft_);
+  return true;
+}
+
+std::unique_ptr<PageBorderBox> PageBorderBox::deserialize(HalFile& file) {
+  int16_t xPos = 0;
+  int16_t yPos = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  uint8_t shade = 0;
+  uint8_t top = 0;
+  uint8_t right = 0;
+  uint8_t bottom = 0;
+  uint8_t left = 0;
+  if (!serialization::readPod(file, xPos) || !serialization::readPod(file, yPos) ||
+      !serialization::readPod(file, width) || !serialization::readPod(file, height) ||
+      !serialization::readPod(file, shade) || !serialization::readPod(file, top) ||
+      !serialization::readPod(file, right) || !serialization::readPod(file, bottom) ||
+      !serialization::readPod(file, left)) {
+    return nullptr;
+  }
+  if (width == 0 || height == 0 || shade > 15 || top > 4 || right > 4 || bottom > 4 || left > 4) {
+    LOG_ERR("PGE", "Deserialization failed: invalid border box (w=%u h=%u shade=%u edges=%u/%u/%u/%u)", width, height,
+            shade, top, right, bottom, left);
+    return nullptr;
+  }
+  auto box = makeUniqueNoThrow<PageBorderBox>(xPos, yPos, width, height, shade, top, right, bottom, left);
+  if (!box) {
+    LOG_ERR("PGE", "Deserialization failed: could not allocate PageBorderBox");
+    return nullptr;
+  }
+  return box;
+}
+
+void PageDropCap::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  const auto& fonts = renderer.getFontMap();
+  const int desired = faceId_ != 0 ? static_cast<int>(faceId_) : fontId;
+  auto it = fonts.find(desired);
+  if (it == fonts.end()) it = fonts.find(fontId);
+  if (it == fonts.end()) return;
+  // yPos is the first reserved line's top: anchor the ink there rather than on the
+  // line's baseline, or a 3x glyph rises two lines above the paragraph.
+  renderer.drawScaledCodepointTop(it->second, codepoint_, xPos + xOffset, yPos + yOffset, scale256_,
+                                  EpdFontFamily::REGULAR, true);
+}
+
+bool PageDropCap::serialize(HalFile& file) {
+  serialization::writePod(file, xPos);
+  serialization::writePod(file, yPos);
+  serialization::writePod(file, codepoint_);
+  serialization::writePod(file, scale256_);
+  serialization::writePod(file, width_);
+  serialization::writePod(file, height_);
+  serialization::writePod(file, faceId_);
+  return true;
+}
+
+std::unique_ptr<PageDropCap> PageDropCap::deserialize(HalFile& file) {
+  int16_t xPos = 0;
+  int16_t yPos = 0;
+  uint32_t codepoint = 0;
+  uint16_t scale256 = 0;
+  uint16_t width = 0;
+  uint16_t height = 0;
+  int32_t faceId = 0;
+  if (!serialization::readPod(file, xPos) || !serialization::readPod(file, yPos) ||
+      !serialization::readPod(file, codepoint) || !serialization::readPod(file, scale256) ||
+      !serialization::readPod(file, width) || !serialization::readPod(file, height) ||
+      !serialization::readPod(file, faceId)) {
+    return nullptr;
+  }
+  if (codepoint == 0 || codepoint > 0x10FFFF || scale256 < 256 || scale256 > 1024 || width == 0 || height == 0) {
+    LOG_ERR("PGE", "Deserialization failed: invalid drop cap (cp=%u scale=%u w=%u h=%u)", codepoint, scale256, width,
+            height);
+    return nullptr;
+  }
+  auto cap = makeUniqueNoThrow<PageDropCap>(codepoint, scale256, width, height, faceId, xPos, yPos);
+  if (!cap) {
+    LOG_ERR("PGE", "Deserialization failed: could not allocate PageDropCap");
+    return nullptr;
+  }
+  return cap;
+}
+
 void Page::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) const {
-  renderFilteredPageElements(elements, renderer, fontId, xOffset, yOffset, [](const PageElement&) { return true; });
+  if (!verticalWritingMode) {
+    for (const auto& element : elements) {
+      if (element->getTag() == TAG_PageBorderBox) {
+        static_cast<const PageBorderBox&>(*element).renderBackground(renderer, xOffset, yOffset);
+      }
+    }
+  }
+  renderFilteredPageElements(elements, renderer, fontId, xOffset, yOffset, [this](const PageElement& element) {
+    if (!verticalWritingMode) return true;
+    return element.getTag() != TAG_PageBorderBox && element.getTag() != TAG_PageDropCap;
+  });
 }
 
 void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) const {
@@ -201,7 +329,18 @@ void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffs
 
 void Page::renderWithImagePlaceholders(GfxRenderer& renderer, const int fontId, const int xOffset,
                                        const int yOffset) const {
+  if (!verticalWritingMode) {
+    for (const auto& element : elements) {
+      if (element->getTag() == TAG_PageBorderBox) {
+        static_cast<const PageBorderBox&>(*element).renderBackground(renderer, xOffset, yOffset);
+      }
+    }
+  }
   for (const auto& element : elements) {
+    if (verticalWritingMode &&
+        (element->getTag() == TAG_PageBorderBox || element->getTag() == TAG_PageDropCap)) {
+      continue;
+    }
     if (element->getTag() == TAG_PageImage) {
       static_cast<const PageImage&>(*element).renderPlaceholder(renderer, xOffset, yOffset);
     } else {
@@ -322,6 +461,18 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file, const bool collectTouchLi
         return nullptr;
       }
       page->elements.push_back(std::move(rule));
+    } else if (tag == TAG_PageDropCap) {
+      auto cap = PageDropCap::deserialize(file);
+      if (!cap) {
+        return nullptr;
+      }
+      page->elements.push_back(std::move(cap));
+    } else if (tag == TAG_PageBorderBox) {
+      auto box = PageBorderBox::deserialize(file);
+      if (!box) {
+        return nullptr;
+      }
+      page->elements.push_back(std::move(box));
     } else {
       LOG_ERR("PGE", "Deserialization failed: Unknown tag %u", tag);
       return nullptr;

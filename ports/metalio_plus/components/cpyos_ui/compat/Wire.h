@@ -12,6 +12,9 @@ class TwoWire {
   void begin() {}
   void begin(int, int, uint32_t = 0) {}
   void setClock(uint32_t) {}
+  // Arduino Wire timeout used by the ported IMU configuration upload.
+  uint32_t getTimeOut() const { return timeout_ms_; }
+  void setTimeOut(uint32_t ms) { timeout_ms_ = ms != 0 ? ms : 1; }
 
   void beginTransmission(uint8_t address);
   // stop=false defers the write so a following requestFrom() can issue a
@@ -32,6 +35,7 @@ class TwoWire {
   uint8_t rx_[kBufferSize] = {};
   size_t rxLen_ = 0;
   size_t rxPos_ = 0;
+  uint32_t timeout_ms_ = 100;
 };
 
 extern TwoWire Wire;

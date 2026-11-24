@@ -147,7 +147,14 @@ def build_manifest(name: str, version: str, parts_list: list[dict], erase: bool)
     }
 
 
-def flash_readme(version: str) -> str:
+def flash_readme(version: str, partitions: dict, data_rows: list) -> str:
+    app0 = partitions['app0'][0]
+    app1 = partitions['app1'][0]
+    data_table = "\n".join(
+        f"| {row['name']} | data partition + 0x{row['offset']:06x} (flash 0x{row['address']:06x}) |"
+        for row in data_rows)
+    manual_data = " ".join(
+        f"0x{row['address']:06x} {row['name']}" for row in data_rows)
     return f'''# {PRODUCT} {version} — Read Pico (小纸 Pico)
 
 This folder is a complete Read Pico installation. Keep it together; the
@@ -162,21 +169,22 @@ Use `manifest-install.json` (or the web flasher on the project site). It writes:
 | readpico-bootloader.bin | 0x0 |
 | readpico-partitions.bin | 0x8000 |
 | readpico-boot_app0.bin | 0xE000 |
-| readpico-firmware.bin | 0x10000 |
-| readpico-app1.bin | 0x740000 (upgrade / app-only manifests) |
-| pinyin.dat / web_pack.dat / hyphen.dat / i18n_pack.dat / emoji.dat | data partition |
+| readpico-firmware.bin | 0x{app0:06x} |
+| readpico-app1.bin | 0x{app1:06x} (only when the updater writes both slots) |
+| readpico-pdfmod.bin | 0x{partitions['pdfmod'][0]:06x} |
+{data_table}
 
-The install manifest asks the browser to erase the chip. That is required when
-coming from the factory partition layout (7.19 MiB slots vs the factory table at
-0xE000). SD-card books and settings under `/.crosspoint` are not touched.
+The install manifest asks the browser to erase the chip. That is required for
+this release: 0.7.0 and older use a different partition table and a different
+PDF/data layout, and must not be upgraded by OTA. SD-card books and settings
+under `/.crosspoint` are not touched by a full install.
 
 ## Upgrade from an existing CPYOS install
 
-Use `manifest-upgrade.json`: it writes the app to **both** OTA slots and the
-data packs, keeps NVS and the partition table, and does not erase. Both slots
-are written because a device that has already used OTA boots from app1, and the
-browser cannot read otadata to choose the active slot; an app0-only write would
-be silently ignored. `manifest-app.json` follows the same rule.
+Do not use OTA for this release. The PDF partition and data layout changed;
+use the full installer above, then continue with OTA from 0.8.1 onward. A later
+OTA manifest writes both app slots so an app0-only write cannot leave a device
+booting an old app1.
 
 ## Device OTA
 
@@ -191,11 +199,10 @@ Upgrade (or first install after writing the bootloader and partition table):
 ```bash
 esptool.py --chip esp32s3 write_flash \\
   0x0 readpico-bootloader.bin 0x8000 readpico-partitions.bin \\
-  0xE000 readpico-boot_app0.bin 0x10000 readpico-firmware.bin \\
-  0x740000 readpico-app1.bin \\
-  0xE70000 pinyin.dat 0xEC6000 web_pack.dat \\
-  0xF00000 hyphen.dat 0xF70000 i18n_pack.dat \\
-  0xFD0000 emoji.dat
+  0xE000 readpico-boot_app0.bin 0x{app0:06x} readpico-firmware.bin \\
+  0x{app1:06x} readpico-app1.bin \\
+  0x{partitions['pdfmod'][0]:06x} readpico-pdfmod.bin \\
+  {manual_data}
 ```
 
 For an existing CPYOS install, skip the bootloader/partition/boot_app0 part and
@@ -240,6 +247,23 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
                           'size': (output / name).stat().st_size,
                           'sha256': sha256_file(output / name)})
 
+    # The XIP PDF app needs its engine in the dedicated pdfmod partition.  It is
+    # part of the full install only: later app-only OTA keeps the installed
+    # engine, which is exactly what the v2 compatibility contract allows.
+    pdfmod_source = root / 'build' / 'pdfmod.bin'
+    pdfmod_part = None
+    if pdfmod_source.is_file() and 'pdfmod' in partitions:
+        pdfmod_name = nightly_targets.asset_name(TARGET_ID, 'pdfmod.bin')
+        copy(pdfmod_source, output / pdfmod_name)
+        pdfmod_part = {'role': 'pdf_engine', 'name': pdfmod_name,
+                       'offset': partitions['pdfmod'][0],
+                       'size': (output / pdfmod_name).stat().st_size,
+                       'sha256': sha256_file(output / pdfmod_name)}
+        if pdfmod_part['size'] > partitions['pdfmod'][1]:
+            fail(f'{pdfmod_name} is {pdfmod_part["size"]} bytes but pdfmod is {partitions["pdfmod"][1]}')
+    elif full_install_only:
+        fail('build/pdfmod.bin is missing; build the paired PDF engine before a full install')
+
     # The font tiers moved app1 and spiffs. An OTA/manifest written at the new
     # addresses would land inside an old device's app1 slot (the new spiffs base
     # is the old app1 range), so the transition release must be a full install.
@@ -250,6 +274,11 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
              'corrupt its app1 slot. Publish with --full-install-only; later app-only OTA '
              'releases from the new layout are safe.'
              % (partitions['app1'][0], partitions['spiffs'][0]))
+
+    for part in app_parts:
+        limit = package_nightly_target.full_install_segment_limit(part['role'])
+        if limit is not None and part['size'] > limit:
+            fail(f'{part["name"]} is {part["size"]} bytes but its flash region is {limit}')
 
     firmware_asset = next(item for item in app_parts if item['role'] == 'firmware')
     if firmware_asset['size'] > partitions['app0'][1]:
@@ -283,7 +312,8 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     copy(root / 'build' / 'readpico-packs.txt', output / 'readpico-packs.txt')
     print('  data packs manifest: readpico-packs.txt')
 
-    install_parts = parts(app_parts, data_rows)
+    install_app_parts = app_parts + ([pdfmod_part] if pdfmod_part is not None else [])
+    install_parts = parts(install_app_parts, data_rows)
     update_parts = parts([firmware_asset, app1_part], data_rows)
     app_only = parts([firmware_asset, app1_part], [])
 
@@ -342,7 +372,7 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         },
     }
     write_json(output / 'latest.json', latest)
-    (output / 'FLASH.md').write_text(flash_readme(version), encoding='utf-8')
+    (output / 'FLASH.md').write_text(flash_readme(version, partitions, data_rows), encoding='utf-8')
 
     # The release workflow uploads top-level files only. Keep the project license,
     # the JJWXC statement and every third-party license text in that flat shape.

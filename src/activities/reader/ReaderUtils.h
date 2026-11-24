@@ -135,7 +135,7 @@ inline uint8_t legacyZoneAction(const GfxRenderer& renderer, const int x, const 
 }
 
 inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
-                                         const bool rtlBook = false) {
+                                         const bool rtlBook = false, const bool reserveReaderMenuTap = true) {
   TouchPageTurn result;
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
@@ -160,7 +160,9 @@ inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const Mapp
 
   const bool nextTaps = allowsTap(SETTINGS.pageTurnGesture);
   const bool prevTaps = allowsTap(SETTINGS.previousPageGesture);
-  const bool menuTap = SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_TAP;
+  // Only views with a reader menu reserve the centre tap; dictionary pages let
+  // it fall through to page turning.
+  const bool menuTap = reserveReaderMenuTap && SETTINGS.showReaderMenu == CrossPointSettings::READER_MENU_TAP;
   const bool invertedTap = SETTINGS.pageTurnGesture == CrossPointSettings::INVERTED_TAP ||
                            SETTINGS.previousPageGesture == CrossPointSettings::INVERTED_TAP;
   // Zone PREV/NEXT are reading-order actions; the mirrored page-turn direction

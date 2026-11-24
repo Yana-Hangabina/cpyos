@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Read Pico 0.8.0 changes the PDF partition: full reinstall required",
+    "Do not use OTA from 0.7.0 or older; use the full installer",
+    "Adds PDF reading with reflow, bookmarks and annotations",
+    "EPUB typography and dictionary improvements",
+    "New plugin games and shutdown confirmation",
+    "Back up the SD card and a full flash image before installing"
+  ],
+  "zh": [
+    "Read Pico 0.8.0 更换 PDF 分区，必须完整重新安装",
+    "0.7.0 及更早版本请勿使用 OTA，请用完整安装包",
+    "新增 PDF 阅读：重排、书签与批注",
+    "EPUB 排版与词典能力改进",
+    "新增插件游戏与关机确认",
+    "安装前请备份 SD 卡和整片镜像"
+  ]
+}

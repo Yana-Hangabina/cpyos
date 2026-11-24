@@ -31,15 +31,25 @@ python3 -m unittest ports.metalio_plus.test.test_package_metalio_plus \
                    ports.metalio_plus.test.test_web_fonts \
                    ports.metalio_plus.test.test_docs_artifacts \
                    ports.metalio_plus.test.test_analyze_power_log \
-                   ports.metalio_plus.test.test_reference_inventory
+                   ports.metalio_plus.test.test_reference_inventory \
+                   ports.metalio_plus.test.test_pdf_port \
+                   ports.metalio_plus.test.test_flash_plus_data \
+                   ports.metalio_plus.test.test_data_layout
 
 bundle="$root/../../artifacts/cpyos-metalio-plus-0.0.0-untested.zip"
 # Only verify a bundle produced from this tree. An older bundle (the 2026-11-09
 # bring-up zip) describes the single-slot layout and would fail the current
 # port-OTA notice checks for a reason that is not a regression.
-if [[ -f "$bundle" ]] && [[ ! -f ports/metalio_plus/build/cpyos_metalio_plus.bin \
-                           || "$bundle" -nt ports/metalio_plus/build/cpyos_metalio_plus.bin ]]; then
-  python3 ports/metalio_plus/scripts/verify_metalio_bundle.py --bundle "$bundle"
+if [[ -f "$bundle" ]]; then
+  # The NOTICE inside a bundle records the data-partition offsets it was built
+  # for.  The 2026-11-09 bring-up zip predates the port-OTA layout, so its
+  # notice names the single-slot spiffs base; verifying it against today's
+  # checks would report a layout mismatch that is not a regression.
+  if unzip -p "$bundle" 'UNTESTED-ON-HARDWARE.txt' 2>/dev/null | grep -q '0xCD0000'; then
+    python3 ports/metalio_plus/scripts/verify_metalio_bundle.py --bundle "$bundle"
+  else
+    echo "note: skipping legacy bundle (pre-port-OTA data offsets)"
+  fi
 fi
 
 if [[ -f ports/metalio_plus/build/cpyos_metalio_plus.elf \

@@ -26,7 +26,12 @@
 //   uint16_t focusSplitX[wordCount]   present only when focusPresent
 //   uint8_t  styles[wordCount]
 //   uint8_t  focusBoundary[wordCount]  present only when focusPresent
+//   uint8_t  fontSlots[wordCount]      present only when the line mixes faces
 //   char     text[textBytes]           all words back to back, NUL-terminated
+//
+// fontSlots holds a 1-based index into the line's wordFontIds table (layout milestone
+// M5b); 0 means the line's own face. The table itself is three scalars, not arena, so a
+// line that never changes size pays the byte per word only when it does.
 //
 // Each word is stored NUL-terminated so render() can hand `text + textOff[i]`
 // straight to C APIs (drawText) with no std::string materialization.
@@ -45,6 +50,14 @@ class TextBlock final : public Block {
     int16_t x;
     int16_t width;
     int16_t topLift;
+  };
+
+  // Per-word faces, one slot per word plus the ids the slots point at.
+  struct WordFonts {
+    const uint8_t* slots;  // 0 = the line's face
+    const int32_t* ids;    // slot k (1-based) renders with ids[k - 1]
+    uint8_t count;         // 0 = the line has a single face
+    constexpr WordFonts() : slots(nullptr), ids(nullptr), count(0) {}
   };
 
  private:
@@ -68,6 +81,10 @@ class TextBlock final : public Block {
   bool paragraphFinal = false;
   bool focusPresent = false;
   bool isValid = true;
+  // Word faces of this line, serialized before the arena. Count 0 is also the
+  // "no slots region" flag, so a single-face line keeps the old layout.
+  uint8_t fontSlotCount = 0;
+  int32_t wordFontIds[3] = {0, 0, 0};
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
   std::unique_ptr<uint8_t[]> arena;
@@ -78,6 +95,7 @@ class TextBlock final : public Block {
   const uint16_t* focusSplitXArr = nullptr;  // null when !focusPresent
   const uint8_t* stylesArr = nullptr;
   const uint8_t* focusBoundaryArr = nullptr;  // null when !focusPresent
+  const uint8_t* fontSlotArr = nullptr;       // null when fontSlotCount == 0
   const char* textArr = nullptr;
   std::vector<std::string> rubyTexts;
   // Layout-only metadata. ChapterHtmlSlimParser moves it into Page::links
@@ -85,7 +103,7 @@ class TextBlock final : public Block {
   std::vector<LinkSpan> linkSpans;
 
   TextBlock() = default;  // deserialize() fills the fields directly
-  static size_t arenaSize(uint16_t wordCount, bool hasFocus, uint16_t textBytes);
+  static size_t arenaSize(uint16_t wordCount, bool hasFocus, uint16_t textBytes, bool hasFontSlots);
   void bindArenaPointers();
 
  public:
@@ -95,7 +113,8 @@ class TextBlock final : public Block {
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSplitX, const BlockStyle& blockStyle = BlockStyle(),
-                     std::vector<std::string> rubyTexts = {}, std::vector<LinkSpan> linkSpans = {});
+                     std::vector<std::string> rubyTexts = {}, std::vector<LinkSpan> linkSpans = {},
+                     const WordFonts& wordFonts = WordFonts());
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;
@@ -119,6 +138,15 @@ class TextBlock final : public Block {
   }
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
+  uint8_t wordFontSlot(const uint16_t i) const { return fontSlotArr != nullptr ? fontSlotArr[i] : 0; }
+  uint8_t fontSlots() const { return fontSlotCount; }
+  int32_t wordFontId(const uint8_t slot) const {
+    return slot > 0 && slot <= fontSlotCount ? wordFontIds[slot - 1] : 0;
+  }
+  // Bytes of the single allocation, so a layout test can assert what a line costs.
+  size_t arenaBytes() const {
+    return arena != nullptr ? arenaSize(numWords, focusPresent, textBytes, fontSlotCount > 0) : 0;
+  }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSplitX(const uint16_t i) const { return focusPresent ? focusSplitXArr[i] : 0; }
   bool hasRuby() const;

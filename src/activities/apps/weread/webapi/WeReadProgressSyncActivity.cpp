@@ -171,6 +171,7 @@ void WeReadProgressSyncActivity::startSync() {
 void WeReadProgressSyncActivity::advanceSync() {
   // Serialize synchronous TLS work with the renderer task and release glyph
   // caches before the handshake, matching the main WeRead activity.
+  NetworkStartup::ActivityGuard networkGuard;
   RenderLock renderBarrier(*this);
   if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
   const auto event = operation_.step();

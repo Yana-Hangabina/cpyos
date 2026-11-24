@@ -18,13 +18,12 @@ void drawHeaderTopLine(const GfxRenderer& renderer, const ThemeMetrics& metrics,
                        const std::string& dateText, const std::string& reminderText) {
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
-  const int batteryX = pageWidth - 12 - metrics.batteryWidth;
-  int rightEdge = batteryX - 8;
-
-  if (showBatteryPercentage) {
-    const std::string batteryText = std::to_string(powerManager.getBatteryPercentage()) + "%";
-    rightEdge -= renderer.getTextWidth(BaseTheme::STATUS_NUMERIC_FONT_ID, batteryText.c_str()) + 4;
-  }
+  // The theme's header already draws the battery (CpyTheme: the same pill as Home;
+  // BaseTheme: the FreeInkUI header + battery). Drawing one here as well was a
+  // second indicator at a different height. Only the date belongs to this row, and
+  // it is placed left of the cluster the theme drew.
+  const int clusterWidth = GUI.statusBarBatteryWidth(renderer, showBatteryPercentage);
+  int rightEdge = pageWidth - 12 - clusterWidth - 8;
 
   int dateX = rightEdge;
   if (!dateText.empty()) {

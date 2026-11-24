@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
@@ -26,6 +27,9 @@
 namespace fui = freeink::ui;
 
 namespace {
+// Holding Back for a second leaves the browser for Home; a tap keeps walking
+// the feed history one level at a time.
+constexpr unsigned long GO_HOME_MS = 1000;
 // Tells a dead server from a catalog that wants a password; both are a bare
 // "failed" to the fetch itself. Read right after a failed fetch.
 StrId feedFailureMessage() {
@@ -119,6 +123,12 @@ void OpdsBookBrowserActivity::drawFooter() {
 }
 
 void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
+  // Full speed for the transfer: the governor drops to 80 MHz after
+  // three seconds without input, and a download produces none of its own
+  // (measured on the OTA path as ~4 KB/s).  quiet: a render pass holding
+  // the lock is a cost, not an error.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   if (server.url.empty()) {
     fail(StrId::STR_NO_SERVER_URL);
     return;
@@ -225,7 +235,8 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
 }
 
 void OpdsBookBrowserActivity::onBackButton() {
-  if (state == State::CHECK_WIFI || navigationHistory.empty()) {
+  if (state == State::CHECK_WIFI || navigationHistory.empty() ||
+      mappedInput.getHeldTime() >= GO_HOME_MS) {
     onGoHome();
   } else {
     currentPath = navigationHistory.back();
@@ -245,6 +256,12 @@ void OpdsBookBrowserActivity::startBrowse() {
 }
 
 void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
+  // Full speed for the transfer: the governor drops to 80 MHz after
+  // three seconds without input, and a download produces none of its own
+  // (measured on the OTA path as ~4 KB/s).  quiet: a render pass holding
+  // the lock is a cost, not an error.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
+
   beginDownload(book.title);
 
   // Build full download URL relative to the current feed, not the root server URL

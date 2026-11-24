@@ -8,6 +8,7 @@
 #include "Xtc.h"
 
 #include <Bitmap.h>
+#include <BookCachePrune.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -48,18 +49,12 @@ bool Xtc::load() {
 }
 
 bool Xtc::clearCache() const {
-  if (!Storage.exists(cachePath.c_str())) {
-    LOG_DBG("XTC", "Cache does not exist, no action needed");
-    return true;
+  // Prune, do not rmtree: annotations/bookmarks/progress live here too (BookCachePrune.h).
+  const bool cleared = book_cache::pruneRegenerable(cachePath);
+  if (cleared) {
+    LOG_DBG("XTC", "Cache cleared successfully");
   }
-
-  if (!Storage.removeDir(cachePath.c_str())) {
-    LOG_ERR("XTC", "Failed to clear cache");
-    return false;
-  }
-
-  LOG_DBG("XTC", "Cache cleared successfully");
-  return true;
+  return cleared;
 }
 
 void Xtc::setupCacheDir() const {

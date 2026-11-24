@@ -321,6 +321,21 @@ fz_unblend_masked_tile(fz_context *ctx, fz_pixmap *tile, fz_image *image, const 
  * large PDFs where page content + output pixmap already fragment PSRAM. */
 static long long fz_image_budget = 512LL * 1024;
 void fz_set_image_budget(long long bytes) { fz_image_budget = bytes; }
+/* The Read Pico panel is grayscale.  Decoding JPEG images to one channel
+ * instead of RGB cuts the decoded image working set by 3x; pdf-image.c only
+ * switches the image colorspace when this is enabled and the buffer is JPEG. */
+static int fz_dct_gray = 0;
+int fz_dct_grayscale_mode(void) { return fz_dct_gray; }
+void fz_set_dct_grayscale(int enabled) { fz_dct_gray = enabled != 0; }
+/* Diagnostics: how many JPEG images the PDF loader converted to one channel. */
+static int fz_gray_jpeg_seen = 0;
+void fz_gray_jpeg_reset(void) { fz_gray_jpeg_seen = 0; }
+int fz_gray_jpeg_count(void) { return fz_gray_jpeg_seen; }
+void fz_gray_jpeg_note(void) { ++fz_gray_jpeg_seen; }
+/* Read Pico: stream embedded font programs to SD instead of holding them in PSRAM. */
+static int fz_font_out_of_core = 0;
+int fz_pdf_font_out_of_core_mode(void) { return fz_font_out_of_core; }
+void fz_set_pdf_font_out_of_core(int enabled) { fz_font_out_of_core = enabled != 0; }
 
 static void fz_adjust_image_subarea(fz_context *ctx, fz_image *image, fz_irect *subarea, int l2factor)
 {

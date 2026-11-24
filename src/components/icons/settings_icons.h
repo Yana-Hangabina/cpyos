@@ -117,11 +117,14 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_READING_GUIDE_LINE_STYLE:
       return &icon_ruler_48;
     case StrId::STR_HYPHENATION:
+    case StrId::STR_SAVE_VOCABULARY_LOOKUPS:
+    case StrId::STR_VIEW_VOCABULARY:
     case StrId::STR_CHAPTER_PAGE_COUNT:
       return &icon_book_48;
     case StrId::STR_ORIENTATION:
     case StrId::STR_PAGE_TURN_DIRECTION:
     case StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION:
+    case StrId::STR_SIDE_BTN_FOLLOW_ORIENTATION:
     case StrId::STR_TILT_PAGE_TURN:
     case StrId::STR_MOTION_PAGE_TURN:
       return &icon_rotate_cw_48;
@@ -233,8 +236,11 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_NETWORK_TYPE:
     case StrId::STR_NETWORK_4G:
       return &icon_wifi_48;
+    case StrId::STR_WIFI_IDLE_TIMEOUT:
+      return &icon_timer_48;
     case StrId::STR_KOREADER_SYNC:
     case StrId::STR_OPDS_SERVERS:
+    case StrId::STR_DEVICE_RESOURCES:
       return &icon_radio_tower_48;
     case StrId::STR_CLEAR_READING_CACHE:
       return &icon_eraser_48;

@@ -77,6 +77,10 @@ class TtfEpdFont {
   // Cache cost doubles, which PSRAM absorbs.
   bool load(uint16_t pointSize, bool twoBit = true, size_t glyphCacheBytes = 32 * 1024, uint16_t maxGlyphs = 768,
             bool fourBit = false);
+  // A sized variant of a loaded master: borrows its sources and FreeType faces
+  // instead of re-parsing the font file and allocating a face per size.
+  bool loadVariantOf(TtfEpdFont& master, uint16_t pointSize, bool twoBit = true,
+                     size_t glyphCacheBytes = 64 * 1024, uint16_t maxGlyphs = 512);
 
   EpdFontFamily family() const;
 
@@ -113,7 +117,8 @@ class TtfEpdFont {
 
   struct Face {
     TtfEpdFont* owner = nullptr;
-    freeink::font::FtFont ft;
+    freeink::font::FtFont ftStorage_;
+    freeink::font::FtFont* ft = &ftStorage_;
     freeink::font::PsramVector<uint8_t> bmp;
     size_t used = 0;
     size_t cap = 0;
@@ -161,8 +166,27 @@ class TtfEpdFont {
   int8_t faultKern(Face& f, uint32_t leftCp, uint32_t rightCp);
   static void flushFace(Face& f);
 
+  // Keeps a borrowed FreeType face alive while a glyph fault runs on it.
+  struct FaceLock {
+    FaceLock(TtfEpdFont* font, const size_t idx) : font_(font), idx_(idx) {
+      while (font_ && font_->master_) font_ = font_->master_;
+      if (font_ && idx_ < 4) font_->faceLocks_[idx_]++;
+    }
+    ~FaceLock() {
+      if (font_ && idx_ < 4 && font_->faceLocks_[idx_] > 0) font_->faceLocks_[idx_]--;
+    }
+    FaceLock(const FaceLock&) = delete;
+    FaceLock& operator=(const FaceLock&) = delete;
+
+   private:
+    TtfEpdFont* font_;
+    size_t idx_;
+  };
+
   Source sources_[4];      // indexed by Style role
   Face faces_[4];          // 0=regular 1=bold 2=italic 3=bold-italic
+  TtfEpdFont* master_ = nullptr;         // non-null: borrow master's FT faces
+  uint8_t faceLocks_[4] = {0, 0, 0, 0};  // prevent deinit during a glyph fault
   uint32_t size26_6_ = 0;  // exact 26.6 ppem (pt @150DPI), no whole-pixel rounding
   bool loaded_ = false;
   // Set while a glyph fault runs MemoryManager::ensureFree(): the eviction

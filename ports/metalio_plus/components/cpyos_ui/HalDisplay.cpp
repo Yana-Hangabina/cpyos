@@ -394,6 +394,8 @@ HalDisplay::Controller HalDisplay::getController() const {
     return BoardConfig::DisplayController::LgfxEpd;
 }
 
+const char* HalDisplay::getControllerName() const { return nullptr; }
+
 HalDisplay::GrayscaleCapabilities HalDisplay::grayscaleCapabilities(GrayscaleMode mode) const {
     GrayscaleCapabilities caps;
     // Absolute/Direct upload a complete 4bpp canvas, which is exactly what this

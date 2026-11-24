@@ -40,7 +40,7 @@ OUTPUT = ROOT / "src" / "fontIds.h"
 # Reader point sizes the pack can bind (`ReaderFontSizes.h`). The low byte of
 # CJK_READER_SIZE_FONT_ID holds the point size, so the range must stay < 256.
 READER_MIN_PT = 10
-READER_MAX_PT = 34
+READER_MAX_PT = 40
 
 # Header-derived families: id name -> the style headers hashed into it.
 HEADER_FAMILIES: dict[str, tuple[str, ...]] = {

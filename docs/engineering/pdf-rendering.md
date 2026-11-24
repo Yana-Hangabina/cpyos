@@ -3,6 +3,13 @@
 Status: work in progress. This note is the system of record for the PDF render
 budget so the next round does not re-derive it from serial logs.
 
+> **Final status (2026-11-18):** the delivered engine is the flash-XIP `pdfmod`
+> module documented in [`pdf-xip.md`](pdf-xip.md).  Out-of-core embedded fonts
+> removed the font-buffer peak, and the reader-settings reflow now recovers
+> pages 19 and 41 of the 112-page book (57 and 59 lines, three screens each).
+> The “still fails” measurements below are kept as the historical record of why
+> the fallback ladder, grayscale JPEG and out-of-core fonts exist.
+
 ## Device budget (measured, not estimated)
 
 | Item | PSRAM |
@@ -117,6 +124,10 @@ Rules, all of them learned on the device:
   page as reflowed text (figures missing, text readable).
 * **A page is never replaced by a nearly empty reflow**: under 200 bytes of
   extracted text the layout is rejected and the bitmap path runs instead.
+* With the reader's Hyphenation setting enabled, ASCII words are broken with
+  the bundled English Liang patterns at a fitting syllable boundary and get a
+  visible `-`; tries are kept resident because PDF load runs on PSRAM-stacked
+  tasks and cannot read internal flash for them.
 * Wrap at `usableWidth - 16`; `getTextWidth` ignores the last glyph's right
   bearing and the rotated draw clips at the panel edge (long lines lost their
   final character at exactly `usableWidth`).
@@ -131,12 +142,12 @@ Sampled pages on separate cold boots, every page reported:
 (25-72 lines each), 2 bitmaps (40, 60). Earlier targeted runs add 1, 2, 7, 33,
 49, 68, 28, 41, 44, 58, 65 (reflow) and 6, 23, 75 (text-only bitmap).
 
-**Page 19 is the only page that still fails.** It is a mixed text+figure page
-whose body has no Unicode mapping, so reflow cannot recover it, and the bitmap
-path needs a ~463 KB contiguous block it never gets. It now shows
-"PDF 读取失败，翻页可重试" and a page turn really retries it. Page 60 % bitmap
-with a 48 KB image budget was added for this class of page but does not rescue
-19.
+**Historical note:** page 19 used to be the only page that still failed: it was
+a mixed text+figure page whose body had no visible Unicode mapping, so the old
+reflow probe skipped it and the bitmap path needed a contiguous block it never
+got.  With the final extraction/typography pipeline the page now yields 57
+lines and reflows in three screens.  Page 60 remains a bitmap page because it
+has only 75 bytes of text.
 
 Full-book automation was attempted three ways and none is reliable yet: one
 burst of PDFNEXT drops commands in the UART buffer; per-page waits exceed
@@ -148,15 +159,46 @@ overlap fixed before it can be trusted.
 ## Final coverage (112-page book, every page on its own cold boot)
 
 ```
-reflow 99 · bitmap 12 · failed 1 (page 19)
+historical sweep: reflow 99 · bitmap 12 · failed 1 (page 19)
+final targeted recheck: page 19 and page 41 reflow; page 60 bitmap
 ```
 
-Page 19 is a mixed text+figure page whose body has no Unicode mapping, so
-reflow cannot recover it and the bitmap path needs a contiguous block that is
-never available; it shows "PDF 读取失败，翻页可重试" and a page turn retries it.
-The 5-page image PDF renders every page through the bitmap path.
+The final targeted recheck is the one that matches the delivered XIP module.
+Page 19/41 reflow after the out-of-core font and width-scaled typography
+changes; page 60 stays bitmap.  The 5-page image PDF renders every page through
+the bitmap path, now with the short-text/vector ink-bbox crop used for scans.
 
 The verification harness is `/tmp/pdf_verify_all.sh` (not in the repo): reset the
 board, open the book at page N, read its verdict, write one line, next page. It
 is deliberately independent per page, because every faster scheme lost serial
 lines or exhausted PSRAM by stacking activities.
+
+## SD code-paging feasibility probe (2026-11-17): gate failed
+
+Goal: keep MuPDF out of app0 and load its code from SD at runtime. A minimal
+probe was built (`src/pdf/PdfPagingProbe.cpp`, env `readpico_paging_probe`,
+serial `CMD:PGPROBE`) to test ESP32-S3 MMU executable mappings and an
+ITLB-miss/instruction-fetch exception handler.
+
+Measured on Read Pico:
+
+- `heap_caps_aligned_alloc(SPIRAM)` + `esp_mmu_map(..., MMU_MEM_CAP_EXEC)`
+  returns an executable IROM virtual address; a tiny Xtensa function in the
+  mapped PSRAM page executes correctly (`result=42`).
+- `mmu_hal_unmap_region` does not invalidate the cached ITLB entry: the same
+  function still executes after unmapping.
+- Calling a never-mapped IROM address does **not** reach an installed
+  `xt_set_exception_handler` for `EXCCAUSE_ITLB_MISS`, `INSTR_ERROR`,
+  `INSTR_ADDR_ERROR` or `LOAD_STORE_ADDR_ERROR`; it panics and reboots.
+
+The implemented alternative is documented in [`pdf-xip.md`](pdf-xip.md): the
+MuPDF engine is linked at fixed addresses, stored in the dedicated `pdfmod`
+partition, and executed from flash while mutable data lives in PSRAM via an
+MMU-mapped alias.
+Conclusion: MMU demand paging on this IDF/Xtensa port is not a usable path;
+the exception table cannot recover code-page misses. The remaining SD option
+is a module/GOT trampoline overlay (plan B), which requires splitting MuPDF
+into pageable modules and indirect calls. That is a research project and does
+not yet meet the full-page acceptance gate. Full MuPDF still needs flash XIP
+(app or a dedicated capability partition); no PDF feature was enabled by this
+probe. The probe is opt-in only and is not linked into normal `readpico` builds.

@@ -18,6 +18,9 @@ bool begin(GfxRenderer& renderer, uint8_t pointSize);
 // removes) the optional full emoji font; prefers /.crosspoint/font_extras/emoji.ttf
 // and falls back to the data-partition subset.
 bool reload(GfxRenderer& renderer, uint8_t pointSize);
+// Drop the face and its PSRAM-resident TTF.  reload()/begin() reads storage
+// again; the PDF reader uses this to hand ~0.9 MB to a heavy MuPDF page.
+void release(GfxRenderer& renderer);
 // Reload at a new reader point size. No-op when unchanged. Call on the UI task
 // before the next render (EpubReaderActivity::onEnter does).
 void setPointSize(GfxRenderer& renderer, uint8_t pointSize);

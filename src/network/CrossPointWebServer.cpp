@@ -75,6 +75,7 @@ namespace web_en {
 #include "util/PluginLocations.h"
 #include "util/TaskWatchdog.h"
 #include "util/UrlUtils.h"
+#include <HalPowerManager.h>
 
 namespace {
 // Arduino's WebServer retains parsed request arguments until the next request.
@@ -2422,6 +2423,9 @@ void CrossPointWebServer::handleRelay() {
 
   suspendTransferServices();
   ScopedCleanup resumeServices{[this] { resumeTransferServices(); }};
+  // The browser is waiting on this upstream fetch: keep the CPU up for it, or
+  // the relay idles at 80 MHz between reads.
+  HalPowerManager::Lock powerLock(/*quiet=*/true);
   LOG_DBG("WEB", "Relay TLS start: heap %u, max block %u: %s", (unsigned)ESP.getFreeHeap(),
           (unsigned)ESP.getMaxAllocHeap(), url.c_str());
 

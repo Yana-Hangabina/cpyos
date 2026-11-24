@@ -58,7 +58,7 @@ Enter a URL and the page is fetched and re-typeset as text at the current readin
 ### Chinese text and fonts
 
 - One scalable CJK family covering the 8,105 standard Chinese characters plus GB2312, shared by the UI, titles, JJWXC and body text.
-- Separate UI and reading sizes (reading 10–34pt); richer SD-card fonts fill in rarer characters.
+- Separate UI and reading sizes (reading 10–40pt, narrowed automatically by panel size; fixed .cpfont files list their own sizes plus built-in min/max endpoints); richer SD-card fonts fill in rarer characters.
 - Offline pinyin search and continuous pinyin input; 11 hyphenation languages loaded on demand.
 - Bundled emoji glyphs for common names and titles.
 - Optional font-extension packs (full emoji, extended CJK, more scripts) download to the SD card on demand; missing glyphs prompt for the right pack, and the firmware size is unchanged.
@@ -95,6 +95,54 @@ Device OTA is under **Settings → System → Check for updates**. It writes the
 Devices on **0.2.1 or older** should use the web flasher once; their OTA manifest is on GitHub Pages, which some networks cannot reach.
 
 Device OTA updates both the app and the data packs; a full install is only needed when the partition table or a pack format changes incompatibly. See `FLASH.md` and `SHA256SUMS` in the release bundle for offsets and checksums.
+
+### PDF / XIP build (this branch)
+
+The PDF-enabled build runs MuPDF from a dedicated `pdfmod` partition and uses a
+**different partition table**: app0 5.5 MiB, app1 5.375 MiB, `pdfmod` 1.875 MiB
+(normal builds use two 6.375 MiB slots). When switching between a normal and a
+PDF/XIP image:
+
+- **Use "First install / recovery" (a full flash)**: the web flasher's install
+  button, or `python3 scripts/flash_pdf_xip.py --first-install`. Device OTA and
+  the web page's "Upgrade from CPYOS" button are not valid across layouts; app1
+  and the data partition would overlap.
+- **Updating the PDF engine needs no reflash**: Settings -> **PDF engine** (the list that
+  also holds Apps, WiFi networks and Date and time; the row only exists in XIP builds)
+  -> **Check for updates**. The device connects to the saved Wi-Fi silently, fetches the
+  engine manifest, downloads it and verifies size, SHA-256 **and** whether that engine
+  was built for this firmware -- all before it erases anything. The SD card, library and
+  settings are untouched, and the download shows real progress with a cancel control.
+- Offline fallback: copy `pdfmod.bin` to the SD card root and choose "From /pdfmod.bin?"
+  in the same menu.
+- Three messages are protections, not faults: no `/pdfmod.bin` on the card, "Wrong
+  firmware" (the engine was linked against a different app image), and a refusal while a
+  PDF is open (it would replace a running engine).
+- "Check for updates" depends on the maintainer publishing the manifest and blob to the
+  site (recipe in `docs/engineering/pdf-xip.md`); until then the menu only reports that
+  the list could not be fetched.
+- On the flashing side: `scripts/flash_pdf_xip.py --pdfmod-only` rewrites the engine and
+  nothing else. `--first-install/--full` now **reads the device's live partition table
+  first** and refuses if that table write would move the data partition -- otherwise the
+  device boots normally while pinyin, hyphenation, the language pack, web assets and
+  emoji are all silently dead.
+- Any app change requires rebuilding the module against the new firmware and
+  flashing both (the module links to absolute host symbols).
+- Text pages reflow with the EPUB reader settings (font, size, margins, line
+  spacing, paragraph spacing, first-line indent and alignment). With hyphenation
+  enabled, long English words break at a Liang syllable point with a visible
+  line-end hyphen. Figures, tables and multi-column pages stay bitmaps; image
+  pages auto-crop white margins and fit the reader's margins with their aspect
+  ratio preserved.
+- Encrypted PDFs prompt on the device; the password stays in RAM only. Reader
+  bookmarks, notes and highlights are stored beside the book cache, and a PDF's
+  own outline appears in the reader's Contents panel.
+- The toolbar's Format panel opens Text Settings. Panel switching repaints only
+  the chrome instead of re-rendering the PDF on every key. Long-press on reflowed
+  text selects a word and uses the same action bar as the EPUB reader for
+  highlights and notes.
+- PDFs that need external CMaps require staging them to `/.crosspoint/cmaps` on
+  the SD card first.
 
 ## Build from source
 

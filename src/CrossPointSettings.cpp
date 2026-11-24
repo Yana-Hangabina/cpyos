@@ -302,11 +302,13 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   }
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["readerGestureHintSeen"] = readerGestureHintSeen;
+  doc["pdfWifiHintSeen"] = pdfWifiHintSeen;
   // The reader's Text sheet exposes these two switches on every board, but the
   // SettingsList rows only exist under the Read Pico guard. Persist them here so
   // a toggle survives a reboot on the other panels too (measured on the Plus:
   // the switch read back 否 after `reboot` because nothing ever wrote the key).
   doc["fastPageTurn"] = fastPageTurn;
+  doc["pdfSmartLineMerge"] = pdfSmartLineMerge;
   doc["pageTurnEffect"] = pageTurnEffect;
   doc["frontButtonBack"] = frontButtonBack;
   doc["frontButtonConfirm"] = frontButtonConfirm;
@@ -644,7 +646,12 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   // `clamp(value, 1, 0)` treats 1 as out of range and is why the one-shot hint
   // returned after every reboot.
   readerGestureHintSeen = storedBoolFlag(doc["readerGestureHintSeen"] | static_cast<uint8_t>(0));
+  pdfWifiHintSeen = storedBoolFlag(doc["pdfWifiHintSeen"] | static_cast<uint8_t>(0));
   fastPageTurn = storedBoolFlag(doc["fastPageTurn"] | static_cast<uint8_t>(0));
+  // Absent key means the DEFAULT, which is on -- see the field comment. Writing a
+  // literal 0 here would quietly make the feature opt-in again for every existing
+  // settings.json written before the key existed.
+  pdfSmartLineMerge = storedBoolFlag(doc["pdfSmartLineMerge"] | kPdfSmartLineMergeDefault);
   pageTurnEffect = storedBoolFlag(doc["pageTurnEffect"] | static_cast<uint8_t>(0));
   frontButtonBack = clamp(doc["frontButtonBack"] | (uint8_t)FRONT_HW_BACK, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm =
@@ -698,7 +705,16 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     storedFontSize = 12 + storedFontSize * 2;  // 0,1,2,3 -> 12,14,16,18
     needsResave = true;
   }
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // A settings file can come from a larger panel (or an older ladder). Bring
+  // the stored point size into this board's derived range once at load, so the
+  // panel and the reader never disagree about what size "34" means.
+  const uint8_t deviceFontSize = readerClampPointSizeToDevice(storedFontSize);
+  if (deviceFontSize != storedFontSize) needsResave = true;
+  fontPointSize = deviceFontSize;
+#else
   fontPointSize = storedFontSize;
+#endif
 
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;
@@ -1106,10 +1122,24 @@ void CrossPointSettings::clearSdFontFamily() {
   sdFontFlashPreload = 0;
   fontFamily = NOTOSANS;
 #ifndef CROSSMUX_UI_PROFILE_HIGH_DPI
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  fontPointSize = readerClampPointSizeToDevice(fontPointSize);
+#else
   fontPointSize =
       snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
 #endif
+#endif
   saveToFile();
+}
+
+void CrossPointSettings::useBuiltinReaderFontAt(const uint8_t pointSize) {
+  sdFontFamilyName[0] = '\0';
+  sdFontFlashPreload = 0;
+  fontFamily = NOTOSANS;
+  // Stored sizes can come from an older family (e.g. 15pt) that is not on the
+  // current built-in ladder, or from a larger panel. Snap once here so a
+  // fallback never asks the pack for a face it will not register.
+  fontPointSize = readerClampPointSizeToDevice(pointSize);
 }
 
 int CrossPointSettings::getReaderFontId() const {
@@ -1128,8 +1158,12 @@ int CrossPointSettings::getReaderFontId() const {
   // carried over from an SD family may not be one of them. ensureLoaded()
   // normally persists the snap; snap again here (without allocating — this runs
   // in the page render loop) so rendering is correct even before it has run.
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  const uint8_t pt = readerClampPointSizeToDevice(fontPointSize);
+#else
   const uint8_t pt =
       snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+#endif
 #if !defined(CROSSPOINT_SYSTEM_FONT_PACK)
   // The bitmap profile has one built-in reader size; the pack registers every
   // size, so the size setting must keep working there.

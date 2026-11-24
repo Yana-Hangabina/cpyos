@@ -105,6 +105,9 @@ class Activity {
   virtual bool presentsGrayscale() const { return false; }
   // Serial-only soak hook: moves the list ring like a NavNext/NavPrevious press.
   virtual void debugMoveRing(int) {}
+  // Serial-only Back path for screens whose Back handling is otherwise only
+  // reachable through the physical key (e.g. the native plugin host).
+  virtual void debugBack() {}
   // Absolute selection for scripted device tests (ring moves are relative).
   virtual void debugSelect(int) {}
   // Serial-only soak hook: performs the Confirm action at the current ring position.
@@ -151,6 +154,9 @@ class Activity {
   // Serial-only: open the reader's selection bar on the current page, so the
   // [look up][highlight][note] chips can be inspected without a long press.
   virtual void debugOpenPhraseSelection() {}
+  // Serial-only: run the reader's real phrase ladder on a caller-given word, so a
+  // dictionary hit can be checked without a long-press selection.
+  virtual void debugLookupPhrase(const char*) {}
   virtual void debugDumpPage() {}
   virtual void debugOpenStressComment() {}
   virtual void debugOpenSearch() {}

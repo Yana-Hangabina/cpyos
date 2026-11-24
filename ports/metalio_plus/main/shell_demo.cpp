@@ -26,12 +26,21 @@
 #include "DeviceSecret.h"
 #include "PortContentCrypto.h"
 #include "usb_msc.h"
+#if defined(CROSSPOINT_PDF_XIP)
+#include "pdf/PdfAssets.h"
+#include "pdf/PdfEngineUpdate.h"
+#include "pdf/PdfModuleRuntime.h"
+#endif
 #include "web_transfer.h"
 #include "ws_upload.h"
 #include "plus_transfer_hooks.h"
 #include "sleep_wake.h"
 #include "SilentRestart.h"
 #include "CrossPointState.h"
+#include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
+#include "AchievementsStore.h"
+#include "OpdsServerStore.h"
 #include "WifiCredentialStore.h"
 #include <WiFiClient.h>
 #include "network/FirmwareFlasher.h"
@@ -59,6 +68,7 @@ extern "C" bool plus_last_push_tps_ok();
 #include "plus_voice_activity.h"
 #include "plus_voice_client.h"
 #include "PlusCellular.h"
+#include "plugin_demo.h"
 #include <SoundFeedback.h>
 
 
@@ -100,6 +110,8 @@ ISource* privateSource();
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
+#include <esp_cpu.h>
+#include <esp_memory_utils.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
 #include <esp_timer.h>
@@ -160,9 +172,15 @@ extern "C" void plus_boot_hang_request(void);
 #include "EmojiFont.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+#include "Memory.h"
+#include "activities/apps/plugins/PluginActivity.h"
+#include "plugins/PluginManager.h"
+#endif
 #include "activities/home/MyActivity.h"
 #include "activities/apps/standby/StandbyActivity.h"
 #include "plus_ota_activity.h"
+#include "plus_resources_activity.h"
 #include "power_off_activity.h"
 #include "cpyos_sd.h"
 
@@ -722,10 +740,17 @@ extern "C" void cpyos_shell_demo(void) {
     }
     STEP_MEM("settings ok; i18n");
     // The product build loads every store in main.cpp; the shell only loaded
-    // settings and the Wi-Fi list, so features that gate on a store (e.g. the
-    // reader's KOReader sync row) looked unconfigured on the bench. Load the
-    // credential store here too -- it has no effect on any layout.
+    // settings and the Wi-Fi list, so features that gate on a store looked
+    // unconfigured on the bench. In particular RecentBooksStore is the source
+    // for Home's "继续阅读"/recent shelf: without this load the in-memory list
+    // starts empty on every boot even though recent.json is present, and the
+    // next reader open overwrites it with a one-entry list.
     KOREADER_STORE.loadFromFile();
+    APP_STATE.loadFromFile();
+    RECENT_BOOKS.loadFromFile();
+    READING_STATS.loadFromFile();
+    ACHIEVEMENTS.loadFromFile();
+    OPDS_STORE.loadFromFile();
     // Apply the saved UI language before the strings are resolved. Read Pico
     // does the same; without it the shell always draws the default language
     // even though Settings shows the user's choice.
@@ -774,10 +799,31 @@ extern "C" void cpyos_shell_demo(void) {
         LOG_ERR("PLUS", "font decompressor init failed");
     }
     sdFontSystem.begin(renderer);
+#if defined(CROSSPOINT_PDF_XIP_SD)
+    // Read Pico installs the MuPDF font/CMap bundle from its font setup; the
+    // Plus has no app1 carrier, so unpack the SD bundle once here (marker
+    // gated).  Without it non-embedded CJK fonts and CMaps are unavailable to
+    // the PDF engine until the bench-only `pdfassets` command runs.
+    if (ensurePdfAssets()) {
+        ESP_LOGI("PLUS", "PDF font/CMap assets ready");
+    } else {
+        ESP_LOGW("PLUS", "PDF font/CMap assets unavailable (stage /pdf_assets.bin)");
+    }
+#endif
     STEP_MEM("sd fonts ok; emoji");
     // Bundled emoji face from the spiffs partition. A missing pack only leaves
     // emoji as tofu; it never aborts. The reader re-applies its point size.
     emoji_font::begin(renderer, SETTINGS.fontPointSize);
+#if !defined(CROSSPOINT_EMBED_HYPHENATION)
+    // Read Pico warms every hyphenation trie on the main task right after
+    // HalSystem::begin(); the Plus port never did, so a section layout that
+    // needed hyphenation read the data partition from the PSRAM render stack
+    // and the loader refused it ("partition index read refused: PSRAM stack").
+    auto& hyph = hyphenation::HyphenationStore::shared();
+    hyph.preloadAll();
+    ESP_LOGI("PLUS", "HYPH preload done; loaded language: %s",
+             hyph.loadedLanguage() ? hyph.loadedLanguage() : "-");
+#endif
     STEP_MEM("emoji ok; clock/frontlight");
     halClock.begin();
     halClock.setUseChinaServers(SETTINGS.contentProfile == CrossPointSettings::ContentProfile::China);
@@ -795,6 +841,11 @@ extern "C" void cpyos_shell_demo(void) {
         SETTINGS.saveToFile();
     }
     probeFrontlightOnce();
+    // Battery policy: start the vendor settle window and take the boot sample
+    // (the log line is the proof the gauge is actually being read). The Plus
+    // app never called this before, so the chrome's battery capsule could only
+    // ever show the "no reading" placeholder.
+    powerManager.begin();
     // The speaker path is deliberately NOT warmed here: the BH1098 reset writes
     // the shared TCA9555 ports, and it was racing display.begin()'s TPS power-on
     // (log: "TPS probe failed" x3, rails off) so the first boot frame scanned
@@ -900,13 +951,14 @@ bool g_consoleReadable = true;
 void consoleHelp() {
     printf("commands: help info dmaheap cryptotest tracetext batt rtc sd imu touch keys slpinfo i2c sdwrite haptic [ms] panel [fast] window screenshot screenshotgray browser <url> tlsprobe <host> putfile <path> <bytes> flash <sd path> lang <zh|en> tap <lx> <ly> key <name> swipe <x0> <y0> <x1> <y1> crypto pinyin hyphen wifi light <0-100> [warm 0-100]\n"
            "          ap <ssid> [pass] | apoff | radiooff | web [ssid] [pass] | weboff | usbmsc on|off\n"
-           "          wificonnect <ssid> <password> | selftest | touchraw | rtcset <epoch> | bt on|off|scan [seconds]\n"
+           "          wificonnect <ssid> <password> | wificonnect_saved <ssid> | selftest | touchraw | rtcset <epoch> | bt on|off|scan [seconds]\n"
            "          settings [tab] | my [tab] | camera | slptest [s] | stats | stab <tab> | saction <n> | slist\n"
-           "          wipe <dir> | ota [check|url <u>|channel 0|1] | pageturn 0|1 | pwroff\n");
+           "          wipe <dir> | ota [check|url <u>|channel 0|1] | resources | pageturn 0|1 | pwroff\n");
     // Bench/debug hooks (kept on one line so `help` stays scannable).
     printf("          act aikey areatest audio badge btmap cleanrect vcom battlog boothang btaudio cat cellprobe cellular cellularforget clean "
-           " confirm cpu dict dns embfont fastturn fbclear fbink flpresent hash httpprobe imgtest logtest ls mkdir open orient "
-           " part pwrdemo pwrhold reboot resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
+           " confirm readerpanel cpu dict dns embfont fastturn fbclear fbink flpresent hash httpprobe imgtest jjwxc logtest ls mkdir open orient "
+           " part pdfassets pdfengineupdate pdfengineurl <https://url> plugindemo [path] pluginloop <n> [path] plugins pluginlaunch <id> putfilefast <path> <bytes> pdfengineinstall <path> "
+           " pwrdemo pwrhold reboot resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
            " sdstress sleepbadge slpdiag slpusb standby sync tail textaa touchdown touchup voiceprobe volume vtext wave wifisaved\n");
 }
 
@@ -1020,9 +1072,8 @@ void consoleDict(const char* args) {
     }
     std::string def;
     std::string head;
-    DictLocation loc;
     Dictionary::LookupResult lr = Dictionary::LookupResult::NotFound;
-    const bool ok = dict.lookup(args != nullptr ? args : "", def, head, &lr, &loc);
+    const bool ok = dict.lookup(args != nullptr ? args : "", def, head, &lr);
     printf("dict: ok=%d result=%d head='%s' bytes=%u\n", ok ? 1 : 0, static_cast<int>(lr), head.c_str(),
            static_cast<unsigned>(def.size()));
     if (ok && !def.empty()) printf("dict def: %.80s\n", def.c_str());
@@ -1402,6 +1453,83 @@ void consolePutFile(const char* args) {
     close(fd);
     printf("putfile: ok %u bytes\n", got);
 }
+
+// Flow-controlled bulk upload for images/assets that are too large for the
+// 64-byte putfile loop (and for when USB MSC/Wi-Fi is unavailable).  The host
+// sends at most one block, then waits for PFB_ACK before sending more, so the
+// USB-Serial/JTAG RX FIFO cannot be overrun; the stream is CRC32-checked and
+// the host compares it before trusting the file.
+void consolePutFileFast(const char* args) {
+    char path[192] = {};
+    unsigned size = 0;
+    if (args == nullptr || sscanf(args, "%191s %u", path, &size) != 2 || path[0] == '\0' || size == 0) {
+        printf("usage: putfilefast </path/on/card> <bytes>\n");
+        return;
+    }
+    char full[224];
+    if (strncmp(path, "/sdcard", 7) == 0) {
+        snprintf(full, sizeof(full), "%s", path);
+    } else {
+        snprintf(full, sizeof(full), "/sdcard%s", path);
+    }
+    const int fd = open(full, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        printf("putfilefast: cannot open %s\n", full);
+        return;
+    }
+    constexpr size_t kBlock = 2048;
+    uint8_t* buf = static_cast<uint8_t*>(heap_caps_malloc(kBlock, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (buf == nullptr) {
+        printf("putfilefast: no PSRAM\n");
+        close(fd);
+        return;
+    }
+    printf("PFB_READY\n");
+    fflush(stdout);
+    unsigned got = 0;
+    uint32_t crc = 0xffffffffu;
+    uint32_t lastDataMs = millis();
+    while (got < size) {
+        const size_t want = std::min<size_t>(kBlock, size - got);
+        // Drain a complete block before writing/ACKing.  The USB CDC delivers
+        // in small packets (64 B); ACKing each packet turned one 1 KiB block
+        // into sixteen host round trips and made the transfer far slower than
+        // the link allows.
+        size_t filled = 0;
+        while (filled < want) {
+            const size_t n = fread(buf + filled, 1, want - filled, stdin);
+            if (n == 0) {
+                if (millis() - lastDataMs > 20000) {
+                    printf("putfilefast: timeout at %u/%u\n", got, size);
+                    heap_caps_free(buf);
+                    close(fd);
+                    return;
+                }
+                vTaskDelay(pdMS_TO_TICKS(1));
+                continue;
+            }
+            filled += n;
+            lastDataMs = millis();
+        }
+        if (write(fd, buf, want) != static_cast<ssize_t>(want)) {
+            printf("putfilefast: write failed at %u\n", got);
+            heap_caps_free(buf);
+            close(fd);
+            return;
+        }
+        for (size_t i = 0; i < want; ++i) {
+            crc ^= buf[i];
+            for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+        }
+        got += static_cast<unsigned>(want);
+        printf("PFB_ACK %u\n", got);
+        fflush(stdout);
+    }
+    heap_caps_free(buf);
+    close(fd);
+    printf("PFB_DONE %u %08x\n", got, static_cast<unsigned>(~crc));
+}
+
 
 // Direct SecureClient probe: separates TCP/TLS connect from the read path.
 void consoleTlsProbe(const char* args) {
@@ -2029,6 +2157,54 @@ void consoleWifiConnect(const char* args) {
            WiFi.localIP().toString().c_str());
 }
 
+// Connect using a credential already in the store (no password on the command
+// line). WiFi.begin() writes NVS, so the work runs on a short internal-stack
+// task: the console itself prefers a PSRAM stack.
+void consoleWifiConnectSaved(const char* ssid) {
+    if (ssid == nullptr || *ssid == '\0') {
+        printf("usage: wificonnect_saved <ssid>\n");
+        return;
+    }
+    WIFI_STORE.loadFromFile();
+    std::string pass;
+    bool found = false;
+    for (size_t i = 0; i < WIFI_STORE.getCredentialCount(); ++i) {
+        const auto credential = WIFI_STORE.getCredentialAt(i);
+        if (credential && credential->ssid == ssid) {
+            pass = credential->password;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        printf("wificonnect_saved: unknown network '%s'\n", ssid);
+        return;
+    }
+    struct Ctx {
+        const char* ssid;
+        std::string pass;
+        volatile int result;
+        volatile int status;
+        char ip[16];
+    } ctx{ssid, pass, -1, -1, {0}};
+    auto runner = [](void* raw) {
+        auto* c = static_cast<Ctx*>(raw);
+        NetworkStartup::prepare(renderer);
+        c->result = WiFi.begin(c->ssid, c->pass.c_str());
+        const uint32_t started = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - started < 15000) vTaskDelay(pdMS_TO_TICKS(200));
+        c->status = static_cast<int>(WiFi.status());
+        std::snprintf(c->ip, sizeof(c->ip), "%s", WiFi.localIP().toString().c_str());
+        vTaskDelete(nullptr);
+    };
+    if (xTaskCreate(runner, "wificon", 12288, &ctx, 4, nullptr) != pdPASS) {
+        printf("wificonnect_saved: task create failed\n");
+        return;
+    }
+    while (ctx.result < 0) vTaskDelay(pdMS_TO_TICKS(50));
+    printf("wificonnect_saved: ssid='%s' result=%d status=%d ip=%s\n", ssid, ctx.result, ctx.status, ctx.ip);
+}
+
 // Flash a firmware image already on the SD card into the inactive OTA slot.
 // This is the development update path: the board has no EN reset line and the
 // running app owns the USB-Serial/JTAG console, so esptool cannot reflash it
@@ -2139,6 +2315,8 @@ void runPendingBenchAction() {
         a->debugInstallUrl(s_benchStr);
     } else if (action == 10) {
         a->debugSetChannel(s_benchArg);
+    } else if (action == 11) {
+        a->debugOpenPanel(s_benchArg);
     }
     activityManager.requestUpdate();
 }
@@ -2154,6 +2332,18 @@ void consoleRing(const char* args) {
 void consoleConfirm() {
     s_benchAction = 2;
     printf("confirm\n");
+}
+
+
+// Serial-only: open a reader toolbar panel by tool index (0 contents, 1 text,
+// 2 bookmarks, 3 more). The toolbar itself switches tools with Left/Right, but
+// injected keys race the panel render; calling the hook directly is the
+// deterministic path a bench needs.
+void consoleReaderPanel(const char* args) {
+    const int tool = args != nullptr ? atoi(args) : 0;
+    s_benchArg = tool;
+    s_benchAction = 11;
+    printf("readerpanel %d\n", tool);
 }
 
 void consoleSelect(const char* args) {
@@ -2307,7 +2497,20 @@ void consoleExec(char* line) {
     while (*args != '\0' && *args != ' ') ++args;
     if (*args == ' ') *args++ = '\0';
     if (*command == '\0') return;
-    if (strcmp(command, "help") == 0) {
+    // The console prefers a PSRAM stack (internal RAM is too fragmented for a
+    // 20 KB one). Writing internal flash from PSRAM is a panic, so the few
+    // bench commands that do that refuse here instead of wedging the unit.
+    if (esp_ptr_external_ram(esp_cpu_get_sp()) &&
+        (strcmp(command, "flash") == 0 || strcmp(command, "ota") == 0 ||
+         strcmp(command, "sdformat") == 0)) {
+        printf("%s: refused on the PSRAM console stack; use esptool or the UI\n", command);
+        return;
+    }
+    if (strcmp(command, "plugindemo") == 0) {
+        consolePlugin(args);
+    } else if (strcmp(command, "pluginloop") == 0) {
+        consolePluginLoop(args);
+    } else if (strcmp(command, "help") == 0) {
         consoleHelp();
     } else if (strcmp(command, "flash") == 0) {
         consoleFlash(args);
@@ -2323,6 +2526,8 @@ void consoleExec(char* line) {
         consoleRing(args);
     } else if (strcmp(command, "confirm") == 0) {
         consoleConfirm();
+    } else if (strcmp(command, "readerpanel") == 0) {
+        consoleReaderPanel(args);
     } else if (strcmp(command, "sel") == 0) {
         consoleSelect(args);
     } else if (strcmp(command, "settings") == 0) {
@@ -2420,6 +2625,13 @@ void consoleExec(char* line) {
                Storage.canParkForLightSleep() ? 1 : 0, static_cast<unsigned>(SETTINGS.sleepStateBadge),
                static_cast<unsigned>(SETTINGS.lightSleepStyle),
                static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+    } else if (strcmp(command, "jjwxc") == 0) {
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+        activityManager.goToJjwxc();
+        printf("jjwxc: opened\n");
+#else
+        printf("jjwxc: this build has no private book source\n");
+#endif
     } else if (strcmp(command, "standby") == 0) {
         activityManager.goToStandby();
     } else if (strcmp(command, "sleepbadge") == 0) {
@@ -2443,11 +2655,38 @@ void consoleExec(char* line) {
         int seconds = args != nullptr ? atoi(args) : 5;
         if (seconds < 1) seconds = 1;
         if (seconds > 30) seconds = 30;
+#if defined(CROSSPOINT_PDF_XIP_SD)
+        if (pdf_module::isLoaded()) {
+            printf("slptest: refused; the PDF engine is mapped in PSRAM (Standby also refuses)\n");
+            return;
+        }
+#endif
         printf("slptest: light sleep %d s\n", seconds);
-        const auto reason = powerManager.lightSleepFor((uint32_t)seconds);
-        printf("slptest: wake=%d failure=%u err=%d\n", (int)reason,
-               (unsigned)HalPowerManager::lastLightSleepFailure(),
-               HalPowerManager::lastLightSleepError());
+        struct SleepCtx {
+            uint32_t seconds;
+            volatile int reason;
+            volatile unsigned failure;
+            volatile int error;
+            volatile int done;
+        } sctx{static_cast<uint32_t>(seconds), -1, 0, 0, 0};
+        auto sleeper = [](void* raw) {
+            auto* c = static_cast<SleepCtx*>(raw);
+            c->reason = static_cast<int>(powerManager.lightSleepFor(c->seconds));
+            c->failure = HalPowerManager::lastLightSleepFailure();
+            c->error = HalPowerManager::lastLightSleepError();
+            c->done = 1;
+            vTaskDelete(nullptr);
+        };
+        if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+            if (xTaskCreate(sleeper, "slptest", 12288, &sctx, 4, nullptr) != pdPASS) {
+                printf("slptest: task create failed\n");
+                return;
+            }
+            while (!sctx.done) vTaskDelay(pdMS_TO_TICKS(50));
+        } else {
+            sleeper(&sctx);
+        }
+        printf("slptest: wake=%d failure=%u err=%d\n", sctx.reason, sctx.failure, sctx.error);
     } else if (strcmp(command, "my") == 0) {
         consoleMy(args);
     } else if (strcmp(command, "stats") == 0) {
@@ -2462,6 +2701,9 @@ void consoleExec(char* line) {
         consoleWipe(args);
     } else if (strcmp(command, "ota") == 0) {
         consoleOta(args);
+    } else if (strcmp(command, "resources") == 0) {
+        activityManager.replaceActivityWith<PlusResourcesActivity>();
+        printf("resources: page opened\n");
     } else if (strcmp(command, "pa") == 0) {
         const bool on = args != nullptr && atoi(args) != 0;
         printf("pa: %d -> %d\n", on ? 1 : 0, (int)epd_board_metalio_eink4_plus_pa_set(on));
@@ -2740,7 +2982,31 @@ void consoleExec(char* line) {
     } else if (strcmp(command, "slpinfo") == 0) {
         consoleSlpInfo();
     } else if (strcmp(command, "pinyin") == 0) {
-        consolePinyin();
+        if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+            // The pinyin tables live in the data partition; that flash read is
+            // only legal on an internal stack.
+            struct Ctx {
+                volatile int ok;
+                volatile unsigned syllables;
+                volatile int done;
+            } ctx{0, 0, 0};
+            auto runner = [](void* raw) {
+                auto* c = static_cast<Ctx*>(raw);
+                auto& db = pinyin::PinyinDb::shared();
+                c->ok = db.ensureLoaded() ? 1 : 0;
+                c->syllables = c->ok ? static_cast<unsigned>(db.tables().syllableCount()) : 0u;
+                c->done = 1;
+                vTaskDelete(nullptr);
+            };
+            if (xTaskCreate(runner, "pinyin", 10240, &ctx, 4, nullptr) != pdPASS) {
+                printf("pinyin: task create failed\n");
+            } else {
+                while (!ctx.done) vTaskDelay(pdMS_TO_TICKS(20));
+                printf("pinyin: loaded=%d syllables=%u\n", ctx.ok, ctx.syllables);
+            }
+        } else {
+            consolePinyin();
+        }
     } else if (strcmp(command, "hyphen") == 0) {
         consoleHyphen();
     } else if (strcmp(command, "i2c") == 0) {
@@ -2779,12 +3045,128 @@ void consoleExec(char* line) {
         consoleFbClear();
     } else if (strcmp(command, "browser") == 0) {
         consoleBrowser(args);
+    } else if (strcmp(command, "plugins") == 0) {
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+        activityManager.goToNativePlugins();
+        printf("plugins: opened\n");
+#else
+        printf("plugins: runtime not built\n");
+#endif
+    } else if (strcmp(command, "pluginlaunch") == 0) {
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+        char id[40] = {};
+        if (args == nullptr || sscanf(args, "%39s", id) != 1) {
+            printf("usage: pluginlaunch <id>\n");
+        } else {
+            auto plugins = native_plugins::scan();
+            for (const auto& info : plugins) {
+                if (info.id == id && info.error.empty()) {
+                    if (activityManager.replaceActivityWith<PluginActivity>(info)) {
+                        printf("pluginlaunch: %s\n", id);
+                    } else {
+                        printf("pluginlaunch: OOM\n");
+                    }
+                    id[0] = '\0';
+                    break;
+                }
+            }
+            if (id[0] != '\0') printf("pluginlaunch: not found or invalid: %s\n", id);
+        }
+#else
+        printf("pluginlaunch: runtime not built\n");
+#endif
+#if defined(CROSSPOINT_PDF_XIP)
+    } else if (strcmp(command, "pdfengineurl") == 0) {
+        // Bench: point the engine updater at a local HTTPS server so the full
+        // manifest -> download -> install path can be exercised without
+        // publishing a release.  An empty argument clears the override.
+        pdf_engine::setManifestUrlOverride(args != nullptr && *args != '\0' ? args : nullptr);
+        printf("pdfengineurl: %s\n", pdf_engine::isConfigured() ? "set" : "cleared");
+    } else if (strcmp(command, "pdfengineupdate") == 0) {
+        bool started = false;
+        if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+            struct Ctx {
+                volatile int started;
+            } ctx{-1};
+            auto runner = [](void* raw) {
+                auto* c = static_cast<Ctx*>(raw);
+                c->started = pdf_engine::startUpdate() ? 1 : 0;
+                vTaskDelete(nullptr);
+            };
+            if (xTaskCreate(runner, "pdfengstart", 10240, &ctx, 4, nullptr) != pdPASS) {
+                printf("pdfengineupdate: task create failed\n");
+            } else {
+                while (ctx.started < 0) vTaskDelay(pdMS_TO_TICKS(20));
+                started = ctx.started == 1;
+            }
+        } else {
+            started = pdf_engine::startUpdate();
+        }
+        if (!started) {
+            printf("pdfengineupdate: busy or not configured\n");
+        } else if (pdf_engine::updateInProgress()) {
+            while (pdf_engine::updateInProgress()) vTaskDelay(pdMS_TO_TICKS(200));
+            const auto state = pdf_engine::pollUpdate();
+            const auto failure = pdf_engine::result().failure;
+            printf("pdfengineupdate: state=%d failure=%d\n", static_cast<int>(state), static_cast<int>(failure));
+            if (state == pdf_engine::State::Done) {
+                int install = -1;
+                if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+                    struct InstallCtx {
+                        volatile int status;
+                    } ictx{-1};
+                    auto installRunner = [](void* raw) {
+                        auto* c = static_cast<InstallCtx*>(raw);
+                        c->status = static_cast<int>(pdf_engine::installFromTemp());
+                        vTaskDelete(nullptr);
+                    };
+                    if (xTaskCreate(installRunner, "pdfenginst", 12288, &ictx, 4, nullptr) == pdPASS) {
+                        while (ictx.status < 0) vTaskDelay(pdMS_TO_TICKS(20));
+                        install = ictx.status;
+                    }
+                } else {
+                    install = static_cast<int>(pdf_engine::installFromTemp());
+                }
+                printf("pdfengineupdate: install=%d\n", install);
+            }
+        }
+    } else if (strcmp(command, "pdfassets") == 0) {
+        printf("pdfassets: %s\n", ensurePdfAssets() ? "ok" : "fail");
+    } else if (strcmp(command, "pdfengineinstall") == 0) {
+        if (args == nullptr || *args == '\0') {
+            printf("usage: pdfengineinstall </path/to/pdfmod.bin>\n");
+        } else if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+            // installFromSdFile reads the running app's SHA from internal flash;
+            // doing that on the PSRAM console stack trips the cache-disable
+            // assert. Run it on a short internal-stack task and wait for it.
+            struct Ctx {
+                const char* path;
+                volatile int status;
+            } ctx{args, -1};
+            auto runner = [](void* raw) {
+                auto* c = static_cast<Ctx*>(raw);
+                c->status = static_cast<int>(pdf_module::installFromSdFile(c->path));
+                vTaskDelete(nullptr);
+            };
+            TaskHandle_t task = nullptr;
+            if (xTaskCreate(runner, "pdfinstall", 12288, &ctx, 4, &task) != pdPASS) {
+                printf("pdfengineinstall: task create failed\n");
+            } else {
+                while (ctx.status < 0) vTaskDelay(pdMS_TO_TICKS(20));
+                printf("pdfengineinstall: %d\n", ctx.status);
+            }
+        } else {
+            printf("pdfengineinstall: %d\n", static_cast<int>(pdf_module::installFromSdFile(args)));
+        }
+#endif
     } else if (strcmp(command, "httpprobe") == 0) {
         consoleHttpProbe(args);
     } else if (strcmp(command, "tlsprobe") == 0) {
         consoleTlsProbe(args);
     } else if (strcmp(command, "putfile") == 0) {
         consolePutFile(args);
+    } else if (strcmp(command, "putfilefast") == 0) {
+        consolePutFileFast(args);
     } else if (strcmp(command, "crypto") == 0) {
         printf("crypto: %s\n", freeink::content::portContentCryptoSelfTest() ? "ok" : "FAILED");
     } else if (strcmp(command, "cryptotest") == 0) {
@@ -2934,6 +3316,8 @@ void consoleExec(char* line) {
         printf("wave transient=%d (0 GL16, 1 DU20, 2 DU14, 3 GL36)\n", plus_epd_transient_wave());
     } else if (strcmp(command, "wifi") == 0) {
         consoleWifi();
+    } else if (strcmp(command, "wificonnect_saved") == 0) {
+        consoleWifiConnectSaved(args);
     } else if (strcmp(command, "wificonnect") == 0) {
         consoleWifiConnect(args);
     } else if (strcmp(command, "wifisaved") == 0) {
@@ -3056,7 +3440,24 @@ void plus_console_start() {
     // plus-console); a panic in the middle of a FAT write is what leaves the
     // card needing a power cycle. Nothing here is product code, so give it a
     // comfortable stack.
-    xTaskCreate(consoleTask, "plus-console", 20480, nullptr, 2, nullptr);
+    // The merged UI fragments the internal heap enough that a 20 KB stack can
+    // fail even with ~78 KB free (largest block), and a failed create used to be
+    // silent: heartbeats kept flowing while every command was ignored. Prefer a
+    // PSRAM stack (the depth unit is StackType_t words), then an internal stack.
+    // The flash-writing bench commands must not run on that stack; they check.
+    if (xTaskCreatePinnedToCoreWithCaps(consoleTask, "plus-console",
+                                       20480 / sizeof(StackType_t), nullptr, 2, nullptr, 0,
+                                       MALLOC_CAP_SPIRAM) != pdPASS) {
+      const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+      if (xTaskCreate(consoleTask, "plus-console", 20480, nullptr, 2, nullptr) != pdPASS &&
+          xTaskCreate(consoleTask, "plus-console", 12288, nullptr, 2, nullptr) != pdPASS) {
+        ESP_LOGE("PLUS", "console task create failed (internal largest=%u); serial commands are unavailable",
+                 static_cast<unsigned>(largest));
+        return;
+      }
+      ESP_LOGW("PLUS", "console on internal stack (PSRAM create failed, largest=%u)",
+               static_cast<unsigned>(largest));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3401,6 +3802,49 @@ extern "C" void cpyos_shell_loop(void) {
         }
     }
     activityManager.loop();
+    // Battery sampling: the SoC policy averages one accepted sample per second,
+    // so the gauge must be read from the loop, never from the renderer (that
+    // inversion is why this port's capsule sat at the "no reading" placeholder
+    // forever). Repaint a tab page when the shown level/validity/charging state
+    // changes; the reader redraws on page turns, and a full scan mid-reading
+    // would cost more than a slightly stale number.
+    {
+        static unsigned long lastBatteryCheckMs = 0;
+        static uint16_t lastBatteryPercent = 0xFFFF;
+        static bool lastBatteryKnown = false;
+        static bool lastBatteryCharging = false;
+        const unsigned long nowMs = millis();
+        if (nowMs - lastBatteryCheckMs >= 1000) {
+            lastBatteryCheckMs = nowMs;
+            const uint16_t level = powerManager.getBatteryPercentage();
+            const bool known = powerManager.batteryPercentageKnown();
+            const bool charging = powerManager.isBatteryCharging();
+            if (level != lastBatteryPercent || known != lastBatteryKnown ||
+                charging != lastBatteryCharging) {
+                lastBatteryPercent = level;
+                lastBatteryKnown = known;
+                lastBatteryCharging = charging;
+                const Activity* batteryActivity = activityManager.currentActivityPtr();
+                if (batteryActivity != nullptr && batteryActivity->mainTab() != MainTab::None &&
+                    !activityManager.isReaderActivity() && !activityManager.isStandbyActivity() &&
+                    !activityManager.isSwitchPending()) {
+                    activityManager.requestUpdate();
+                }
+            }
+        }
+    }
+#if defined(CROSSPOINT_PDF_XIP)
+    // Read Pico flushes the deferred PDF-engine unmap from its main loop.  The
+    // Plus owns the same loader API and must do the same, otherwise the mapped
+    // engine (code + rodata + data aliases) stays alive for the whole boot
+    // after the reader is left, which is neither parity nor necessary.
+    if (pdf_module::flushScheduledUnload(!activityManager.hasActivityNamed("PdfReader"))) {
+        ESP_LOGI("PLUS", "PDF engine unmapped after leaving the reader");
+    }
+#endif
+    // Same network idle window as the reference main loop. Without this the
+    // Plus port ignored SETTINGS.wifiIdleTimeoutSeconds completely.
+    NetworkStartup::pollIdle(millis());
 #if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
     maybeOfferFontExtrasForMissingUiGlyph();
 #endif

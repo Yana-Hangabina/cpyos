@@ -150,6 +150,13 @@ class ActivityManager {
   void goToRecentBooks();
   void goToBrowser();
   void goToPlugins(bool showOpds);
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+  // SD-installed native ELF plugin picker. Only linked when the target builds
+  // the plugin host (Plus port and the readpico_plugins bench environment).
+  void goToNativePlugins();
+  // Launch one installed package by id (tool-drawer plugin tiles).
+  void goToNativePlugin(const std::string& id);
+#endif
   void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
@@ -209,6 +216,17 @@ class ActivityManager {
   // Remove the currentActivity, returning the last one on stack
   // Note: if popActivity() on last activity on the stack, we will goHome()
   void popActivity();
+  // True when an activity with this debug name is anywhere below the current
+  // one.  The serial bench uses it to tell "the reader is not open" (nothing to
+  // do) apart from "a keyboard is on top of the reader" (dismiss it and the
+  // command becomes reachable), which used to look identical in the log.
+  bool hasStackedActivity(const char* name) const;
+  /// True when `name` is the root activity or anywhere in the stack.  The PDF
+  /// reader opened from Home replaces the root, so hasStackedActivity() is
+  /// false there and the serial route used to ignore the command.
+  bool hasActivityNamed(const char* name) const;
+  /// Every activity on screen or beneath it, top first (diagnostics only).
+  std::vector<std::string> debugActivityNames() const;
 
   bool preventAutoSleep() const;
   // True when an activity below the current one (usually the reader/comment

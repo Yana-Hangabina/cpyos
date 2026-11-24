@@ -1,5 +1,9 @@
 #include "StandbyActivity.h"
 
+#if defined(CROSSPOINT_PDF_XIP_SD)
+#include "pdf/PdfModuleRuntime.h"
+#endif
+
 #include <Arduino.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -26,8 +30,6 @@
 #include "NetworkStartup.h"
 #include "StandbyImageFace.h"
 #include "StandbyTime.h"
-#include "activities/ActivityResult.h"
-#include "activities/network/WifiSelectionActivity.h"
 #include "fontIds.h"
 #include "util/SleepBadge.h"
 #include "util/TimeUtils.h"
@@ -53,11 +55,6 @@ constexpr uint32_t kWifiTimeoutMs = 15000u;  // Same as WifiSelectionActivity
 constexpr uint32_t kNtpTimeoutMs = 12000u;
 constexpr uint32_t kSyncDelayMs = 1500u;
 
-// Once per power-on, Standby may push the WiFi selection UI to help the user
-// get online for clock sync. After it has been shown (regardless of whether the
-// user connected or cancelled), subsequent Standby entries within the same
-// session will not re-prompt — the explicit way to retry is Settings → WiFi.
-bool g_promptedForWifiThisSession = false;
 bool g_debugWakeRequested = false;
 
 // Diagnostic trail for "the clock returned to the reader by itself": light
@@ -157,6 +154,8 @@ void StandbyActivity::onEnter() {
   powerArmed_ = false;
   powerArmAtMs_ = millis() + 350;
   g_debugWakeRequested = false;
+  silentCandidates_.clear();
+  silentCandidateIndex_ = 0;
   if (!TimeUtils::isClockValid() && SETTINGS.clockAutoSync) {
     syncState_ = SyncState::Delayed;
     syncStartMs_ = millis();
@@ -168,12 +167,15 @@ void StandbyActivity::onExit() {
   switch (syncState_) {
     case SyncState::Idle:
     case SyncState::Delayed:
+    case SyncState::Unavailable:
       break;
     case SyncState::WifiConnecting:
     case SyncState::ClockSyncing:
       stopTimeSyncWifi();
       break;
   }
+  silentCandidates_.clear();
+  silentCandidateIndex_ = 0;
   syncState_ = SyncState::Idle;
   if (lightFace_) {
     lightFace_->onExit();
@@ -190,104 +192,166 @@ void StandbyActivity::onExit() {
 void StandbyActivity::startTimeSync() {
   if (TimeUtils::isClockValid() || !SETTINGS.clockAutoSync) return;
   // A background cache owns the radio; don't fight it for a clock sync.
-  if (background_work::active()) return;
+  if (background_work::active()) {
+    syncState_ = SyncState::Unavailable;
+    requestUpdate();
+    return;
+  }
+#if defined(CROSSPOINT_PLUS_PORT)
+  // The 4G transport aliases WIFI_STA in the compat layer. Scanning or trying
+  // saved SSIDs there would either block on the modem attach or tear it down.
+  if (SETTINGS.networkType == CrossPointSettings::NETWORK_CELLULAR && SETTINGS.cellularPresent != 0) {
+    syncState_ = SyncState::Unavailable;
+    requestUpdate();
+    return;
+  }
+#endif
 
   // Another activity (e.g. Settings → WiFi) may have already connected the
   // device. Skip our own WiFi.begin in that case and request a clock sync.
   if (WiFi.status() == WL_CONNECTED) {
     NetworkStartup::prepare(renderer);
+    if (!silentNetworkHold_) {
+      NetworkStartup::hold();
+      silentNetworkHold_ = true;
+    }
     LOG_DBG("STANDBY", "WiFi already connected, skipping silent attempt");
     beginClockSync();
     return;
   }
 
-  // Default path: try the saved "last connected" credentials silently.
-  if (trySilentWifiConnect()) {
-    return;
-  }
-
-  // No credentials available to try. Push the WiFi selection UI (once per
-  // session) so the user can connect manually.
-  if (!g_promptedForWifiThisSession) {
-    promptForWifi();
+  // Default path: try saved credentials silently. The old version only tried
+  // lastConnectedSsid and then pushed the Wi-Fi picker on top of the lock
+  // screen when that access point happened to be out of range. Scan first and
+  // fall back to every saved network that is actually visible.
+  if (!trySilentWifiConnect()) {
+    markTimeSyncUnavailable();
   }
 }
 
 bool StandbyActivity::trySilentWifiConnect() {
   // SD I/O shares SPI with the e-ink panel, so we hold a RenderLock for the
   // duration of the credential file access.
-  std::string ssid;
-  std::string pass;
+  std::vector<WifiCredential> saved;
+  std::string last;
   {
     RenderLock lock(*this);
     if (WIFI_STORE.getCredentialCount() == 0) WIFI_STORE.loadFromFile();
-    const std::string last = WIFI_STORE.getLastConnectedSsid();
-    if (last.empty()) {
-      LOG_DBG("STANDBY", "No lastConnectedSsid for silent connect");
-      return false;
+    last = WIFI_STORE.getLastConnectedSsid();
+    const size_t count = WIFI_STORE.getCredentialCount();
+    saved.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+      const auto cred = WIFI_STORE.getCredentialAt(i);
+      if (cred) saved.push_back(*cred);
     }
-    const auto cred = WIFI_STORE.findCredential(last);
-    if (!cred) {
-      LOG_DBG("STANDBY", "lastConnectedSsid '%s' has no saved credential", last.c_str());
-      return false;
-    }
-    ssid = cred->ssid;
-    pass = cred->password;
+  }
+  if (saved.empty()) {
+    LOG_DBG("STANDBY", "No saved WiFi credentials for silent connect");
+    return false;
   }
 
+  if (!silentNetworkHold_) {
+    NetworkStartup::hold();
+    silentNetworkHold_ = true;
+  }
   WiFi.persistent(false);
-  NetworkStartup::setMode(renderer, WIFI_STA);
-  // Fresh-slate disconnect (radio off + erase cached AP) so the next begin()
-  // latches the exact creds we just loaded, not whatever the radio retained
-  // from a previous session.
-  WiFi.disconnect(true, true);
+  if (!NetworkStartup::setMode(renderer, WIFI_STA)) {
+    LOG_ERR("STANDBY", "Station initialization failed for silent connect");
+    return false;
+  }
+  // Do not erase the AP before begin(): on a fresh mode change STA is not
+  // started and Arduino's eraseap path returns "STA not started", which can
+  // make this first association time out. begin() replaces the config in RAM.
   delay(100);
-  if (pass.empty()) {
-    WiFi.begin(ssid.c_str());
-  } else {
-    WiFi.begin(ssid.c_str(), pass.c_str());
+
+  struct VisibleNetwork {
+    int32_t rssi = 0;
+    const WifiCredential* cred = nullptr;
+  };
+  std::vector<VisibleNetwork> visible;
+  const int scanCount = WiFi.scanNetworks(false, true);
+  if (scanCount > 0) {
+    visible.reserve(static_cast<size_t>(scanCount));
+    for (int i = 0; i < scanCount; ++i) {
+      const std::string scanned(WiFi.SSID(static_cast<uint8_t>(i)).c_str());
+      if (scanned.empty()) continue;
+      for (const auto& cred : saved) {
+        if (cred.ssid != scanned) continue;
+        const bool already = std::any_of(visible.begin(), visible.end(),
+                                         [&cred](const VisibleNetwork& n) { return n.cred == &cred; });
+        if (!already) visible.push_back({WiFi.RSSI(static_cast<uint8_t>(i)), &cred});
+        break;
+      }
+    }
   }
-  syncState_ = SyncState::WifiConnecting;
-  syncStartMs_ = millis();
-  LOG_DBG("STANDBY", "Silent WiFi connect start: %s", ssid.c_str());
-  return true;
+  WiFi.scanDelete();
+
+  std::sort(visible.begin(), visible.end(),
+            [](const VisibleNetwork& a, const VisibleNetwork& b) { return a.rssi > b.rssi; });
+  if (!last.empty() && !visible.empty()) {
+    const auto lastIt = std::find_if(visible.begin(), visible.end(),
+                                     [&last](const VisibleNetwork& n) { return n.cred->ssid == last; });
+    if (lastIt != visible.end()) std::rotate(visible.begin(), lastIt, lastIt + 1);
+  }
+
+  silentCandidates_.clear();
+  silentCandidateIndex_ = 0;
+  for (const auto& network : visible) {
+    silentCandidates_.emplace_back(network.cred->ssid, network.cred->password);
+  }
+  // If the scan failed or returned nothing, still give the last known network
+  // one chance (it may be hidden). No other absent SSIDs are tried: on the Plus
+  // a failed WiFi.begin can block the UI task for the full association timeout.
+  if (silentCandidates_.empty() && !last.empty()) {
+    const auto cred = std::find_if(saved.begin(), saved.end(),
+                                   [&last](const WifiCredential& c) { return c.ssid == last; });
+    if (cred != saved.end()) silentCandidates_.emplace_back(cred->ssid, cred->password);
+  }
+
+  LOG_DBG("STANDBY", "Silent WiFi candidates: %u (scan=%d, saved=%u)", static_cast<unsigned>(silentCandidates_.size()),
+          scanCount, static_cast<unsigned>(saved.size()));
+  if (silentCandidates_.empty()) return false;
+  return tryNextSilentCandidate();
 }
 
-void StandbyActivity::promptForWifi() {
-  g_promptedForWifiThisSession = true;
-  LOG_DBG("STANDBY", "Prompting WiFi selection UI");
-  auto activity = makeUniqueNoThrow<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false,
-                                                           /*keepRadioOnExit=*/false);
-  if (!activity) {
-    LOG_ERR("STANDBY", "OOM: WifiSelectionActivity (%u bytes)", static_cast<unsigned>(sizeof(WifiSelectionActivity)));
-    return;
+bool StandbyActivity::tryNextSilentCandidate() {
+  while (silentCandidateIndex_ < silentCandidates_.size()) {
+    const auto& candidate = silentCandidates_[silentCandidateIndex_++];
+    WiFi.disconnect();
+    delay(50);
+    // The Plus compatibility layer returns int from begin(); Arduino returns
+    // wl_status_t. Keep the value as int so both targets compile.
+    const int beginStatus =
+        WiFi.begin(candidate.first.c_str(), candidate.second.empty() ? nullptr : candidate.second.c_str(),
+                   /*channel=*/0, /*bssid=*/nullptr, /*connect=*/false);
+    LOG_DBG("STANDBY", "Silent WiFi attempt: %s (%s)", candidate.first.c_str(),
+            beginStatus == static_cast<int>(WL_CONNECT_FAILED) ? "begin failed" : "started");
+    if (beginStatus == static_cast<int>(WL_CONNECT_FAILED)) continue;
+    syncState_ = SyncState::WifiConnecting;
+    syncStartMs_ = millis();
+    requestUpdate();
+    return true;
   }
-  startActivityForResult(std::move(activity), [this](const ActivityResult& result) { onWifiResult(result); });
+  markTimeSyncUnavailable();
+  return false;
 }
 
-void StandbyActivity::onWifiResult(const ActivityResult& result) {
-  if (result.isCancelled) {
-    LOG_DBG("STANDBY", "WiFi UI cancelled; clock remains unavailable");
-    stopTimeSyncWifi();
-    syncState_ = SyncState::Idle;
-    return;
-  }
-  if (TimeUtils::isClockValid()) {
-    LOG_DBG("STANDBY", "WiFi UI returned with a trustworthy clock");
-    completeTimeSync();
-    return;
-  }
-
-  LOG_DBG("STANDBY", "WiFi UI returned connected; requesting clock sync");
-  beginClockSync();
-  requestUpdate();  // refresh header back to "Syncing…"
+void StandbyActivity::markTimeSyncUnavailable() {
+  silentCandidates_.clear();
+  silentCandidateIndex_ = 0;
+  stopTimeSyncWifi();
+  syncState_ = SyncState::Unavailable;
+  requestUpdate();
 }
 
 void StandbyActivity::beginClockSync() {
+  if (!silentNetworkHold_) {
+    NetworkStartup::hold();
+    silentNetworkHold_ = true;
+  }
   if (!halClock.requestSync()) {
     LOG_ERR("STANDBY", "Clock sync could not start");
-    stopTimeSyncWifi();
-    syncState_ = SyncState::Idle;
+    markTimeSyncUnavailable();
     return;
   }
   syncState_ = SyncState::ClockSyncing;
@@ -296,11 +360,12 @@ void StandbyActivity::beginClockSync() {
 }
 
 void StandbyActivity::pumpTimeSync() {
-  if (syncState_ == SyncState::Idle) return;
+  if (syncState_ == SyncState::Idle || syncState_ == SyncState::Unavailable) return;
   const uint32_t elapsed = millis() - syncStartMs_;
 
   switch (syncState_) {
     case SyncState::Idle:
+    case SyncState::Unavailable:
       return;
     case SyncState::Delayed:
       if (elapsed < kSyncDelayMs) return;
@@ -310,44 +375,38 @@ void StandbyActivity::pumpTimeSync() {
     case SyncState::WifiConnecting: {
       const wl_status_t status = WiFi.status();
       if (status == WL_CONNECTED) {
+        silentCandidates_.clear();
+        silentCandidateIndex_ = 0;
         beginClockSync();
         return;
       }
       if (status != WL_CONNECT_FAILED && status != WL_NO_SSID_AVAIL && elapsed < kWifiTimeoutMs) return;
 
-      LOG_DBG("STANDBY", "Silent WiFi sync failed (status=%d, t=%ums)", static_cast<int>(status),
-              static_cast<unsigned>(elapsed));
-      stopTimeSyncWifi();
-      syncState_ = SyncState::Idle;
-      if (!g_promptedForWifiThisSession)
-        promptForWifi();
-      else
-        requestUpdate();
+      LOG_DBG("STANDBY", "Silent WiFi attempt failed (status=%d, t=%ums), trying next saved network",
+              static_cast<int>(status), static_cast<unsigned>(elapsed));
+      WiFi.disconnect();
+      tryNextSilentCandidate();
       return;
     }
     case SyncState::ClockSyncing:
       switch (halClock.syncState()) {
         case ClockSyncState::Succeeded:
-          g_promptedForWifiThisSession = false;
           LOG_DBG("STANDBY", "Clock synchronized");
           completeTimeSync();
           return;
         case ClockSyncState::Failed:
           LOG_DBG("STANDBY", "Clock sync failed");
-          stopTimeSyncWifi();
-          syncState_ = SyncState::Idle;
+          markTimeSyncUnavailable();
           return;
         case ClockSyncState::Idle:
           if (elapsed < kNtpTimeoutMs) return;
           LOG_DBG("STANDBY", "Clock sync stopped");
-          stopTimeSyncWifi();
-          syncState_ = SyncState::Idle;
+          markTimeSyncUnavailable();
           return;
         case ClockSyncState::Syncing:
           if (elapsed < kNtpTimeoutMs) return;
           LOG_DBG("STANDBY", "Clock sync timed out");
-          stopTimeSyncWifi();
-          syncState_ = SyncState::Idle;
+          markTimeSyncUnavailable();
           return;
       }
       break;
@@ -355,10 +414,13 @@ void StandbyActivity::pumpTimeSync() {
 }
 
 void StandbyActivity::stopTimeSyncWifi() {
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  esp_wifi_deinit();
+  silentCandidates_.clear();
+  silentCandidateIndex_ = 0;
+  if (silentNetworkHold_) {
+    NetworkStartup::releaseHold();
+    silentNetworkHold_ = false;
+  }
+  NetworkStartup::releaseRadio();
 }
 
 void StandbyActivity::completeTimeSync() {
@@ -401,7 +463,7 @@ bool StandbyActivity::canEnterLightSleep() const {
 #if CROSSPOINT_EMULATED == 0
   if (phase_ != Phase::Standby) return false;
   if (background_work::active()) return false;
-  const bool syncActive = syncState_ != SyncState::Idle;
+  const bool syncActive = syncState_ == SyncState::WifiConnecting || syncState_ == SyncState::ClockSyncing;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
 #if defined(CROSSPOINT_PLUS_PORT)
   const bool usbBlocks = gpio.isUsbConnected() && !HalPowerManager::debugUsbSleepAllowed();
@@ -427,8 +489,14 @@ bool StandbyActivity::tryLightSleep(const uint32_t idleMs) {
   if (phase_ != Phase::LightSleep) return false;
   if (background_work::active()) return false;
 
-  const bool syncActive = syncState_ != SyncState::Idle;
+  const bool syncActive = syncState_ == SyncState::WifiConnecting || syncState_ == SyncState::ClockSyncing;
   const bool wifiActive = WiFi.getMode() != WIFI_MODE_NULL;
+#if defined(CROSSPOINT_PDF_XIP_SD)
+  // The SD PDF engine runs from a PSRAM window; parking for light sleep may cut
+  // the rails behind it and the S31 cannot unmap it safely. Stay awake after any
+  // PDF session in this boot instead of risking a return into vanished code.
+  if (pdf_module::isLoaded()) return false;
+#endif
   const bool hardwareAllowed = powerManager.canStandbyLightSleep(gpio);
 #if defined(CROSSPOINT_PLUS_PORT)
   const bool usbConnected = gpio.isUsbConnected() && !HalPowerManager::debugUsbSleepAllowed();
@@ -568,7 +636,11 @@ void StandbyActivity::render(RenderLock&&) {
 
   const bool clockValid = TimeUtils::isClockValid();
   if (!clockValid && phase_ == Phase::Standby) {
-    UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, overlayTop, tr(STR_STANDBY_SYNCING));
+    const bool syncing = syncState_ == SyncState::Delayed || syncState_ == SyncState::WifiConnecting ||
+                         syncState_ == SyncState::ClockSyncing;
+    const char* syncText =
+        I18N.get(syncing ? StrId::STR_STANDBY_SYNCING : StrId::STR_CLOCK_SYNC_NO_WIFI);
+    UITheme::drawCenteredText(renderer, faceViewport, SMALL_FONT_ID, overlayTop, syncText);
   }
 
   const bool debugBadge = standby_debug::sleepBadgeShown();

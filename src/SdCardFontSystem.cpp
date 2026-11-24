@@ -184,7 +184,18 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
         loadTtfFamily(*family, renderer, /*registryWasDirty=*/false);
       } else
 #endif
-          if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize, SETTINGS.sdFontFlashPreload != 0)) {
+          if (READER_HAS_SCALABLE_FALLBACK &&
+              !readerFontPointSizeIsNative(&registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontPointSize)) {
+        // A saved size from another family, or a size chosen before the bitmap
+        // family changed. Fixed .cpfont files cannot scale; hand the size to the
+        // built-in vector face instead of silently snapping back to a smaller
+        // bitmap. The picker marks these rows and uses the same transition.
+        LOG_INF("SDFS", "%s has no %u pt bitmap; using the built-in scalable face", SETTINGS.sdFontFamilyName,
+                static_cast<unsigned>(SETTINGS.fontPointSize));
+        SETTINGS.useBuiltinReaderFontAt(SETTINGS.fontPointSize);
+        SETTINGS.saveToFile();
+      } else if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize,
+                                     SETTINGS.sdFontFlashPreload != 0)) {
         snapFontPointSizeTo(manager_.currentPointSize());
         setupUiFallbacks(renderer);
         LOG_DBG("SDFS", "Loaded SD card font family: %s", SETTINGS.sdFontFamilyName);
@@ -233,6 +244,16 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, bool allowFlashCache)
 
   const char* wantedFamily = SETTINGS.sdFontFamilyName;
 
+  if (wantedFamily[0] != '\0' && READER_HAS_SCALABLE_FALLBACK &&
+      !readerFontPointSizeIsNative(&registry_, wantedFamily, SETTINGS.fontPointSize)) {
+    // The selected bitmap family cannot render this ladder point. Keep the
+    // chosen size and let the built-in scalable face own the page; snapping to
+    // the nearest bitmap would silently undo a 20..40pt choice.
+    LOG_INF("SDFS", "%s has no %u pt bitmap; using the built-in scalable face", wantedFamily,
+            static_cast<unsigned>(SETTINGS.fontPointSize));
+    SETTINGS.useBuiltinReaderFontAt(SETTINGS.fontPointSize);
+  }
+
 #if CROSSPOINT_VECTOR_FONTS
   // Vector (.ttf/.otf) family selected: route through the FreeInkFont path and
   // drop any pre-rasterized (.cpfont) font that was loaded.
@@ -258,9 +279,15 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, bool allowFlashCache)
     }
 #ifndef CROSSMUX_UI_PROFILE_HIGH_DPI
     // Back on a built-in family, which exists only at BUILTIN_READER_POINT_SIZES:
-    // a size inherited from an SD family has to come back into that set.
-    snapFontPointSizeTo(snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES),
-                                               SETTINGS.fontPointSize));
+    // a size inherited from an SD family has to come back into that set. The
+    // device range belongs to the scalable pack; a bitmap-only target keeps
+    // its original built-in snap.
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+    snapFontPointSizeTo(readerClampPointSizeToDevice(SETTINGS.fontPointSize));
+#else
+    snapFontPointSizeTo(
+        snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), SETTINGS.fontPointSize));
+#endif
 #endif
     return;
   }
@@ -325,6 +352,13 @@ void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) {
   unloadTtf(renderer);
   // Font Extras faces are also resident; a memory-critical transition must be
   // able to reclaim them. ensureLoaded()/reader entry reloads them.
+  unloadSupplementFonts(renderer);
+#endif
+}
+
+void SdCardFontSystem::releaseSdFamilies(GfxRenderer& renderer) {
+  manager_.unloadAll(renderer);
+#if CROSSPOINT_VECTOR_FONTS
   unloadSupplementFonts(renderer);
 #endif
 }
@@ -474,11 +508,18 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
 #endif
 }
 
-int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*/) const {
+int SdCardFontSystem::resolveFontId(const char* familyName, const uint8_t pointSize) const {
 #if CROSSPOINT_VECTOR_FONTS
   // A loaded vector (.ttf) family answers first — it isn't in the .cpfont manager.
   if (ttfFontId_ != 0 && familyName && ttfFamily_ == familyName) return ttfFontId_;
 #endif
+  if (familyName && familyName[0] != '\0' && READER_HAS_SCALABLE_FALLBACK &&
+      !readerFontPointSizeIsNative(&registry_, familyName, pointSize)) {
+    // 0 tells getReaderFontId() to fall through to the scalable built-in face.
+    // Returning the manager's nearest bitmap here is what made a 20..40pt
+    // request silently render at the family's maximum size.
+    return 0;
+  }
   // The manager holds exactly one reader-size font, already selected for
   // SETTINGS.fontPointSize, so the size argument is implicit — always return
   // that font's ID. ensureLoaded() must have run for the current settings first.
@@ -664,7 +705,7 @@ void SdCardFontSystem::addTtfSourcesFrom(const TtfSource* sources, TtfEpdFont& f
 }
 
 void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
-  if (ttfFamily_.empty()) return;
+  if (!ttf_ || ttfFamily_.empty()) return;
   // Small caches: UI strings (titles/rows) are short. Each UI family is 4-style
   // but LAZY, so only the regular face is ever built for UI text — the bold/
   // italic faces cost nothing. All faces share the reader's sources (streamed
@@ -711,8 +752,10 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
       LOG_ERR("SDFS", "OOM: TtfEpdFont for UI fallback @%upt", ui.pointSize);
       continue;  // built-in bitmap UI fonts keep covering this size
     }
-    addTtfSources(*f);
-    const bool ok = f->load(ui.pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/16 * 1024, /*maxGlyphs=*/384);
+    // Share the reader face's FreeType faces instead of re-parsing the font and
+    // allocating one FT_Face per UI size.
+    const bool ok =
+        f->loadVariantOf(*ttf_, ui.pointSize, /*twoBit=*/true, /*glyphCacheBytes=*/16 * 1024, /*maxGlyphs=*/384);
     if (!ok) continue;
     LOG_DBG("SDFS", "TTF UI fallback @%upt loaded (heap free %u)", ui.pointSize, (unsigned)ESP.getFreeHeap());
     // Distinct id from the reader-size font: a UI size can equal the reader size
@@ -736,8 +779,7 @@ void SdCardFontSystem::setupTtfUiFallbacks(GfxRenderer& renderer) {
 void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
                                      const bool registryWasDirty) {
   // Keep sizes inherited from other families within the selectable vector range.
-  snapFontPointSizeTo(
-      snapToNearestPointSize(VECTOR_READER_POINT_SIZES, std::size(VECTOR_READER_POINT_SIZES), SETTINGS.fontPointSize));
+  snapFontPointSizeTo(readerClampPointSizeToDevice(SETTINGS.fontPointSize));
   const uint8_t size = SETTINGS.fontPointSize;
   const bool previewBudget = ttfPreviewBudget_;
 
@@ -778,6 +820,14 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
   if (!registryWasDirty && ttf_ && ttfFamily_ == family.name && ttfPreviewBudget_ == previewBudget) {
     renderer.unregisterTtfFont(ttfFontId_);
     renderer.removeFont(ttfFontId_);
+    // UI fallbacks now borrow the reader face's FreeType faces; drop them
+    // before the resize deinits/re-inits those faces, then rebuild them.
+    for (const int id : ttfUiIds_) {
+      renderer.unregisterTtfFont(id);
+      renderer.removeFont(id);
+    }
+    ttfUiIds_.clear();
+    ttfUi_.clear();
     if (ttf_->load(size, /*twoBit=*/true, cacheBytes, maxGlyphs, fourBit)) {
       ttf_->build(" ");
       ttfFontId_ = computeTtfFontId(family.name.c_str(), size);
@@ -786,6 +836,7 @@ void SdCardFontSystem::loadTtfFamily(const SdCardFontFamilyInfo& family, GfxRend
       ttfPointSize_ = size;
       ttfFourBit_ = fourBit;
       ttfPreviewBudget_ = previewBudget;
+      setupTtfUiFallbacks(renderer);
       LOG_DBG("SDFS", "Reader TTF face resized: %u KB cache / %u glyphs (%s)", static_cast<unsigned>(cacheBytes / 1024),
               static_cast<unsigned>(maxGlyphs), previewBudget ? "preview budget" : "reading budget");
       return;

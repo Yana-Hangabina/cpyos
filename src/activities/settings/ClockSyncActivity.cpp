@@ -77,6 +77,7 @@ void ClockSyncActivity::runSync() {
     return;
   }
 
+  NetworkStartup::ActivityGuard networkGuard;
   const bool ok = halClock.syncNow();
   if (!ok) {
     state = State::Failed;

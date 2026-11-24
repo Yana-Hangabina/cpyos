@@ -74,9 +74,9 @@ def repo_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def read_spiffs_partition(root):
-    """Return (flash_base, size) for the data/spiffs partition, from partitions.csv."""
-    path = os.path.join(root, PARTITIONS_CSV)
+def read_spiffs_partition(root, csv_path=None):
+    """Return (flash_base, size) for the data/spiffs partition, from a partition CSV."""
+    path = os.path.join(root, csv_path or PARTITIONS_CSV)
     if not os.path.exists(path):
         fail("no %s" % path)
     with open(path, "r", encoding="utf-8") as fh:
@@ -86,8 +86,8 @@ def read_spiffs_partition(root):
                 try:
                     return int(fields[3], 0), int(fields[4], 0)
                 except ValueError:
-                    fail("cannot parse the spiffs row of %s: %r" % (PARTITIONS_CSV, line))
-    fail("no data/spiffs row in %s" % PARTITIONS_CSV)
+                    fail("cannot parse the spiffs row of %s: %r" % (path, line))
+    fail("no data/spiffs row in %s" % path)
 
 
 def read_cpp_constant(path, name):
@@ -113,7 +113,8 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset, core_offset):
+def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset, core_offset,
+            no_core=False):
     """Build the row list from whatever data blobs actually exist.
 
     pinyin/hyphen/i18n degrade to a note when absent. The web pack does not:
@@ -135,6 +136,8 @@ def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, 
     ]
     rows = []
     for name, offset, path, required in candidates:
+        if no_core and name == "core":
+            continue
         if not os.path.exists(path):
             if required:
                 fail("%s is absent (%s). Read Pico's web server reads its pages from that pack; "
@@ -207,9 +210,15 @@ def main():
     parser.add_argument("--repo", default=repo_root(), help="crossmux repository root (default: %(default)s)")
     parser.add_argument("--out", default=None, help="output path (default: <repo>/build/data_manifest.txt)")
     parser.add_argument("--check", action="store_true", help="fail if the existing manifest is stale")
+    parser.add_argument("--partitions", default=PARTITIONS_CSV,
+                        help="partition CSV relative to --repo (default: %(default)s); "
+                             "pass ports/metalio_plus/partitions_plus_ota.csv for the Plus")
+    parser.add_argument("--no-core", action="store_true",
+                        help="omit cjk_core.dat (the XIP PDF app embeds the system font; its "
+                             "2.0 MiB spiffs cannot hold the 1.6 MiB core blob)")
     args = parser.parse_args()
 
-    base, partition_size = read_spiffs_partition(args.repo)
+    base, partition_size = read_spiffs_partition(args.repo, args.partitions)
     hyphen_offset = read_cpp_constant(os.path.join(args.repo, STORE_HEADER), "HYPN_PARTITION_OFFSET")
     if hyphen_offset <= PINYIN_PARTITION_OFFSET:
         fail("HyphenationStore.h puts hyphenation at partition offset 0x%x, which is where Pinyin lives"
@@ -241,7 +250,7 @@ def main():
     subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "build_ui_font_subset.py"),
                     "--core-only"], check=True)
     rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset,
-                   core_offset)
+                   core_offset, args.no_core)
     text = render(base, partition_size, rows)
 
     out = args.out or os.path.join(args.repo, "build", "data_manifest.txt")

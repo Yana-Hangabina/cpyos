@@ -1,0 +1,11 @@
+{
+  "id": "sokoban",
+  "name": "Sokoban",
+  "version": "1.0.0",
+  "api": 1,
+  "arch": "xtensa",
+  "entry": "app_main",
+  "elf": "plugin.elf",
+  "description": "Push every box onto a target.",
+  "author": "CPYOS"
+}
