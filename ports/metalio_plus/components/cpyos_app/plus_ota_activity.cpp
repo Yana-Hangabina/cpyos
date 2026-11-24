@@ -291,35 +291,50 @@ void PlusOtaActivity::render(RenderLock&&) {
   renderer.clearScreen();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, w, metrics.headerHeight}, "系统更新");
 
-  int y = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + 16;
-  const int x = metrics.contentSidePadding;
-  const int line12 = renderer.getLineHeight(UI_12_FONT_ID);
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int x = safe.x;
+  const int cardW = safe.width;
   const int line10 = renderer.getLineHeight(UI_10_FONT_ID);
+  const int line12 = renderer.getLineHeight(UI_12_FONT_ID);
+  const int pad = 20;
+  const int rowH = line10 + 16;
 
-  char buf[160];
-  std::snprintf(buf, sizeof(buf), "当前版本  %s", plus_ota::currentVersion());
-  renderer.drawText(UI_12_FONT_ID, x, y, buf, true, EpdFontFamily::BOLD);
-  y += line12 + 8;
-  std::snprintf(buf, sizeof(buf), "板型  %s · %s · %s", plus_ota::boardName(), plus_ota::chipName(),
-                plus_ota::appName());
-  renderer.drawText(UI_10_FONT_ID, x, y, buf);
-  y += line10 + 4;
-  std::snprintf(buf, sizeof(buf), "设备  %s", plus_ota::deviceId());
-  renderer.drawText(UI_10_FONT_ID, x, y, buf);
-  y += line10 + 16;
+  int y = metrics.topPadding + metrics.headerHeight + 20;
 
+  // One information card: label on the left, value right-aligned on the same
+  // baseline so long model names cannot push the label around.
+  const int rows = 4;
+  const int cardH = pad * 2 + rows * rowH;
+  renderer.drawRoundedRect(x, y, cardW, cardH, 2, 16, true);
+  int rowY = y + pad;
+  auto infoRow = [&](const char* label, const char* value) {
+    renderer.drawText(UI_10_FONT_ID, x + pad, rowY, label);
+    const int valueW = renderer.getTextWidth(UI_10_FONT_ID, value);
+    const int valueX = std::max(x + pad + 120, x + cardW - pad - valueW);
+    renderer.drawText(UI_10_FONT_ID, valueX, rowY, value, true);
+    rowY += rowH;
+  };
+  infoRow("当前版本", plus_ota::currentVersion());
+  infoRow("固件名称", plus_ota::appName());
+  char model[96];
+  std::snprintf(model, sizeof(model), "%s · %s", plus_ota::boardName(), plus_ota::chipName());
+  infoRow("设备型号", model);
+  infoRow("设备 ID", plus_ota::deviceId());
+  y += cardH + 18;
+
+  char buf[192];
   switch (state_) {
     case State::Checking:
-      renderer.drawText(UI_12_FONT_ID, x, y, "正在检查更新…");
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, "正在检查更新…");
       break;
     case State::Available:
       std::snprintf(buf, sizeof(buf), "发现新版本  %s  (%u KB)", info_.version.c_str(),
                     static_cast<unsigned>(info_.size / 1024));
-      renderer.drawText(UI_12_FONT_ID, x, y, buf, true, EpdFontFamily::BOLD);
-      y += line12 + 6;
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, buf, true, EpdFontFamily::BOLD);
+      y += line12 + 8;
       if (!info_.versionStatus.empty()) {
         std::snprintf(buf, sizeof(buf), "版本状态  %s", info_.versionStatus.c_str());
-        renderer.drawText(UI_10_FONT_ID, x, y, buf);
+        renderer.drawText(UI_10_FONT_ID, x + 4, y, buf);
       }
       break;
     case State::Downloading: {
@@ -327,42 +342,49 @@ void PlusOtaActivity::render(RenderLock&&) {
       const size_t total = progressTotal_.load();
       std::snprintf(buf, sizeof(buf), "正在下载  %u / %u KB", static_cast<unsigned>(done / 1024),
                     static_cast<unsigned>(total / 1024));
-      renderer.drawText(UI_12_FONT_ID, x, y, buf);
-      y += line12 + 8;
-      renderer.drawRect(x, y, w - 2 * x, 14, 1, true);
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, buf);
+      y += line12 + 10;
+      const int barW = cardW - 8;
+      renderer.drawRoundedRect(x + 4, y, barW, 16, 2, 8, true);
       if (total > 0) {
-        const int fill = static_cast<int>(static_cast<uint64_t>(w - 2 * x) * done / total);
-        renderer.fillRect(x + 1, y + 1, std::max(0, fill - 2), 12, true);
+        const int fill = static_cast<int>(static_cast<uint64_t>(barW - 4) * done / total);
+        if (fill > 0) {
+          renderer.fillRoundedRect(x + 6, y + 2, std::max(4, fill), 12, 6, Color::Black);
+        }
       }
       break;
     }
     case State::Installing:
-      renderer.drawText(UI_12_FONT_ID, x, y, "正在写入新版本…");
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, "正在写入新版本…");
       break;
     case State::Done:
-      renderer.drawText(UI_12_FONT_ID, x, y, "更新已写入，正在重启…", true, EpdFontFamily::BOLD);
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, "更新已写入，正在重启…", true, EpdFontFamily::BOLD);
       break;
     case State::Failed:
-      renderer.drawText(UI_12_FONT_ID, x, y, "更新失败", true, EpdFontFamily::BOLD);
-      y += line12 + 6;
-      renderer.drawText(UI_10_FONT_ID, x, y, error_.c_str());
+      renderer.drawText(UI_12_FONT_ID, x + 4, y, "更新失败", true, EpdFontFamily::BOLD);
+      y += line12 + 8;
+      renderer.drawText(UI_10_FONT_ID, x + 4, y, error_.c_str());
       break;
     case State::Idle:
-      renderer.drawText(UI_12_FONT_ID, x, y, error_.empty() ? "点击下方按钮检查更新" : error_.c_str());
+      renderer.drawText(UI_12_FONT_ID, x + 4, y,
+                        error_.empty() ? "点击下方按钮检查更新" : error_.c_str(),
+                        error_.empty() ? false : true,
+                        error_.empty() ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD);
       break;
   }
 
-  // Two capsules at the bottom: primary (check / install / retry) and channel.
+  // Two capsules, equal size: primary filled, secondary outlined. Both use the
+  // same radius so the pair reads as one control row.
   const int btnH = 56;
   const int gap = 16;
-  const int btnW = (w - 2 * x - gap) / 2;
-  const int btnY = h - metrics.buttonHintsHeight - btnH - 16;
+  const int btnW = (safe.width - gap) / 2;
+  const int btnY = h - metrics.buttonHintsHeight - btnH - 24;
   const char* primary = state_ == State::Available ? "安装更新"
                        : state_ == State::Done    ? "立即重启"
                                                   : "检查更新";
   if (state_ == State::Checking || state_ == State::Downloading || state_ == State::Installing) primary = "请稍候";
-  primaryRect_ = Rect{x, btnY, btnW, btnH};
-  secondaryRect_ = Rect{x + btnW + gap, btnY, btnW, btnH};
+  primaryRect_ = Rect{safe.x, btnY, btnW, btnH};
+  secondaryRect_ = Rect{safe.x + btnW + gap, btnY, btnW, btnH};
   renderer.fillRoundedRect(primaryRect_.x, primaryRect_.y, primaryRect_.width, primaryRect_.height, btnH / 2,
                            Color::Black);
   renderer.drawCenteredText(UI_12_FONT_ID, primaryRect_.y + (btnH - line12) / 2, primary, false,
@@ -370,7 +392,7 @@ void PlusOtaActivity::render(RenderLock&&) {
   renderer.drawRoundedRect(secondaryRect_.x, secondaryRect_.y, secondaryRect_.width, secondaryRect_.height, 2,
                            btnH / 2, true);
   const char* secondary = busy() ? "取消" : "返回";
-  renderer.drawCenteredText(UI_10_FONT_ID, secondaryRect_.y + (btnH - line10) / 2, secondary, true);
+  renderer.drawCenteredText(UI_12_FONT_ID, secondaryRect_.y + (btnH - line12) / 2, secondary, true);
   // Like every activity, this one owns its push; without it the page only
   // appeared when some later frame happened to flush the framebuffer.
   renderer.displayBuffer();
