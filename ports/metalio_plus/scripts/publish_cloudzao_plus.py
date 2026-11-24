@@ -323,12 +323,20 @@ def main() -> int:
         }
         if args.remark:
             fields["remark"] = args.remark
-        response = upload(
-            token,
-            f"{API}/api/firmwares/community/{urllib.parse.quote(firmware_id, safe='')}/versions",
-            fields,
-            image.path,
-        )
+        try:
+            response = upload(
+                token,
+                f"{API}/api/firmwares/community/{urllib.parse.quote(firmware_id, safe='')}/versions",
+                fields,
+                image.path,
+            )
+        except RuntimeError as exc:
+            text = str(exc)
+            if "已存在" in text or "already exists" in text.lower():
+                print(f"version {image.version} is already published; keeping the existing upload")
+                response = {}
+            else:
+                raise
         version_id = ""
         if isinstance(response, dict):
             version_id = str(response.get("id") or response.get("versionId") or "").strip()
