@@ -151,10 +151,10 @@ def flash_readme(version: str, partitions: dict, data_rows: list) -> str:
     app0 = partitions['app0'][0]
     app1 = partitions['app1'][0]
     data_table = "\n".join(
-        f"| {row['name']} | data partition + 0x{row['offset']:06x} (flash 0x{row['address']:06x}) |"
+        f"| {row['name']} | data partition + 0x{row['partitionOffset']:06x} (flash 0x{row['offset']:06x}) |"
         for row in data_rows)
     manual_data = " ".join(
-        f"0x{row['address']:06x} {row['name']}" for row in data_rows)
+        f"0x{row['offset']:06x} {row['name']}" for row in data_rows)
     return f'''# {PRODUCT} {version} — Read Pico (小纸 Pico)
 
 This folder is a complete Read Pico installation. Keep it together; the
@@ -229,7 +229,7 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     # esp_app_desc.version is the git revision (dirty builds end in -dirty), not
     # CROSSPOINT_VERSION. The UI and OTA compare CROSSPOINT_VERSION, which is a
     # literal in the image; check that instead.
-    expected_build_version = f'{version}-cpyos'
+    expected_build_version = f'{version}-rp'
     if expected_build_version.encode() not in blob:
         fail(f'{firmware_source.name} does not contain CROSSPOINT_VERSION {expected_build_version!r}')
     if not package_nightly_target.firmware_uses_data_packs(firmware_source):

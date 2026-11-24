@@ -33,7 +33,7 @@ bool hit(const Rect& r, int x, int y) {
 void PlusOtaActivity::onEnter() {
   Activity::onEnter();
   LOG_INF("OTA", "page: local=%s id=%s channel=%s configured=%d", plus_ota::currentVersion(), plus_ota::deviceId(),
-          channel_ == plus_ota::Channel::Test ? "test" : "stable", plus_ota::configured() ? 1 : 0);
+          "partner", plus_ota::configured() ? 1 : 0);
   if (!plus_ota::configured()) setError("此构建未配置 CloudZao 产品标识");
   requestUpdate();
 }
@@ -248,10 +248,7 @@ void PlusOtaActivity::onSecondary() {
     cancelRequested_ = true;
     return;
   }
-  channel_ = channel_ == plus_ota::Channel::Test ? plus_ota::Channel::Stable : plus_ota::Channel::Test;
-  error_.clear();
-  state_ = State::Idle;
-  requestUpdate();
+  finish();
 }
 
 void PlusOtaActivity::debugConfirm() { onPrimary(); }
@@ -303,9 +300,6 @@ void PlusOtaActivity::render(RenderLock&&) {
   std::snprintf(buf, sizeof(buf), "当前版本  %s", plus_ota::currentVersion());
   renderer.drawText(UI_12_FONT_ID, x, y, buf, true, EpdFontFamily::BOLD);
   y += line12 + 8;
-  std::snprintf(buf, sizeof(buf), "通道  %s", channel_ == plus_ota::Channel::Test ? "测试版" : "正式版");
-  renderer.drawText(UI_10_FONT_ID, x, y, buf);
-  y += line10 + 4;
   std::snprintf(buf, sizeof(buf), "板型  %s · %s · %s", plus_ota::boardName(), plus_ota::chipName(),
                 plus_ota::appName());
   renderer.drawText(UI_10_FONT_ID, x, y, buf);
@@ -375,9 +369,7 @@ void PlusOtaActivity::render(RenderLock&&) {
                             EpdFontFamily::BOLD);
   renderer.drawRoundedRect(secondaryRect_.x, secondaryRect_.y, secondaryRect_.width, secondaryRect_.height, 2,
                            btnH / 2, true);
-  const char* secondary = busy() ? "取消"
-                        : channel_ == plus_ota::Channel::Test ? "切到正式版"
-                                                             : "切到测试版";
+  const char* secondary = busy() ? "取消" : "返回";
   renderer.drawCenteredText(UI_10_FONT_ID, secondaryRect_.y + (btnH - line10) / 2, secondary, true);
   // Like every activity, this one owns its push; without it the page only
   // appeared when some later frame happened to flush the framebuffer.
