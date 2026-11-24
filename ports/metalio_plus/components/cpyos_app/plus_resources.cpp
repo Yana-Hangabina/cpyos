@@ -572,7 +572,12 @@ BindResult bindDevice() {
   LOG_INF("RES", "pairing: http=%d body=%u B", r.status, static_cast<unsigned>(r.body.size()));
   if (r.status != 200) {
     result.error = listError(r.body, r.status);
-    if (r.status == 409) result.error = "设备已绑定，或暂时无法生成验证码；请在小程序中检查绑定";
+    if (r.status == 409) {
+        // activation_unavailable: the platform still lists this device as bound
+        // (or refused a code). A re-flashed device has no tokens, so the only
+        // recovery is to remove it from the Metalio mini-program and pair again.
+        result.error = "设备已绑定但没有本机令牌：请在 Metalio 小程序里删除该设备，再点重试获取新的六位码";
+      }
     return result;
   }
   JsonDocument doc;

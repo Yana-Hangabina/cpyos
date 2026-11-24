@@ -62,7 +62,7 @@ Business answers are HTTP status codes; there is no `code:0` envelope:
 | HTTP | Meaning in `plus_resources` |
 |---|---|
 | 200 | success |
-| 404 / 409 / 410 | not found / conflict / pairing expired |
+| 404 / 409 / 410 | not found / `activation_unavailable` or pending / pairing expired. After a full re-flash the device holds no tokens but the platform still lists it as bound: remove the device in the Metalio mini-program, then request a new code. |
 | 401 / 403 | token invalid → re-pair |
 | 429 | rate limited; wait the advertised interval |
 | 5xx | server error; retry later, never in a tight loop |
