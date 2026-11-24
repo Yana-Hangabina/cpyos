@@ -111,9 +111,9 @@ jobs:
           cd ports/metalio_plus
           rm -rf build_shell sdkconfig
           CPYOS_PDF=1 CPYOS_PLUS_JJWXC=1 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
-            idf.py -B build_shell set-target esp32s31
+            idf.py --preview -B build_shell set-target esp32s31
           CPYOS_PDF=1 CPYOS_PLUS_JJWXC=1 CPYOS_SHELL_DEMO=1 CPYOS_ACTIVITY_PROBE=1 CPYOS_UI_PROBE=1 \
-            idf.py -B build_shell -DPROJECT_VER="$APP_VERSION" reconfigure build
+            idf.py --preview -B build_shell -DPROJECT_VER="$APP_VERSION" reconfigure build
           python3 - "$APP_VERSION" <<'PY'
           import struct, sys
           path = "build_shell/cpyos_metalio_plus.bin"
