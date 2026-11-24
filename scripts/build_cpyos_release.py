@@ -389,19 +389,25 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
             copy(src, output / f'LICENSE-{src.name}')
     print('  legal: LICENSE, NOTICE-JJWXC.md, THIRD_PARTY_NOTICES.md, LICENSE-*.txt')
 
-    sums = []
-    for path in sorted(output.iterdir()):
-        if path.is_file() and path.name not in {'SHA256SUMS'}:
-            sums.append(f'{sha256_file(path)}  {path.name}')
-    (output / 'SHA256SUMS').write_text('\n'.join(sums) + '\n', encoding='utf-8')
-
+    # Build the archive first: the sums must describe the zip as shipped, and a
+    # leftover SHA256SUMS from an earlier run must not be archived (it would be a
+    # file whose own hash is listed).
     package = output / f'cpyos-readpico-{version}-full.zip'
+    stale_sums = output / 'SHA256SUMS'
+    if stale_sums.exists():
+        stale_sums.unlink()
     with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for path in sorted(output.iterdir()):
             if path.is_file() and path.name not in {package.name}:
                 archive.write(path, arcname=path.name)
         if not full_install_only:
             archive.write(output / 'ota' / 'readpico.json', arcname='ota/readpico.json')
+
+    sums = []
+    for path in sorted(output.iterdir()):
+        if path.is_file() and path.name not in {'SHA256SUMS'}:
+            sums.append(f'{sha256_file(path)}  {path.name}')
+    (output / 'SHA256SUMS').write_text('\n'.join(sums) + '\n', encoding='utf-8')
 
     print(f'Release {PRODUCT} {version} -> {output}')
     print(f'  install parts: {len(install_parts)}, upgrade parts: {len(update_parts)}')
