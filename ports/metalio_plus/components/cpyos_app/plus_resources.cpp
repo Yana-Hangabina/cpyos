@@ -1,5 +1,8 @@
 #include "plus_resources.h"
 
+#include <cstdarg>
+#include <cstdio>
+
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HalStorage.h>
@@ -24,6 +27,35 @@
 
 namespace plus_resources {
 namespace {
+
+// Bounded on-card breadcrumb for the binding/resource flow. Only status codes
+// and event names are written: never tokens, deviceCode, download URLs or key
+// material. Keeping it on the card means a bench without a serial console can
+// still see what the partner API answered.
+constexpr const char* kLogPath = "/.crosspoint/res.log";
+constexpr size_t kLogMaxBytes = 8192;
+
+void resLog(const char* format, ...) {
+  char line[160];
+  va_list args;
+  va_start(args, format);
+  std::vsnprintf(line, sizeof(line), format, args);
+  va_end(args);
+  const bool rotate = [&]() {
+    HalFile probe = Storage.open(kLogPath, O_RDONLY);
+    if (!probe) return false;
+    const size_t size = static_cast<size_t>(probe.fileSize());
+    probe.close();
+    return size > kLogMaxBytes;
+  }();
+  HalFile out = Storage.open(kLogPath, O_WRONLY | O_CREAT | (rotate ? O_TRUNC : O_APPEND));
+  if (!out) return;
+  char entry[192];
+  const int n = std::snprintf(entry, sizeof(entry), "%lu %s\n", static_cast<unsigned long>(millis()), line);
+  if (n > 0) out.write(reinterpret_cast<const uint8_t*>(entry), static_cast<size_t>(n));
+  out.close();
+}
+
 
 constexpr const char* kPairPath = "/pairings";
 constexpr const char* kTokenPath = "/device-tokens";
@@ -475,6 +507,7 @@ bool ackItem(const Item& item, std::string& error) {
     return false;
   }
   LOG_INF("RES", "acknowledged deliveryId=%s", item.task_id.c_str());
+  resLog("ack http=%d", r.status);
   return true;
 }
 
@@ -523,6 +556,7 @@ BindResult bindDevice() {
     serializeJson(req, payload);
     const HttpResult r = httpRequest("POST", urlFor(kTokenPath), payload, nullptr, 8192);
     LOG_INF("RES", "token poll: http=%d body=%u B", r.status, static_cast<unsigned>(r.body.size()));
+    resLog("token poll http=%d", r.status);
     if (r.status == 200) {
       JsonDocument doc;
       if (deserializeJson(doc, r.body) == DeserializationError::Ok) {
@@ -530,6 +564,7 @@ BindResult bindDevice() {
         if (!g_tokens.access.empty()) {
           result.ok = true;
           LOG_INF("RES", "device token received");
+          resLog("token received");
           return result;
         }
       }
@@ -570,6 +605,7 @@ BindResult bindDevice() {
   const HttpResult r = httpRequest("POST", urlFor(kPairPath), payload, nullptr, 8192);
   result.http = r.status;
   LOG_INF("RES", "pairing: http=%d body=%u B", r.status, static_cast<unsigned>(r.body.size()));
+  resLog("pairing http=%d", r.status);
   if (r.status != 200) {
     result.error = listError(r.body, r.status);
     if (r.status == 409) {
@@ -619,6 +655,7 @@ FetchResult fetchResources() {
   if (r.status == 401 && refreshAccess()) r = get();
   result.http = r.status;
   LOG_INF("RES", "deliveries: http=%d body=%u B", r.status, static_cast<unsigned>(r.body.size()));
+  resLog("deliveries http=%d", r.status);
   if (r.status == 401) {
     clearTokens();
     result.business_code = 401;

@@ -88,6 +88,14 @@ class PlusResourcesActivity final : public UiListActivity {
   bool bind_guide_ = false;
   bool auto_probe_pending_ = false;
   bool probe_from_enter_ = false;
+  // While the guide is waiting for the mini-program, each probe must poll
+  // /device-tokens (the exchange can only happen once); a plain resource fetch
+  // can never turn an approved pairing into tokens.
+  bool probe_polls_tokens_ = false;
+  // 409 activation_unavailable right after removing the device in the
+  // mini-program is transient (platform propagation); keep requesting a code
+  // instead of parking on an error page.
+  bool retry_pairing_ = false;
   std::string bind_url_;
   uint32_t next_probe_ms_ = 0;
   uint32_t probe_deadline_ms_ = 0;

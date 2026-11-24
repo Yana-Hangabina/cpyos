@@ -417,10 +417,14 @@ void PlusResourcesActivity::beginDownloadJob(const int item_index) {
 
 void PlusResourcesActivity::scheduleProbe() {
   if (probe_deadline_ms_ == 0 || !bind_guide_) {
-    probe_deadline_ms_ = millis() + 120000;
+    // The activation code is valid for a day; keeping the guide polling for
+    // 15 minutes covers the whole "open the mini-program and type the code"
+    // flow instead of stopping after two minutes and leaving the exchange
+    // undone.
+    probe_deadline_ms_ = millis() + 15UL * 60UL * 1000UL;
     probe_attempts_ = 0;
   }
-  next_probe_ms_ = millis() + 4000;
+  next_probe_ms_ = millis() + (retry_pairing_ ? 10000 : 4000);
 }
 
 void PlusResourcesActivity::beginProbeJob() {
@@ -438,10 +442,11 @@ void PlusResourcesActivity::beginProbeJob() {
 
 void PlusResourcesActivity::startProbe(const bool user_initiated, const bool from_enter) {
   if (worker_ != nullptr || job_ != Job::None) return;
-  if (!user_initiated && (probe_attempts_ >= 30 || static_cast<int32_t>(millis() - probe_deadline_ms_) >= 0)) {
+  if (!user_initiated && (probe_attempts_ >= 225 || static_cast<int32_t>(millis() - probe_deadline_ms_) >= 0)) {
     return;
   }
   probe_from_enter_ = from_enter;
+  probe_polls_tokens_ = bind_guide_ && (!activation_code_.empty() || retry_pairing_);
   if (WiFi.status() != WL_CONNECTED) {
     if (!user_initiated) return;
     queueJob(PendingAction::Probe, -1);
@@ -519,6 +524,8 @@ void PlusResourcesActivity::runWorker() {
   stage_.store(1);
   if (job_ == Job::Bind) {
     bind_result_ = plus_resources::bindDevice();
+  } else if (job_ == Job::Probe && probe_polls_tokens_) {
+    bind_result_ = plus_resources::bindDevice();
   } else if (job_ == Job::Fetch || job_ == Job::Probe) {
     fetch_result_ = plus_resources::fetchResources();
   } else if (job_ == Job::Download) {
@@ -570,10 +577,23 @@ void PlusResourcesActivity::pollWorker() {
     return;
   }
   if (finished == Job::Bind) {
+    probe_polls_tokens_ = false;
     if (!bind_result_.ok) {
+      if (bind_result_.http == 409) {
+        retry_pairing_ = true;
+        bind_guide_ = true;
+        activation_code_.clear();
+        bind_message_ = bind_result_.error.empty() ? tr(STR_NOT_BOUND) : bind_result_.error;
+        state_ = State::List;
+        rows_dirty_ = true;
+        scheduleProbe();
+        requestUpdate(true);
+        return;
+      }
       setError(bind_result_.error.empty() ? tr(STR_ERROR_GENERAL_FAILURE) : bind_result_.error, Job::Bind);
       return;
     }
+    retry_pairing_ = false;
     if (bind_result_.code.empty()) {
       // The upstream omits activation for a device it already knows. Trust the
       // resource service (not the field's absence) and check the binding.
@@ -590,6 +610,49 @@ void PlusResourcesActivity::pollWorker() {
     bind_url_ = bind_result_.bind_url;
     bound_ = false;
     bind_guide_ = true;
+    state_ = State::List;
+    rows_dirty_ = true;
+    scheduleProbe();
+    requestUpdate(true);
+    return;
+  }
+  if (finished == Job::Probe && probe_polls_tokens_) {
+    probe_polls_tokens_ = false;
+    if (!bind_result_.ok) {
+      if (bind_result_.http == 409) {
+        retry_pairing_ = true;
+        bind_guide_ = true;
+        activation_code_.clear();
+        bind_message_ = bind_result_.error.empty() ? tr(STR_NOT_BOUND) : bind_result_.error;
+        state_ = State::List;
+        rows_dirty_ = true;
+        scheduleProbe();
+        requestUpdate(true);
+        return;
+      }
+      setError(bind_result_.error.empty() ? tr(STR_ERROR_GENERAL_FAILURE) : bind_result_.error, Job::Probe);
+      return;
+    }
+    retry_pairing_ = false;
+    if (bind_result_.code.empty()) {
+      // The deviceCode was exchanged (or the device was already bound): the
+      // tokens are on disk now, so fetch the delivery list without waiting for
+      // another tap.
+      bind_guide_ = false;
+      retry_pairing_ = false;
+      activation_code_.clear();
+      bind_url_.clear();
+      bind_message_.clear();
+      bound_ = false;
+      state_ = State::List;
+      rows_dirty_ = true;
+      requestUpdate(true);
+      startProbe(true);
+      return;
+    }
+    activation_code_ = bind_result_.code;
+    bind_message_.clear();
+    bound_ = false;
     state_ = State::List;
     rows_dirty_ = true;
     scheduleProbe();
