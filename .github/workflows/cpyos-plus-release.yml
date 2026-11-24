@@ -279,5 +279,5 @@ jobs:
             fi
           else
             gh release create "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" \
-              "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
+              --draft=false "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
           fi

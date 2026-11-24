@@ -179,10 +179,10 @@ jobs:
             gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "脆皮鸭 CPYOS $VERSION" \
-              --notes-file "docs/releases/$VERSION.md" --latest
+              --notes-file "docs/releases/$VERSION.md" --draft=false --latest
           else
             gh release create "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
-              --title "脆皮鸭 CPYOS $VERSION" \
+              --title "脆皮鸭 CPYOS $VERSION" --draft=false \
               --notes-file "docs/releases/$VERSION.md" --latest
           fi
 
