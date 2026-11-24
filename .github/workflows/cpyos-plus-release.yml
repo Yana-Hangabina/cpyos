@@ -81,8 +81,6 @@ jobs:
         run: |
           set -euo pipefail
           bash patches/freeink-sdk/apply.sh
-          bash patches/freeink-sdk-cff/apply.sh
-
       - name: Check out the private JJWXC component
         env:
           JJWXC_DEPLOY_KEY: ${{ secrets.JJWXC_DEPLOY_KEY }}

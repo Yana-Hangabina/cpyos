@@ -87,7 +87,6 @@ jobs:
         run: |
           set -euo pipefail
           bash patches/freeink-sdk/apply.sh
-
       - name: Mark the expected SDK patch as clean for versioning
         run: |
           set -euo pipefail
