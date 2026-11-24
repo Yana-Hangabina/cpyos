@@ -86,7 +86,7 @@ python -m esptool --chip esp32s3 --port /dev/cu.usbmodemXXXX --baud 921600 \
   0xF50000 emoji.dat
 ```
 
-★ **升级时两个 app 槽都要写**：设备做过 OTA 后 otadata 会选中 app1，而网页刷机无法读取 otadata 判断活动槽；只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。`manifest-upgrade.json` / `manifest-app.json` 已经同时写 app0 与 app1，手动刷写也要照做。首次安装由 `boot_app0.bin` 选中 app0，不需要 app1。
+★ **0.8.0 的完整安装不写 app1**（由 `boot_app0.bin` 选中 app0）；从下一个版本起，升级清单会同时写 app0 与 app1，手动刷写也要照做：设备做过 OTA 后 otadata 会选中 app1，只写 app0 会“显示成功但设备仍从 app1 启动旧固件”。
 
 成功判据是日志里的 **`Hash of data verified.`**，不是退出码。
 
