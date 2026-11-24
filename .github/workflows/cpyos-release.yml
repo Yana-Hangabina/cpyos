@@ -118,20 +118,20 @@ jobs:
         run: |
           set -euo pipefail
           pio run -e readpico_pdf_jjwxc
-          # compiledb rewrites .pio/build and has wiped a fresh image before, so
-          # keep the ELF and the binary outside the build dir.
-          cp .pio/build/readpico_pdf_jjwxc/firmware.elf "$RUNNER_TEMP/firmware.elf"
-          cp .pio/build/readpico_pdf_jjwxc/firmware.bin "$RUNNER_TEMP/firmware.bin"
+          # compiledb rewrites .pio/build and has emptied it on CI, taking the
+          # bootloader/partition images with it. Keep the whole directory.
+          rm -rf "$RUNNER_TEMP/build_pico"
+          cp -a .pio/build/readpico_pdf_jjwxc "$RUNNER_TEMP/build_pico"
 
       - name: Build the paired PDF engine
         run: |
           set -euo pipefail
           pio run -t compiledb -e readpico_pdf_jjwxc
-          python3 scripts/build_pdf_module.py             --firmware-elf "$RUNNER_TEMP/firmware.elf"
-          # compiledb can leave the build dir empty; the verifier and packager
-          # read this path.
-          mkdir -p .pio/build/readpico_pdf_jjwxc
-          cp "$RUNNER_TEMP/firmware.bin" .pio/build/readpico_pdf_jjwxc/firmware.bin
+          python3 scripts/build_pdf_module.py             --firmware-elf "$RUNNER_TEMP/build_pico/firmware.elf"
+          # Restore every artifact the verifier and packager read.
+          rm -rf .pio/build/readpico_pdf_jjwxc
+          mkdir -p .pio/build
+          cp -a "$RUNNER_TEMP/build_pico" .pio/build/readpico_pdf_jjwxc
 
       - name: Generate data packs
         run: |
