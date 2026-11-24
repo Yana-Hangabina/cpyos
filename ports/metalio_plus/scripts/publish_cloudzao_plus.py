@@ -92,6 +92,31 @@ def envelope(payload: object) -> object:
     return payload
 
 
+def enable_ota(token: str, firmware_id: str) -> None:
+    """Best-effort: the upload already makes the version installable.
+
+    CloudZao answers "至少需要提交一个固件级修改字段" when otaEnabled is
+    already true (PATCH with no actual change). That is the expected state for
+    every release after the first one, so treat it as success.
+    """
+    try:
+        json_request(
+            "PATCH",
+            f"{API}/api/firmwares/community/{urllib.parse.quote(firmware_id, safe='')}",
+            token=token,
+            body={"otaEnabled": True},
+        )
+        print("otaEnabled: true")
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - the message is the contract here
+        text = str(exc)
+        if "至少需要提交一个固件级修改字段" in text:
+            print("otaEnabled: already enabled")
+            return
+        raise
+
+
 def json_request(method: str, url: str, token: str | None = None, body: object | None = None) -> object:
     data = None
     headers = {"Accept": "application/json"}
@@ -286,13 +311,7 @@ def main() -> int:
         created = True
         print(f"created product: {firmware_id}")
         if not args.skip_enable_ota:
-            json_request(
-                "PATCH",
-                f"{API}/api/firmwares/community/{urllib.parse.quote(firmware_id, safe='')}",
-                token=token,
-                body={"otaEnabled": True},
-            )
-            print("otaEnabled: true")
+            enable_ota(token, firmware_id)
     else:
         print(f"firmware: {firmware_id}")
 
