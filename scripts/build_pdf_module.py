@@ -129,12 +129,30 @@ def compile_source(compile_db: str, source: str, out_obj: str, extra: list[str])
         # Module-only files (PdfModuleGlue.cpp) are empty in the app build, so
         # some generators omit them.  Reuse the closest sibling's command: same
         # include paths and flags, different source/object.
+        # compile_commands produced before the first full build (CI runs
+        # compiledb first so the ELF survives) may not list the PDF sources at
+        # all. Fall back to any src/*.cpp command: the include paths and flags
+        # are the same project-wide, only the source path changes.
         entry = next((e for e in entries if e["file"].endswith("src/pdf/PdfDocument.cpp")), None)
         if entry is None:
+            entry = next((e for e in entries
+                          if e["file"].replace("\\", "/").endswith(".cpp")
+                          and "src/" in e["file"].replace("\\", "/")), None)
+        if entry is None:
             raise SystemExit("compile command missing for " + source)
+        original = entry["file"]
         entry = dict(entry)
         entry["file"] = os.path.join(ROOT, source)
-        entry["command"] = entry["command"].replace("src/pdf/PdfDocument.cpp", source)
+        command = entry["command"]
+        if original in command:
+            command = command.replace(original, source, 1)
+        else:
+            base = os.path.basename(original)
+            if base in command:
+                command = command.replace(base, source, 1)
+            else:
+                raise SystemExit("cannot rewrite the compile command for " + source)
+        entry["command"] = command
     cmd = entry["command"]
     cmd = cmd.replace(" -DCROSSPOINT_PDF_XIP=1", "")
     cmd = cmd.replace(" -DCROSSPOINT_PDF_XIP_SD=1", "")
