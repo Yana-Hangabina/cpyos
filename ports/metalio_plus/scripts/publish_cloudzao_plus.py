@@ -346,13 +346,7 @@ def main() -> int:
         print(f"published version: {image.version} version_id={version_id or '(not returned)'}")
 
         if not args.skip_enable_ota:
-            json_request(
-                "PATCH",
-                f"{API}/api/firmwares/community/{urllib.parse.quote(firmware_id, safe='')}",
-                token=token,
-                body={"otaEnabled": True},
-            )
-            print("otaEnabled: true")
+            enable_ota(token, firmware_id)
 
     print(f"done: firmware_id={firmware_id} version={image.version} status={args.status}")
     return 0
