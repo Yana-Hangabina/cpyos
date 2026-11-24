@@ -47,8 +47,9 @@ readpico-packs.txt
 pinyin.dat 0x000000 349500 <sha256> 0x056000
 web_pack.dat 0x056000 157876 <sha256> 0x090000
 hyphen.dat 0x090000 351756 <sha256> 0x100000
-i18n_pack.dat 0x100000 334398 <sha256> 0x160000
-emoji.dat 0x160000 126544 <sha256> 0x180000
+i18n_pack.dat 0x0e6000 354379 <sha256> 0x13d000
+emoji.dat 0x13d000 126544 <sha256> 0x15c000
+cjk_core.dat 0x15c000 642887 <sha256> 0x200000
 ```
 
 Offsets are relative to the spiffs partition; `limit` is the next pack’s offset
@@ -132,7 +133,7 @@ dev → public sync. It validates each blob against `build/data_manifest.txt`.
 
 ## 5. Capacity
 
-`i18n_pack.dat` currently ends well before `emoji.dat` (`0x160000`), leaving
+`i18n_pack.dat` currently ends well before `emoji.dat` (`0x13d000`), leaving
 ~58 KiB for about 250 more keys. The emoji pack ends ~4.5 KiB before the
 partition end. Moving emoji/web to SD, or changing the partition table (a
 full-install operation), is the next step if i18n outgrows that reserve.

@@ -10,7 +10,7 @@ the Metalio E-INK4 Plus port, which share `src/SystemFontPack.cpp`,
 |---|---|---|---:|---|
 | 0 | `CPYOSHanSansSC-UI.ttf` / `cpyos_han_sans.def` | app0, inflated to PSRAM | 296,572 B TTF / 193,766 B carrier | every system UI role, 8–18pt |
 | 0b | `CPYOSWorldScripts-UI.ttf` / `cpyos_ui_ext.def` | app0, inflated to PSRAM | 49,152 B TTF / 25,333 B carrier | UI supplements for Vietnamese, Czech/Polish/Turkish, Hebrew, Arabic, … |
-| 1 | `CPYOSHanSansSC-Regular-8105.ttf` / `cjk_core.dat` | data/spiffs at `+0x180000`; released to `/fonts/CPYOSCJKCore/` | 2,555,704 B TTF / 1,640,306 B carrier | reader body text and book titles |
+| 1 | `CPYOSHanSansSC-Core.ttf` / `cjk_core.dat` | data/spiffs at `+0x15C000`; released to `/fonts/CPYOSCJKCore/` | 971,556 B TTF / 642,887 B carrier | reader body text (3,500 common hanzi + ASCII/punctuation) |
 | 2 | `CPYOSCJK.ttf` (font-extra) | SD | 10.4 MB | optional Ext-A/rare ideographs |
 | 3 | `CPYOSWorldScripts.ttf` (font-extra) | SD | 6.76 MB | optional full non-CJK book text |
 
@@ -80,8 +80,8 @@ The data partition grew from 1.5 MiB to 3 MiB by shrinking both OTA slots from
 | Partition | Old | New |
 |---|---|---|
 | app0 / app1 | `0x730000` each | `0x660000` each (6.375 MiB) |
-| spiffs | `0xe70000`, `0x180000` | `0xcd0000`, `0x320000` |
-| core carrier | — | spiffs `+0x180000`, 1,640,306 B |
+| spiffs | `0xdf0000`, `0x200000` | `0xcd0000`, `0x320000` |
+| core carrier | — | spiffs `+0x15C000`, 642,887 B |
 
 The UI font shrank app0 by ~1.4 MB and the 8pt bitmap by 341 KB, so the image
 still has comfortable headroom in the smaller slot. `partitions.csv`,
@@ -91,7 +91,7 @@ read the core offset from `src/SystemCoreFont.h`, not from a second copy.
 
 `SystemCoreFont::releaseToSd()` runs at the start of `SdCardFontSystem::begin()`:
 
-1. validate the CPFZ header at `+0x180000`;
+1. validate the CPFZ header at `+0x15C000`;
 2. skip when `/fonts/CPYOSCJKCore/CPYOSCJKCore.ttf` already matches the size and
    the `.core-crc` sidecar;
 3. otherwise mmap the partition, inflate to PSRAM, verify CRC-32, and write the

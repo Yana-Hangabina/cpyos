@@ -1150,7 +1150,7 @@ the partition. Read Pico and the Plus use CPFZ instead.
 
 ### Reading-core release layout
 
-`build/cjk_core.dat` (CPFZ) lives at **spiffs +0x180000** — raw flash
+`build/cjk_core.dat` (CPFZ) lives at **spiffs +0x15C000** — raw flash
 `0xE50000` with the readpico/Plus OTA table, `0xB30000` with the Plus
 single-slot table. On the first boot after a full install,
 `SystemCoreFont::releaseToSd()` inflates it and writes:
