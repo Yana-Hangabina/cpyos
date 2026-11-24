@@ -147,7 +147,7 @@ def build_manifest(name: str, version: str, parts_list: list[dict], erase: bool)
     }
 
 
-def flash_readme(version: str, partitions: dict, data_rows: list) -> str:
+def flash_readme(version: str, partitions: dict, data_rows: list, full_install_only: bool = False) -> str:
     app0 = partitions['app0'][0]
     app1 = partitions['app1'][0]
     data_table = "\n".join(
@@ -155,6 +155,23 @@ def flash_readme(version: str, partitions: dict, data_rows: list) -> str:
         for row in data_rows)
     manual_data = " ".join(
         f"0x{row['offset']:06x} {row['name']}" for row in data_rows)
+    app1_note = ("not written here; kept for manual recovery"
+                 if full_install_only else "written when the updater flashes both slots")
+    if full_install_only:
+        upgrade_section = """## Upgrade from an existing CPYOS install
+
+Do not use OTA for this release. The PDF partition and data layout changed; use
+the full installer above. OTA resumes with the next release, whose manifest
+writes **both** app slots. There is intentionally no `ota/readpico.json` in this
+folder, so older firmware cannot pick up a half-migrated image.
+"""
+    else:
+        upgrade_section = """## Device OTA
+
+`readpico-firmware.bin` is the app-only image used by the device's OTA screen.
+`ota/readpico.json` is the manifest the firmware fetches; do not rename the
+asset entry `firmware.bin` inside that JSON.
+"""
     return f'''# {PRODUCT} {version} — Read Pico (小纸 Pico)
 
 This folder is a complete Read Pico installation. Keep it together; the
@@ -170,7 +187,7 @@ Use `manifest-install.json` (or the web flasher on the project site). It writes:
 | readpico-partitions.bin | 0x8000 |
 | readpico-boot_app0.bin | 0xE000 |
 | readpico-firmware.bin | 0x{app0:06x} |
-| readpico-app1.bin | 0x{app1:06x} (only when the updater writes both slots) |
+| readpico-app1.bin | 0x{app1:06x} ({app1_note}) |
 | readpico-pdfmod.bin | 0x{partitions['pdfmod'][0]:06x} |
 {data_table}
 
@@ -179,18 +196,7 @@ this release: 0.7.0 and older use a different partition table and a different
 PDF/data layout, and must not be upgraded by OTA. SD-card books and settings
 under `/.crosspoint` are not touched by a full install.
 
-## Upgrade from an existing CPYOS install
-
-Do not use OTA for this release. The PDF partition and data layout changed;
-use the full installer above, then continue with OTA from 0.8.1 onward. A later
-OTA manifest writes both app slots so an app0-only write cannot leave a device
-booting an old app1.
-
-## Device OTA
-
-`readpico-firmware.bin` is the app-only image used by the device's OTA screen.
-`ota/readpico.json` is the manifest the firmware fetches; do not rename the
-asset entry `firmware.bin` inside that JSON.
+{upgrade_section}
 
 ## Manual esptool
 
@@ -372,7 +378,7 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         },
     }
     write_json(output / 'latest.json', latest)
-    (output / 'FLASH.md').write_text(flash_readme(version, partitions, data_rows), encoding='utf-8')
+    (output / 'FLASH.md').write_text(flash_readme(version, partitions, data_rows, full_install_only), encoding='utf-8')
 
     # The release workflow uploads top-level files only. Keep the project license,
     # the JJWXC statement and every third-party license text in that flat shape.
