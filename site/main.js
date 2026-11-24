@@ -142,7 +142,14 @@
     const install = el('install-button');
     if (install) install.setAttribute('manifest', `${base}/manifest-install.json`);
     const upgrade = el('upgrade-button');
-    if (upgrade) upgrade.setAttribute('manifest', `${base}/manifest-upgrade.json`);
+    if (upgrade) {
+      if (latest.downloads && latest.downloads.manifestUpgrade) {
+        upgrade.setAttribute('manifest', `${base}/manifest-upgrade.json`);
+      } else {
+        // Layout-transition releases have no upgrade manifest on purpose.
+        upgrade.hidden = true;
+      }
+    }
 
     const releaseUrl = `https://github.com/Yana-Hangabina/cpyos/releases/tag/cpyos-${encodeURIComponent(version)}`;
     const zipUrl = `https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-${encodeURIComponent(version)}/cpyos-readpico-${encodeURIComponent(version)}-full.zip`;

@@ -46,6 +46,7 @@ class ImageCheckTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         shutil.copy(ROOT / 'partitions_readpico.csv', self.root / 'partitions_readpico.csv')
+        shutil.copy(ROOT / 'partitions_readpico_xip.csv', self.root / 'partitions_readpico_xip.csv')
 
     def tearDown(self):
         self.temp.cleanup()

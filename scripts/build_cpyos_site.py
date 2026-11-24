@@ -185,6 +185,7 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
     if not isinstance(version, str) or not version:
         fail('latest.json has no version')
     ota_path = release_dir / 'ota' / 'readpico.json'
+    firmware_name = latest['firmware'].get('filename', 'readpico-firmware.bin')
     for name in REQUIRED_MANIFESTS:
         if name in OTA_MANIFESTS and not ota_path.exists():
             continue
@@ -192,7 +193,6 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
     if ota_path.exists():
         ota = load(ota_path)
         firmware_url = ota.get('assets', [{}])[0].get('browser_download_url', '')
-        firmware_name = latest['firmware'].get('filename', 'readpico-firmware.bin')
         # 0.1.1 and older advertise the Pages copy; 0.1.2+ deliberately point the
         # device at the GitHub release asset (mirror-prefixed), because Pages is slow
         # from mainland China. Accept either, but it must name THIS version's file.
@@ -207,7 +207,11 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
         shutil.rmtree(output)
     shutil.copytree(source, output)
     (output / '.nojekyll').write_text('', encoding='utf-8')
-    check_pdf_engine(output, release_dir / firmware_name)
+    if ota_path.exists():
+        check_pdf_engine(output, release_dir / firmware_name)
+    else:
+        print('  full-install release: engine is inside manifest-install.json; '
+              'site engine updates use the rolling pdf-engine release')
 
     downloads = output / 'downloads' / version
     downloads.mkdir(parents=True, exist_ok=True)

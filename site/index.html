@@ -70,7 +70,7 @@
   <section class="hero" aria-labelledby="hero-title">
     <div class="wrap">
       <div>
-        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.7.0</span></span><span class="dot"></span><span>非官方固件</span></div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.8.0</span></span><span class="dot"></span><span>非官方固件</span></div>
         <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
         <p class="lede">让 Read Pico 能读晋江、微信读书、本地书和网页。</p>
         <p class="en-lede">A reading system for the MindReset Read Pico: JJWXC, WeRead, a text-mode web browser, Chinese typography, partial refresh and device OTA — built on CrossMux.</p>
@@ -232,10 +232,10 @@
           <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
           <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
           <tr><th>Fonts</th><td>内置 8,105 个通用规范汉字 + Emoji 子集；完整 Emoji、扩展中文与多语言文字可下载到 SD 卡</td></tr>
-          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.7.0</span></b> · 预编译包只面向 Read Pico</td></tr>
+          <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.8.0</span></b> · Read Pico / E-INK4 Plus 双设备发布</td></tr>
         </table>
-        <p class="muted" style="margin-top:14px;max-width:760px">Metalio E-INK4 Plus（4.7″，ESP32-S31）是实验性移植：独立 ESP-IDF 6.1 工程已链接显示/触摸/电源/SD/电量计/RTC，并提供 bring-up、端到端阅读 demo 与完整 Activity 壳（首页/书架/设置/应用/阅读器）四种构建；16 级文字与窗口局部刷新已实现，但<strong>全部未经实机验证、没有预编译包</strong>。受 app0 容量限制目前只编 EN+ZH；受保护 EPUB 与字体扩展已接入，OTA 发布通道/USB/BLE/网页服务尚未移植。它使用另一套 SoC 与并口面板，请勿用本页的 Read Pico 固件刷写。</p>
-        <p class="muted" style="margin-top:6px;max-width:760px">The Metalio E-INK4 Plus (4.7″, ESP32-S31) is an experimental port. A separate ESP-IDF 6.1 project links the display/touch/power/SD/gauge/RTC drivers and offers bring-up, end-to-end reader-demo and full activity-shell builds (home/shelf/settings/apps/reader). 16-level text and windowed partial refresh are implemented, but <strong>nothing is verified on hardware and there is no prebuilt image</strong>. The app slot currently limits it to EN+ZH; protected EPUB and font extras are wired, while OTA release plumbing/USB/BLE/web server are not ported. Do not flash the Read Pico firmware to it.</p>
+        <p class="muted" style="margin-top:14px;max-width:760px">Metalio E-INK4 Plus（4.7″，ESP32-S31）首次正式发布：完整书架、阅读器、PDF、浏览器、微信读书、晋江（闭源组件）、字体、WebDAV/Calibre、插件与游戏；适配触摸、前光、扬声器/麦克风、电池计、RTC、待机与浅睡。4G 数据通路已接入（本机无模块），在 <a href="https://burner.cloudzao.com/zh/registry">CloudZao 固件市场</a> 搜索「脆皮鸭CPYOS」安装；固件更新与资源推送使用新的 partner API（待实机验证）。它使用另一套 SoC 与面板，请勿用 Read Pico 固件刷写。</p>
+        <p class="muted" style="margin-top:6px;max-width:760px">The Metalio E-INK4 Plus (4.7″, ESP32-S31) is now officially released: full shelf, reader, PDF, browser, WeRead, JJWXC (closed-source component), fonts, WebDAV/Calibre, plugins and games, with touch, frontlight, speaker/microphone, battery gauge, RTC, standby and light sleep. The 4G data path is wired but no module is fitted; Install it from the <a href="https://burner.cloudzao.com/zh/registry">CloudZao firmware market</a> (search “脆皮鸭CPYOS”); updates/resources use the new partner API (hardware verification pending). It uses a different SoC and panel; never flash Read Pico firmware to it.</p>
       </div>
     </div>
   </section>
@@ -247,14 +247,14 @@
         <h2 id="install-title">用浏览器刷机。<span>NO TOOLCHAIN REQUIRED</span></h2>
       </div>
       <div class="panel reveal" style="margin-bottom:26px;border-color:#b08a2e">
-        <h3>0.2.1 及更早版本：请用网页刷机升级</h3>
-        <p>这些版本的设备 OTA 清单仍在 GitHub Pages，部分网络无法访问。0.7.0 已于 2026-11-06 发布：请用本页的「从 CPYOS 升级」或完整安装包升级到 0.7.0 或更新版本。0.2.2 起清单改走 GitHub Release 镜像并全程保持 240 MHz，之后即可在设备内 OTA。</p>
-        <p class="muted">Devices on 0.2.1 or older: use the web flasher on this page. Their OTA manifest is hosted on GitHub Pages, which some networks cannot reach.</p>
+        <h3>0.8.0 更换 PDF 分区：请用网页完整安装</h3>
+        <p>0.8.0 的 Read Pico 固件使用新的 6.0 MiB 应用槽和独立 PDF 引擎分区。0.7.0 及更早版本<strong>不能通过设备 OTA 升级</strong>，请使用本页的「完整安装」并保留 SD 卡；安装完成后再恢复后续 OTA。</p>
+        <p class="muted">0.8.0 changes the Read Pico partition layout. Devices on 0.7.0 or older must use the web full installer, not OTA. SD-card books and settings are kept.</p>
       </div>
       <div class="install-grid">
         <div class="panel reveal">
           <div class="status">
-            <span class="v" id="release-version">0.7.0</span>
+            <span class="v" id="release-version">0.8.0</span>
             <span class="date" id="release-date">READ PICO · 2026.11.05</span>
           </div>
           <h3>这次更新</h3>
@@ -277,11 +277,11 @@
           </div>
         </div>
         <div class="panel reveal">
-          <h3>选择安装方式</h3>
-          <p>第一次安装、从 CrossMux 1.6.5 或出厂固件切换，用「首次安装」。已经在跑 CPYOS 的设备用「升级」，保留设置和数据分区。</p>
+          <h3>安装方式</h3>
+          <p>0.8.0 请使用「完整安装」。它会重建分区表并写入 PDF 引擎；SD 卡里的书和设置不会被网页刷机删除。升级按钮在本次布局迁移中有意隐藏。</p>
           <div class="install-actions">
             <esp-web-install-button id="install-button" manifest="./downloads/0.7.0/manifest-install.json">
-              <button slot="activate" class="btn solid" type="button">首次安装 / 恢复 <span class="arrow">→</span></button>
+              <button slot="activate" class="btn solid" type="button">完整安装 / 恢复 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">当前浏览器无法直接刷写。请用桌面版 Chrome 或 Edge 打开本页，或下载安装包手动刷写。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 HTTPS 打开。</span>
             </esp-web-install-button>
@@ -305,13 +305,13 @@
       <div class="install-grid" style="margin-top:30px">
         <div class="panel reveal">
           <h3>设备内 OTA</h3>
-          <p>已经安装 CPYOS 后，可以直接在设备上更新：</p>
+          <p><strong>0.8.0 不通过 OTA 升级旧分区。</strong>完整安装 0.8.0 后，0.8.1 起可在设备上更新：</p>
           <ol>
             <li>连接 Wi-Fi。</li>
             <li>打开 <b>设置 → 系统 → 检查更新</b>。</li>
             <li>确认升级后不要断电；完成后设备会重启。</li>
           </ol>
-          <p class="warn" style="margin-top:14px">0.2.1 及更早版本请先用网页刷机升级。</p>
+          <p class="warn" style="margin-top:14px">0.7.0 及更早版本请先用本页完整安装；不要点击设备内的检查更新。</p>
           <p class="muted" style="margin-top:14px">0.7.0 起检查更新优先直连 GitHub，失败后才依次尝试镜像与 Pages；固件下载最多只探测三条线路，并复用刚成功的线路。OTA 会更新非活动的 app 槽和数据包，不动 SD 卡、书库和设置。扩展字体是可选下载，不计入固件或 OTA 数据包。</p>
         </div>
         <div class="panel reveal">

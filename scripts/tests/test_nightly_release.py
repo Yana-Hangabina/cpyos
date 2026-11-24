@@ -100,7 +100,7 @@ class NightlyTargetTest(unittest.TestCase):
             'environments': {'nightly': 'readpico_nightly'},
             'supportedChannels': ['nightly'],
             'fullInstall': True,
-            'partitionsCsv': 'partitions_readpico.csv',
+            'partitionsCsv': 'partitions_readpico_xip.csv',
         })
         for flavor in nightly_targets.FLAVOR_TOKENS:
             self.assertEqual(nightly_targets.environment_for('readpico', 'nightly', flavor), 'readpico_nightly')

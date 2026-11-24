@@ -43,6 +43,7 @@ class WebFlasherTest(unittest.TestCase):
         self.dist.mkdir()
         self.output = self.root / 'web'
         shutil.copy(ROOT / 'partitions_readpico.csv', self.root / 'partitions_readpico.csv')
+        shutil.copy(ROOT / 'partitions_readpico_xip.csv', self.root / 'partitions_readpico_xip.csv')
         for _role, source_name, _offset in package_nightly_target.FULL_INSTALL_SEGMENTS:
             name = nightly_targets.asset_name('readpico', source_name)
             blob = make_image() if source_name == 'firmware.bin' else b'\x01' * 64
