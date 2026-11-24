@@ -111,8 +111,11 @@ def enable_ota(token: str, firmware_id: str) -> None:
         raise
     except Exception as exc:  # noqa: BLE001 - the message is the contract here
         text = str(exc)
-        if "至少需要提交一个固件级修改字段" in text:
-            print("otaEnabled: already enabled")
+        # The server's detail is JSON with \uXXXX escapes, so match the status
+        # code and the escaped form instead of the literal Chinese sentence.
+        if ("HTTP 400" in text or "HTTP 409" in text or "至少需要提交一个固件级修改字段" in text
+                or "\u81f3\u5c11\u9700\u8981" in text):
+            print("otaEnabled: already enabled (server rejected a no-op PATCH)")
             return
         raise
 
