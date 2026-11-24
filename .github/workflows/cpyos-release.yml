@@ -119,14 +119,19 @@ jobs:
           set -euo pipefail
           pio run -e readpico_pdf_jjwxc
           # compiledb rewrites .pio/build and has wiped a fresh image before, so
-          # keep the ELF the engine is paired against outside the build dir.
+          # keep the ELF and the binary outside the build dir.
           cp .pio/build/readpico_pdf_jjwxc/firmware.elf "$RUNNER_TEMP/firmware.elf"
+          cp .pio/build/readpico_pdf_jjwxc/firmware.bin "$RUNNER_TEMP/firmware.bin"
 
       - name: Build the paired PDF engine
         run: |
           set -euo pipefail
           pio run -t compiledb -e readpico_pdf_jjwxc
           python3 scripts/build_pdf_module.py             --firmware-elf "$RUNNER_TEMP/firmware.elf"
+          # compiledb can leave the build dir empty; the verifier and packager
+          # read this path.
+          mkdir -p .pio/build/readpico_pdf_jjwxc
+          cp "$RUNNER_TEMP/firmware.bin" .pio/build/readpico_pdf_jjwxc/firmware.bin
 
       - name: Generate data packs
         run: |
