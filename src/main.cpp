@@ -2653,7 +2653,7 @@ void loop() {
         activityManager.goToFullScreenMessage("Emoji 😀👍❤️🚀 中文", EpdFontFamily::BOLD,
                                               "Noto Emoji subset / fallback", false);
       }
-#if defined(CROSSPOINT_MUPDF)
+#if defined(CROSSPOINT_MUPDF) && CROSSPOINT_SERIAL_BENCH
       else if (cmd == "PDF") {
         for (int i = 0; i <= 4; ++i) {
           const std::string cache = "/.crosspoint/pdf_1404219513/page_" + std::to_string(i) + ".bmp";
