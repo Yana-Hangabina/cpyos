@@ -236,6 +236,9 @@ def main() -> int:
         fail("--flash-start-address must look like 0x10000")
     if args.remark_file:
         args.remark = args.remark_file.read_text(encoding="utf-8", errors="replace").strip()
+    if len(args.remark) > 500:
+        fail(f"the version remark is {len(args.remark)} characters; CloudZao accepts at most 500 "
+             "(use docs/releases/<version>.cloudzao.txt for a short note)")
     if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+-]{0,63}", args.version):
         fail("version contains unsupported characters")
 
