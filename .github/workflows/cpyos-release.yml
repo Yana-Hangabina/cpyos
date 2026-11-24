@@ -117,16 +117,16 @@ jobs:
       - name: Build Read Pico (XIP PDF + private book source)
         run: |
           set -euo pipefail
-          # compiledb rewrites .pio/build (it has wiped a fresh image before),
-          # so run it FIRST and let the real build produce firmware.elf last.
-          pio run -t compiledb -e readpico_pdf_jjwxc
           pio run -e readpico_pdf_jjwxc
+          # compiledb rewrites .pio/build and has wiped a fresh image before, so
+          # keep the ELF the engine is paired against outside the build dir.
+          cp .pio/build/readpico_pdf_jjwxc/firmware.elf "$RUNNER_TEMP/firmware.elf"
 
       - name: Build the paired PDF engine
         run: |
           set -euo pipefail
-          test -f .pio/build/readpico_pdf_jjwxc/firmware.elf
-          python3 scripts/build_pdf_module.py             --firmware-elf .pio/build/readpico_pdf_jjwxc/firmware.elf
+          pio run -t compiledb -e readpico_pdf_jjwxc
+          python3 scripts/build_pdf_module.py             --firmware-elf "$RUNNER_TEMP/firmware.elf"
 
       - name: Generate data packs
         run: |
