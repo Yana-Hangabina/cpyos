@@ -97,6 +97,17 @@ jobs:
           git clone --depth 1 git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc
           test -f src/jjwxc/app/JjwxcActivity.cpp
 
+      - name: Generate the app-side generated headers
+        run: |
+          set -euo pipefail
+          # These files are build artifacts (git-ignored). The PlatformIO build
+          # generates them from pre-scripts; the CMake/IDF build needs them
+          # explicitly.
+          python3 scripts/gen_i18n.py lib/I18n/translations lib/I18n/ --strip-unused
+          python3 scripts/build_html.py
+          python3 scripts/build_web_pack.py
+          python3 scripts/generate_userguide_epub.py --bundled
+
       - name: Build the Plus shell image
         run: |
           set -euo pipefail
