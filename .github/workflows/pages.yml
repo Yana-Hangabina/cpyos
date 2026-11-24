@@ -41,8 +41,12 @@ jobs:
           if [ -n "$tag" ]; then
             echo "Using release $tag"
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release --clobber
-            mkdir -p release/ota
-            cp release/readpico-ota.json release/ota/readpico.json
+            # Full-install-only releases intentionally have no OTA manifest;
+            # the site builder detects that from manifest-install.json.
+            if [ -f release/readpico-ota.json ]; then
+              mkdir -p release/ota
+              cp release/readpico-ota.json release/ota/readpico.json
+            fi
             python3 scripts/build_cpyos_site.py --release-dir release --output _site
           else
             echo "No release yet; publishing the static site only"
