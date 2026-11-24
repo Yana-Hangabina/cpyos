@@ -150,6 +150,14 @@ constexpr unsigned long READING_STATS_CHECKPOINT_IDLE_MS = 15UL * 1000UL;
 static unsigned long lastX4ProPowerClickAt = 0;
 static bool g_debugNoSleep = false;  // CMD:NOSLEEP (serial soaks only)
 
+// Bench-only serial hooks are compiled into development images only. Release
+// builds define nothing here: CMD:CAT/CMD:LS could dump /ACCOUNT.txt or the
+// JJWXC cookie jar over serial, PUTFILE/RM/MOVE modify the card, and the
+// *DEMO commands draw fixtures that do not belong on a user's device.
+#ifndef CROSSPOINT_SERIAL_BENCH
+#define CROSSPOINT_SERIAL_BENCH 0
+#endif
+
 // Scan watchdog for the windowed (area) push. That path has no bounded wait
 // inside epdiy -- a scan that never completes blocks its caller forever, and this
 // board has no reset button. Callers that use the area push arm a deadline; if it
@@ -1752,6 +1760,17 @@ void loop() {
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
       cmd.trim();
+#if !CROSSPOINT_SERIAL_BENCH
+      // Card access, fixture pages and demo screens stay in development images.
+      if (cmd.startsWith("PUTFILE") || cmd.startsWith("CAT") || cmd.startsWith("LS") || cmd.startsWith("RM ") ||
+          cmd.startsWith("MOVE ") || cmd.startsWith("UNLOCK ") || cmd.startsWith("FONTDEMO") ||
+          cmd.startsWith("WIFIDEMO") || cmd == "STRESSCOMMENT" || cmd == "FAKECOMMENT" ||
+          cmd.startsWith("PURCHASEDEMO") || cmd.startsWith("CARDDEMO") || cmd == "WAITDEMO" ||
+          cmd == "POPUPDEMO" || cmd == "CONFIRMDEMO" || cmd == "MESSAGEDEMO" || cmd == "AUTOSLEEPDEMO" ||
+          cmd == "HINTRESET" || cmd == "MAKEPDF" || cmd == "PDFBIG" || cmd == "PDFFAILDEMO") {
+        LOG_INF("DBG", "bench-only serial command disabled in release builds");
+      } else
+#endif
       if (cmd == "SCREENSHOT") {
         const uint32_t bufferSize = display.getBufferSize();
         logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
@@ -2167,11 +2186,17 @@ void loop() {
 #endif
       } else if (cmd.startsWith("DETAIL")) {
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
-        String id = "4465668";
+        // The novel id is required: a baked-in sample id would ship a test book
+        // reference in a release image.
         const int space = cmd.indexOf(' ');
-        if (space > 0) id = cmd.substring(space + 1);
-        JjwxcActivity::requestDeepLink(id.c_str(), JjwxcActivity::DeepLinkAction::OpenBookDetail);
-        activityManager.goToJjwxc();
+        String id = space > 0 ? cmd.substring(space + 1) : String();
+        id.trim();
+        if (id.isEmpty()) {
+          LOG_ERR("DBG", "DETAIL needs a novel id");
+        } else {
+          JjwxcActivity::requestDeepLink(id.c_str(), JjwxcActivity::DeepLinkAction::OpenBookDetail);
+          activityManager.goToJjwxc();
+        }
 #endif
       } else if (cmd == "JJSIGNIN") {
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
