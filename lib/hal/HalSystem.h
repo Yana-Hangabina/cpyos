@@ -43,8 +43,8 @@ bool isRebootFromPanic();
 bool isRebootDeliberate();
 
 // True when this build can reboot into the SoC ROM USB download mode.
-// Read Pico (ESP32-S3) and Metalio Plus (ESP32-S31) support it; other boards
-// return false so the settings row is not shown.
+// Verified on the Metalio Plus (ESP32-S31); Read Pico/ESP32-S3 has no exposed
+// strap we can drive, so it returns false and the settings row is hidden.
 bool supportsUsbDownloadMode();
 
 // Set the SoC force-download strap and reset. Does not return on success: the
