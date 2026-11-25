@@ -19,6 +19,7 @@ import hashlib
 import json
 import re
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -174,6 +175,99 @@ def check_pdf_engine(output: Path, firmware: Path | None = None) -> None:
           f'{firmware.name} and the {manifest.name} index')
 
 
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_sums(release_dir: Path) -> dict[str, str]:
+    sums = release_dir / 'SHA256SUMS'
+    result: dict[str, str] = {}
+    if not sums.is_file():
+        return result
+    for line in sums.read_text(encoding='utf-8').splitlines():
+        fields = line.split()
+        if len(fields) == 2:
+            result[fields[1].lstrip('*')] = fields[0]
+    return result
+
+
+def read_partition_binary(path: Path) -> list[dict]:
+    data = path.read_bytes()
+    rows = []
+    for at in range(0, min(len(data), 0xC00), 32):
+        magic = struct.unpack_from('<H', data, at)[0]
+        if magic != 0x50AA:
+            break
+        kind, subtype = data[at + 2], data[at + 3]
+        offset, size = struct.unpack_from('<II', data, at + 4)
+        name = data[at + 12:at + 28].split(b'\0', 1)[0].decode('ascii', 'replace')
+        rows.append({'name': name, 'type': kind, 'subtype': subtype, 'offset': offset, 'size': size})
+    return rows
+
+
+def write_plus_flash_manifest(release_dir: Path, downloads: Path, version: str) -> None:
+    """Generate the E-INK4 Plus browser-install manifest from release assets.
+
+    The Plus needs its partition table, both OTA slots and the six data packs;
+    esp-web-tools cannot drive ESP32-S31, so plus-flasher.js consumes this file.
+    """
+    table = next((p for p in release_dir.glob('cpyos-plus-*-partition-table.bin')), None)
+    firmware = next((p for p in release_dir.glob('cpyos-plus-*.bin')
+                     if 'partition-table' not in p.name and 'pdf' not in p.name), None)
+    data_manifest = release_dir / 'data_manifest_plus.txt'
+    if not table or not firmware or not data_manifest.is_file():
+        print('  no E-INK4 Plus full-install assets in this release; Plus web install omitted')
+        return
+    partitions = read_partition_binary(table)
+    apps = sorted((row for row in partitions if row['type'] == 0), key=lambda row: row['offset'])
+    if len(apps) < 2:
+        fail(f'{table.name} has fewer than two app slots')
+    slot_size = min(row['size'] for row in apps[:2])
+    if firmware.stat().st_size > slot_size:
+        fail(f'{firmware.name} is larger than the Plus OTA slot ({slot_size} B)')
+    sums = read_sums(release_dir)
+
+    def part(path: Path, address: int) -> dict:
+        return {
+            'path': path.name,
+            'offset': address,
+            'size': path.stat().st_size,
+            'sha256': sums.get(path.name) or file_sha256(path),
+        }
+
+    parts = [
+        part(table, 0x8000),
+        part(firmware, apps[0]['offset']),
+        part(firmware, apps[1]['offset']),
+    ]
+    for line in data_manifest.read_text(encoding='utf-8').splitlines():
+        fields = line.split('\t')
+        if len(fields) < 7 or fields[0] != 'data':
+            continue
+        name = fields[1]
+        address = int(fields[3], 0)
+        path = release_dir / Path(fields[6]).name
+        if not path.is_file():
+            fail(f'Plus data pack {name} is missing: {path}')
+        parts.append(part(path, address))
+    parts.sort(key=lambda item: item['offset'])
+    payload = {
+        'name': '脆皮鸭 CPYOS for Metalio E-INK4 Plus',
+        'version': version,
+        'chipFamily': 'ESP32-S31',
+        'new_install_prompt_erase': False,
+        'parts': parts,
+    }
+    target = downloads / 'flash-plus.json'
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(f'  Plus web install: {target.name} ({len(parts)} parts)')
+
+
 def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dict:
     release_dir = release_dir.resolve()
     source = source.resolve()
@@ -240,6 +334,7 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
         if packs.is_file():
             shutil.copy2(packs, output / 'ota' / 'readpico-packs.txt')
     shutil.copy2(release_dir / 'latest.json', output / 'latest.json')
+    write_plus_flash_manifest(release_dir, downloads, version)
 
     print(f'Pages artifact -> {output}')
     print(f'  release {version}: {copied} files under downloads/{version}')

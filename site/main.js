@@ -83,10 +83,10 @@
   }
 
   function formatDate(value) {
-    if (!value) return 'READ PICO';
+    if (!value) return 'READ PICO + E-INK4 PLUS';
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return 'READ PICO';
-    return `READ PICO · ${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, '0')}.${String(date.getUTCDate()).padStart(2, '0')}`;
+    return `READ PICO + E-INK4 PLUS · ${date.getUTCFullYear()}.${String(date.getUTCMonth() + 1).padStart(2, '0')}.${String(date.getUTCDate()).padStart(2, '0')}`;
   }
 
   async function loadRelease() {
@@ -145,6 +145,7 @@
     if (upgrade) {
       if (latest.downloads && latest.downloads.manifestUpgrade) {
         upgrade.setAttribute('manifest', `${base}/manifest-upgrade.json`);
+        upgrade.hidden = false;
       } else {
         // Layout-transition releases have no upgrade manifest on purpose.
         upgrade.hidden = true;
@@ -153,7 +154,8 @@
 
     const releaseUrl = `https://github.com/Yana-Hangabina/cpyos/releases/tag/cpyos-${encodeURIComponent(version)}`;
     const zipUrl = `https://github.com/Yana-Hangabina/cpyos/releases/download/cpyos-${encodeURIComponent(version)}/cpyos-readpico-${encodeURIComponent(version)}-full.zip`;
-    setLink('download-app', `${base}/readpico-firmware.bin`);
+    const plusSelected = document.querySelector('input[name="flash-device"]:checked')?.value === 'plus';
+    if (!plusSelected) setLink('download-app', `${base}/readpico-firmware.bin`);
     setLink('download-sums', `${base}/SHA256SUMS`);
     setLink('download-zip', zipUrl);
     setLink('download-release', releaseUrl);

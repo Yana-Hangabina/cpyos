@@ -21,7 +21,7 @@
 
 - **首次安装必须做完整安装**：下载发布页的 `cpyos-plus-0.8.0-e4p.bin`、`cpyos-plus-0.8.0-e4p-partition-table.bin`
   与六个数据包，按 README 的 `--layout port-ota --full-install` 命令写入分区表、两个应用槽和数据分区。
-  浏览器刷机只支持 Read Pico（esp-web-tools 不支持 ESP32-S31）。
+  也可以在刷机页选择「Metalio E-INK4 Plus」直接完成。
 - **CloudZao 固件市场的“安装”只写一个 app 镜像**：它无法替换分区表，也不会写数据分区（语言包、emoji、
   阅读字库）。在非 CPYOS 分区的原厂设备上直接用它安装，会得到无法正常启动或缺字库的系统。
 - **已完成 0.8.0 完整安装的设备**可以继续用 CloudZao 固件市场更新：市场写入 app0（0x10000），在 app0 为

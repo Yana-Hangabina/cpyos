@@ -16,6 +16,11 @@
   var EN = 'en';
 
   function detectLang() {
+    // The CPYOS site is Chinese-first and sets CPYOS_FLASHER_LANG before this
+    // script loads; the standalone nightly page leaves it unset.
+    if (global.CPYOS_FLASHER_LANG) {
+      return String(global.CPYOS_FLASHER_LANG).toLowerCase().indexOf('zh') === 0 ? ZH : EN;
+    }
     try {
       var forced = new URLSearchParams(global.location.search).get('lang');
       if (forced) return forced.toLowerCase().indexOf('zh') === 0 ? ZH : EN;

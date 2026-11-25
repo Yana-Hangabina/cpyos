@@ -1,6 +1,6 @@
 # 安装与更新 / Install and update
 
-本文说明 **Read Pico（小纸 Pico，RDP-G01-W）** 的安装。CPYOS 同时支持 **Metalio E-INK4 Plus（4.7″，ESP32-S31）**，但 SoC、分区表、面板接口和电源拓扑都不同，固件不可互换；Plus 的首次安装（分区表 + 两个应用槽 + 数据分区）见 `ports/metalio_plus/README.md`，浏览器刷机不支持 ESP32-S31。CPYOS 的镜像也不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）或其它 CrossMux 目标。
+本文说明 **Read Pico（小纸 Pico，RDP-G01-W）** 的安装。CPYOS 同时支持 **Metalio E-INK4 Plus（4.7″，ESP32-S31）**，但 SoC、分区表、面板接口和电源拓扑都不同，固件不可互换；Plus 的首次安装（分区表 + 两个应用槽 + 数据分区）可在刷机页选择设备后完成，手动方式见 `ports/metalio_plus/README.md`。CPYOS 的镜像也不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）或其它 CrossMux 目标。
 
 ## 0. 0.8.0 的 XIP 布局必须完整安装
 

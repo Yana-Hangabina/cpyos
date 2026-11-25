@@ -35,11 +35,19 @@ first paint by the inline script in `<head>`.
 
 ## Flashing
 
-The install and upgrade buttons are `esp-web-install-button` elements from
-esp-web-tools 10.4.0, vendored under `vendor/esp-web-tools/` so the flasher
-does not depend on `unpkg.com` (unreachable on some networks). Their manifests
-are set from `latest.json` at runtime. Browsers must support Web Serial and the
-page must be served over https (or localhost for development).
+The Read Pico install button is an `esp-web-install-button` from esp-web-tools
+10.4.0, vendored under `vendor/esp-web-tools/` so the flasher does not depend on
+`unpkg.com`. Its manifest is set from `latest.json` at runtime. `flasher-ui.js`
+translates the English dialog (the CPYOS page forces Chinese) and adds the
+four-step progress tracker.
+
+The E-INK4 Plus uses `plus-flasher.js` and the unmodified esptool-js 0.7.0 in
+`vendor/plus-flasher/` (the first release with an ESP32-S31 chip class). It
+reads the generated `downloads/<version>/flash-plus.json`, writes the partition
+table, both app slots and the six data packs, and verifies every range with the
+flash MD5 command. `scripts/build_cpyos_site.py` generates that manifest from
+the release assets; it never hardcodes offsets. Browsers must support Web Serial
+and the page must be served over https (or localhost for development).
 
 If the vendored module cannot load, `main.js` reveals `#install-loader` and the
 slot text stays hidden, so users see a download fallback rather than an

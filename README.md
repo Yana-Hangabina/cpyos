@@ -7,7 +7,7 @@
 
 ## 这是什么
 
-CPYOS 同时支持 Read Pico 与 Metalio E-INK4 Plus。两款设备共用同一套界面、阅读器、中文字体栈与安装/升级语义，目标是让墨水屏能舒服地读中文网络小说、本地书和网页。
+CPYOS 面向 Read Pico 与 Metalio E-INK4 Plus，目标是让墨水屏能舒服地读中文网络小说、本地书和网页。
 
 它在 CrossMux 的基础上做了这些事：
 
@@ -23,11 +23,10 @@ CPYOS 同时支持 Read Pico 与 Metalio E-INK4 Plus。两款设备共用同一�
 > 源码、构建与刷写说明见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md) 与
 > [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md)。
 >
-> **安装方式与 Read Pico 不同**（详见下文「安装」）：
-> - 浏览器刷机（esp-web-tools）只支持 ESP32-S3，**不能刷 Plus**；
-> - Plus 首次安装需要完整安装（分区表 + 应用 + 数据分区，含阅读字库）。
->   0.8.0 发布页提供 `cpyos-plus-0.8.0-e4p.bin`、分区表与六个数据包，用仓库脚本
->   `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install` 写入；
+> **安装方式**（详见下文「安装」）：
+> - 在官网刷机页选择设备后执行完整安装；Plus 会写入分区表、两个应用槽和六个数据包（含阅读字库）；
+> - 也可以从发布页下载 `cpyos-plus-0.8.0-e4p.bin`、分区表与六个数据包，用仓库脚本
+>   `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install` 手动写入；
 >   不要只写 app 分区，否则会缺少语言包/emoji/阅读字库；
 > - **CloudZao 固件市场只写一个 app 镜像**，只能在已完成完整安装的设备上做后续应用更新，
 >   不能把原厂设备变成 CPYOS（它不写分区表和数据分区）。两条更新通道不要在同一次更新中混用。
@@ -92,7 +91,7 @@ Read Pico 没有 BOOT/RESET 按钮，第一次安装前先做 16 MiB 整片备�
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 ```
 
-然后用桌面版 Chrome 或 Edge 打开[官网刷机页](https://yana-hangabina.github.io/cpyos/#install)。刷机页**没有机型选择**：它只注册了 ESP32-S3，也就是 Read Pico；Plus 是 ESP32-S31，浏览器刷机不支持。
+然后用桌面版 Chrome 或 Edge 打开[官网刷机页](https://yana-hangabina.github.io/cpyos/#install)：先选择「小纸 Pico」，再点完整安装。
 
 - **首次安装 / 恢复**：从出厂固件或 CrossMux 1.6.5 切换时使用，会重建分区表；
 - **从 CPYOS 升级**：已经在跑 CPYOS 的设备使用，保留设置和数据分区。
@@ -105,14 +104,13 @@ python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 
 ### Metalio E-INK4 Plus（无名 4.7″）
 
-Plus 使用 ESP32-S31，**官网的浏览器刷机不支持这台设备**（esp-web-tools 没有 S31 支持）。
-首次安装必须做完整安装：
+Plus 使用 ESP32-S31。在刷机页选择该设备后执行完整安装：
 
 1. 备份整片 16 MiB Flash（`--backup plus-16m.bin`，脚本会做）；
 2. 从发布页下载 `cpyos-plus-0.8.0-e4p.bin`（应用）、`cpyos-plus-0.8.0-e4p-partition-table.bin`
    （分区表）和六个数据包（`pinyin.dat`、`web_pack.dat`、`hyphen.dat`、`i18n_pack.dat`、
    `emoji.dat`、`cjk_core.dat`）；
-3. 在仓库根目录用脚本一次写入分区表、两个应用槽与数据分区：
+3. 也可以手动执行同一安装流程（官网一键刷机失败时的备用路径）：
 
 ```bash
 python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slot both \

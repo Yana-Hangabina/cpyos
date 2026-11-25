@@ -7,7 +7,7 @@ Releases, full install packages and checksums: <https://github.com/Yana-Hangabin
 
 ## What this is
 
-CPYOS supports both the Read Pico and the Metalio E-INK4 Plus. They share one UI, reader, CJK font stack and install/update model, while keeping device-specific images and partition tables:
+CPYOS targets the Read Pico and the Metalio E-INK4 Plus:
 
 - a redesigned home, library, find-books, My and reader UI;
 - a native JJWXC client and a reader-mode web browser;
@@ -21,13 +21,12 @@ CPYOS supports both the Read Pico and the Metalio E-INK4 Plus. They share one UI
 > separate ESP-IDF 6.1 project lives in `ports/metalio_plus/`; see its README and
 > [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md).
 >
-> **Installation differs from the Read Pico** (see “Install” below):
-> - the browser flasher (esp-web-tools) supports ESP32-S3 only and **cannot flash the Plus**;
-> - a first install needs a full install (partition table + app + data partition including the
->   reading font). The 0.8.0 release ships `cpyos-plus-0.8.0-e4p.bin`,
->   `cpyos-plus-0.8.0-e4p-partition-table.bin` and six data packs; write them with
->   `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install`.
->   An app-only write leaves the device without the language pack, emoji or reading font;
+> **Installation** (see “Install” below):
+> - pick the device on the web installer page and run the full install; the Plus install writes the
+>   partition table, both app slots and six data packs including the reading font;
+> - the release also ships `cpyos-plus-0.8.0-e4p.bin`, its partition table and six data packs for
+>   the manual `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install`
+>   path. An app-only write leaves the device without the language pack, emoji or reading font;
 > - **the CloudZao firmware market writes one app image only**. It can update a device that has
 >   already been fully installed, but it cannot convert a stock device to CPYOS (no partition
 >   table, no data partition). Do not mix market and on-device updates in one step.
@@ -92,7 +91,7 @@ Back up the full 16 MiB flash before the first install and keep the backup on an
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 ```
 
-Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.github.io/cpyos/#install). The flasher has **no model picker** because it registers only the ESP32-S3 (Read Pico); the Plus is an ESP32-S31 and cannot be flashed from a browser:
+Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.github.io/cpyos/#install), pick “Read Pico”, and run the full install:
 
 - **First install / recovery** when coming from factory firmware or CrossMux 1.6.5 (rebuilds the partition table);
 - **Upgrade from CPYOS** for an existing CPYOS install (keeps settings and the data partition).
@@ -104,13 +103,12 @@ card, books and settings alone. Devices on **0.2.1 or older** should use the web
 
 ### Metalio E-INK4 Plus
 
-The Plus uses an ESP32-S31; **the browser flasher does not support it**. A first install must be a
-full install:
+The Plus uses an ESP32-S31. Pick it on the web installer page and run a full install:
 
 1. back up the full 16 MiB flash (`--backup plus-16m.bin`);
 2. download `cpyos-plus-0.8.0-e4p.bin`, `cpyos-plus-0.8.0-e4p-partition-table.bin` and the six data
    packs (`pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core.dat`);
-3. from the repository root, write the partition table, both app slots and the data partition:
+3. for the manual fallback path, from the repository root, write the partition table, both app slots and the data partition:
 
 ```bash
 python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slot both \
