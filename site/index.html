@@ -70,10 +70,10 @@
   <section class="hero" aria-labelledby="hero-title">
     <div class="wrap">
       <div>
-        <div class="kicker mono"><span class="dot"></span><span>Read Pico · ESP32-S3</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.8.0</span></span><span class="dot"></span><span>非官方固件</span></div>
+        <div class="kicker mono"><span class="dot"></span><span>Read Pico · Metalio E-INK4 Plus</span><span class="dot"></span><span>CPYOS <span id="hero-version">0.8.0</span></span><span class="dot"></span><span>非官方固件</span></div>
         <h1 id="hero-title">脆皮鸭<span class="en">CPYOS / E-INK READING</span></h1>
-        <p class="lede">让 Read Pico 能读晋江、微信读书、本地书和网页。</p>
-        <p class="en-lede">A reading system for the MindReset Read Pico: JJWXC, WeRead, a text-mode web browser, Chinese typography, partial refresh and device OTA — built on CrossMux.</p>
+        <p class="lede">让 Read Pico（小纸 Pico）与 Metalio E-INK4 Plus 都能读晋江、微信读书、本地书和网页。</p>
+        <p class="en-lede">A reading system for two e-ink readers — MindReset Read Pico (ESP32-S3) and Metalio E-INK4 Plus (ESP32-S31): JJWXC, WeRead, a text-mode web browser, Chinese typography, PDF, partial refresh and device OTA.</p>
         <div class="cta">
           <a class="btn solid" href="#install">网页刷机 <small>FLASH</small></a>
           <a class="btn" href="#features">功能 <small>FEATURES</small></a>
@@ -222,20 +222,20 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="no mono">03 / DEVICE</div>
-        <h2 id="device-title">只面向一台设备。<span>READ PICO</span></h2>
+        <h2 id="device-title">两款设备，同一套系统。<span>TWO DEVICES</span></h2>
       </div>
       <div class="reveal">
         <table class="specs">
-          <tr><th>Device</th><td><b>Read Pico（小纸 Pico，RDP-G01-W）</b></td></tr>
-          <tr><th>Panel</th><td>4.7" · 684 × 1216 · 16 灰阶 · 约 297 PPI · 无前光</td></tr>
-          <tr><th>SoC</th><td>ESP32-S3 · 双核 240 MHz · 8 MB PSRAM · Wi-Fi / BT5</td></tr>
-          <tr><th>Flash</th><td>16 MB · 2 × 7.19 MiB app 槽 · 1.5 MiB 数据分区</td></tr>
-          <tr><th>Input</th><td>电容触摸 + 3 个电容键 · 无 BOOT / RESET 键</td></tr>
+          <tr><th>Devices</th><td><b>Read Pico（小纸 Pico，RDP-G01-W）</b> · <b>Metalio E-INK4 Plus（4.7″，ESP32-S31）</b></td></tr>
+          <tr><th>Panel</th><td>两款均为 4.7″ · 684 × 1216 · 16 灰阶 · 约 297 PPI<br>Read Pico 无前光；Plus 带可调前光</td></tr>
+          <tr><th>SoC</th><td>Read Pico: ESP32-S3 · 双核 240 MHz · 8 MB PSRAM<br>Plus: ESP32-S31 · 16 MB PSRAM · 前光 / 扬声器 / 麦克风 / 电池计</td></tr>
+          <tr><th>Flash</th><td>16 MB · 2 × 6.0 MiB app 槽 · 2.0 MiB 数据分区<br>Read Pico 另有 1.875 MiB 独立 PDF 引擎分区；Plus 的 PDF 引擎走 SD</td></tr>
+          <tr><th>Input</th><td>Read Pico：电容触摸 + 3 个电容键，无 BOOT / RESET 键<br>Plus：电容触摸 + 3 个侧键 + 电源键</td></tr>
           <tr><th>Fonts</th><td>内置 8,105 个通用规范汉字 + Emoji 子集；完整 Emoji、扩展中文与多语言文字可下载到 SD 卡</td></tr>
           <tr><th>Release</th><td><b>脆皮鸭 CPYOS <span id="spec-version">0.8.0</span></b> · Read Pico / E-INK4 Plus 双设备发布</td></tr>
         </table>
-        <p class="muted" style="margin-top:14px;max-width:760px">Metalio E-INK4 Plus（4.7″，ESP32-S31）首次正式发布：完整书架、阅读器、PDF、浏览器、微信读书、晋江（闭源组件）、字体、WebDAV/Calibre、插件与游戏；适配触摸、前光、扬声器/麦克风、电池计、RTC、待机与浅睡。4G 数据通路已接入（本机无模块），先在官网下载完整安装包完成首次安装（必须写入分区表与数据分区）；完成后再在 <a href="https://burner.cloudzao.com/zh/registry">CloudZao 固件市场</a> 搜索「脆皮鸭CPYOS」获取后续应用更新。固件市场的安装仅写 app 分区，不能用于首次安装。设备资源与固件检查使用 partner API（绑定/资源/OTA 检查已实机验证）。它使用另一套 SoC 与面板，请勿用 Read Pico 固件刷写。</p>
-        <p class="muted" style="margin-top:6px;max-width:760px">The Metalio E-INK4 Plus (4.7″, ESP32-S31) is now officially released: full shelf, reader, PDF, browser, WeRead, JJWXC (closed-source component), fonts, WebDAV/Calibre, plugins and games, with touch, frontlight, speaker/microphone, battery gauge, RTC, standby and light sleep. The 4G data path is wired but no module is fitted; Install it from the <a href="https://burner.cloudzao.com/zh/registry">CloudZao firmware market</a> (search “脆皮鸭CPYOS”); updates/resources use the new partner API (hardware verification pending). It uses a different SoC and panel; never flash Read Pico firmware to it.</p>
+        <p class="muted" style="margin-top:14px;max-width:760px">Metalio E-INK4 Plus（4.7″，ESP32-S31）首次正式发布：完整书架、阅读器、PDF、浏览器、微信读书、晋江（闭源组件）、字体、WebDAV/Calibre、插件与游戏；适配触摸、前光、扬声器/麦克风、电池计、RTC、待机与浅睡。4G 数据通路已接入（本机无模块）。首次安装请从发布页下载应用、分区表与六个数据包，用 <span class="mono">ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install</span> 一次写入分区表、两个应用槽与数据分区；完成后再在 <a href="https://burner.cloudzao.com/zh/registry">CloudZao 固件市场</a> 搜索「脆皮鸭CPYOS」获取后续应用更新。固件市场的安装仅写 app 分区，不能用于首次安装，也不能补齐数据分区。设备资源与固件检查使用 partner API（绑定/资源/OTA 检查已实机验证）。它使用另一套 SoC 与面板，请勿用 Read Pico 固件刷写。</p>
+        <p class="muted" style="margin-top:6px;max-width:760px">The Metalio E-INK4 Plus (4.7″, ESP32-S31) is now officially released: full shelf, reader, PDF, browser, WeRead, JJWXC (closed-source component), fonts, WebDAV/Calibre, plugins and games, with touch, frontlight, speaker/microphone, battery gauge, RTC, standby and light sleep. The 4G data path is wired but no module is fitted. For the first install, download the app, partition table and six data packs from the release page and run <span class="mono">ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install</span>; the <a href="https://burner.cloudzao.com/zh/registry">CloudZao firmware market</a> (search “脆皮鸭CPYOS”) then serves app-only updates and cannot perform the first install or write the data partition. It uses a different SoC and panel; never flash Read Pico firmware to it.</p>
       </div>
     </div>
   </section>
@@ -244,18 +244,27 @@
     <div class="wrap">
       <div class="sec-head reveal">
         <div class="no mono">04 / INSTALL</div>
-        <h2 id="install-title">用浏览器刷机。<span>NO TOOLCHAIN REQUIRED</span></h2>
+        <h2 id="install-title">Read Pico 用浏览器刷机。<span>PLUS USES THE FULL PACKAGE</span></h2>
       </div>
       <div class="panel reveal" style="margin-bottom:26px;border-color:#b08a2e">
         <h3>0.8.0 更换 PDF 分区：请用网页完整安装</h3>
         <p>0.8.0 的 Read Pico 固件使用新的 6.0 MiB 应用槽和独立 PDF 引擎分区。0.7.0 及更早版本<strong>不能通过设备 OTA 升级</strong>，请使用本页的「完整安装」并保留 SD 卡；安装完成后再恢复后续 OTA。</p>
         <p class="muted">0.8.0 changes the Read Pico partition layout. Devices on 0.7.0 or older must use the web full installer, not OTA. SD-card books and settings are kept.</p>
       </div>
+      <div class="panel reveal" style="margin-bottom:26px">
+        <h3>Metalio E-INK4 Plus：首次安装不能走浏览器</h3>
+        <p>本页的浏览器刷机只支持 <b>Read Pico</b>（esp-web-tools 不支持 ESP32-S31）。Plus 的首次安装请下载发布页的 <span class="mono">cpyos-plus-0.8.0-e4p.bin</span>、<span class="mono">cpyos-plus-0.8.0-e4p-partition-table.bin</span> 与六个数据包，用脚本一次写入分区表、两个应用槽与数据分区（含阅读字库）：</p>
+        <p class="mono" style="font-size:10.5px;line-height:1.9;word-break:break-all">python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slot both --full-install --allow-versioned --backup plus-16m.bin \
+&nbsp;&nbsp;--firmware cpyos-plus-0.8.0-e4p.bin --partition-table cpyos-plus-0.8.0-e4p-partition-table.bin \
+&nbsp;&nbsp;--pinyin pinyin.dat --web web_pack.dat --hyphen hyphen.dat --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat</p>
+        <p>完成首次安装后，可在 <a href="https://burner.cloudzao.com/zh/registry">CloudZao 固件市场</a> 搜索「脆皮鸭CPYOS」获取后续应用更新；固件市场的“安装”只写 app 分区，<b>只适用于已完成完整安装的设备</b>。</p>
+        <p class="muted">The browser flasher is Read Pico only. For the Plus, run the full-install script above once (partition table + both app slots + data partition); the CloudZao market then serves app-only updates.</p>
+      </div>
       <div class="install-grid">
         <div class="panel reveal">
           <div class="status">
             <span class="v" id="release-version">0.8.0</span>
-            <span class="date" id="release-date">READ PICO · 2026.11.05</span>
+            <span class="date" id="release-date">READ PICO + E-INK4 PLUS · 2026.11.25</span>
           </div>
           <h3>这次更新</h3>
           <ul class="notes" id="release-notes">
@@ -280,12 +289,12 @@
           <h3>安装方式</h3>
           <p>0.8.0 请使用「完整安装」。它会重建分区表并写入 PDF 引擎；SD 卡里的书和设置不会被网页刷机删除。升级按钮在本次布局迁移中有意隐藏。</p>
           <div class="install-actions">
-            <esp-web-install-button id="install-button" manifest="./downloads/0.7.0/manifest-install.json">
+            <esp-web-install-button id="install-button" manifest="./downloads/0.8.0/manifest-install.json">
               <button slot="activate" class="btn solid" type="button">完整安装 / 恢复 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">当前浏览器无法直接刷写。请用桌面版 Chrome 或 Edge 打开本页，或下载安装包手动刷写。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 HTTPS 打开。</span>
             </esp-web-install-button>
-            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.7.0/manifest-upgrade.json">
+            <esp-web-install-button id="upgrade-button" manifest="./downloads/0.8.0/manifest-upgrade.json">
               <button slot="activate" class="btn" type="button">从 CPYOS 升级 <span class="arrow">→</span></button>
               <span slot="unsupported" class="warn">当前浏览器无法直接刷写。请用桌面版 Chrome 或 Edge 打开本页，或下载安装包手动刷写。</span>
               <span slot="not-allowed" class="warn">刷机页必须通过 HTTPS 打开。</span>
@@ -297,7 +306,7 @@
           <ol style="margin-top:18px">
             <li>用 USB-C 数据线连接设备；它应显示为 <span class="mono">USB JTAG/serial debug unit</span>。</li>
             <li>点按钮，在串口列表里选择设备，等待写入完成并自动重启。</li>
-            <li>看不到设备时先换数据线；串口列表只显示 Read Pico（USB <span class="mono">303A:1001</span>）。</li>
+            <li>看不到设备时先换数据线；串口列表只显示 Read Pico（USB <span class="mono">303A:1001</span>）。Plus 不在此列，请用上面的完整安装脚本。</li>
           </ol>
         </div>
       </div>

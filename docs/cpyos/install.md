@@ -1,6 +1,6 @@
 # 安装与更新 / Install and update
 
-本文只面向 **Read Pico（小纸 Pico，RDP-G01-W）**。CPYOS 的预编译包不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）、**Metalio E-INK4 Plus（4.7″，ESP32-S31）** 或其它 CrossMux 目标。Plus 的 SoC、分区表、面板接口和电源拓扑都与 Read Pico 不同，刷错会变砖。
+本文说明 **Read Pico（小纸 Pico，RDP-G01-W）** 的安装。CPYOS 同时支持 **Metalio E-INK4 Plus（4.7″，ESP32-S31）**，但 SoC、分区表、面板接口和电源拓扑都不同，固件不可互换；Plus 的首次安装（分区表 + 两个应用槽 + 数据分区）见 `ports/metalio_plus/README.md`，浏览器刷机不支持 ESP32-S31。CPYOS 的镜像也不适用于 Xteink、Sticky、Metalio E-Ink 4（3.97″，ESP32-S3）或其它 CrossMux 目标。
 
 ## 0. 0.8.0 的 XIP 布局必须完整安装
 
@@ -11,8 +11,8 @@ Read Pico 的 0.8.0 使用新分区：app0/app1 各 **6.0 MiB**、独立 PDF 引
 `python3 scripts/flash_pdf_xip.py --port /dev/cu.usbmodemXXXX --full`（写分区表、app0、PDF
 引擎与全部数据包）。安装完成后的后续版本可以继续 OTA（应用槽偏移不再变化）。
 
-系统 UI 与阅读字体都在 app0 内（可缩放 CJK 字族），不再需要 0.7.0 的 `cjk_core.dat`；缺字时可
-安装字体扩展包。
+app0 内只有系统 UI 子集；常用阅读字库 `cjk_core.dat` 位于 2.0 MiB 数据分区，首次开机自动释放到
+`/fonts/CPYOSCJKCore`。完整安装必须同时写入六个数据包，只刷 app 会缺字库；更生僻的字可安装字体扩展包。
 
 ## 0. 刷机前：整片备份
 

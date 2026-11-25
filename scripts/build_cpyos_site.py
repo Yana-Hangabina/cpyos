@@ -207,6 +207,16 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
         shutil.rmtree(output)
     shutil.copytree(source, output)
     (output / '.nojekyll').write_text('', encoding='utf-8')
+    # The static page carries fallback manifest paths; point them at this
+    # release so a browser without the runtime rewrite still flashes 0.8.0.
+    index = output / 'index.html'
+    html = index.read_text(encoding='utf-8')
+    html = re.sub(r'downloads/\d+\.\d+\.\d+', f'downloads/{version}', html)
+    if not (release_dir / 'manifest-upgrade.json').is_file():
+        # Full-install-only releases have no upgrade path on purpose.
+        html = re.sub(r'<esp-web-install-button id="upgrade-button".*?</esp-web-install-button>', '', html,
+                      flags=re.S)
+    index.write_text(html, encoding='utf-8')
     if ota_path.exists():
         check_pdf_engine(output, release_dir / firmware_name)
     else:

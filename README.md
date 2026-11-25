@@ -1,35 +1,39 @@
 # 脆皮鸭 CPYOS
 
-面向 **Read Pico（小纸 Pico，RDP-G01-W）** 墨水屏的阅读系统，基于 [CrossMux](https://github.com/0x1abin/crossmux) 开发。
+面向 **Read Pico（小纸 Pico，RDP-G01-W）** 与 **Metalio E-INK4 Plus（无名 4.7″，ESP32-S31）** 两款墨水屏的阅读系统，基于 [CrossMux](https://github.com/0x1abin/crossmux) 开发。
 
 官网与网页刷机：<https://yana-hangabina.github.io/cpyos/><br>
 发布、完整安装包与校验和：<https://github.com/Yana-Hangabina/cpyos/releases>
 
 ## 这是什么
 
-CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地读中文网络小说、本地书和网页。
+CPYOS 同时支持 Read Pico 与 Metalio E-INK4 Plus。两款设备共用同一套界面、阅读器、中文字体栈与安装/升级语义，目标是让墨水屏能舒服地读中文网络小说、本地书和网页。
 
 它在 CrossMux 的基础上做了这些事：
 
 - 重做界面，首页、书架、找书、我的和阅读器按墨水屏重新排版；
 - 内置晋江文学城客户端和网页阅读；
 - 统一中文字体、拼音输入、断词和 emoji 回退；
-- 针对这块面板做局部刷新、抗锯齿和翻页效果；
-- 提供设备内 OTA 与网页刷机。
+- 针对两块面板做局部刷新、抗锯齿和翻页效果；
+- 提供设备内 OTA、网页刷机（Read Pico）与完整安装脚本（Plus）。
 
-> **Metalio E-INK4 Plus（4.7″，ESP32-S31，1216×684 并口墨水屏）是实验性移植：尚未实机验证，也没有预编译包。**
-> 独立的 ESP-IDF 6.1 工程在 `ports/metalio_plus/`：显示（E0470A14-AF / GC16）、
-> TPS65185/TCA9555、FT6336U、4-bit SD、BQ27220 电量计与 PCF8563 RTC 已链接；提供四种构建——
-> 纯 BSP、bring-up 状态页（`CPYOS_UI_PROBE=1`）、**端到端阅读 demo**（`CPYOS_READER_DEMO=1`：
-> SD 扫描 → EPUB 解析 → 排版 → 上屏，触摸/盖板键翻页与跨章），以及 **完整 CPYOS Activity 壳**
-> （`CPYOS_SHELL_DEMO=1`：首页/书架/设置/应用/阅读器/文件浏览/睡眠，主题、字体、i18n、
-> 真实 `esp_wifi` + `esp_tls`）。16 级文字与窗口局部刷新已实现，但**全部未经实机验证**。
-> 受 app0 7.19 MiB 限制，目前只编 EN+ZH、CJK 共用 12pt 字面，游戏/AirPage/PixelSwitch 与
-> 网页服务/Calibre 页面不编入；**OTA 发布通道、USB MSC、BLE 尚未移植**（受保护 EPUB 与字体扩展已接入）。
-> 它使用另一套 SoC 与显示/电源拓扑，不在本项目的预编译目标内。源码树中的 `metalio_eink4`
-> 环境对应的是 3.97″ 的 Metalio E-Ink 4（ESP32-S3 + SSD1677 SPI），与 Plus 不是同一台设备。
-> **请勿把 Read Pico 固件刷到 Plus 上。** 移植分析见
+> **Metalio E-INK4 Plus（4.7″，ESP32-S31，1216×684 并口墨水屏）自 0.8.0-e4p 起正式支持。**
+> 它与 Read Pico 共用同一套 Activity、阅读器、字体与数据包，但 SoC 与显示/电源拓扑不同，
+> 固件和分区表**不可互换**。独立工程在 `ports/metalio_plus/`（ESP-IDF 6.1，`esp32s31` target），
+> 源码、构建与刷写说明见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md) 与
 > [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md)。
+>
+> **安装方式与 Read Pico 不同**（详见下文「安装」）：
+> - 浏览器刷机（esp-web-tools）只支持 ESP32-S3，**不能刷 Plus**；
+> - Plus 首次安装需要完整安装（分区表 + 应用 + 数据分区，含阅读字库）。
+>   0.8.0 发布页提供 `cpyos-plus-0.8.0-e4p.bin`、分区表与六个数据包，用仓库脚本
+>   `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install` 写入；
+>   不要只写 app 分区，否则会缺少语言包/emoji/阅读字库；
+> - **CloudZao 固件市场只写一个 app 镜像**，只能在已完成完整安装的设备上做后续应用更新，
+>   不能把原厂设备变成 CPYOS（它不写分区表和数据分区）。两条更新通道不要在同一次更新中混用。
+>
+> `metalio_eink4` 环境对应的是 3.97″ 的 Metalio E-Ink 4（ESP32-S3 + SSD1677 SPI），
+> 与 Plus 不是同一台设备。**请勿把 Read Pico 固件刷到 Plus 上，反之亦然。**
 
 ## 相对 CrossMux 上游的新增与改进
 
@@ -78,7 +82,11 @@ CPYOS 只面向 Read Pico，目标是让这块 4.7 英寸墨水屏能舒服地�
 
 ## 安装
 
-预编译包**只面向 Read Pico**。**不要**把这里的固件刷到 Metalio E-INK4 Plus 或其它 ESP32 设备上：Plus 使用 ESP32-S31，分区表、面板接口和电源拓扑都不同。第一次安装前先做整片 16 MiB 备份，并把备份放到另一台机器上：
+预编译包覆盖 **Read Pico** 与 **Metalio E-INK4 Plus**，但两者的安装方式不同，固件与分区表不可互换。
+
+### Read Pico（小纸 Pico）
+
+Read Pico 没有 BOOT/RESET 按钮，第一次安装前先做 16 MiB 整片备份，并把备份放到另一台机器上：
 
 ```bash
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
@@ -89,11 +97,44 @@ python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 - **首次安装 / 恢复**：从出厂固件或 CrossMux 1.6.5 切换时使用，会重建分区表；
 - **从 CPYOS 升级**：已经在跑 CPYOS 的设备使用，保留设置和数据分区。
 
-设备内 OTA 在 **设置 → 系统 → 检查更新**。OTA 只写非活动的 app 槽和需要更新的数据包，不动 SD 卡、书库和设置。
+0.8.0 更换了 Read Pico 的分区布局（XIP PDF 引擎 + 2.0 MiB 数据分区），**0.7.0 及更早版本必须用网页
+完整安装**，不能用 OTA。设备内 OTA 在 **设置 → 系统 → 检查更新**，只写非活动的 app 槽和需要更新的
+数据包，不动 SD 卡、书库和设置。
 
 **0.2.1 及更早版本**的设备 OTA 清单在 GitHub Pages，部分网络无法访问，请先用官网网页刷机升级一次。
 
-设备 OTA 会同时更新 app 与数据包；只有分区表或包格式发生破坏性变化时，才需要完整安装或网页刷机。完整包的偏移量、校验和与手动命令见包内 `FLASH.md` 和 `SHA256SUMS`。
+### Metalio E-INK4 Plus（无名 4.7″）
+
+Plus 使用 ESP32-S31，**官网的浏览器刷机不支持这台设备**（esp-web-tools 没有 S31 支持）。
+首次安装必须做完整安装：
+
+1. 备份整片 16 MiB Flash（`--backup plus-16m.bin`，脚本会做）；
+2. 从发布页下载 `cpyos-plus-0.8.0-e4p.bin`（应用）、`cpyos-plus-0.8.0-e4p-partition-table.bin`
+   （分区表）和六个数据包（`pinyin.dat`、`web_pack.dat`、`hyphen.dat`、`i18n_pack.dat`、
+   `emoji.dat`、`cjk_core.dat`）；
+3. 在仓库根目录用脚本一次写入分区表、两个应用槽与数据分区：
+
+```bash
+python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slot both \
+  --full-install --allow-versioned --backup plus-16m.bin \
+  --firmware cpyos-plus-0.8.0-e4p.bin \
+  --partition-table cpyos-plus-0.8.0-e4p-partition-table.bin \
+  --pinyin pinyin.dat --web web_pack.dat --hyphen hyphen.dat \
+  --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
+```
+
+详细参数与恢复方法见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md)。
+
+**CloudZao 固件市场**（搜索「脆皮鸭CPYOS」）只能写一个 app 镜像（`0x10000`），
+**仅适用于已经完成完整安装的设备**做后续应用更新；它不会写分区表、bootloader 或数据分区，
+因此不能让原厂设备变成 CPYOS，也不能用来补齐缺失的语言包/阅读字库。设备内「系统更新」写的是
+非活动槽并切换 otadata，与市场更新是两条通道，**不要在同一次更新里混用**。
+
+### 数据包与校验
+
+设备 OTA 会同时更新 app 与数据包；只有分区表或包格式发生破坏性变化时，才需要完整安装或网页刷机。
+完整包的偏移量、校验和与手动命令见包内 `FLASH.md` 和 `SHA256SUMS`；Plus 另见
+`ports/metalio_plus/README.md`。
 
 ## 从源码构建
 

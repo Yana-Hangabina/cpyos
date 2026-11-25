@@ -1,36 +1,39 @@
 # 脆皮鸭 CPYOS
 
-A reading-first firmware for the **Read Pico** (MindReset RDP-G01-W, ESP32-S3, 684×1216, 16 grey levels), built on [CrossMux](https://github.com/0x1abin/crossmux).
+A reading-first firmware for the **Read Pico** (MindReset RDP-G01-W, ESP32-S3) and the **Metalio E-INK4 Plus** (4.7″, ESP32-S31), built on [CrossMux](https://github.com/0x1abin/crossmux).
 
 Project site and browser flasher: <https://yana-hangabina.github.io/cpyos/><br>
 Releases, full install packages and checksums: <https://github.com/Yana-Hangabina/cpyos/releases>
 
 ## What this is
 
-CPYOS targets the Read Pico only. It keeps what CrossMux already does and rebuilds the parts that matter for reading Chinese web novels, local books and web pages on this panel:
+CPYOS supports both the Read Pico and the Metalio E-INK4 Plus. They share one UI, reader, CJK font stack and install/update model, while keeping device-specific images and partition tables:
 
 - a redesigned home, library, find-books, My and reader UI;
 - a native JJWXC client and a reader-mode web browser;
 - one scalable CJK family, pinyin input, hyphenation and emoji fallback;
-- display work tuned for this panel: partial refresh, anti-aliasing and page-turn effects;
-- device OTA and a browser flasher.
+- display work tuned for both panels: partial refresh, anti-aliasing and page-turn effects;
+- device OTA, a browser flasher (Read Pico) and a full-install script (Plus).
 
-> **Metalio E-INK4 Plus (4.7″, ESP32-S31, 1216×684 parallel panel) is an experimental port: no hardware validation and no prebuilt image yet.**
-> A separate ESP-IDF 6.1 project under `ports/metalio_plus/` links the display
-> (E0470A14-AF / GC16), TPS65185/TCA9555, FT6336U touch, 4-bit SD, the BQ27220 fuel gauge and
-> the PCF8563 RTC. It offers four builds: BSP only, a bring-up status page
-> (`CPYOS_UI_PROBE=1`), an **end-to-end reading demo** (`CPYOS_READER_DEMO=1`: SD scan → EPUB
-> parse → layout → display with touch/cover-key page turns and chapter crossing), and the
-> **full CPYOS activity shell** (`CPYOS_SHELL_DEMO=1`: Home/shelf/settings/apps/reader/file
-> browser/sleep, with the CPY theme, fonts, i18n, and a real `esp_wifi` + `esp_tls` stack).
-> 16-level text and windowed partial refresh are implemented but **nothing has been verified on
-> hardware**. The 7.19 MiB app slot currently limits the shell to EN+ZH, a shared 12pt CJK face,
-> and excludes games/AirPage/PixelSwitch and the web-server/Calibre pages; **OTA release
-> plumbing, USB MSC and BLE are not ported yet** (protected EPUB and font extras are wired).
-> It uses a different SoC and display/power topology. The `metalio_eink4` source target in
-> this tree is the 3.97″ Metalio E-Ink 4 (ESP32-S3 + SSD1677 SPI), not the Plus. Do not flash
-> the Read Pico firmware to a Plus.
-> See [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md).
+> **Metalio E-INK4 Plus (4.7″, ESP32-S31, 1216×684 parallel panel) is officially supported since 0.8.0-e4p.**
+> It shares the Activity shell, reader, fonts and data packs with the Read Pico, but the SoC and
+> display/power topology differ, so **images and partition tables are not interchangeable**. The
+> separate ESP-IDF 6.1 project lives in `ports/metalio_plus/`; see its README and
+> [`docs/engineering/metalio-eink4-plus.md`](docs/engineering/metalio-eink4-plus.md).
+>
+> **Installation differs from the Read Pico** (see “Install” below):
+> - the browser flasher (esp-web-tools) supports ESP32-S3 only and **cannot flash the Plus**;
+> - a first install needs a full install (partition table + app + data partition including the
+>   reading font). The 0.8.0 release ships `cpyos-plus-0.8.0-e4p.bin`,
+>   `cpyos-plus-0.8.0-e4p-partition-table.bin` and six data packs; write them with
+>   `ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --full-install`.
+>   An app-only write leaves the device without the language pack, emoji or reading font;
+> - **the CloudZao firmware market writes one app image only**. It can update a device that has
+>   already been fully installed, but it cannot convert a stock device to CPYOS (no partition
+>   table, no data partition). Do not mix market and on-device updates in one step.
+>
+> The `metalio_eink4` environment is the 3.97″ Metalio E-Ink 4 (ESP32-S3 + SSD1677 SPI), a
+> different device. **Never flash Read Pico firmware to a Plus, or vice versa.**
 
 ## What CPYOS adds over upstream CrossMux
 
@@ -79,7 +82,11 @@ Enter a URL and the page is fetched and re-typeset as text at the current readin
 
 ## Install
 
-Prebuilt images target the **Read Pico only**. Do not flash them to a Metalio E-INK4 Plus or any other ESP32 board: the Plus uses an ESP32-S31 with a different partition layout, panel interface and power topology. Back up the full 16 MiB flash before the first install:
+Prebuilt images cover both the **Read Pico** and the **Metalio E-INK4 Plus**, with different install paths.
+
+### Read Pico
+
+Back up the full 16 MiB flash before the first install and keep the backup on another machine:
 
 ```bash
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
@@ -90,59 +97,41 @@ Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.git
 - **First install / recovery** when coming from factory firmware or CrossMux 1.6.5 (rebuilds the partition table);
 - **Upgrade from CPYOS** for an existing CPYOS install (keeps settings and the data partition).
 
-Device OTA is under **Settings → System → Check for updates**. It writes the inactive app slot and any changed data packs, and leaves the SD card, books and settings alone.
+0.8.0 changed the Read Pico partition layout (XIP PDF engine + 2.0 MiB data partition), so **0.7.0
+and older must use the web full installer**, not OTA. Device OTA is under **Settings → System →
+Check for updates**; it writes the inactive app slot and any changed data packs and leaves the SD
+card, books and settings alone. Devices on **0.2.1 or older** should use the web flasher once.
 
-Devices on **0.2.1 or older** should use the web flasher once; their OTA manifest is on GitHub Pages, which some networks cannot reach.
+### Metalio E-INK4 Plus
 
-Device OTA updates both the app and the data packs; a full install is only needed when the partition table or a pack format changes incompatibly. See `FLASH.md` and `SHA256SUMS` in the release bundle for offsets and checksums.
+The Plus uses an ESP32-S31; **the browser flasher does not support it**. A first install must be a
+full install:
 
-### PDF / XIP build (this branch)
+1. back up the full 16 MiB flash (`--backup plus-16m.bin`);
+2. download `cpyos-plus-0.8.0-e4p.bin`, `cpyos-plus-0.8.0-e4p-partition-table.bin` and the six data
+   packs (`pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core.dat`);
+3. from the repository root, write the partition table, both app slots and the data partition:
 
-The PDF-enabled build runs MuPDF from a dedicated `pdfmod` partition and uses a
-**different partition table**: app0 5.5 MiB, app1 5.375 MiB, `pdfmod` 1.875 MiB
-(normal builds use two 6.375 MiB slots). When switching between a normal and a
-PDF/XIP image:
+```bash
+python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slot both \
+  --full-install --allow-versioned --backup plus-16m.bin \
+  --firmware cpyos-plus-0.8.0-e4p.bin \
+  --partition-table cpyos-plus-0.8.0-e4p-partition-table.bin \
+  --pinyin pinyin.dat --web web_pack.dat --hyphen hyphen.dat \
+  --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
+```
 
-- **Use "First install / recovery" (a full flash)**: the web flasher's install
-  button, or `python3 scripts/flash_pdf_xip.py --first-install`. Device OTA and
-  the web page's "Upgrade from CPYOS" button are not valid across layouts; app1
-  and the data partition would overlap.
-- **Updating the PDF engine needs no reflash**: Settings -> **PDF engine** (the list that
-  also holds Apps, WiFi networks and Date and time; the row only exists in XIP builds)
-  -> **Check for updates**. The device connects to the saved Wi-Fi silently, fetches the
-  engine manifest, downloads it and verifies size, SHA-256 **and** whether that engine
-  was built for this firmware -- all before it erases anything. The SD card, library and
-  settings are untouched, and the download shows real progress with a cancel control.
-- Offline fallback: copy `pdfmod.bin` to the SD card root and choose "From /pdfmod.bin?"
-  in the same menu.
-- Three messages are protections, not faults: no `/pdfmod.bin` on the card, "Wrong
-  firmware" (the engine was linked against a different app image), and a refusal while a
-  PDF is open (it would replace a running engine).
-- "Check for updates" depends on the maintainer publishing the manifest and blob to the
-  site (recipe in `docs/engineering/pdf-xip.md`); until then the menu only reports that
-  the list could not be fetched.
-- On the flashing side: `scripts/flash_pdf_xip.py --pdfmod-only` rewrites the engine and
-  nothing else. `--first-install/--full` now **reads the device's live partition table
-  first** and refuses if that table write would move the data partition -- otherwise the
-  device boots normally while pinyin, hyphenation, the language pack, web assets and
-  emoji are all silently dead.
-- Any app change requires rebuilding the module against the new firmware and
-  flashing both (the module links to absolute host symbols).
-- Text pages reflow with the EPUB reader settings (font, size, margins, line
-  spacing, paragraph spacing, first-line indent and alignment). With hyphenation
-  enabled, long English words break at a Liang syllable point with a visible
-  line-end hyphen. Figures, tables and multi-column pages stay bitmaps; image
-  pages auto-crop white margins and fit the reader's margins with their aspect
-  ratio preserved.
-- Encrypted PDFs prompt on the device; the password stays in RAM only. Reader
-  bookmarks, notes and highlights are stored beside the book cache, and a PDF's
-  own outline appears in the reader's Contents panel.
-- The toolbar's Format panel opens Text Settings. Panel switching repaints only
-  the chrome instead of re-rendering the PDF on every key. Long-press on reflowed
-  text selects a word and uses the same action bar as the EPUB reader for
-  highlights and notes.
-- PDFs that need external CMaps require staging them to `/.crosspoint/cmaps` on
-  the SD card first.
+See `ports/metalio_plus/README.md` for every option and the recovery procedure.
+
+**CloudZao firmware market** entries are app-only (`0x10000`): they update a device that already
+has the full CPYOS install, and cannot set up a stock device. On-device updates write the inactive
+slot and switch otadata; do not mix the two channels in one update.
+
+### Packs and checksums
+
+Device OTA updates the app and data packs together; a full install is only needed when the
+partition table or a pack format changes incompatibly. See `FLASH.md` and `SHA256SUMS` in the
+release bundle for offsets and checksums.
 
 ## Build from source
 
