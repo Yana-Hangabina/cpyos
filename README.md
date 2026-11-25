@@ -106,7 +106,7 @@ python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 
 Plus 使用 ESP32-S31。在刷机页选择该设备后执行完整安装：
 
-1. 备份整片 16 MiB Flash（`--backup plus-16m.bin`，脚本会做）；
+1. 先自行备份整片 16 MiB Flash（网页安装器不自动备份；手动脚本可加 `--backup plus-16m.bin`）；
 2. 从发布页下载 `cpyos-plus-0.8.0-e4p.bin`（应用）、`cpyos-plus-0.8.0-e4p-partition-table.bin`
    （分区表）和六个数据包（`pinyin.dat`、`web_pack.dat`、`hyphen.dat`、`i18n_pack.dat`、
    `emoji.dat`、`cjk_core.dat`）；
@@ -121,7 +121,7 @@ python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slo
   --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
 ```
 
-详细参数与恢复方法见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md)。
+若串口里找不到设备：先长按电源彻底断电，再上电重试。CPYOS 没有「设置 → 升级与恢复 → BOOT 刷机」入口；要切换到 kiikoread 等第三方固件，可先执行 `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` 让设备停在 ROM 下载模式，再打开对方的刷机页。详细参数与恢复方法见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md)。
 
 **CloudZao 固件市场**（搜索「脆皮鸭CPYOS」）只能写一个 app 镜像（`0x10000`），
 **仅适用于已经完成完整安装的设备**做后续应用更新；它不会写分区表、bootloader 或数据分区，

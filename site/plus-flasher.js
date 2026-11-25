@@ -240,6 +240,8 @@ async function flash() {
   setProgress(0, '等待选择设备');
   let port;
   let loader;
+  let connected = false;
+  let completed = false;
   try {
     // Must run inside the click handler. Both CPYOS boards expose the same
     // Espressif USB-JTAG VID/PID.
@@ -274,6 +276,7 @@ async function flash() {
     if (loader.chip?.CHIP_NAME !== 'ESP32-S31' || loader.chip.IMAGE_CHIP_ID !== 32) {
       throw new Error(`检测到 ${loader.chip?.CHIP_NAME || '未知芯片'}，不是 Metalio E-INK4 Plus`);
     }
+    connected = true;
     appendLog(`已连接 ${loader.chip.CHIP_NAME} · MAC ${await loader.chip.readMac(loader)}`);
     const sizeLabel = await loader.detectFlashSize();
     const flashSize = loader.flashSizeBytes(sizeLabel);
@@ -320,6 +323,7 @@ async function flash() {
     } catch (error) {
       appendLog(`重启命令失败：${error.message}`);
     }
+    completed = true;
     say('刷写完成。设备会自动重启，现在可以拔掉 USB。');
   } catch (error) {
     const message = error?.name === 'NotFoundError'
@@ -329,6 +333,11 @@ async function flash() {
     say(`刷写未完成：${message}`);
   } finally {
     setBusy(false);
+    if (connected && !completed && loader?.IS_STUB) {
+      // Never leave a failed attempt parked in the S31 ROM/stub: the screen
+      // keeps the last frame and taps stop working until a power cycle.
+      try { await resetS31(loader); } catch (error) { appendLog(`失败后复位失败：${error.message}`); }
+    }
     if (loader?.transport) {
       try { await loader.transport.disconnect(); } catch (error) { appendLog(`串口关闭：${error.message}`); }
     } else if (port?.readable) {

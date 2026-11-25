@@ -105,7 +105,7 @@ card, books and settings alone. Devices on **0.2.1 or older** should use the web
 
 The Plus uses an ESP32-S31. Pick it on the web installer page and run a full install:
 
-1. back up the full 16 MiB flash (`--backup plus-16m.bin`);
+1. back up the full 16 MiB flash yourself (the web installer does not back up; the manual script accepts `--backup plus-16m.bin`);
 2. download `cpyos-plus-0.8.0-e4p.bin`, `cpyos-plus-0.8.0-e4p-partition-table.bin` and the six data
    packs (`pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core.dat`);
 3. for the manual fallback path, from the repository root, write the partition table, both app slots and the data partition:
@@ -119,7 +119,7 @@ python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slo
   --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
 ```
 
-See `ports/metalio_plus/README.md` for every option and the recovery procedure.
+If the serial port does not appear, fully power off (long-press POWER) and power on again. CPYOS has no “Settings → Upgrade & recovery → BOOT flashing” entry; to switch to kiikoread or another firmware, first run `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` to leave the device in ROM download mode, then open the other flasher. See `ports/metalio_plus/README.md` for every option and the recovery procedure.
 
 **CloudZao firmware market** entries are app-only (`0x10000`): they update a device that already
 has the full CPYOS install, and cannot set up a stock device. On-device updates write the inactive
