@@ -119,7 +119,7 @@ python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slo
   --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
 ```
 
-If the serial port does not appear, fully power off (long-press POWER) and power on again. CPYOS has no “Settings → Upgrade & recovery → BOOT flashing” entry; to switch to kiikoread or another firmware, first run `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` to leave the device in ROM download mode, then open the other flasher. See `ports/metalio_plus/README.md` for every option and the recovery procedure.
+If the serial port does not appear, fully power off (long-press POWER) and power on again. CPYOS has no “Settings → Upgrade & recovery → BOOT flashing” entry; to switch to kiikoread or another firmware, first run `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` to leave the device in ROM download mode, then open the other flasher. A failed third-party flash can leave the chip in download/stub mode with the last frame on screen and no touch response; fully power off and on again. See `ports/metalio_plus/README.md` for every option and the recovery procedure.
 
 **CloudZao firmware market** entries are app-only (`0x10000`): they update a device that already
 has the full CPYOS install, and cannot set up a stock device. On-device updates write the inactive

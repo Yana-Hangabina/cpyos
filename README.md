@@ -121,7 +121,7 @@ python3 ports/metalio_plus/scripts/flash_metalio_plus.py --layout port-ota --slo
   --i18n i18n_pack.dat --emoji emoji.dat --core cjk_core.dat
 ```
 
-若串口里找不到设备：先长按电源彻底断电，再上电重试。CPYOS 没有「设置 → 升级与恢复 → BOOT 刷机」入口；要切换到 kiikoread 等第三方固件，可先执行 `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` 让设备停在 ROM 下载模式，再打开对方的刷机页。详细参数与恢复方法见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md)。
+若串口里找不到设备：先长按电源彻底断电，再上电重试。CPYOS 没有「设置 → 升级与恢复 → BOOT 刷机」入口；要切换到 kiikoread 等第三方固件，可先执行 `python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id` 让设备停在 ROM 下载模式，再打开对方的刷机页。第三方刷机失败后设备可能停在下载/Stub 模式，屏幕保持最后一帧且触摸无效，长按电源断电再上电即可。详细参数与恢复方法见 [`ports/metalio_plus/README.md`](ports/metalio_plus/README.md)。
 
 **CloudZao 固件市场**（搜索「脆皮鸭CPYOS」）只能写一个 app 镜像（`0x10000`），
 **仅适用于已经完成完整安装的设备**做后续应用更新；它不会写分区表、bootloader 或数据分区，

@@ -313,7 +313,7 @@
             <p id="plus-status" role="status" aria-live="polite">尚未连接设备。</p>
             <label class="flasher-check"><input id="plus-erase" type="checkbox"> 同时清除设备设置（NVS；首次安装可选，SD 卡文件保留）</label>
             <details class="flasher-log"><summary>刷机日志</summary><pre id="plus-log"></pre></details>
-            <p class="warn">Plus 网页安装会写入分区表、两个应用槽和六个数据包（含阅读字库）。它会保留 SD 卡文件与原有设置，除非勾选上面的清除选项。开始前请确认已备份整片 Flash。若串口里找不到设备或连接失败：先长按电源让设备彻底断电，再上电重试。CPYOS <strong>没有</strong>「设置 → 升级与恢复 → BOOT 刷机」这个入口；要切到 kiikoread 等第三方固件时，先在电脑执行 <span class="mono">python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id</span>，让设备停在 ROM 下载模式，再打开对方的刷机页。</p>
+            <p class="warn">Plus 网页安装会写入分区表、两个应用槽和六个数据包（含阅读字库）。它会保留 SD 卡文件与原有设置，除非勾选上面的清除选项。开始前请确认已备份整片 Flash。若串口里找不到设备或连接失败：先长按电源让设备彻底断电，再上电重试。CPYOS <strong>没有</strong>「设置 → 升级与恢复 → BOOT 刷机」这个入口；要切到 kiikoread 等第三方固件时，先在电脑执行 <span class="mono">python -m esptool --chip esp32s31 --no-stub --before usb_reset --after no_reset chip-id</span>，让设备停在 ROM 下载模式，再打开对方的刷机页。第三方刷机失败后，设备可能停在下载/Stub 模式，屏幕保持最后一帧且触摸无效；长按电源彻底断电再上电即可，不是固件首页死机。</p>
           </div>
           <p class="warn">首次安装会重建分区表；开始前请确认已备份整片 Flash。SD 卡里的书和设置不会被网页刷机删除。</p>
           <ol style="margin-top:18px">
