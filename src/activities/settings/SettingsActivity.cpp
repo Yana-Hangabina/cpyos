@@ -70,6 +70,7 @@
 #include "ReadingStatsSettingsActivity.h"
 #include "SdCardFontSystem.h"
 #include "ScreenRepairActivity.h"
+#include "UsbDownloadModeActivity.h"
 #include "UiCjkFallbacks.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
@@ -575,6 +576,9 @@ void SettingsActivity::rebuildSettingsLists() {
 #endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SCREEN_REPAIR, SettingAction::ScreenRepair));
+  if (HalSystem::supportsUsbDownloadMode()) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_USB_DOWNLOAD_MODE, SettingAction::UsbDownloadMode));
+  }
 #if defined(CROSSPOINT_PDF_XIP)
 #endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_PLUGINS, SettingAction::Plugins));
@@ -1219,6 +1223,9 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ScreenRepair:
         startActivityForResultWith<ScreenRepairActivity>(resultHandler);
         break;
+      case SettingAction::UsbDownloadMode:
+        confirmUsbDownloadMode();
+        break;
 #if defined(CROSSPOINT_PDF_XIP)
       case SettingAction::PdfEngine: {
         // The MuPDF engine lives in its own partition, so it can be replaced
@@ -1383,6 +1390,16 @@ void SettingsActivity::toggleCurrentSetting() {
   // Ring positions include the group headers; settingsCount does not. Clamping
   // to settingsCount snapped a row below a header back to an earlier setting.
   activeNav().selected = std::min(ringPos(), listCount());
+}
+
+void SettingsActivity::confirmUsbDownloadMode() {
+  confirm_.ask(tr(STR_USB_DOWNLOAD_MODE), tr(STR_USB_DOWNLOAD_HINT), tr(STR_CONFIRM), [this] {
+    if (!startActivityForResultWith<UsbDownloadModeActivity>(resultHandler)) {
+      optionPopup.show(StrId::STR_USB_DOWNLOAD_MODE, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0,
+                       [](int) {});
+      requestUpdate();
+    }
+  });
 }
 
 void SettingsActivity::confirmRestoreSystemSettings() {

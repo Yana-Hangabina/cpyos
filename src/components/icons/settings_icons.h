@@ -247,6 +247,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_RESTORE_SYSTEM_SETTINGS:
       return &icon_refresh_cw_48;
     case StrId::STR_CHECK_UPDATES:
+    case StrId::STR_USB_DOWNLOAD_MODE:
       return &icon_download_48;
     // A firmware file dragged onto the card, not the U-disk mode.
     case StrId::STR_SD_FIRMWARE_UPDATE:

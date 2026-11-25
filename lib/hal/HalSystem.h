@@ -41,4 +41,13 @@ bool isRebootFromPanic();
 // wake, etc. Those must not be mistaken for a reader crash. Power loss,
 // brownout, panic and watchdog resets return false.
 bool isRebootDeliberate();
+
+// True when this build can reboot into the SoC ROM USB download mode.
+// Read Pico (ESP32-S3) and Metalio Plus (ESP32-S31) support it; other boards
+// return false so the settings row is not shown.
+bool supportsUsbDownloadMode();
+
+// Set the SoC force-download strap and reset. Does not return on success: the
+// app is replaced by the ROM loader until the user flashes or power-cycles.
+bool rebootToUsbDownload();
 }  // namespace HalSystem

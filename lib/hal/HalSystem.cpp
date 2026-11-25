@@ -15,8 +15,13 @@
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #if !__riscv
 #include <xtensa_context.h>  // XtExcFrame for the stack capture below
+#endif
+#if defined(CPYOS_PLUS_BOARD_PROFILE)
+#include "soc/lp_system_reg.h"
+#include "soc/soc.h"
 #endif
 
 #define MAX_PANIC_STACK_DEPTH 32
@@ -296,6 +301,31 @@ bool isRebootFromPanic() {
   const bool watchdogReset =
       resetReason == ESP_RST_INT_WDT || resetReason == ESP_RST_TASK_WDT || resetReason == ESP_RST_WDT;
   return watchdogReset && panicCaptureMarker == PANIC_CAPTURE_MAGIC;
+}
+
+bool supportsUsbDownloadMode() {
+  // Verified only on the S31. The S3 RTC force bit and a driven GPIO0 strap
+  // both rebooted SPI flash on Read Pico (boot:0x8), so do not offer a fake
+  // entry there; its browser flasher already performs the USB-JTAG reset.
+#if defined(CPYOS_PLUS_BOARD_PROFILE)
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool rebootToUsbDownload() {
+#if defined(CPYOS_PLUS_BOARD_PROFILE)
+  // S31 exposes the ROM force-download bit in the LP system register block.
+  // It survives the CPU reset and makes the next ROM boot stay in download
+  // mode, so the host can flash without the timed USB-JTAG reset sequence.
+  REG_WRITE(LP_SYSTEM_REG_SYS_CTRL_REG,
+            REG_READ(LP_SYSTEM_REG_SYS_CTRL_REG) | LP_SYSTEM_REG_FORCE_DOWNLOAD_BOOT);
+  esp_restart();
+#else
+  (void)0;
+#endif
+  return false;
 }
 
 bool isRebootDeliberate() {

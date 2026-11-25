@@ -41,4 +41,7 @@ bool isRebootFromPanic();
 // wake, etc. Those must not be mistaken for a reader crash. Power loss,
 // brownout, panic and watchdog resets return false.
 bool isRebootDeliberate();
+
+bool supportsUsbDownloadMode();
+bool rebootToUsbDownload();
 }  // namespace HalSystem

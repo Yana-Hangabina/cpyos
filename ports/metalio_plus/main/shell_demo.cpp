@@ -14,6 +14,7 @@
 #include <JpegToBmpConverter.h>
 #include "bmp_export.h"
 #include "HalClock.h"
+#include "HalSystem.h"
 #include "HalDisplay.h"
 #include "HalGPIO.h"
 #include "HalFrontlight.h"
@@ -958,7 +959,7 @@ void consoleHelp() {
     printf("          act aikey areatest audio badge btmap cleanrect vcom battlog boothang btaudio cat cellprobe cellular cellularforget clean "
            " confirm readerpanel cpu dict dns embfont fastturn fbclear fbink flpresent hash httpprobe imgtest jjwxc logtest ls mkdir open orient "
            " part pdfassets pdfengineupdate pdfengineurl <https://url> plugindemo [path] pluginloop <n> [path] plugins pluginlaunch <id> putfilefast <path> <bytes> pdfengineinstall <path> "
-           " pwrdemo pwrhold reboot resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
+           " pwrdemo pwrhold reboot bootdownload resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
            " sdstress sleepbadge slpdiag slpusb standby sync tail textaa touchdown touchup voiceprobe volume vtext wave wifisaved\n");
 }
 
@@ -3342,6 +3343,11 @@ void consoleExec(char* line) {
         consoleRtcSet(args);
     } else if (strcmp(command, "selftest") == 0) {
         consoleSelfTest();
+    } else if (strcmp(command, "bootdownload") == 0) {
+        printf("bootdownload: rebooting into ROM USB download mode\n");
+        fflush(stdout);
+        HalSystem::rebootToUsbDownload();
+        printf("bootdownload: reset did not take effect\n");
     } else if (strcmp(command, "reboot") == 0) {
         // Unattended bring-up: when a subsystem (typically SDMMC) wedges there
         // is no shell, no reset key, and replugging needs a human. A plain

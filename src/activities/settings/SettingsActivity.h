@@ -32,6 +32,7 @@ enum class SettingAction {
   SdFirmwareUpdate,
   PlusResources,
   ScreenRepair,
+  UsbDownloadMode,
   Language,
   DownloadFonts,
   DownloadFontExtras,
@@ -319,6 +320,7 @@ class SettingsActivity final : public UiTabListActivity {
   void openReadingBackgroundPicker();
   void openSleepImagePicker(const char* destPath, uint8_t CrossPointSettings::* stylePtr, uint8_t customValue);
   void confirmRestoreSystemSettings();
+  void confirmUsbDownloadMode();
   void releaseListsForMemoryHungryChild();
   void rebuildSettingsLists();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);

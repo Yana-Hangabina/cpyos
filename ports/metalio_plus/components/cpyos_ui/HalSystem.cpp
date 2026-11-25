@@ -7,6 +7,8 @@
 #include <esp_mac.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include "soc/lp_system_reg.h"
+#include "soc/soc.h"
 
 namespace HalSystem {
 
@@ -29,6 +31,15 @@ bool isRebootDeliberate() {
         default:
             return false;
     }
+}
+
+bool supportsUsbDownloadMode() { return true; }
+
+bool rebootToUsbDownload() {
+    REG_WRITE(LP_SYSTEM_REG_SYS_CTRL_REG,
+              REG_READ(LP_SYSTEM_REG_SYS_CTRL_REG) | LP_SYSTEM_REG_FORCE_DOWNLOAD_BOOT);
+    esp_restart();
+    return false;
 }
 
 const char* getDeviceModel() { return "Metalio E-INK4 Plus"; }
