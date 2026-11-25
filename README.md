@@ -92,7 +92,7 @@ Read Pico 没有 BOOT/RESET 按钮，第一次安装前先做 16 MiB 整片备�
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 ```
 
-然后用桌面版 Chrome 或 Edge 打开[官网刷机页](https://yana-hangabina.github.io/cpyos/#install)：
+然后用桌面版 Chrome 或 Edge 打开[官网刷机页](https://yana-hangabina.github.io/cpyos/#install)。刷机页**没有机型选择**：它只注册了 ESP32-S3，也就是 Read Pico；Plus 是 ESP32-S31，浏览器刷机不支持。
 
 - **首次安装 / 恢复**：从出厂固件或 CrossMux 1.6.5 切换时使用，会重建分区表；
 - **从 CPYOS 升级**：已经在跑 CPYOS 的设备使用，保留设置和数据分区。

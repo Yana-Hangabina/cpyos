@@ -92,7 +92,7 @@ Back up the full 16 MiB flash before the first install and keep the backup on an
 python -m esptool --chip esp32s3 read_flash 0x0 0x1000000 readpico-backup.bin
 ```
 
-Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.github.io/cpyos/#install):
+Then use desktop Chrome or Edge on the [project site](https://yana-hangabina.github.io/cpyos/#install). The flasher has **no model picker** because it registers only the ESP32-S3 (Read Pico); the Plus is an ESP32-S31 and cannot be flashed from a browser:
 
 - **First install / recovery** when coming from factory firmware or CrossMux 1.6.5 (rebuilds the partition table);
 - **Upgrade from CPYOS** for an existing CPYOS install (keeps settings and the data partition).
