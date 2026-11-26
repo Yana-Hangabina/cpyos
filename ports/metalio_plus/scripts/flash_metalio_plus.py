@@ -269,7 +269,7 @@ def build_plan(args) -> tuple[list[tuple[int, Path]], str]:
             hyphen = getattr(args, "hyphen", None) or REPO / "build" / "hyphen.dat"
             i18n = getattr(args, "i18n", None) or PORT_DIR / "build" / "i18n_pack.dat"
             emoji = getattr(args, "emoji", None) or REPO / "build" / "emoji.dat"
-            core = getattr(args, "core", None) or REPO / "build" / "cjk_core.dat"
+            core = core_blob(getattr(args, "core", None))
             for label, path in (("pinyin", pinyin), ("web", web), ("hyphen", hyphen),
                                 ("i18n", i18n), ("emoji", emoji), ("core", core)):
                 if not path.is_file():
@@ -339,7 +339,7 @@ def build_plan(args) -> tuple[list[tuple[int, Path]], str]:
         i18n = getattr(args, "i18n", None) or PORT_DIR / "build" / "i18n_pack.dat"
         # generate_emoji_pack.py writes into the repository-level build/ dir.
         emoji = getattr(args, "emoji", None) or REPO / "build" / "emoji.dat"
-        core = getattr(args, "core", None) or REPO / "build" / "cjk_core.dat"
+        core = core_blob(getattr(args, "core", None))
         for label, path in (("pinyin", pinyin), ("hyphen", hyphen), ("i18n", i18n), ("emoji", emoji),
                             ("core", core)):
             if not path.is_file():
@@ -556,6 +556,24 @@ def verify_app_header(port: str, baud: str, offset: int) -> None:
 
 
 DATA_FILES = ("pinyin.dat", "web_pack.dat", "hyphen.dat", "i18n_pack.dat", "emoji.dat", "cjk_core.dat")
+
+sys.path.insert(0, str(REPO / "scripts"))
+import data_manifest  # noqa: E402
+
+
+def core_blob(args_core, manifest: Path | None = None) -> Path:
+    """The reading-core carrier to write, taken from the Plus data manifest.
+
+    build/cjk_core.dat is only an alias for "whichever tier was generated last", and the
+    Plus layout takes the wider 8,105 carrier while Read Pico's XIP layout takes 3,500.
+    Reading the manifest is what stops a Read Pico build on the same machine from being
+    flashed into a Plus partition as if it were the Plus core.
+    """
+    if args_core:
+        return Path(args_core)
+    table = manifest or (REPO / "build" / "data_manifest_plus.txt")
+    found = data_manifest.blob(REPO, table, "core") if table.is_file() else None
+    return found or (REPO / "build" / "cjk_core.dat")
 
 
 def ensure_data_artifacts() -> bool:

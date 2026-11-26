@@ -69,6 +69,7 @@ inline const freeink::Icon* forSetting(const StrId id) {
       return &icon_panel_bottom_48;
     case StrId::STR_UI_DENSITY:
     case StrId::STR_UI_FONT_SCALE:
+    case StrId::STR_UI_SCALE:
       return &icon_sliders_horizontal_48;
     case StrId::STR_SUNLIGHT_FADING_FIX:
     case StrId::STR_DBL_CLICK_PWR_LIGHT:

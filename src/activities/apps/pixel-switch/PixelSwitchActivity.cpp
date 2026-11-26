@@ -284,13 +284,14 @@ bool PixelSwitchActivity::startSavedWifiAssociation() {
   }
 
   WiFi.persistent(false);
+  // Claim + guarded join, for the same reasons as the standby silent connect:
+  // the mode change and the association request are one sequence, and neither
+  // belongs interleaved with the background queue's own bring-up. The claim
+  // covers the bring-up, not the MQTT session.
+  NetworkStartup::StationClaim stationClaim;
   NetworkStartup::setMode(renderer, WIFI_STA);
   delay(100);
-  if (pass.empty()) {
-    WiFi.begin(ssid.c_str());
-  } else {
-    WiFi.begin(ssid.c_str(), pass.c_str());
-  }
+  NetworkStartup::joinStation(ssid.c_str(), pass.empty() ? nullptr : pass.c_str());
   if (!broughtWifiUp_) {
     NetworkStartup::hold();
     broughtWifiUp_ = true;
@@ -300,10 +301,7 @@ bool PixelSwitchActivity::startSavedWifiAssociation() {
 
 void PixelSwitchActivity::teardownOwnedWifi() {
   if (!broughtWifiUp_) return;
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  esp_wifi_deinit();
+  NetworkStartup::shutdownStation();
   NetworkStartup::releaseHold();
   broughtWifiUp_ = false;
 }

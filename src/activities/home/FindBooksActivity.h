@@ -74,8 +74,8 @@ class FindBooksActivity final : public Activity {
 
   // Hit rects recorded while drawing (render runs on the render task; loop()
   // is the only reader). Width 0 = no such control this frame.
-  Rect rowRects_[kMaxRows] = {};
-  Rect pillRects_[kMaxRows][kMaxPills] = {};
+  Rect rowRects_[kMaxRows];
+  Rect pillRects_[kMaxRows][kMaxPills];
   Action rowActions_[kMaxRows] = {};
   Action pillActions_[kMaxRows][kMaxPills] = {};
 };

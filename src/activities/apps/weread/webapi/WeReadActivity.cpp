@@ -557,12 +557,10 @@ void WeReadActivity::onExit() {
   stageRenderPending_.store(false);
   if (shelfFile_.isOpen()) shelfFile_.close();
   std::vector<TabInfo>().swap(mainTabs_);
-  if (wifiSessionActive_ && WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(100);
-    WiFi.mode(WIFI_OFF);
-    esp_wifi_deinit();
-  }
+  // The same three-call teardown, through the module that owns the gate: this
+  // is a disconnect, a mode change and a driver deinit, and another task
+  // catching the driver half-way through is the refusal class being removed.
+  if (wifiSessionActive_ && WiFi.getMode() != WIFI_MODE_NULL) NetworkStartup::shutdownStation();
   LOG_DBG("WR", "onExit free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
   Activity::onExit();
@@ -1442,7 +1440,7 @@ void WeReadActivity::openBook(const char* path) {
     return;
   }
 
-  WiFi.disconnect(false);
+  NetworkStartup::dropAssociation();
   delay(30);
   silentRestartToReader();
 #endif

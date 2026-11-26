@@ -3762,9 +3762,12 @@ void EpubReaderActivity::renderBook() {
   // refreshed UI chrome (frame 04): the header sits above the body and the wave +
   // page numbers below it, so the body reserves both bands instead of the old
   // bottom status strip.
-  const ReaderChromeMetrics chrome = readerChromeMetrics();
-  orientedMarginTop += std::max(0, chrome.headerBottom + kChromeHeaderGap - orientedMarginTop);
-  const int chromeBottom = renderer.getScreenHeight() - chrome.footerTop + kChromeFooterGap;
+  const ReaderChromeMetrics chromeUi = readerChromeMetricsUi();
+  const auto uiVp = renderer.uiViewport();
+  const int headerBottomNative = uiVp.lengthToNative(chromeUi.headerBottom);
+  const int footerTopNative = uiVp.toNative(chromeUi.footerTop);
+  orientedMarginTop += std::max(0, headerBottomNative + kChromeHeaderGap - orientedMarginTop);
+  const int chromeBottom = renderer.getNativeHeight() - footerTopNative + kChromeFooterGap;
   orientedMarginBottom = std::max(orientedMarginBottom, chromeBottom);
 #if FREEINK_DEVICE_EEGO_A4
   // The A4's status bar is lifted 4 px so the bezel does not cover it (see
@@ -5548,8 +5551,14 @@ int EpubReaderActivity::selectionMarginTop() const {
   int top = 0, right = 0, bottom = 0, left = 0;
   renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
   top += SETTINGS.screenMargin;
-  const ReaderChromeMetrics chrome = readerChromeMetrics();
-  return std::max(top, chrome.headerBottom + kChromeHeaderGap);
+  const ReaderChromeMetrics chromeUi = readerChromeMetricsUi();
+  const int headerBottomNative = renderer.uiViewport().lengthToNative(chromeUi.headerBottom);
+  return std::max(top, headerBottomNative + kChromeHeaderGap);
+}
+
+EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetricsUi() const {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer, GfxRenderer::CoordSpace::Ui);
+  return readerChromeMetrics();
 }
 
 EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetrics() const {
@@ -5591,6 +5600,7 @@ EpubReaderActivity::ReaderChromeMetrics EpubReaderActivity::readerChromeMetrics(
 // size). Both obey the existing status-bar settings, so a user who hid the
 // title or the clock keeps them hidden.
 void EpubReaderActivity::drawReaderHeader() const {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer, GfxRenderer::CoordSpace::Ui);
   const auto m = readerChromeMetrics();
   const auto sb = SETTINGS.statusBarSpec();
   const int screenW = renderer.getScreenWidth();
@@ -5650,6 +5660,7 @@ void EpubReaderActivity::drawReaderHeader() const {
 // Foot: one full-width shallow wave whose filled part is the read portion,
 // with the chapter/page counters on the line below it.
 void EpubReaderActivity::drawReaderFooter() const {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer, GfxRenderer::CoordSpace::Ui);
   const auto m = readerChromeMetrics();
   const auto sb = SETTINGS.statusBarSpec();
   const int width = m.right - m.left;
@@ -5790,8 +5801,9 @@ void EpubReaderActivity::refreshStatusBarClockIfDue() {
   // The clock lives in the top header band now. Repaint that band and the
   // bookmark ribbon (the ribbon hangs inside it) and leave the body alone:
   // the page layout reserved the band, so no glyph can sit there.
-  const auto chrome = readerChromeMetrics();
-  const int clearBottom = std::min(renderer.getScreenHeight(), chrome.headerBottom + 2);
+  const auto chromeUi = readerChromeMetricsUi();
+  const int headerBottomNative = renderer.uiViewport().lengthToNative(chromeUi.headerBottom);
+  const int clearBottom = std::min(renderer.getNativeHeight(), headerBottomNative + 2);
   renderer.fillRect(0, 0, renderer.getScreenWidth(), clearBottom, false);
   drawReaderHeader();
   drawBookmarkCorner(0, 0);

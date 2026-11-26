@@ -24,6 +24,7 @@
 #include "components/icons/inx_library.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookFormat.h"
 #include "util/FileEditUtils.h"
 
 namespace fui = freeink::ui;
@@ -45,7 +46,7 @@ std::string joinPath(const std::string& parent, const std::string& name) {
 }  // namespace
 
 void formatFileName(const std::string& filename, char* buffer, size_t bufferSize);
-void formatFileExtension(const std::string& filename, char* buffer, size_t bufferSize);
+void formatRowBadge(const std::string& filename, char* buffer, size_t bufferSize);
 std::string getFileName(std::string filename);
 std::string getFileExtension(const std::string& filename);
 
@@ -148,7 +149,14 @@ void FileBrowserActivity::rebuildRowItems() {
   }
   for (size_t i = 0; i < files.size(); i++) {
     rowNames[i] = files[i] == MOVE_HERE_ENTRY ? tr(STR_MOVE_HERE) : getFileName(files[i]);
-    rowExtensions[i] = files[i] == MOVE_HERE_ENTRY ? "" : getFileExtension(files[i]);
+    // Format tag: "EPUB"/"PDF"/... for books, the plain uppercase extension
+    // for everything else. Built once per folder load, not per repaint.
+    rowExtensions[i].clear();
+    if (files[i] != MOVE_HERE_ENTRY) {
+      char badge[16];
+      formatRowBadge(files[i], badge, sizeof(badge));
+      rowExtensions[i] = badge;
+    }
     fui::ListItem item;
     item.label = rowNames[i].c_str();
     if (!rowExtensions[i].empty()) item.value = rowExtensions[i].c_str();
@@ -206,6 +214,14 @@ void FileBrowserActivity::drawIconGrid(UiScreen& screen, const fui::Rect rect) c
         index < static_cast<int>(gridLabels.size()) ? gridLabels[index].c_str() : rowNames[index].c_str();
     const int labelX = cell.x + (cell.width - renderer.getTextWidth(UI_10_FONT_ID, label)) / 2;
     renderer.drawText(UI_10_FONT_ID, labelX, iconY + iconSize + 6, label, !selected);
+    // Format tag in the cell corner, same vocabulary as the list rows.
+    char badgeBuf[16];
+    formatRowBadge(files[index], badgeBuf, sizeof(badgeBuf));
+    if (badgeBuf[0] != '\0') {
+      const int badgeW = renderer.getTextWidth(SMALL_FONT_ID, badgeBuf, EpdFontFamily::BOLD);
+      renderer.drawText(SMALL_FONT_ID, cell.x + cell.width - badgeW - 6, cell.y + 4, badgeBuf, !selected,
+                        EpdFontFamily::BOLD);
+    }
     screen.frame().hit(fui::Rect{static_cast<int16_t>(cell.x), static_cast<int16_t>(cell.y),
                                  static_cast<int16_t>(cell.width), static_cast<int16_t>(cell.height)},
                        ACTION_ROW, static_cast<int16_t>(index), fui::InputTouch | fui::InputLongPress);
@@ -913,10 +929,22 @@ void formatFileName(const std::string& filename, char* buffer, const size_t buff
   utf8ComposeNfcInPlace(buffer);
 }
 
-void formatFileExtension(const std::string& filename, char* buffer, const size_t bufferSize) {
+// The right-aligned tag: a book format when the reader can open the file
+// ("EPUB", "PDF", "FB2"...), otherwise the plain uppercase extension.
+void formatRowBadge(const std::string& filename, char* buffer, const size_t bufferSize) {
   buffer[0] = '\0';
   if (filename.empty() || filename.back() == '/') return;
-  if (const char* extension = strrchr(filename.c_str(), '.')) snprintf(buffer, bufferSize, "%s", extension);
+  if (const char* badge = book_format::badgeFor(filename)) {
+    snprintf(buffer, bufferSize, "%s", badge);
+    return;
+  }
+  const char* dot = strrchr(filename.c_str(), '.');
+  if (dot == nullptr || dot[1] == '\0') return;
+  size_t n = 0;
+  for (const char* c = dot + 1; *c != '\0' && n + 1 < bufferSize; ++c, ++n) {
+    buffer[n] = (*c >= 'a' && *c <= 'z') ? static_cast<char>(*c - 'a' + 'A') : *c;
+  }
+  buffer[n] = '\0';
 }
 
 void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListItem& item) {
@@ -930,7 +958,7 @@ void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListI
   }
   formatFileName(entry, self->rowNameBuf, sizeof(self->rowNameBuf));
   item.label = self->rowNameBuf;
-  formatFileExtension(entry, self->rowExtBuf, sizeof(self->rowExtBuf));
+  formatRowBadge(entry, self->rowExtBuf, sizeof(self->rowExtBuf));
   if (self->rowExtBuf[0] != '\0') {
     item.value = self->rowExtBuf;
   }

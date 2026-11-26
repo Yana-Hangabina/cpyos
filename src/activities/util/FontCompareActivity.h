@@ -21,6 +21,8 @@ class FontCompareActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  // A font-quality A/B sheet is measured against the panel, not the UI scale.
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
 
  private:
   void drawPage(bool grayscale) const;

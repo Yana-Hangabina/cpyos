@@ -44,6 +44,10 @@ struct Item {
   int page_count = 0;
   int font_weight = 0;
   bool supported = false;
+  // Cheap card-side state for the list ("downloaded" tag) and deletion. The
+  // authoritative check before reusing a file is still the SHA-256 in
+  // downloadAndAck(); this one only compares existence and size.
+  bool downloaded = false;
 };
 
 using Items = std::vector<Item, jjwxc::PsramAllocator<Item>>;
@@ -102,5 +106,29 @@ TransferResult downloadAndAck(Item& item, ProgressFn progress, void* ctx, const 
 std::string formatBytes(uint64_t bytes);
 const char* typeName(Type type);  // "BOOK" / "BADGE" / "FONT"
 std::string extensionOf(const std::string& name);
+
+// True when the item's destination file already exists with the advertised
+// size (or an unknown size). Existence only: the download path still verifies
+// the SHA-256 before it reuses a file.
+bool isDownloaded(const Item& item);
+
+// Local record of resources this device installed, so the page can still show
+// (and delete) them after the server has acknowledged the delivery and dropped
+// it from the pending list. Keyed by destination path.
+struct InstalledResource {
+  Type type = Type::Unknown;
+  PsramString path;
+  PsramString sha256;
+  uint64_t file_size = 0;
+};
+using InstalledList = std::vector<InstalledResource, jjwxc::PsramAllocator<InstalledResource>>;
+
+// Reads the record and drops entries whose file has disappeared (the record is
+// rewritten when that happens). Always rewrites nothing else.
+void listInstalled(InstalledList& out);
+// Adds or replaces this item's entry. Call after the file is on the card.
+bool recordInstalled(const Item& item);
+// Removes one path from the record. Call after the file was deleted.
+bool forgetInstalled(const char* path);
 
 }  // namespace plus_resources

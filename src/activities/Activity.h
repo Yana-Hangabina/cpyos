@@ -38,6 +38,12 @@ class Activity {
   virtual void prepareForSleep() {}
   virtual void loop() {}
 
+  // UI surfaces draw in the logical viewport by default. Reader/image/sleep
+  // surfaces override to Native so pagination, selections and images keep
+  // physical-pixel semantics.
+  enum class UiLayoutMode : uint8_t { Canvas, Native };
+  virtual UiLayoutMode uiLayoutMode() const { return UiLayoutMode::Canvas; }
+
   virtual void render(RenderLock&&) {}
 
   // One cancellable idle pass after a normal render; zero keeps the task asleep.

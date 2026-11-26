@@ -163,6 +163,8 @@ class SdCardFontSystem {
   // packs (different resident/streaming budgets).
   bool openTtfSourceInto(TtfSource* sources, uint8_t style, const std::string& path, size_t residentMax,
                          size_t familyResidentMax, size_t streamPrefix, size_t psramReserve);
+  // Adopt an already-in-PSRAM face as a resident source (no copy, no file handle).
+  bool adoptBorrowedSource(TtfSource* sources, uint8_t style, const uint8_t* data, uint32_t len);
   // Register every present source with `font` (shared bytes / file handles).
   void addTtfSources(TtfEpdFont& font);
   void addTtfSourcesFrom(const TtfSource* sources, TtfEpdFont& font);
@@ -185,6 +187,10 @@ class SdCardFontSystem {
     // Resident form: the whole file. Streamed form: a PSRAM prefix cache of the
     // file head (cmap/loca/hmtx) — empty when PSRAM couldn't fund it.
     freeink::font::PsramVector<uint8_t> bytes;
+    // Borrowed resident form: a buffer owned elsewhere that must outlive this source and
+    // must NOT be copied (the no-SD resident core is ~1 MB the font pack already holds).
+    const uint8_t* borrowed = nullptr;
+    uint32_t borrowedLen = 0;
     HalFile file;  // open handle (streamed form)
     bool streamed = false;
     unsigned long size = 0;

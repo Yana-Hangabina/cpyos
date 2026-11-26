@@ -117,7 +117,7 @@ void WeReadProgressSyncActivity::onExit() {
   operation_.reset();
   Activity::onExit();
   if (!wifiActivated_) return;
-  WiFi.disconnect(false);
+  NetworkStartup::dropAssociation();
   delay(30);
   silentRestartToReader();
 }

@@ -212,6 +212,9 @@ class EpubReaderActivity final : public ReaderActivity {
     int footerHeight = 0;
   };
   ReaderChromeMetrics readerChromeMetrics() const;
+  // Same geometry in the logical viewport (design units). Reader content stays
+  // native; chrome draws in this space and reserves converted native bands.
+  ReaderChromeMetrics readerChromeMetricsUi() const;
   // The content top used by renderContents()/drawSelection(): viewable top plus
   // screenMargin, pushed below the reader chrome header. Word hit-testing must
   // use this same value or a long-press selects the line below the finger.
@@ -481,15 +484,17 @@ class EpubReaderActivity final : public ReaderActivity {
   // manage needs a complete TtfEpdFont at destruction, so only the members are gated.
   void loadEmbeddedFontIfPresent();
   void releaseEmbeddedFont();
+  // Plain state is unconditional: the reading face probe runs on every build
+  // and only the face/bytes below need a complete TtfEpdFont.
+  int embeddedFontId_ = 0;
+  bool embeddedFontFourBit_ = false;
+  bool loggedReaderFaceMode_ = false;
 #if CROSSPOINT_VECTOR_FONTS
   // Raw pointer, not unique_ptr: the owning TU (EpubReaderActivity.cpp) is the
   // only one with a complete TtfEpdFont, and unique_ptr would demand completeness
   // from every TU that destroys the activity. Freed in releaseEmbeddedFont().
   TtfEpdFont* embeddedFont_ = nullptr;
   memory::ByteBuffer embeddedFontBytes_;
-  int embeddedFontId_ = 0;
-  bool embeddedFontFourBit_ = false;
-  bool loggedReaderFaceMode_ = false;
 #endif
 
   uint16_t buildViewportWidth = 0;

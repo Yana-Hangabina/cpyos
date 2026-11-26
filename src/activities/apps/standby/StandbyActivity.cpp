@@ -177,6 +177,7 @@ void StandbyActivity::onExit() {
   silentCandidates_.clear();
   silentCandidateIndex_ = 0;
   syncState_ = SyncState::Idle;
+  releaseSilentStation();
   if (lightFace_) {
     lightFace_->onExit();
     lightFace_.reset();
@@ -250,6 +251,12 @@ bool StandbyActivity::trySilentWifiConnect() {
     return false;
   }
 
+  // Claim the station for the whole silent sequence -- mode change, scan and
+  // the candidate joins below. The JJWXC queue is *designed* to start when the
+  // device enters standby, so an unclaimed sequence here is exactly the
+  // interleave the driver answers with ESP_ERR_WIFI_STATE, and this screen reads
+  // that refusal as "this network failed" and skips a healthy AP.
+  claimSilentStation();
   if (!silentNetworkHold_) {
     NetworkStartup::hold();
     silentNetworkHold_ = true;
@@ -257,6 +264,7 @@ bool StandbyActivity::trySilentWifiConnect() {
   WiFi.persistent(false);
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) {
     LOG_ERR("STANDBY", "Station initialization failed for silent connect");
+    releaseSilentStation();
     return false;
   }
   // Do not erase the AP before begin(): on a fresh mode change STA is not
@@ -269,6 +277,10 @@ bool StandbyActivity::trySilentWifiConnect() {
     const WifiCredential* cred = nullptr;
   };
   std::vector<VisibleNetwork> visible;
+  // The scan stays a direct call: it blocks for seconds, and a gate held that
+  // long would only make every other caller time out on it. The claim taken
+  // above is what keeps the background queue off the radio for the whole
+  // sequence, which is the interleave that actually produced refusals.
   const int scanCount = WiFi.scanNetworks(false, true);
   if (scanCount > 0) {
     visible.reserve(static_cast<size_t>(scanCount));
@@ -310,23 +322,41 @@ bool StandbyActivity::trySilentWifiConnect() {
 
   LOG_DBG("STANDBY", "Silent WiFi candidates: %u (scan=%d, saved=%u)", static_cast<unsigned>(silentCandidates_.size()),
           scanCount, static_cast<unsigned>(saved.size()));
-  if (silentCandidates_.empty()) return false;
+  if (silentCandidates_.empty()) {
+    releaseSilentStation();
+    return false;
+  }
   return tryNextSilentCandidate();
 }
 
 bool StandbyActivity::tryNextSilentCandidate() {
   while (silentCandidateIndex_ < silentCandidates_.size()) {
     const auto& candidate = silentCandidates_[silentCandidateIndex_++];
-    WiFi.disconnect();
+    NetworkStartup::dropAssociation();
     delay(50);
-    // The Plus compatibility layer returns int from begin(); Arduino returns
-    // wl_status_t. Keep the value as int so both targets compile.
+    // Snapshot before the join: the core stores the status its last event wrote,
+    // so a WL_CONNECT_FAILED left behind by the candidate before this one is
+    // also what begin() reports -- and the old test skipped a network that was
+    // fine. Only a driver refusal says anything about *this* attempt
+    // (activities/network/WifiAttempt.h).
+    //
+    // joinStation() is the single entry point on purpose: it holds the radio command
+    // claim, supplies the simulator stub, and returns int so the Plus compat layer's
+    // begin() (which is not wl_status_t) compiles too. ui-contract's raw WiFi.begin()
+    // here predates that and was superseded by the wifi line -- keeping both would give
+    // this candidate loop a second, ungated way to command the radio.
+    const wifi_attempt::Snapshot before = NetworkStartup::radioSnapshot();
     const int beginStatus =
-        WiFi.begin(candidate.first.c_str(), candidate.second.empty() ? nullptr : candidate.second.c_str(),
-                   /*channel=*/0, /*bssid=*/nullptr, /*connect=*/false);
+        NetworkStartup::joinStation(candidate.first.c_str(),
+                                    candidate.second.empty() ? nullptr : candidate.second.c_str(),
+                                    /*connect=*/false);
+    const wifi_attempt::Snapshot after{beginStatus, NetworkStartup::radioSnapshot().disconnectEvents};
+    const wifi_attempt::Verdict verdict =
+        wifi_attempt::classifyBegin(before, after, NetworkStartup::tracksRadioEvents());
     LOG_DBG("STANDBY", "Silent WiFi attempt: %s (%s)", candidate.first.c_str(),
-            beginStatus == static_cast<int>(WL_CONNECT_FAILED) ? "begin failed" : "started");
-    if (beginStatus == static_cast<int>(WL_CONNECT_FAILED)) continue;
+            verdict == wifi_attempt::Verdict::DriverRefused ? "driver refused" : "started");
+    if (verdict == wifi_attempt::Verdict::DriverRefused) continue;
+    attemptStart_ = before;
     syncState_ = SyncState::WifiConnecting;
     syncStartMs_ = millis();
     requestUpdate();
@@ -334,6 +364,22 @@ bool StandbyActivity::tryNextSilentCandidate() {
   }
   markTimeSyncUnavailable();
   return false;
+}
+
+// A claim, not an RAII StationClaim: this sequence spans several loop() ticks,
+// and an Activity cannot keep a scope alive across them. claimSilentStation() is
+// idempotent for exactly that reason -- the candidate loop re-enters the join
+// while the first claim is still held.
+void StandbyActivity::claimSilentStation() {
+  if (silentStationClaimed_) return;
+  NetworkStartup::claimStation();
+  silentStationClaimed_ = true;
+}
+
+void StandbyActivity::releaseSilentStation() {
+  if (!silentStationClaimed_) return;
+  silentStationClaimed_ = false;
+  NetworkStartup::releaseStation();
 }
 
 void StandbyActivity::markTimeSyncUnavailable() {
@@ -380,11 +426,16 @@ void StandbyActivity::pumpTimeSync() {
         beginClockSync();
         return;
       }
-      if (status != WL_CONNECT_FAILED && status != WL_NO_SSID_AVAIL && elapsed < kWifiTimeoutMs) return;
+      // A failure status is evidence about this candidate only if the event
+      // clock moved after its join; otherwise it is what the previous candidate
+      // left in the same field. The timeout is evidence on its own.
+      const bool liveFailure = wifi_attempt::polledFailureIsLive(attemptStart_, NetworkStartup::radioSnapshot(),
+                                                                 NetworkStartup::tracksRadioEvents());
+      if (elapsed < kWifiTimeoutMs && !liveFailure) return;
 
-      LOG_DBG("STANDBY", "Silent WiFi attempt failed (status=%d, t=%ums), trying next saved network",
-              static_cast<int>(status), static_cast<unsigned>(elapsed));
-      WiFi.disconnect();
+      LOG_DBG("STANDBY", "Silent WiFi attempt failed (status=%d live=%d t=%ums), trying next saved network",
+              static_cast<int>(status), liveFailure ? 1 : 0, static_cast<unsigned>(elapsed));
+      NetworkStartup::dropAssociation();
       tryNextSilentCandidate();
       return;
     }
@@ -416,6 +467,7 @@ void StandbyActivity::pumpTimeSync() {
 void StandbyActivity::stopTimeSyncWifi() {
   silentCandidates_.clear();
   silentCandidateIndex_ = 0;
+  releaseSilentStation();
   if (silentNetworkHold_) {
     NetworkStartup::releaseHold();
     silentNetworkHold_ = false;

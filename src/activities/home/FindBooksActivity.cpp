@@ -1,5 +1,7 @@
 #include "FindBooksActivity.h"
 
+#include "FindBooksPlan.h"
+
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WeReadStore.h>
@@ -58,6 +60,8 @@ constexpr int16_t kPillHeight = UiHighDpiProfile::enabled ? 56 : 40;
 constexpr int16_t kPillPadX = UiHighDpiProfile::enabled ? 22 : 16;
 constexpr int16_t kPillGap = 10;
 constexpr int16_t kPadY = UiHighDpiProfile::enabled ? 18 : 12;  // card top/bottom inset
+// Gap between a card's header block (seal / title / status) and its pill row.
+constexpr int16_t kCardInnerGap = 8;
 
 // The same white disc + 2 px ring the shelf's cover seals use, so a source is
 // one visual thing across both tabs.
@@ -323,22 +327,18 @@ void FindBooksActivity::render(RenderLock&&) {
   constexpr int detailFont = UI_10_FONT_ID;
   const int titleLine = renderer.getLineHeight(titleFont);
   const int detailLine = renderer.getLineHeight(detailFont);
-  // A card must hold its header block (seal / title / status) and the pill row
-  // with air between them; anything less is squeezed by the band, never clipped.
-  const int headerBlock = std::max<int>(kSealSize, titleLine + 3 + detailLine);
-  const int minCardHeight = kPadY * 2 + headerBlock + 8 + kPillHeight;
-
   // Cards share what the band can give them; with four sources that is the
-  // design's 172 px, with two (no Chinese apps) they simply keep that height.
-  const int available = content.height - 2 * kTopMargin - kArrivalRowHeight - kRowGap;
-  const int cardHeight =
-      std::min<int>(kCardHeight, std::max(minCardHeight, (available - kRowGap * (n - 1)) / std::max(1, n)));
+  // design's 184 px, and above 100% the plan compresses the flexible blocks so
+  // the stack still ends inside the body (see FindBooksPlan.h).
+  constexpr find_books_plan::Design kCardDesign{kTopMargin, kArrivalRowHeight, kRowGap, kCardHeight, kSealSize,
+                                                kPillHeight,     kPadY,             kCardInnerGap};
+  const find_books_plan::Plan plan = find_books_plan::planFor(kCardDesign, content.height, n, titleLine, detailLine);
 
   // Top row: the way books arrive on the card. There is no inbox on this
   // firmware (uploads land straight in their target folder), so the row is the
   // upload page itself and carries no "N waiting" count or timestamp.
   {
-    const Rect row{left, content.y + kTopMargin, width, kArrivalRowHeight};
+    const Rect row{left, content.y + plan.topPad, width, plan.arrivalH};
     renderer.fillRoundedRect(row.x, row.y, row.width, row.height, 16, Color::White);
     renderer.drawRoundedRect(row.x, row.y, row.width, row.height, 2, 16, true);
     if (selected_ == 0) renderer.drawRoundedRect(row.x - 2, row.y - 2, row.width + 4, row.height + 4, 2, 18, true);
@@ -359,21 +359,21 @@ void FindBooksActivity::render(RenderLock&&) {
     rowActions_[0] = Action::Transfer;
   }
 
-  int rowY = content.y + kTopMargin + kArrivalRowHeight + kRowGap;
+  int rowY = content.y + plan.topPad + plan.arrivalH + plan.gap;
   for (int i = 0; i < n; i++) {
     const Entry& entry = kEntries[i];
     const int row = i + 1;
-    const Rect card{left, rowY, width, cardHeight};
+    const Rect card{left, rowY, width, plan.cardH};
     renderer.fillRoundedRect(card.x, card.y, card.width, card.height, 16, Color::White);
     renderer.drawRoundedRect(card.x, card.y, card.width, card.height, 2, 16, true);
     if (selected_ == row) renderer.drawRoundedRect(card.x - 2, card.y - 2, card.width + 4, card.height + 4, 2, 18, true);
 
     // Header: seal (or the local/OPDS glyph), name, honest status line.
     const int sealX = card.x + 20;
-    const int sealY = card.y + kPadY;
-    const int textX = sealX + kSealSize + 16;
+    const int sealY = card.y + plan.padY;
+    const int textX = sealX + plan.seal + 16;
     const int chevX = card.x + card.width - 22;
-    drawChevron(renderer, chevX, sealY + kSealSize / 2);
+    drawChevron(renderer, chevX, sealY + plan.seal / 2);
     const int textRight = chevX - 16;
 
     const char* title = I18N.get(entry.title);
@@ -381,16 +381,16 @@ void FindBooksActivity::render(RenderLock&&) {
     // when drawn as a 48 px inner square.
     switch (entry.id) {
       case Source::Jjwxc:
-        InxAppIcons::drawModern(renderer, UIIcon::Jjwxc, sealX, sealY, kSealSize, false);
+        InxAppIcons::drawModern(renderer, UIIcon::Jjwxc, sealX, sealY, plan.seal, false);
         break;
       case Source::WeRead:
-        InxAppIcons::drawModern(renderer, UIIcon::WeRead, sealX, sealY, kSealSize, false);
+        InxAppIcons::drawModern(renderer, UIIcon::WeRead, sealX, sealY, plan.seal, false);
         break;
       case Source::Local:
-        InxAppIcons::drawModern(renderer, UIIcon::File, sealX, sealY, kSealSize, false);
+        InxAppIcons::drawModern(renderer, UIIcon::File, sealX, sealY, plan.seal, false);
         break;
       case Source::Opds:
-        InxAppIcons::drawModern(renderer, UIIcon::Opds, sealX, sealY, kSealSize, false);
+        InxAppIcons::drawModern(renderer, UIIcon::Opds, sealX, sealY, plan.seal, false);
         break;
     }
     const std::string titleShown =
@@ -448,7 +448,7 @@ void FindBooksActivity::render(RenderLock&&) {
     // Pills: the card's real entry points. JJWXC exposes shelf, discovery,
     // search and login/account directly instead of hiding them one level down
     // in the app menu. Two to four pills share the card's text column.
-    const int pillY = card.y + card.height - kPillHeight - kPadY;
+    const int pillY = card.y + card.height - plan.pillH - plan.padY;
     int pillX = textX;
     const Action actions[kMaxPills] = {primaryFor(row), secondaryFor(row), tertiaryFor(row),
                                        quaternaryFor(row)};
@@ -457,11 +457,11 @@ void FindBooksActivity::render(RenderLock&&) {
       const char* label = I18N.get(labelFor(actions[slot]));
       const int pillW = renderer.getTextWidth(detailFont, label) + 2 * kPillPadX;
       if (pillX + pillW > card.x + card.width - 20) break;
-      const Rect pill{pillX, pillY, pillW, kPillHeight};
+      const Rect pill{pillX, pillY, pillW, plan.pillH};
       drawPill(renderer, pill, label);
-      pillRects_[row][slot] = Rect{pill.x - 2, static_cast<int16_t>(pill.y - kPadY),
+      pillRects_[row][slot] = Rect{pill.x - 2, static_cast<int16_t>(pill.y - plan.padY),
                                    static_cast<int16_t>(pill.width + 4),
-                                   static_cast<int16_t>(kPillHeight + 2 * kPadY)};
+                                   static_cast<int16_t>(plan.pillH + 2 * plan.padY)};
       pillActions_[row][slot] = actions[slot];
       pillX += pillW + kPillGap;
     }
@@ -470,7 +470,7 @@ void FindBooksActivity::render(RenderLock&&) {
     // The card's body opens the same place as its primary pill; a tap on a
     // pill is handled before this by loop().
     rowActions_[row] = actions[0];
-    rowY += cardHeight + kRowGap;
+    rowY += plan.cardH + plan.gap;
   }
 
   // The source cards stop well above the tab bar; the design closes the page

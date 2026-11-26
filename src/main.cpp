@@ -18,7 +18,9 @@
 #include "network/OtaUpdater.h"
 #include <HalPowerManager.h>
 #include <HalStorage.h>
+#if !defined(SIMULATOR)
 #include <SDCardManager.h>
+#endif
 #include <HalSystem.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
@@ -44,6 +46,7 @@
 #include "BootTimings.h"
 #include "BackgroundWork.h"
 #include "CrossPointSettings.h"
+#include "NetworkStartup.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -53,6 +56,7 @@
 #include "booksource/BookSource.h"
 #include "components/StatusCards.h"
 #include "util/BootLanguage.h"
+#include "util/BookCacheUtils.h"
 #include "EmojiFont.h"
 #include "SdCardFontSystem.h"
 #include "UiCjkFallbacks.h"
@@ -65,6 +69,7 @@
 #endif
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "SystemFontPack.h"
+#include "SystemCoreFont.h"
 #include "Typography.h"
 #endif
 #include "WifiCredentialStore.h"
@@ -87,30 +92,49 @@
 #include "TlsProbe.h"
 #endif
 #if defined(ENABLE_CHINESE_VERSION)
+#if !defined(SIMULATOR)
 #include "activities/apps/webbrowser/WebBrowserActivity.h"
 #endif
 #endif
+#endif
+// The shutdown-confirm card is not a PDF feature: the power-key state
+// machine uses it in every Read Pico build, with or without the PDF reader.
+#include "activities/PowerOffActivity.h"
 #if defined(CROSSPOINT_MUPDF)
 #include "activities/reader/PdfReaderActivity.h"
+#include "PdfBenchRoute.h"
+#endif
+#if defined(CROSSPOINT_PDF_XIP)
+#include "pdf/PdfModuleRuntime.h"
+#include "activities/settings/PdfEngineUpdateActivity.h"
+#include "pdf/PdfEngineUpdate.h"
 #endif
 #include "activities/network/WifiSelectionActivity.h"
+#include "NetworkStartup.h"
 #ifdef ENABLE_CHINESE_VERSION
 #include "FontExtras.h"
 #include "activities/settings/FontDownloadActivity.h"
 #include "activities/settings/FontExtrasActivity.h"
+#include "pdf/PdfPagingProbe.h"
+#include "activities/settings/AppVisibilitySettingsActivity.h"
 #include "activities/settings/SettingsActivity.h"
 #include "activities/settings/SettingsSearchActivity.h"
 #include "activities/settings/TextSettingsActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "activities/apps/2048/Game2048Activity.h"
+#endif
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "activities/util/FontCompareActivity.h"
 #endif
 #include "activities/util/PhotoDemoActivity.h"
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "activities/apps/sokoban/SokobanGameActivity.h"
 #include "activities/apps/minesweeper/MinesweeperGameActivity.h"
 #endif
+#endif
+#include "activities/apps/reading-stats/ReadingHeatmapActivity.h"
 #include "activities/settings/LanguageSelectActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
@@ -121,6 +145,11 @@
 #include "util/ScreenshotUtil.h"
 #include "util/Timezones.h"
 #include "util/UserGuide.h"
+
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+#include "plugin_demo.h"
+#include "plugins/PluginCatalog.h"
+#endif
 
 #if CROSSPOINT_VECTOR_FONTS
 // Rendering (incl. FreeType TTF rasterization) runs on the Arduino loop task.
@@ -150,10 +179,10 @@ constexpr unsigned long READING_STATS_CHECKPOINT_IDLE_MS = 15UL * 1000UL;
 static unsigned long lastX4ProPowerClickAt = 0;
 static bool g_debugNoSleep = false;  // CMD:NOSLEEP (serial soaks only)
 
-// Bench-only serial hooks are compiled into development images only. Release
-// builds define nothing here: CMD:CAT/CMD:LS could dump /ACCOUNT.txt or the
-// JJWXC cookie jar over serial, PUTFILE/RM/MOVE modify the card, and the
-// *DEMO commands draw fixtures that do not belong on a user's device.
+// Bench-only serial hooks (card access, fixture pages, demo screens). Dev
+// images enable them from platformio.ini; a release image defines nothing and
+// they answer with a single log line instead. Without this, CMD:CAT could dump
+// /ACCOUNT.txt or the JJWXC cookie jar over serial on a shipped device.
 #ifndef CROSSPOINT_SERIAL_BENCH
 #define CROSSPOINT_SERIAL_BENCH 0
 #endif
@@ -585,7 +614,11 @@ static bool sdFontReloadPending = false;
 static bool finishWifiSessionWithoutRestart() {
   if (!BoardConfig::hasTouch()) return false;
   if (esp_sntp_enabled()) esp_sntp_stop();
-  WiFi.mode(WIFI_OFF);
+  // Guarded: this runs on the main loop, and the background queue is the one
+  // other task that brings the station up by itself. A raw mode change here
+  // while its join is in flight is answered with ESP_ERR_WIFI_STATE there, not
+  // here -- which is how a healthy screen ends up reporting a generic failure.
+  NetworkStartup::powerDownRadio();
   delay(100);
   LOG_DBG("MAIN", "WiFi stopped without restart on touch device");
 #if FREEINK_DEVICE_READPICO
@@ -785,9 +818,22 @@ static void deliverSleepPluginEvents() {
   const auto cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
   if (!cred) return;
 
+  // Claim the station for the whole join-and-drain. Sleep can be the first radio
+  // use after a wake, and the JJWXC queue worker is the one other task that
+  // brings the station up by itself; two tasks commanding the driver at the same
+  // moment is what it answers with ESP_ERR_WIFI_STATE. The claim is the policy
+  // half (background work stays off), the guarded mode change and join are the
+  // mechanism half (no other caller can interleave a command).
+  NetworkStartup::StationClaim stationClaim;
   status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(cred->ssid.c_str(), cred->password.c_str());
+  // setMode(), not WiFi.mode(): a sleep join is exactly the moment the driver
+  // needs BLE stopped, render memory reclaimed and the SNTP callback parked, and
+  // those are the rules only this entry point applies.
+  if (!NetworkStartup::setMode(WIFI_STA)) {
+    LOG_INF("MAIN", "Sleep-event radio bring-up refused (memory or driver); deferring delivery");
+    return;
+  }
+  NetworkStartup::joinStation(cred->ssid.c_str(), cred->password.c_str());
   const unsigned long joinDeadline = millis() + 10000;
   while (WiFi.status() != WL_CONNECTED && millis() < joinDeadline) {
     delay(100);
@@ -868,10 +914,9 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
   // Wake from deep sleep is effectively a chip reset, so no state needs to survive.
-  if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-  }
+  // Deep sleep is about to reset the chip, so the full guarded teardown is safe
+  // here and it is the one that cannot interleave with anything.
+  if (WiFi.getMode() != WIFI_MODE_NULL) NetworkStartup::shutdownStation();
 
 #if FREEINK_CAP_HAPTIC
   gpio.stopHapticFeedback();
@@ -1172,6 +1217,12 @@ void* wcReallocPsram(void* ptr, const size_t size) {
 void setup() {
   // Stage timing starts before the board bring-up it is meant to measure.
   boottimings::begin();
+  // Background workers (the JJWXC queue service, plugin downloads) enable the
+  // radio through NetworkStartup::setMode() like every other caller, but they
+  // are not Activities and hold no renderer reference. Registering it once here
+  // keeps them on the same rules -- SNTP hold, modem-sleep policy, affordability
+  // and the render-memory reclaim -- instead of writing a second, weaker version.
+  NetworkStartup::registerRenderer(&renderer);
 #if defined(BOARD_HAS_PSRAM) && !defined(SIMULATOR)
   if (wolfSSL_SetAllocators(wcAllocPsram, wcFreePsram, wcReallocPsram) != 0) {
     LOG_ERR("TLS", "wolfSSL rejected the PSRAM allocators; using the default heap");
@@ -1223,6 +1274,12 @@ void setup() {
 #endif
 
   HalSystem::begin();
+#if defined(CROSSPOINT_PDF_XIP) && defined(CROSSPOINT_PDF_DEBUG_LOG_HEADER)
+  // Read-only: says whether the installed engine is for this app contract before
+  // any document is opened (the board's console cannot be driven). The dev HEAD
+  // build does not link this helper; enable the define in the PDF WIP tree.
+  pdf_module::debugLogImageHeader();
+#endif
 #if !defined(CROSSPOINT_EMBED_HYPHENATION)
   // The hyphenation loader reads the data partition.  Warm every trie here, on
   // the main task, before the PSRAM-stack render task exists; otherwise loading
@@ -1392,6 +1449,10 @@ void setup() {
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
+  UITheme::getInstance().applyRendererGeometry(renderer);
+  // setupDisplayAndFonts() ran before the theme pushed its design size; rebind
+  // the type scale now that the viewport (and its native point sizes) is known.
+  typography::apply(renderer, SETTINGS.uiFontScale);
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   pluginevents::refreshSubscriptions();
   // Seed the system clock from the battery-backed RTC: on RTC boards it is the
@@ -1574,8 +1635,13 @@ void setup() {
     // crash, a flash, an OTA or a software reset) is cleared silently and the
     // device lands on Home; a genuine panic already went to the crash report
     // above. The reset reason is kept in the log for diagnosis.
+#if defined(SIMULATOR)
+    const char* rebootKind = "sim";
+#else
+    const char* rebootKind = HalSystem::isRebootDeliberate() ? "deliberate" : "interrupted";
+#endif
     LOG_INF("RECOVERY", "dropping stale reader resume state for '%s' (%s reboot)",
-            APP_STATE.openEpubPath.c_str(), HalSystem::isRebootDeliberate() ? "deliberate" : "interrupted");
+            APP_STATE.openEpubPath.c_str(), rebootKind);
     APP_STATE.openEpubPath.clear();
     APP_STATE.readerActivityLoadCount = 0;
     APP_STATE.saveToFile();
@@ -1613,6 +1679,29 @@ void setup() {
     }
   }
 
+#if defined(SIMULATOR)
+  // Headless capture hook: start on a named screen so the simulator sweep does
+  // not depend on scripted tab taps. Device builds never define SIMULATOR.
+  if (const char* startAt = std::getenv("CPYOS_SIM_START_AT")) {
+    const std::string target(startAt);
+    if (target == "my") {
+      activityManager.goToMy();
+      const char* tabText = std::getenv("CPYOS_SIM_MY_TAB");
+      const int tab = tabText ? std::atoi(tabText) : 0;
+      if (auto* current = activityManager.currentActivityPtr()) current->debugSetTab(tab);
+    } else if (target == "settings") {
+      activityManager.goToSettings();
+    } else if (target == "library") {
+      activityManager.goToLibrary();
+    } else if (target == "stats") {
+      activityManager.goToReadingStatsMenu();
+    } else if (target == "keyboard") {
+      activityManager.pushActivity(
+          makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test", "", 64, InputType::Text));
+    }
+  }
+#endif
+
   if (resume == BootResume::Silent) {
     if (postOtaBoot) {
       // Apply the queued Home replacement before waiting for its first physical paint.
@@ -1642,8 +1731,66 @@ void setup() {
   xTaskCreate(stuckDetectorTask, "stuckdet", 3072, nullptr, 0, nullptr);
 }
 
+
+#if defined(CROSSPOINT_MUPDF)
+/// The PDF bench hooks (CMD:PDFNEXT / PDFSEL / PDFMERGE / PDFENGINE …) reach the reader by
+/// casting whatever activity is on top.  That cast is only sound when the top activity really
+/// is the PDF reader: sending CMD:PDFMERGE from the home dashboard called a reader method on a
+/// different Activity and produced "CORRUPT HEAP: Bad head" plus a heap assert (reproduced on
+/// device 2026-11-20).  RTTI is off in this build, so the registered debug name is the check,
+/// and a refused cast is logged rather than silently ignored -- a bench command that does
+/// nothing looks exactly like a device that does nothing.
+PdfReaderActivity* pdfForeground(ActivityManager& manager, const char* who) {
+  Activity* current = manager.currentActivityPtr();
+  if (current == nullptr) {
+    LOG_ERR("PDF", "serial %s ignored: no foreground activity", who);
+    return nullptr;
+  }
+  const bool foreground = std::string(current->debugName()) == "PdfReader";
+  const bool inStack = manager.hasActivityNamed("PdfReader");
+  switch (pdf_bench::route(foreground, inStack)) {
+    case pdf_bench::Route::Forward:
+      return static_cast<PdfReaderActivity*>(current);
+    case pdf_bench::Route::DismissAndResend:
+      // A keyboard or modal covers the reader: the command is not wrong, it is
+      // blocked.  Dismiss the child and ask for a resend (the harness does that
+      // automatically); ignoring it here is how unattended runs kept firing at a
+      // modal they could not see.
+      LOG_ERR("PDF", "serial %s: dismissed %s to reach the reader; resend the command", who,
+              current->debugName());
+      manager.popActivity();
+      return nullptr;
+    case pdf_bench::Route::Ignore: {
+      std::string names;
+      for (const auto& a : manager.debugActivityNames()) names += a + " ";
+      LOG_ERR("PDF", "serial %s ignored: foreground activity is %s and no PDF reader is open (known: %s) fg=%d stack=%d",
+              who, current->debugName(), names.c_str(), static_cast<int>(foreground),
+              static_cast<int>(inStack));
+      return nullptr;
+    }
+  }
+  return nullptr;
+}
+#endif
+
 void loop() {
   s_loopHeartbeat.fetch_add(1, std::memory_order_relaxed);
+  // The reader schedules its radio teardown; this task's stack is internal.
+  if (NetworkStartup::flushDeepRelease()) {
+    LOG_INF("NET", "deep radio release ran from the main loop (internal stack)");
+  }
+#if defined(CROSSPOINT_PDF_XIP)
+  // A PdfReader exit on the render task (PSRAM stack) schedules the engine
+  // unmap; the MMU/cache teardown must run on a stack in internal RAM, and this
+  // is that task.  Cheap when nothing is pending.
+  const bool pdfReaderIdle = !activityManager.hasStackedActivity("PdfReader") &&
+                             std::string(activityManager.currentActivityPtr()
+                                             ? activityManager.currentActivityPtr()->debugName()
+                                             : "") != "PdfReader";
+  if (pdf_module::flushScheduledUnload(pdfReaderIdle)) {
+    LOG_INF("PDF", "engine module unmapped by the main loop");
+  }
+#endif
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
@@ -1783,9 +1930,12 @@ void loop() {
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
       cmd.trim();
+      // Bench-only serial hooks are compiled into development images only.
+      // Release builds keep this list closed: CMD:CAT/CMD:LS could dump
+      // ACCOUNT.txt or the JJWXC cookie jar, PUTFILE/RM/MOVE write the card, and
+      // the *DEMO commands draw fixtures that do not belong on a user's device.
 #if !CROSSPOINT_SERIAL_BENCH
-      // Card access, fixture pages and demo screens stay in development images.
-      if (cmd.startsWith("PUTFILE") || cmd.startsWith("CAT") || cmd.startsWith("LS") || cmd.startsWith("RM ") ||
+      if (cmd.startsWith("PUTFILE ") || cmd.startsWith("CAT ") || cmd.startsWith("LS") || cmd.startsWith("RM ") ||
           cmd.startsWith("MOVE ") || cmd.startsWith("UNLOCK ") || cmd.startsWith("FONTDEMO") ||
           cmd.startsWith("WIFIDEMO") || cmd == "STRESSCOMMENT" || cmd == "FAKECOMMENT" ||
           cmd.startsWith("PURCHASEDEMO") || cmd.startsWith("CARDDEMO") || cmd == "WAITDEMO" ||
@@ -1794,20 +1944,126 @@ void loop() {
         LOG_INF("DBG", "bench-only serial command disabled in release builds");
       } else
 #endif
-      if (cmd == "SCREENSHOT") {
+      if (cmd.startsWith("UISCALE")) {
+        const int value = cmd.substring(7).toInt();
+        if (value >= 100 && value <= 125) {
+          SETTINGS.uiScalePercent = static_cast<uint8_t>(value);
+          {
+            // Face reloads replace maps the render task may be measuring from;
+            // hold the render lock exactly like the settings-page path does.
+            RenderLock lock;
+            UITheme::getInstance().applyRendererGeometry(renderer);
+            typography::apply(renderer, SETTINGS.uiFontScale);
+          }
+          SETTINGS.saveToFile();
+          LOG_INF("UI", "ui scale %u%% (viewport %dx%d, permille %u)", static_cast<unsigned>(SETTINGS.uiScalePercent),
+                  renderer.getScreenWidth(), renderer.getScreenHeight(), renderer.uiViewport().scalePermille);
+          activityManager.requestUpdate();
+        } else {
+          LOG_ERR("UI", "usage: CMD:UISCALE <100..125>");
+        }
+      } else if (cmd == "UIVIEWPORT") {
+        const auto vp = renderer.uiViewport();
+        LOG_INF("UI", "activity=%s space=%s native=%dx%d design=%dx%d scale=%u/1000",
+                activityManager.currentActivityPtr() ? activityManager.currentActivityPtr()->debugName() : "(none)",
+                renderer.isUiSpace() ? "ui" : "native", renderer.getNativeWidth(), renderer.getNativeHeight(),
+                vp.width, vp.height, vp.scalePermille);
+      } else if (cmd == "BACK") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugBack();
+      } else if (cmd == "SCREENSHOT") {
         const uint32_t bufferSize = display.getBufferSize();
+        // The dump reads the live framebuffer. The render task paints it while
+        // holding the render lock, so an unlocked dump can capture a frame that
+        // is half old and half new: on the Wi-Fi sheet that showed up as rows
+        // whose right-hand columns (chevrons, the footer's third cell, the tail
+        // of the footer rule) simply were not there yet -- a paint-order tear
+        // that looks exactly like a layout/clipping bug. Take the lock so every
+        // dump is one complete frame.
         logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
-        uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
+        {
+          RenderLock lock;
+          uint8_t* buf = display.getFrameBuffer();
+          logSerial.write(buf, bufferSize);
+        }
         logSerial.printf("SCREENSHOT_END\n");
+      } else if (cmd.startsWith("TAP ")) {
+        // CMD:TAP <logicalX> <logicalY>: queue one synthetic tap for the next
+        // frame. Touch-only controls (drawn rect == hit rect) can then be driven
+        // from the console without a finger, including through FreeInkUI.
+        const int sp1 = cmd.indexOf(' ');
+        const int sp2 = sp1 > 0 ? cmd.indexOf(' ', sp1 + 1) : -1;
+        if (sp2 > sp1) {
+          const int lx = cmd.substring(sp1 + 1, sp2).toInt();
+          const int ly = cmd.substring(sp2 + 1).toInt();
+          float tnx = 0.0f;
+          float tny = 0.0f;
+          renderer.logicalToTap(lx, ly, tnx, tny);
+#if !defined(SIMULATOR)
+          gpio.debugQueueTouchTap(tnx, tny);
+#endif
+          LOG_INF("TAP", "inject logical %d,%d -> %.4f,%.4f", lx, ly, tnx, tny);
+        } else {
+          LOG_INF("TAP", "usage: CMD:TAP <x> <y>");
+        }
       }
+#if defined(CROSSPOINT_PDF_XIP)
+      else if (cmd == "PDFMODTEST") {
+        const bool ok = pdf_module::ensureLoaded();
+        const auto* ops = pdf_module::ops();
+        LOG_INF("PDFM", "PDFMODTEST ok=%d ops=%p", ok ? 1 : 0, static_cast<const void*>(ops));
+      } else if (cmd.startsWith("PDFMODINSTALL ")) {
+        String path = cmd.substring(14);
+        path.trim();
+        const int status = static_cast<int>(pdf_module::installFromSdFile(path.c_str()));
+        LOG_INF("PDFM", "PDFMODINSTALL %s status=%d (0 ok,1 notfound,2 badheader,3 mismatch,4 io,5 busy)",
+                path.c_str(),
+                status);
+      }
+#endif
+#if defined(CROSSPOINT_PLUGIN_RUNTIME)
+#if defined(CROSSPOINT_PAGING_PROBE)
+      else if (cmd == "PGPROBE") {
+        pdf_paging_probe::run();
+      }
+#endif
+      else if (cmd == "APPVIS") {
+        activityManager.pushActivity(
+            std::make_unique<AppVisibilitySettingsActivity>(renderer, mappedInputManager));
+      } else if (cmd == "PLUGINS") {
+        activityManager.goToNativePlugins();
+        LOG_INF("PLUG", "opening the native plugin picker");
+      } else if (cmd.startsWith("PLUGINCATALOG ")) {
+        String url = cmd.substring(14);
+        url.trim();
+        native_plugins::setCatalogUrlOverride(url.length() > 0 ? url.c_str() : nullptr);
+        LOG_INF("PLUG", "catalog URL override: %s", native_plugins::catalogUrl());
+      } else if (cmd.startsWith("MKDIR ")) {
+        String path = cmd.substring(6);
+        path.trim();
+        if (path.length() < 2 || path[0] != '/') {
+          LOG_ERR("DBG", "usage: MKDIR <absolute path>");
+        } else {
+          LOG_INF("DBG", "MKDIR %s %s", path.c_str(), Storage.mkdir(path.c_str(), true) ? "ok" : "failed");
+        }
+      } else if (cmd == "PLUGIN" || cmd.startsWith("PLUGIN ")) {
+        const int space = cmd.indexOf(' ');
+        const String arg = space > 0 ? cmd.substring(space + 1) : String();
+        consolePlugin(arg.length() > 0 ? arg.c_str() : nullptr);
+      } else if (cmd == "PLUGINLOOP" || cmd.startsWith("PLUGINLOOP ")) {
+        const int space = cmd.indexOf(' ');
+        const String arg = space > 0 ? cmd.substring(space + 1) : String();
+        consolePluginLoop(arg.length() > 0 ? arg.c_str() : nullptr);
+      }
+#endif
 #if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
       else if (cmd == "BROWSER" || cmd.startsWith("BROWSER ")) {
         const int space = cmd.indexOf(' ');
         String url;
         if (space > 0) url = cmd.substring(space + 1);
+#if !defined(SIMULATOR)
         WebBrowserActivity::requestOpen(url.c_str());
         activityManager.goToWebBrowser();
+#endif
         LOG_INF("WEB", "serial open %.90s", url.c_str());
       } else if (cmd == "BNEXT" || cmd == "BPREV") {
         if (auto* activity = activityManager.currentActivityPtr())
@@ -1821,8 +2077,10 @@ void loop() {
       } else if (cmd == "BBOOKMARKS") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugBrowserBookmarks();
       } else if (cmd == "BFIXTURE") {
+#if !defined(SIMULATOR)
         WebBrowserActivity::requestFixture();
         activityManager.goToWebBrowser();
+#endif
         LOG_INF("WEB", "serial open offline fixture");
       } else if (cmd == "BOPENPLACE" || cmd.startsWith("BOPENPLACE ")) {
         if (auto* activity = activityManager.currentActivityPtr()) {
@@ -1866,6 +2124,33 @@ void loop() {
         LOG_INF("PERF", "library index marked dirty");
       } else if (cmd == "LIBRARY") {
         activityManager.goToLibrary();
+      } else if (cmd.startsWith("PRUNE")) {
+        // "CMD:PRUNE <book path>": run the product's per-book cache clear and report what it
+        // kept.  A cleared cache must lose the derived blobs and keep the reader's own files;
+        // that is the whole rule, and it cannot be checked without a finger on 清除分页缓存.
+        const int space = cmd.indexOf(' ');
+        String arg = space > 0 ? cmd.substring(space + 1) : String("");
+        arg.trim();
+        const std::string bookPath = arg.c_str();
+        const std::string cache = bookCachePath(bookPath);
+        if (cache.empty()) {
+          LOG_ERR("CACHE", "serial CMD:PRUNE no cache directory for this path");
+        } else {
+          static constexpr const char* kProbe[] = {"annotations.bin", "progress.bin", "meta.bin",
+                                                   "book.bin"};
+          bool before[4];
+          bool after[4];
+          for (int i = 0; i < 4; ++i) {
+            before[i] = Storage.exists((cache + "/" + kProbe[i]).c_str());
+          }
+          const bool ok = clearBookCache(bookPath);
+          for (int i = 0; i < 4; ++i) {
+            after[i] = Storage.exists((cache + "/" + kProbe[i]).c_str());
+          }
+          LOG_ERR("CACHE", "serial CMD:PRUNE ok=%d annotations %d->%d progress %d->%d meta %d->%d book %d->%d",
+                  ok ? 1 : 0, before[0], after[0], before[1], after[1], before[2], after[2], before[3],
+                  after[3]);
+        }
       } else if (cmd == "HOME") {
         activityManager.goHome();
       } else if (cmd == "SEARCH") {
@@ -1892,8 +2177,13 @@ void loop() {
           logSerial.printf("LIBSNAP_EMPTY\n");
         }
       } else if (cmd == "HINTRESET") {
+        // Both one-shot hints: the touch map, and the notice that reading turns
+        // the radio off.  They are the only two hints a screenshot pass needs to
+        // re-arm, and they are re-armed the same way deliberately.
         SETTINGS.readerGestureHintSeen = 0;
+        SETTINGS.pdfWifiHintSeen = 0;
         SETTINGS.saveToFile();
+        LOG_INF("DBG", "hint flags cleared: gesture=0 wifi=0");
       } else if (cmd == "HINT") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugDismissHint();
       } else if (cmd.startsWith("TAB")) {
@@ -1920,13 +2210,19 @@ void loop() {
           const int space = cmd.indexOf(' ');
           activity->debugSetContentsFilter(space > 0 ? cmd.substring(space + 1).toInt() : 1);
         }
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
       } else if (cmd == "MINES") {
         activityManager.pushActivity(makeUniqueNoThrow<MinesweeperGameActivity>(
             renderer, mappedInputManager, MinesweeperBoard::Difficulty::Easy));
+#endif
       } else if (cmd == "GRAYSTATS") {
         // Grayscale/16-level scan entry points since the last take (the paths that
         // bypass displayBuffer, e.g. the Home dashboard and image pages).
+#if defined(SIMULATOR)
+        logSerial.printf("GRAYSTATS unavailable in simulator builds\n");
+#else
         logSerial.printf("GRAYSTATS gray=%u\n", static_cast<unsigned>(HalDisplay::takeGrayScanCount()));
+#endif
       } else if (cmd == "REFRESHMAP") {
         auto* activity = activityManager.currentActivityPtr();
         int ux = 0;
@@ -2054,14 +2350,30 @@ void loop() {
         const int pointSize = space > 0 ? cmd.substring(space + 1).toInt() : 0;
         activityManager.pushActivity(
             makeUniqueNoThrow<FontCompareActivity>(renderer, mappedInputManager, pointSize));
+      } else if (cmd == "FONTCORE") {
+        // One line for the complaint no earlier log could settle: "the language/core pack is
+        // flashed, so why is there still tofu?". Carrier-present and face-in-use are separate
+        // facts, and the reader falls back silently on either one, so a field report needs
+        // both plus the reason code -- not the boot log, which a monitor started late misses.
+        const auto core = system_core_font::status();
+        LOG_INF("CORE", "core status: carrier=%d sd=%d ready=%d faceInUse=%d resident=%d "
+                        "tier=%s problem=%s sizes=%u->%u sd=%u",
+                static_cast<int>(core.carrierPresent), static_cast<int>(core.sdFilePresent),
+                static_cast<int>(core.ready), static_cast<int>(core.faceInUse),
+                static_cast<int>(system_core_font::residentData(nullptr) != nullptr), core.tier,
+                system_core_font::problemName(core.problem),
+                static_cast<unsigned>(core.compressedSize), static_cast<unsigned>(core.rawSize),
+                static_cast<unsigned>(core.sdSize));
 #endif
       } else if (cmd == "APPS") {
         activityManager.pushActivity(makeUniqueNoThrow<MyActivity>(renderer, mappedInputManager, 1));
+#if !defined(CROSSPOINT_PLUGIN_RUNTIME)
       } else if (cmd == "SOKOBAN") {
         activityManager.pushActivity(makeUniqueNoThrow<SokobanGameActivity>(renderer, mappedInputManager));
       } else if (cmd == "2048") {
         activityManager.pushActivity(
             makeUniqueNoThrow<Game2048Activity>(renderer, mappedInputManager));
+#endif
       } else if (cmd.startsWith("GAMEMOVE")) {
         if (auto* activity = activityManager.currentActivityPtr()) {
           const int space = cmd.indexOf(' ');
@@ -2070,6 +2382,32 @@ void loop() {
       } else if (cmd == "KEYBOARD") {
         activityManager.pushActivity(makeUniqueNoThrow<KeyboardEntryActivity>(renderer, mappedInputManager, "Test",
                                                                              "", 64, InputType::Text));
+      } else if (cmd.startsWith("LOCK")) {
+        // Bench: hold the CPU lock for N ms on a helper task, so CMD:NET can
+        // still be answered from the loop while it is held.  This is the
+        // mechanism every download page relies on (kDownloadPowerLocks); the
+        // static test proves each transfer holds it, this proves it holds 240.
+        int hold = 8000;
+        const int space = cmd.indexOf(' ');
+        if (space > 0) hold = cmd.substring(space + 1).toInt();
+        if (hold < 500) hold = 500;
+        if (hold > 60000) hold = 60000;
+        if (xTaskCreate(
+                [](void* arg) {
+                  const int ms = static_cast<int>(reinterpret_cast<intptr_t>(arg));
+                  {
+                    HalPowerManager::Lock lock(/*quiet=*/true);
+                    LOG_ERR("PWR", "LOCK held for %dms (bench)", ms);
+                    vTaskDelay(pdMS_TO_TICKS(ms));
+                  }
+                  LOG_ERR("PWR", "LOCK released (bench)");
+                  vTaskDelete(nullptr);
+                },
+                "PwrLockBench", 4096,  // 4 KiB overflowed: the Lock ctor logs and the
+                                        // canary fired before the hold even began
+                reinterpret_cast<void*>(static_cast<intptr_t>(hold)), 1, nullptr) != pdPASS) {
+          LOG_ERR("PWR", "LOCK bench task create failed");
+        }
       } else if (cmd == "WATCH") {
         // Serial-only: a low-priority task that keeps dumping task states, so a
         // UI task frozen on a mutex can still be diagnosed (CMD: lines are read by
@@ -2107,6 +2445,12 @@ void loop() {
         logSerial.printf("DARK=%u\n", (unsigned)SETTINGS.screenInverted);
       } else if (cmd == "CONFIRM") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugConfirm();
+      } else if (cmd == "CANCEL") {
+        if (auto* activity = activityManager.currentActivityPtr()) activity->debugCancel();
+      } else if (cmd == "PWROFFDEMO") {
+        // Bench: raise the shutdown card without a physical hold.
+        LOG_ERR("PWR", "serial CMD:PWROFFDEMO");
+        activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
       } else if (cmd == "FEXTCANCEL") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugCancel();
       } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
@@ -2201,6 +2545,11 @@ void loop() {
             renderer, mappedInputManager, std::string(path.c_str()), false));
       } else if (cmd == "STATS") {
         activityManager.goToReadingStatsMenu();
+      } else if (cmd == "STATSPAGE") {
+        // The heatmap always draws the dated sub-page header (the stats dashboard
+        // switches to the tab-bar header when it is opened as a main tab), and the
+        // menus in front of either need a touch the host cannot send.
+        activityManager.pushActivity(std::make_unique<ReadingHeatmapActivity>(renderer, mappedInputManager));
       } else if (cmd == "TRANSFER") {
         activityManager.goToFileTransfer();
       } else if (cmd == "JJWXC") {
@@ -2300,6 +2649,54 @@ void loop() {
           runTlsProbe(host, ballastKb);
         }
 #endif
+      } else if (cmd == "WIFIPS") {
+        // The modem-sleep policy is the mitigation for a real abort, so its state
+        // has to be readable on demand instead of inferred from silence.
+        wifi_ps_type_t ps = WIFI_PS_MIN_MODEM;
+        const esp_err_t err = esp_wifi_get_ps(&ps);
+        // logSerial, not Serial: Logging.h makes Serial.printf deprecated and this
+        // env does not link that shim at all.
+        logSerial.printf("WIFIPS get=%d ps=%d none=%d status=%d mode=%d\n", static_cast<int>(err),
+                         static_cast<int>(ps), static_cast<int>(WIFI_PS_NONE),
+                         static_cast<int>(WiFi.status()), static_cast<int>(WiFi.getMode()));
+      } else if (cmd.startsWith("WIFICONNECT")) {
+        WIFI_STORE.loadFromFile();
+        // "CMD:WIFICONNECT <ssid substring>" picks a saved network explicitly;
+        // without an argument the last-connected one is reused.
+        String want = cmd.substring(11);
+        want.trim();
+        // Substring match, because SSIDs may carry emoji that are painful to
+        // type: "as" or "ital" is enough to pick the hotspot.
+        std::optional<WifiCredential> cred;
+        if (want.length() == 0) {
+          cred = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
+        } else {
+          for (size_t i = 0; i < WIFI_STORE.getCredentialCount(); ++i) {
+            const auto ssid = WIFI_STORE.getSsidAt(i);
+            if (ssid && std::string(ssid->c_str()).find(want.c_str()) != std::string::npos) {
+              cred = WIFI_STORE.findCredential(*ssid);
+              if (cred) WIFI_STORE.setLastConnectedSsid(*ssid);  // later silent connects reuse it
+              break;
+            }
+          }
+        }
+        if (!cred.has_value()) {
+          logSerial.printf("WIFICONNECT no saved network\n");
+        } else {
+          // Route through NetworkStartup, not WiFi.mode: a raw mode call while a
+          // connect attempt is in flight returns ESP_ERR_WIFI_STATE ("sta is
+          // connecting, cannot set config") and dropped a working association on
+          // 2026-11-20.  setMode is the project rule (AGENTS.md section 60).
+          // The console runs on its own task, so this bench path is a real
+          // second bring-up: it claims the station and uses the guarded join.
+          NetworkStartup::StationClaim stationClaim;
+          NetworkStartup::setMode(renderer, WIFI_STA);
+          NetworkStartup::joinStation(cred->ssid.c_str(), cred->password.c_str());
+          const uint32_t deadline = millis() + 15000;
+          while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(deadline - millis()) > 0) delay(100);
+          logSerial.printf("WIFICONNECT ssid=%.32s status=%d ip=%s\n", cred->ssid.c_str(), static_cast<int>(WiFi.status()),
+                           WiFi.localIP().toString().c_str());
+        }
       } else if (cmd == "WIFI") {
         activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
 #if defined(BOARD_HAS_PSRAM)
@@ -2507,6 +2904,9 @@ void loop() {
                   Storage.rename(from.c_str(), to.c_str()) ? "ok" : "failed");
         }
       } else if (cmd.startsWith("UNLOCK ")) {
+#if defined(SIMULATOR)
+        LOG_ERR("DBG", "UNLOCK is a device-only FAT recovery helper");
+#else
         // Serial-only recovery: clear the FAT read-only attribute on one file.
         // A write opened with O_RDWR/O_WRONLY is refused outright while that bit
         // is set, and vol().remove() opens O_WRONLY, so such a file can be read
@@ -2528,6 +2928,7 @@ void loop() {
                     ok ? "rw" : "failed");
           }
         }
+#endif
       } else if (cmd.startsWith("CAT ")) {
         String path = cmd.substring(4);
         path.trim();
@@ -2562,6 +2963,35 @@ void loop() {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugPageTurn(false);
       } else if (cmd == "PAGEDUMP") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugDumpPage();
+      } else if (cmd.startsWith("DICTSELECT ")) {
+        // Serial hook for the phrase-lookup smoke test: the reader reads the
+        // dictionary folder from settings, so pick one explicitly instead of
+        // walking Settings with injected taps.
+        const String name = cmd.substring(11);
+        snprintf(SETTINGS.dictionaryName, sizeof(SETTINGS.dictionaryName), "%s", name.c_str());
+        SETTINGS.saveToFile();
+        LOG_INF("DICT", "dictionary selected: %.31s", SETTINGS.dictionaryName);
+      } else if (cmd.startsWith("LANG ")) {
+        // CMD:LANG <index>: the same side effects as picking the language in
+        // Settings, so a translation can be checked on glass without walking the list.
+        const int index = cmd.substring(5).toInt();
+        if (index >= 0 && index < static_cast<int>(Language::_COUNT)) {
+          SETTINGS.applyLanguageSelection(static_cast<uint8_t>(index));
+          if (SETTINGS.saveToFile()) {
+            I18N.setLanguage(static_cast<Language>(index));
+            bootlang::remember(static_cast<uint8_t>(index));
+            activityManager.requestUpdate(true);
+            LOG_INF("LANG", "language index %d applied", index);
+          } else {
+            LOG_ERR("LANG", "language save failed");
+          }
+        }
+      } else if (cmd.startsWith("PHRASELOOKUP ")) {
+        // Serial hook for the dictionary phrase ladder: same path as the lookup
+        // chip, but with a caller-given word instead of a long-press selection.
+        if (auto* activity = activityManager.currentActivityPtr()) {
+          activity->debugLookupPhrase(cmd.substring(13).c_str());
+        }
       } else if (cmd == "PHRASE") {
         // Serial hook for the reader's three-chip selection bar (look up /
         // highlight / note), which otherwise needs a 650 ms long press.
@@ -2657,10 +3087,7 @@ void loop() {
       } else if (cmd == "WIFIOFF") {
         // Diagnostic: simulate losing the AP mid-queue. The queue must stop on
         // NeedsWifi without a retry loop or reconnect attempts.
-        WiFi.disconnect(true);
-        delay(50);
-        WiFi.mode(WIFI_OFF);
-        esp_wifi_deinit();
+        NetworkStartup::shutdownStation();
         LOG_INF("NET", "debug: radio forced off");
       } else if (cmd == "JJCACHECLEAR") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugClearJjwxcCacheQueue();
@@ -2677,20 +3104,156 @@ void loop() {
                                               "Noto Emoji subset / fallback", false);
       }
 #if defined(CROSSPOINT_MUPDF) && CROSSPOINT_SERIAL_BENCH
-      else if (cmd == "PDF") {
+      else if (cmd.startsWith("HYPH")) {
+        // Serial bench hook for PDF reflow typography; persists like the UI.
+        const int space = cmd.indexOf(' ');
+        const bool on = space > 0 && cmd.substring(space + 1).toInt() != 0;
+        SETTINGS.hyphenationEnabled = on ? 1 : 0;
+        SETTINGS.saveToFile();
+        LOG_INF("DBG", "hyphenation=%d", SETTINGS.hyphenationEnabled);
+      } else if (cmd.startsWith("PDFMERGE")) {
+        // Serial bench hook for the PDF-specific line-merge option; persists like
+        // the More-panel toggle.  Re-open the page (CMD:PDF / CMD:PDFNEXT) to see
+        // the "reflow merge: N blocks -> M paragraphs" line.
+        const int space = cmd.indexOf(' ');
+        if (space < 0) {
+          // Read-only form. It used to fall through with `on == false`, so asking
+          // for the current value silently persisted "off" -- which is also the
+          // only way to observe the shipped default before anything changes it.
+          LOG_INF("DBG", "pdfSmartLineMerge=%d (read-only; pass 0|1 to set)",
+                  SETTINGS.pdfSmartLineMerge);
+        } else {
+          const bool on = cmd.substring(space + 1).toInt() != 0;
+          if (auto* pdfActivity = pdfForeground(activityManager, cmd.c_str())) {
+            // Production path: setting + engine + reflow, exactly what the menu row does.
+            pdfActivity->applySmartLineMerge(on);
+          } else {
+            SETTINGS.pdfSmartLineMerge = on ? 1 : 0;
+            SETTINGS.saveToFile();
+            LOG_INF("DBG", "pdfSmartLineMerge=%d (no open PDF reader; applies on next open)",
+                    SETTINGS.pdfSmartLineMerge);
+          }
+        }
+      } else if (cmd.startsWith("PDFENGURL")) {
+        // Point the engine updater at a different manifest -- a LAN server during testing,
+        // so the download/verify/install chain can be exercised without publishing anything.
+        // An empty argument restores the firmware's compiled-in default.  The override wins
+        // over the mirror shortlist (see PdfEngineUpdate.cpp), which is what makes it useful.
+        const int space = cmd.indexOf(' ');
+        const String url = space > 0 ? cmd.substring(space + 1) : String();
+        pdf_engine::setManifestUrlOverride(url.length() > 0 ? url.c_str() : nullptr);
+        LOG_INF("PDFM", "engine manifest URL: %s (configured=%d)", pdf_engine::manifestUrl(),
+                pdf_engine::isConfigured() ? 1 : 0);
+      } else if (cmd.startsWith("FRAG")) {
+        // Deterministic PSRAM fragmentation: allocate <count> blocks of <kb>
+        // kilobytes, free every other one, and keep the rest.  Reproducing "the
+        // big page grinds" used to need a 1.86 MB engine download first; a bench
+        // that just makes the heap look the same is the difference between a
+        // scenario that is tested and one that is remembered.
+        static std::vector<void*> gFragBlocks;
+        if (cmd == "UNFRAG") {
+          for (void* block : gFragBlocks) heap_caps_free(block);
+          gFragBlocks.clear();
+          LOG_INF("DBG", "FRAG released; psram largest=%u",
+                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+        } else {
+          int kb = 48;
+          int count = 24;
+          const int space = cmd.indexOf(' ');
+          if (space > 0) {
+            const int space2 = cmd.indexOf(' ', space + 1);
+            kb = cmd.substring(space + 1, space2 > 0 ? space2 : cmd.length()).toInt();
+            if (space2 > 0) count = cmd.substring(space2 + 1).toInt();
+          }
+          if (kb < 4) kb = 4;
+          if (count < 2) count = 2;
+          if (count > 128) count = 128;
+          for (int i = 0; i < count; ++i) {
+            void* block = heap_caps_malloc(static_cast<size_t>(kb) * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!block) break;
+            gFragBlocks.push_back(block);
+          }
+          for (size_t i = 1; i < gFragBlocks.size(); i += 2) heap_caps_free(gFragBlocks[i]);
+          for (size_t i = 1; i < gFragBlocks.size(); i += 2) gFragBlocks[i] = nullptr;
+          gFragBlocks.erase(std::remove(gFragBlocks.begin(), gFragBlocks.end(), nullptr), gFragBlocks.end());
+          LOG_INF("DBG", "FRAG kb=%d kept=%u psram free=%u largest=%u", kb,
+                  static_cast<unsigned>(gFragBlocks.size()),
+                  static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+                  static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
+        }
+      } else if (cmd == "WIFIDROP") {
+        // Bench: the same association-only release the reader uses, but from the
+        // main loop's internal stack -- tells "the drop is ineffective" apart
+        // from "the drop cannot be done from the reader's render task".
+        LOG_ERR("NET", "serial CMD:WIFIDROP");
+        NetworkStartup::releaseRadio();
+      } else if (cmd == "WIFIDEINIT") {
+        LOG_ERR("NET", "serial CMD:WIFIDEINIT");
+        NetworkStartup::releaseRadioDeep();
+      } else if (cmd == "PDFFAILDEMO") {
+        if (auto* pdfActivity = pdfForeground(activityManager, cmd.c_str())) {
+          LOG_ERR("PDF", "serial CMD:PDFFAILDEMO");
+          pdfActivity->debugShowRenderFailed();
+        }
+      } else if (cmd == "PDFENGINE") {
+        // Bench companion to the matrix script: prints the loaded engine's ABI and the
+        // running app's ELF digest prefix, both of which the update path compares against.
+        if (auto* pdfActivity = pdfForeground(activityManager, cmd.c_str())) {
+          pdfActivity->debugEngineStatus();
+        }
+      } else if (cmd == "PDFENGUPDATE") {
+        // Drive the production path, not a copy of it: the same activity
+        // Settings > PDF engine opens (silent connect, PSRAM worker for
+        // fetch/download/verify, install here on an internal stack).  A bench
+        // poll loop in this task would block drawing for minutes.
+        if (!pdf_engine::isConfigured()) {
+          LOG_ERR("PDFM", "PDFENGUPDATE: manifest URL not configured");
+        } else {
+          activityManager.pushActivity(
+              makeUniqueNoThrow<PdfEngineUpdateActivity>(renderer, mappedInputManager));
+        }
+      } else if (cmd == "MAKEPDF") {
+        static const char kPdf[] =
+            "%PDF-1.4\n"
+            "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+            "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"
+            "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n"
+            "4 0 obj\n<< /Length 30 >>\nstream\nBT /F1 24 Tf 72 720 Td (Hello XIP PDF) Tj ET\nendstream\nendobj\n"
+            "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n"
+            "xref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000262 00000 n \n0000000364 00000 n \n"
+            "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n443\n%%EOF\n";
+        HalFile out;
+        if (!Storage.openFileForWrite("DBG", "/test.pdf", out)) {
+          LOG_ERR("DBG", "MAKEPDF open failed");
+        } else {
+          out.write(kPdf, sizeof(kPdf) - 1);
+          out.close();
+          LOG_INF("DBG", "MAKEPDF wrote %u bytes", static_cast<unsigned>(sizeof(kPdf) - 1));
+        }
+      } else if (cmd == "PDF" || cmd.startsWith("PDF ")) {
+        String openPath = "/BOOKS/test.pdf";
+        if (cmd.length() > 4) {
+          openPath = cmd.substring(4);
+          openPath.trim();
+        }
         for (int i = 0; i <= 4; ++i) {
           const std::string cache = "/.crosspoint/pdf_1404219513/page_" + std::to_string(i) + ".bmp";
           if (Storage.exists(cache.c_str())) Storage.remove(cache.c_str());
         }
         PdfReaderActivity::debugInitialPage = 0;
-        LOG_ERR("PDF", "serial CMD:PDF opening /BOOKS/test.pdf");
+        LOG_ERR("PDF", "serial CMD:PDF opening %s", openPath.c_str());
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
-      } else if (cmd == "PDFNEXT") {
-        auto* pdfActivity = static_cast<PdfReaderActivity*>(activityManager.currentActivityPtr());
+            renderer, mappedInputManager, openPath.c_str(), false));
+      } else if (cmd == "PDFNEXT" || cmd == "PDFPREV") {
+        auto* pdfActivity = pdfForeground(activityManager, cmd.c_str());
         if (pdfActivity) {
-          LOG_ERR("PDF", "serial CMD:PDFNEXT");
-          pdfActivity->pageTurn(true);
+          const bool forward = cmd == "PDFNEXT";
+          LOG_ERR("PDF", "serial CMD:%s", cmd.c_str());
+          // pageTurn() only moves the index; the *reader's* loop is what asks for
+          // the repaint.  Calling it from the bench without this made every
+          // "CMD:PDFNEXT" look like a dead page turn -- no render, no log, and
+          // that was read as a firmware hang more than once.
+          if (pdfActivity->pageTurn(forward)) activityManager.requestUpdate();
           pdfActivity->requestUpdate();
         }
       } else if (cmd.startsWith("PDFNOTE")) {
@@ -2731,6 +3294,34 @@ void loop() {
         LOG_ERR("PDF", "serial CMD:PDFCACHE rebuilding the big-PDF cache");
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
             renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd.startsWith("PRUNE")) {
+        // "CMD:PRUNE <book path>": run the product's per-book cache clear and report what
+        // it kept.  This is the check that matters for that action -- a cleared cache must
+        // lose the derived blobs and keep the reader's own files -- and it cannot be made
+        // without a finger on 清除分页缓存.
+        const int space = cmd.indexOf(' ');
+        String arg = space > 0 ? cmd.substring(space + 1) : String("");
+        arg.trim();
+        const std::string bookPath = arg.c_str();
+        const std::string cache = bookCachePath(bookPath);
+        if (cache.empty()) {
+          LOG_ERR("CACHE", "serial CMD:PRUNE no cache directory for this path");
+        } else {
+          static constexpr const char* kProbe[] = {"annotations.bin", "progress.bin", "meta.bin",
+                                                   "book.bin"};
+          bool before[4];
+          bool after[4];
+          for (int i = 0; i < 4; ++i) {
+            before[i] = Storage.exists((cache + "/" + kProbe[i]).c_str());
+          }
+          const bool ok = clearBookCache(bookPath);
+          for (int i = 0; i < 4; ++i) {
+            after[i] = Storage.exists((cache + "/" + kProbe[i]).c_str());
+          }
+          LOG_ERR("CACHE", "serial CMD:PRUNE ok=%d annotations %d->%d progress %d->%d meta %d->%d book %d->%d",
+                  ok ? 1 : 0, before[0], after[0], before[1], after[1], before[2], after[2], before[3],
+                  after[3]);
+        }
       } else if (cmd.startsWith("PDFBIG")) {
         // Optional 1-based page for a focused render test: "CMD:PDFBIG 68".
         // The stale cache entry is removed so renderPage really re-renders it.
@@ -2745,6 +3336,44 @@ void loop() {
         LOG_ERR("PDF", "serial CMD:PDFBIG opening big PDF at page %d", page + 1);
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
             renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+      } else if (cmd.startsWith("PDFSEL ")) {
+        // ★ The trailing space is load-bearing: "PDFSELACTION" also starts with
+        // "PDFSEL", and with a bare prefix here every chip / key-widen code fell into
+        // this branch and silently ran a selection probe at default coordinates
+        // (found 2026-11-21; scripts/tests/test_serial_command_shadowing.py now pins
+        // the whole class over the command chain, not just this pair).
+        // "CMD:PDFSEL <x> <y> [dragX] [dragY]": resolve a word on the current
+        // reflowed PDF page and log the selection range + quote; with the extra
+        // pair it also drags a handle there (bench for the drag clamp + the
+        // EPUB-parity lookup anchor).  "PDFSEL <x> <y> <toX> <toY> <1|2>" picks the
+        // start vs end handle.
+        if (auto* pdfActivity = pdfForeground(activityManager, cmd.c_str())) {
+          const String args = cmd.substring(6);
+          int idx = 0;
+          auto nextInt = [&args, &idx](int fallback) {
+            while (idx < args.length() && args[idx] == ' ') ++idx;
+            const int start = idx;
+            while (idx < args.length() && (args[idx] == '-' || (args[idx] >= '0' && args[idx] <= '9'))) ++idx;
+            return idx > start ? args.substring(start, idx).toInt() : fallback;
+          };
+          const int x = nextInt(60);
+          const int y = nextInt(200);
+          const int dx = nextInt(-1);
+          const int dy = nextInt(-1);
+          // Optional 5th argument picks WHICH handle moves: 1 = start, 2 = end
+          // (default). Both endpoint paths and the shared no-cross clamp are then
+          // drivable without a finger, not just the end one.
+          pdfActivity->debugSelectionAt(x, y, dx, dy, nextInt(2));
+        }
+      } else if (cmd.startsWith("PDFSELACTION ")) {
+        // Drive one chip of the selection action bar: 0/1/2 = Lookup/Highlight/
+        // Note for a fresh selection, 0/1 = Delete/Note while editing an existing
+        // annotation.  Pairs with CMD:PDFSEL so the EPUB-parity round trip is
+        // checkable with no finger: select, highlight, re-press (expect
+        // editing>=0), delete, press again (expect editing=-1).
+        if (auto* pdfActivity = pdfForeground(activityManager, cmd.c_str())) {
+          pdfActivity->debugSelectionAction(cmd.substring(13).toInt());
+        }
       }
 #endif
     }
@@ -2857,6 +3486,61 @@ void loop() {
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP &&
                                         gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
 
+#if FREEINK_DEVICE_READPICO
+  // Read Pico's power key state, resilient to the PMU poll briefly reporting
+  // "not held" while the finger is still down (BoardReadPico clears a failed
+  // poll on purpose).  Without the 300 ms continuity window that blip looked
+  // like a release: the standby overlay opened mid-hold, the hold timer
+  // restarted, and the card only appeared after ~6 s stacked on the lock face.
+  static bool pwDown = false;
+  static unsigned long pwDownAt = 0;
+  static unsigned long pwReleaseAt = 0;
+  static unsigned long pwIgnoreUntil = 0;  // refractory: release bounce must not become a tap
+  const bool pwHeld = gpio.isPressed(HalGPIO::BTN_POWER);
+  const unsigned long pwNow = millis();
+  if (pwHeld && !pwDown) {
+    if (!(pwReleaseAt != 0 && pwNow - pwReleaseAt <= 300)) pwDownAt = pwNow;
+    pwReleaseAt = 0;
+    pwDown = true;
+  } else if (!pwHeld && pwDown) {
+    pwDown = false;
+    pwReleaseAt = pwNow;
+  }
+  // A 2.5 s hold opens the shutdown card (parity with the Metalio Plus port);
+  // its confirm runs the PMU's cooperative power-off.  Pushed early on purpose:
+  // the card's scan needs ~0.4 s, so it is on screen when the 3 s hold ends.
+  if (pwHeld && pwDownAt != 0 && pwNow - pwDownAt >= 2500 && !powerWakeBlocked && powerReleasedSinceWake &&
+      pwNow >= allowSleepAt && !gpio.isPressed(HalGPIO::BTN_DOWN) &&
+      !activityManager.hasActivityNamed("PowerOff") && !activityManager.isSwitchPending() &&
+      !activityManager.isSleepActivity()) {
+    LOG_INF("MAIN", "Power held %lums -> shutdown card", pwNow - pwDownAt);
+    pwDownAt = 0;  // one card per hold
+    // The release that follows can bounce: the PMU reported a 110 ms phantom
+    // press right after a 2.5 s hold and it opened standby on top of the card.
+    // The whole remainder of this gesture is inert.
+    pwIgnoreUntil = pwNow + 1200;
+    activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+    return;
+  }
+  // Decide the release only after the continuity window: a short press is the
+  // standby tap, a hold that already opened the card does nothing here.
+  if (!pwHeld && pwReleaseAt != 0 && pwNow - pwReleaseAt > 300) {
+    const unsigned long heldFor = (pwDownAt != 0) ? pwReleaseAt - pwDownAt : 0;
+    const bool wantStandby = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STANDBY;
+    if (pwDownAt != 0 && heldFor <= 1200 && heldFor >= 50 && wantStandby && !powerWakeBlocked &&
+        powerReleasedSinceWake && pwNow >= allowSleepAt && pwNow >= pwIgnoreUntil &&
+        !activityManager.isStandbyActivity() && !activityManager.hasActivityNamed("PowerOff")) {
+      LOG_INF("MAIN", "Power tap (%lums) -> standby", heldFor);
+      pwDownAt = 0;
+      pwReleaseAt = 0;
+      activityManager.goToStandby();
+      return;
+    }
+    pwDownAt = 0;
+    pwReleaseAt = 0;
+    if (heldFor < 50) pwIgnoreUntil = pwNow + 250;  // swallow the bounce, not the user
+  }
+#else
   if (!x4ProAwaitingClickWindow && !powerWakeBlocked && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
@@ -2868,12 +3552,14 @@ void loop() {
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
   }
+#endif  // !FREEINK_DEVICE_READPICO
 
   // Short power press = standby overlay. This is the default on Read Pico and
   // works from any screen; the activity below is preserved (reader position,
   // comment-cache worker) and the next press/Back pops back to it. Reader
   // actions such as PAGE_TURN/FOOTNOTES keep their own binding and are not
   // intercepted here.
+#if !FREEINK_DEVICE_READPICO
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STANDBY && !powerWakeBlocked &&
       powerReleasedSinceWake && millis() >= allowSleepAt && !activityManager.isStandbyActivity() &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
@@ -2881,6 +3567,7 @@ void loop() {
     activityManager.goToStandby();
     return;
   }
+#endif  // !FREEINK_DEVICE_READPICO
 
   // Consume the wake barrier after the handlers above have ignored the key for
   // this frame: the release edge and "not pressed" are safe from the next frame
@@ -2952,9 +3639,51 @@ void loop() {
   }
 #endif
 
+  // Battery sampling lives here, not in the pill: the SoC filters on both S31
+  // and Read Pico average one accepted sample per second, so the renderer must
+  // not be the thing that decides whether the gauge is read (that dead-locked
+  // the Plus chrome at "--", and made Read Pico depend on a 15 s poll plus an
+  // unrelated repaint). Sample at ~1 Hz; the HAL throttles its own I2C reads.
+  // Repaint only main pages when the shown state changes: the reader refreshes
+  // on every page turn, and a surprise full scan mid-reading would be worse
+  // than a slightly stale number.
+  {
+    static uint16_t lastBatteryPercent = 0xFFFF;
+    static bool lastBatteryKnown = false;
+    static bool lastBatteryCharging = false;
+    static unsigned long lastBatteryCheckMs = 0;
+    const unsigned long nowMs = millis();
+    if (nowMs - lastBatteryCheckMs >= 1000) {
+      lastBatteryCheckMs = nowMs;
+      const uint16_t battery = powerManager.getBatteryPercentage();
+      const bool known = powerManager.batteryPercentageKnown();
+      const bool charging = powerManager.isBatteryCharging();
+      if (battery != lastBatteryPercent || known != lastBatteryKnown || charging != lastBatteryCharging) {
+        lastBatteryPercent = battery;
+        lastBatteryKnown = known;
+        lastBatteryCharging = charging;
+        const Activity* activity = activityManager.currentActivityPtr();
+        // The first valid sample must repaint too: the boot frame was painted
+        // while the level was still unknown (empty capsule), and waiting for an
+        // unrelated repaint is what left a static home screen showing nothing.
+        if (activity != nullptr && activity->mainTab() != MainTab::None &&
+            !activityManager.isReaderActivity() && !activityManager.isStandbyActivity() &&
+            !activityManager.isSwitchPending()) {
+          activityManager.requestUpdate();
+        }
+      }
+    }
+  }
+
   const unsigned long activityStartTime = millis();
   const bool readerWasActive = activityManager.isReaderActivity();
   activityManager.loop();
+  // Idle auto-release of a connected STA that nothing is using (dev Wi-Fi policy).
+  // Skipped only while a command is mid-flight -- pollIdle re-asserts the
+  // modem-sleep policy with a driver call, so there is no reason to interleave
+  // it. It is deliberately *not* skipped while a screen holds a claim: that
+  // would stop re-asserting the policy for as long as the sheet stays open.
+  if (NetworkStartup::radioIdle()) NetworkStartup::pollIdle(millis());
 #if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
   maybeOfferFontExtrasForMissingUiGlyph();
 #endif

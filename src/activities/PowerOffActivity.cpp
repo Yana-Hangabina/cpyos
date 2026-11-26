@@ -5,7 +5,7 @@
 #include <Logging.h>
 #include <esp_system.h>
 
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(SIMULATOR)
 #include <BoardReadPico.h>
 #endif
 
@@ -54,7 +54,7 @@ void PowerOffActivity::confirmOff() {
   shuttingDown_ = true;
   LOG_ERR("PWR", "shutdown confirmed; drawing the power-off screen");
   drawShutdownScreen();
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(SIMULATOR)
   // Cooperative power-off: HOST_REQUEST_OFF -> SHUTDOWN_REQUESTED ->
   // SHUTDOWN_READY, and the PMU drops the host EN rail.  The PMU owns the only
   // wake source (the key), so there is no ESP deep-sleep step here.

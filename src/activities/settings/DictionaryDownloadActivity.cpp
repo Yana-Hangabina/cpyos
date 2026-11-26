@@ -7,6 +7,7 @@
 #include <HalSystem.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <NetworkStartup.h>
 #include <WiFi.h>
 #include <esp_rom_crc.h>
 
@@ -92,7 +93,7 @@ void DictionaryDownloadActivity::onExit() {
   std::string().swap(baseUrl_);
   logHeap("exit");
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
     silentRestart();
   }

@@ -19,6 +19,7 @@ from nightly_targets import (
     environment_for,
     manifest_name,
     matrix,
+    partition_layout_conflicts,
     version_for,
 )
 FULL_INSTALL_SEGMENTS = (
@@ -223,6 +224,13 @@ def package_target(root, target_id, channel, output):
     if channel not in target['supportedChannels']:
         raise SystemExit(f'{target_id} does not support the {channel} channel')
     environment = environment_for(target_id, channel, 'global')
+    # The package flashes the table named in TARGETS, so that name has to be the
+    # table the environment was compiled against. Check it before writing anything:
+    # a mismatch produces an image that boots (app0 is at 0x10000 in every map) and
+    # then reads its data packs from where nothing put them.
+    conflicts = partition_layout_conflicts(root, {target_id: target})
+    if conflicts:
+        raise SystemExit('packaging refused: ' + '; '.join(conflicts))
     build = root / '.pio/build' / environment
     output.mkdir(parents=True, exist_ok=True)
     partitions = verify_partition_csv(root, target.get('partitionsCsv', 'partitions.csv'))

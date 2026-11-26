@@ -10,6 +10,10 @@
 #include "activities/Activity.h"
 
 class ReaderActivity : public Activity {
+ public:
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
+
+
  protected:
   std::string bookPath;
   int pagesUntilFullRefresh = 0;

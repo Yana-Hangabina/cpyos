@@ -14,6 +14,7 @@
 #include "BackgroundWork.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "FontCacheManager.h"
+#include "FontInstaller.h"
 #include "LibraryBuilder.h"
 #include "Logging.h"
 #include "NetworkStartup.h"
@@ -73,6 +74,10 @@ void PlusResourcesActivity::onEnter() {
   app.on(ACTION_USER, &PlusResourcesActivity::onCancel, this);
   rows_dirty_ = true;
   state_ = State::List;
+  // Resources this device already installed stay on the page even when the
+  // server has no pending delivery for them any more.
+  items_.clear();
+  mergeInstalledIntoItems();
   // The page is a status page first: if the device is already online, refresh
   // the binding from the server automatically so a successful mini-program
   // binding is reflected without an extra tap.
@@ -83,6 +88,7 @@ void PlusResourcesActivity::onEnter() {
 }
 
 void PlusResourcesActivity::onExit() {
+  confirm_.dismiss();
   if (worker_ != nullptr) {
     cancel_requested_ = true;
     const uint32_t deadline = millis() + kWorkerWaitMs;
@@ -105,6 +111,48 @@ void PlusResourcesActivity::onExit() {
 int PlusResourcesActivity::listCount() const { return 2 + static_cast<int>(items_.size()); }
 
 const char* PlusResourcesActivity::headerTitle() const { return tr(STR_DEVICE_RESOURCES); }
+
+void PlusResourcesActivity::mergeInstalledIntoItems() {
+  plus_resources::listInstalled(installed_);
+  // A delivery whose file was already on the card (fetched before this record
+  // existed) is adopted into the record once, so it survives the next fetch.
+  bool adopted = false;
+  for (const auto& item : items_) {
+    if (!item.downloaded || item.local_path.empty()) continue;
+    bool recorded = false;
+    for (const auto& rec : installed_) {
+      if (strcmp(rec.path.c_str(), item.local_path.c_str()) == 0) {
+        recorded = true;
+        break;
+      }
+    }
+    if (!recorded && plus_resources::recordInstalled(item)) adopted = true;
+  }
+  if (adopted) plus_resources::listInstalled(installed_);
+  for (const auto& rec : installed_) {
+    bool present = false;
+    for (const auto& item : items_) {
+      if (strcmp(item.local_path.c_str(), rec.path.c_str()) == 0) {
+        present = true;
+        break;
+      }
+    }
+    if (present) continue;
+    plus_resources::Item item;
+    item.type = rec.type;
+    item.state = plus_resources::ItemState::Pending;
+    item.supported = true;
+    item.downloaded = true;
+    item.local_path = rec.path;
+    item.sha256 = rec.sha256;
+    item.file_size = rec.file_size;
+    const char* base = strrchr(rec.path.c_str(), '/');
+    const char* name = (base != nullptr && base[1] != '\0') ? base + 1 : rec.path.c_str();
+    item.name = name;
+    item.display_name = name;
+    items_.push_back(std::move(item));
+  }
+}
 
 void PlusResourcesActivity::drawFooter() {
   if (bind_guide_ || state_ == State::Connecting) return;
@@ -165,6 +213,9 @@ void PlusResourcesActivity::rebuildRows() {
       row_values_.push_back(tr(STR_UNSUPPORTED_RESOURCE));
     } else if (item.state == plus_resources::ItemState::SavedNotAcknowledged) {
       row_values_.push_back(tr(STR_RESOURCE_ACK_FAILED));
+    } else if (item.downloaded) {
+      // Tap / long-press / swipe on this row offers to delete the file.
+      row_values_.push_back(tr(STR_DOWNLOADED));
     } else {
       row_values_.push_back(tr(STR_DOWNLOAD));
     }
@@ -203,7 +254,9 @@ void PlusResourcesActivity::buildScreen(UiScreen& screen) {
   props.items = row_items_.data();
   props.count = static_cast<uint16_t>(row_items_.size());
   props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch;
+  props.inputMask = fui::InputTouch | fui::InputLongPress;
+  props.valueInset = 8;
+  configureSwipeDelete(screen, props);
   syncListViewport(screen, props);
   screen.list(props);
 }
@@ -221,11 +274,80 @@ void PlusResourcesActivity::activateIndex(const int index) {
   }
   const int item_index = index - 2;
   if (item_index < 0 || item_index >= static_cast<int>(items_.size())) return;
-  if (!items_[item_index].supported || items_[item_index].state == plus_resources::ItemState::Unsupported) {
+  const auto& item = items_[item_index];
+  if (!item.supported || item.state == plus_resources::ItemState::Unsupported) {
     setError(tr(STR_UNSUPPORTED_RESOURCE));
     return;
   }
+  // A file already on the card is not downloaded twice: the row's only useful
+  // action is removing it.
+  if (item.downloaded) {
+    promptRemove(index);
+    return;
+  }
   startDownload(item_index);
+}
+
+bool PlusResourcesActivity::canSwipeDelete(const int index) const {
+  const int item_index = index - 2;
+  return state_ == State::List && item_index >= 0 && item_index < static_cast<int>(items_.size()) &&
+         items_[item_index].supported && items_[item_index].downloaded;
+}
+
+void PlusResourcesActivity::swipeDelete(const int index) { promptRemove(index); }
+
+void PlusResourcesActivity::onRowLongPress(const int index) { promptRemove(index); }
+
+void PlusResourcesActivity::promptRemove(const int index) {
+  const int item_index = index - 2;
+  if (state_ != State::List || item_index < 0 || item_index >= static_cast<int>(items_.size())) return;
+  const auto& item = items_[item_index];
+  if (!item.downloaded) return;
+  const std::string name =
+      item.display_name.empty() ? std::string(item.name.c_str()) : std::string(item.display_name.c_str());
+  app.clearTapFlash();
+  confirm_.ask(tr(STR_DELETE_ITEM_CONFIRM), name.c_str(), tr(STR_DELETE), [this, item_index] {
+    closeSwipeDelete();
+    removeItem(item_index);
+  });
+  requestUpdate();
+}
+
+void PlusResourcesActivity::removeItem(const int item_index) {
+  if (item_index < 0 || item_index >= static_cast<int>(items_.size())) return;
+  auto& item = items_[item_index];
+  const std::string path(item.local_path.c_str());
+  const plus_resources::Type type = item.type;
+  bool removed = false;
+  if (type == plus_resources::Type::Font) {
+    // The family directory holds this resource's face; deleting it through the
+    // installer also clears the active-font setting when it was the one in use.
+    std::string family;
+    const size_t slash = path.find_last_of('/');
+    if (slash != std::string::npos && slash > 0) {
+      const size_t prev = path.find_last_of('/', slash - 1);
+      if (prev != std::string::npos) family = path.substr(prev + 1, slash - prev - 1);
+    }
+    FontInstaller installer(sdFontSystem.registry());
+    removed = family.empty() ? Storage.remove(path.c_str()) : installer.deleteFamily(family.c_str()) == FontInstaller::Error::OK;
+  } else {
+    removed = Storage.remove(path.c_str());
+  }
+  if (!removed) {
+    setError(tr(STR_ERROR_MSG));
+    return;
+  }
+  item.downloaded = false;
+  plus_resources::forgetInstalled(path.c_str());
+  if (type == plus_resources::Type::Book) {
+    library::markLibraryIndexDirty();
+  } else if (type == plus_resources::Type::Font) {
+    sdFontSystem.markRegistryDirty();
+    sdFontSystem.refreshIfDirty();
+  }
+  LOG_INF("RES", "deleted resource %s", path.c_str());
+  rows_dirty_ = true;
+  requestUpdate(true);
 }
 
 void PlusResourcesActivity::startBind() {
@@ -692,6 +814,7 @@ void PlusResourcesActivity::pollWorker() {
     bind_url_.clear();
     bind_message_.clear();
     items_ = std::move(fetch_result_.items);
+    mergeInstalledIntoItems();
     fetched_ = true;
     state_ = State::List;
     rows_dirty_ = true;
@@ -715,16 +838,20 @@ void PlusResourcesActivity::pollWorker() {
       return;
     }
     if (index >= 0 && index < static_cast<int>(items_.size())) {
+      items_[index].downloaded = true;
+      plus_resources::recordInstalled(items_[index]);
       if (!transfer_result_.acked) {
         items_[index].state = plus_resources::ItemState::SavedNotAcknowledged;
       } else {
+        items_[index].state = plus_resources::ItemState::Pending;
         if (items_[index].type == plus_resources::Type::Book) {
           library::markLibraryIndexDirty();
         } else if (items_[index].type == plus_resources::Type::Font) {
           sdFontSystem.markRegistryDirty();
           sdFontSystem.refreshIfDirty();
         }
-        items_.erase(items_.begin() + index);
+        // The row stays on the page as "downloaded" and can be removed from
+        // here; erasing it left the user with no way to free the card space.
       }
     }
     state_ = State::List;
@@ -1004,6 +1131,7 @@ bool PlusResourcesActivity::handleErrorActions() {
 }
 
 bool PlusResourcesActivity::handleCustomInput() {
+  if (confirm_.handleInput(mappedInput, [this] { requestUpdate(); })) return true;
   const bool busy_now = state_ == State::Connecting || state_ == State::Binding || state_ == State::Fetching ||
       state_ == State::Downloading;
   int tap_x = 0;
@@ -1037,6 +1165,10 @@ bool PlusResourcesActivity::paintOverlayBeforePresent() {
   if (state_ == State::Connecting || state_ == State::Binding || state_ == State::Fetching ||
       state_ == State::Downloading) {
     drawWait();
+    return true;
+  }
+  if (confirm_.active()) {
+    confirm_.paint(renderer);
     return true;
   }
   return false;

@@ -24,6 +24,9 @@ class PhotoDemoActivity final : public Activity {
   void render(RenderLock&&) override {}
   // The moving box must go through the band path, exactly like a game move.
   bool wantsBandUpdates() const override { return true; }
+  // A residue test page is measured in panel pixels (17% of the glass), so it
+  // must not be re-expressed through the logical UI viewport.
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
 
  private:
   void drawTestPage() const;

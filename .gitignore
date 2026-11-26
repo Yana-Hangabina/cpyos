@@ -49,3 +49,16 @@ flake.*
 # Private book-source component (not distributed). See
 # docs/engineering/private-book-source.md.
 /src/jjwxc/
+
+# Local MuPDF source and build tree (fetched on demand; not vendored)
+/patches/mupdf/mupdf-*-source/
+/patches/mupdf/build/
+
+; downloaded upstream MuPDF tree (regenerate with patches/mupdf/prepare_source.sh)
+patches/mupdf/source/
+# CloudZao publishing credentials (local-only; kept outside the tree too).
+cloudzao.env
+exp/fixtures/*.pdf
+
+# Local release staging, nested checkouts and device backups (never source).
+/repos/

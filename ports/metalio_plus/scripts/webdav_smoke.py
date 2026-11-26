@@ -5,8 +5,8 @@ Calibre's wireless plugin talks WebDAV to the device, so this exercises the
 same surface without Calibre: OPTIONS, PROPFIND (depth 0), PUT, GET, DELETE,
 plus the protected-directory aliases that must stay forbidden.
 
-    python3 ports/metalio_plus/scripts/webdav_smoke.py <device-ip>
-    python3 ports/metalio_plus/scripts/webdav_smoke.py <device-ip> --port 80
+    python3 ports/metalio_plus/scripts/webdav_smoke.py 192.168.101.18
+    python3 ports/metalio_plus/scripts/webdav_smoke.py 192.168.101.18 --port 80
 """
 from __future__ import annotations
 

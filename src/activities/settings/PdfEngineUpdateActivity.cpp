@@ -102,9 +102,10 @@ void PdfEngineUpdateActivity::connectAndStart() {
     } else {
       HalPowerManager::Lock powerLock(/*quiet=*/true);
       // setMode, not WiFi.mode: it stops BLE and reclaims render memory first.
+      NetworkStartup::StationClaim stationClaim;
       if (NetworkStartup::setMode(renderer, WIFI_STA)) {
         radioOwnedByUs_ = true;
-        WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+        NetworkStartup::joinStation(credential->ssid.c_str(), credential->password.c_str());
         const uint32_t deadline = millis() + kConnectTimeoutMs;
         while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(deadline - millis()) > 0) {
           vTaskDelay(pdMS_TO_TICKS(100));

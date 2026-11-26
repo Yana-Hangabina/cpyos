@@ -30,6 +30,18 @@
 
 #if defined(CROSSPOINT_I18N_PACK)
 #include "I18nPack.h"
+#include "../../src/LanguageFontCoverage.h"  // tier coverage facts
+
+// The coverage table indexes by its own enum, while this file receives I18n's. They are
+// generated from the same gen_i18n.py order, and the names align index-for-index today
+// (verified 2026-11-26: 36 entries each, AR=1 and FA=12 in both). Pinned here because a
+// regenerated list that reorders languages would otherwise silently refuse the wrong ones.
+static_assert(static_cast<uint8_t>(Language::AR) == language_font::AR,
+              "I18n::Language and the coverage table disagree on AR");
+static_assert(static_cast<uint8_t>(Language::FA) == language_font::FA,
+              "I18n::Language and the coverage table disagree on FA");
+static_assert(!language_font::mustRefuse(static_cast<uint8_t>(Language::EN)),
+              "English must stay selectable");
 #endif
 
 using namespace i18n_strings;
@@ -294,6 +306,14 @@ bool I18n::isLanguageAvailable(Language lang) {
   // fonts only, so Chinese strings render as garbled boxes even though ZH_CN's
   // strings are compiled in. Treat it as unavailable here.
   if (lang == Language::ZH_CN) return false;
+#endif
+#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+  // Arabic and Persian are the same class of failure as the case above: the strings are
+  // compiled, but the UI has no shaping face, so presentation-form codepoints draw as
+  // separate boxes. The generated coverage table owns that judgement, so a tier change here
+  // follows without touching this function. Gated on the pack build because the table's
+  // numbers are measured against the system font tiers; other configs carry different faces.
+  if (language_font::mustRefuse(static_cast<uint8_t>(lang))) return false;
 #endif
   return true;
 }

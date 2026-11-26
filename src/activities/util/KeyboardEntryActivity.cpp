@@ -1522,8 +1522,12 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     if (keyHeight < renderer.getLineHeight(UI_12_FONT_ID) + renderer.getLineHeight(SMALL_FONT_ID) + 8)
       props.labelText.font = fui::GfxRendererTarget::FONT_SMALL;
   }
+  // The SDK lays the keys out from the design rect but adds the gap in a unit
+  // the 125% viewport does not shrink, so ten columns overflow the right edge.
+  // Drop the horizontal gap above 100%; the 1 px key border still separates them.
+  const bool enlargedUi = renderer.uiViewport().scalePermille > 1000;
   props.gap = props.rowGap =
-      static_cast<int16_t>(keyboardGap(metrics, UiHighDpiProfile::enabled && inputLineCount() == 1));
+      static_cast<int16_t>(enlargedUi ? 0 : keyboardGap(metrics, UiHighDpiProfile::enabled && inputLineCount() == 1));
   if (urlPanel) props.uniformKeyWidth = false;  // Shortcut rows stretch independently.
   if (!mappedInput.hasTouch()) props.background = fui::Paint::none();
   frame.target().fill(kbRect, props.background);

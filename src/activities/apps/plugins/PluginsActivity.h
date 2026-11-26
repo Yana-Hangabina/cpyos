@@ -33,13 +33,16 @@ class PluginsActivity final : public UiListActivity {
   void loop() override;
 
  private:
-  enum class RowKind : uint8_t { Rescan, Check, Installed, Catalog };
+  enum class RowKind : uint8_t { PdfEngine, Rescan, Check, Installed, Catalog };
   enum class State : uint8_t { List, Fetching, Downloading, Error };
   enum class Job : uint8_t { None, Catalog, Install };
 
-  static constexpr int kRescanRow = 0;
-  static constexpr int kCheckRow = 1;
-  static constexpr int kFirstPluginRow = 2;
+  // Pinned prefix rows; the installed/catalog packages follow in append order.
+  // kPdfEngineRow only exists in PDF builds (see the #if in rebuildRows()).
+  static constexpr int kPdfEngineRow = 0;
+  static constexpr int kRescanRow = 1;
+  static constexpr int kCheckRow = 2;
+  static constexpr int kFirstPluginRow = 3;
 
   int listCount() const override;
   void buildScreen(UiScreen& screen) override;

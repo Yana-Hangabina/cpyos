@@ -25,14 +25,15 @@ import os
 import sys
 from pathlib import Path
 
-ASSETS = {
-    'pinyin': 'pinyin.dat',
-    'web': 'web_pack.dat',
-    'hyphen': 'hyphen.dat',
-    'i18n': 'i18n_pack.dat',
-    'emoji': 'emoji.dat',
-    'core': 'cjk_core.dat',
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import data_manifest  # noqa: E402
+
+# The names a device asks for.  Deliberately shared with the release bundler: the core
+# carrier is built per tier (cjk_core_3500.dat / cjk_core_8105.dat) but published and
+# fetched under its stable alias, and if the two scripts each kept their own table the
+# bundle could ship a file this manifest never names.
+ASSETS = data_manifest.PACK_ASSETS
 
 
 def fail(message: str) -> None:

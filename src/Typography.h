@@ -22,6 +22,9 @@ struct Points {
 };
 
 Points pointsFor(Scale scale);
+// Same role sizes after the current UI viewport scale. apply() refreshes the
+// cached scale so Font Extras and SD role tables bind to the native point size.
+Points pointsForCurrent(Scale scale);
 
 // One UI font id and the point size its role wants at this scale. The table is
 // the single source of truth for both the preferred bindings below and the

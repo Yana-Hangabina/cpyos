@@ -34,7 +34,7 @@ extern void armScanWatchdog(uint32_t timeoutMs);
 extern void disarmScanWatchdog();
 #endif
 
-#if FREEINK_DEVICE_READPICO
+#if FREEINK_DEVICE_READPICO && !defined(SIMULATOR)
 #include <rom/cache.h>
 #endif
 
@@ -160,6 +160,55 @@ void appendShapedRtlTokens(const char* text, std::string& shapedOut) {
   }
 }
 }  // namespace
+
+thread_local const GfxRenderer* GfxRenderer::tlsUiOwner_ = nullptr;
+thread_local GfxRenderer::CoordSpace GfxRenderer::tlsUiSpace_ = GfxRenderer::CoordSpace::Native;
+
+GfxRenderer::ScopedCoordSpace::ScopedCoordSpace(const GfxRenderer& renderer, const CoordSpace space)
+    : renderer_(renderer), previousOwner_(tlsUiOwner_), previousSpace_(tlsUiSpace_) {
+  tlsUiOwner_ = &renderer_;
+  tlsUiSpace_ = space;
+}
+
+GfxRenderer::ScopedCoordSpace::~ScopedCoordSpace() {
+  tlsUiOwner_ = previousOwner_;
+  tlsUiSpace_ = previousSpace_;
+}
+
+GfxRenderer::CoordSpace GfxRenderer::coordSpace() const {
+  return tlsUiOwner_ == this ? tlsUiSpace_ : CoordSpace::Native;
+}
+
+int GfxRenderer::getNativeWidth() const {
+  return orientation == Portrait || orientation == PortraitInverted ? panelHeight : panelWidth;
+}
+
+int GfxRenderer::getNativeHeight() const {
+  return orientation == Portrait || orientation == PortraitInverted ? panelWidth : panelHeight;
+}
+
+ui_viewport::Viewport GfxRenderer::uiViewport() const {
+  return ui_viewport::resolve(uiDesignSpec_, getNativeWidth(), getNativeHeight(), uiScalePercent_);
+}
+
+int GfxRenderer::toNativeUi(const int value) const { return uiViewport().toNative(value); }
+
+int GfxRenderer::toDesignUi(const int value) const { return uiViewport().toDesign(value); }
+
+int GfxRenderer::toNativeUiLength(const int value) const { return uiViewport().lengthToNative(value); }
+
+int GfxRenderer::toDesignUiLength(const int value) const { return uiViewport().lengthToDesign(value); }
+
+void GfxRenderer::mapUiRect(int& x, int& y, int& w, int& h) const {
+  if (!isUiSpace()) return;
+  const auto vp = uiViewport();
+  const int x2 = vp.toNative(x + w);
+  const int y2 = vp.toNative(y + h);
+  x = vp.toNative(x);
+  y = vp.toNative(y);
+  w = x2 - x;
+  h = y2 - y;
+}
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
   // Vector (TTF) fonts: the glyph bitmap lives in the font's own cache, keyed by
@@ -1011,6 +1060,18 @@ void GfxRenderer::drawGlyphBitmap(const uint8_t* bitmap, const int width, const 
 // IMPORTANT: This function is in critical rendering path and is called for every pixel. Please keep it as simple and
 // efficient as possible.
 void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    const int nx = vp.toNative(x);
+    const int ny = vp.toNative(y);
+    const int nw = std::max(1, vp.toNative(x + 1) - nx);
+    const int nh = std::max(1, vp.toNative(y + 1) - ny);
+    const ScopedCoordSpace native(*this);
+    for (int py = ny; py < ny + nh; ++py) {
+      for (int px = nx; px < nx + nw; ++px) drawPixel(px, py, state);
+    }
+    return;
+  }
   if (x < clipLeft_ || y < clipTop_ || x >= clipRight_ || y >= clipBottom_) return;
   int phyX = 0;
   int phyY = 0;
@@ -1220,6 +1281,10 @@ size_t GfxRenderer::nextEmojiRun(const char* text, const size_t len, const size_
 
 int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontFamily::Style style,
                               const BidiUtils::BidiBaseDir baseDir) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getTextWidth(fontId, text, style, baseDir));
+  }
   if (text == nullptr || *text == '\0') return 0;
   if (emojiFontId_ == 0) return getTextWidthRun(fontId, text, style, baseDir);
   const size_t len = strlen(text);
@@ -1293,6 +1358,13 @@ void GfxRenderer::drawCenteredText(const int fontId, const int y, const char* te
 void GfxRenderer::drawText(const int fontId, const int x, const int y, const char* text, const bool black,
                            const EpdFontFamily::Style style, const BidiUtils::BidiBaseDir baseDir,
                            const int8_t tracking) const {
+  if (isUiSpace()) {
+    const int nativeX = toNativeUi(x);
+    const int nativeY = toNativeUi(y);
+    const ScopedCoordSpace native(*this);
+    drawText(fontId, nativeX, nativeY, text, black, style, baseDir, tracking);
+    return;
+  }
   if (text == nullptr || *text == '\0') return;
   if (emojiFontId_ == 0) {
     drawTextRun(fontId, x, y, text, black, style, baseDir, tracking);
@@ -1742,6 +1814,16 @@ void GfxRenderer::fillArcAA(const int maxRadius, const int cx, const int cy, con
 }
 
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) const {
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    const int nx1 = vp.toNative(x1);
+    const int ny1 = vp.toNative(y1);
+    const int nx2 = vp.toNative(x2);
+    const int ny2 = vp.toNative(y2);
+    const ScopedCoordSpace native(*this);
+    drawLine(nx1, ny1, nx2, ny2, state);
+    return;
+  }
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   if (x1 == x2) {
     if (y2 < y1) {
@@ -1791,12 +1873,30 @@ void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const bool state) con
 }
 
 void GfxRenderer::drawLine(int x1, int y1, int x2, int y2, const int lineWidth, const bool state) const {
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    const int nx1 = vp.toNative(x1);
+    const int ny1 = vp.toNative(y1);
+    const int nx2 = vp.toNative(x2);
+    const int ny2 = vp.toNative(y2);
+    const int nw = vp.lengthToNative(lineWidth);
+    const ScopedCoordSpace native(*this);
+    drawLine(nx1, ny1, nx2, ny2, nw, state);
+    return;
+  }
   for (int i = 0; i < lineWidth; i++) {
     drawLine(x1, y1 + i, x2, y2 + i, state);
   }
 }
 
 void GfxRenderer::drawRect(const int x, const int y, const int width, const int height, const bool state) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    drawRect(nx, ny, nw, nh, state);
+    return;
+  }
   drawLine(x, y, x + width - 1, y, state);
   drawLine(x + width - 1, y, x + width - 1, y + height - 1, state);
   drawLine(x + width - 1, y + height - 1, x, y + height - 1, state);
@@ -1806,6 +1906,14 @@ void GfxRenderer::drawRect(const int x, const int y, const int width, const int 
 // Border is inside the rectangle
 void GfxRenderer::drawRect(const int x, const int y, const int width, const int height, const int lineWidth,
                            const bool state) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const int nlw = toNativeUiLength(lineWidth);
+    const ScopedCoordSpace native(*this);
+    drawRect(nx, ny, nw, nh, nlw, state);
+    return;
+  }
   for (int i = 0; i < lineWidth && width - 2 * i > 0 && height - 2 * i > 0; i++) {
     drawRect(x + i, y + i, width - 2 * i, height - 2 * i, state);
   }
@@ -1813,6 +1921,16 @@ void GfxRenderer::drawRect(const int x, const int y, const int width, const int 
 
 void GfxRenderer::drawArc(const int maxRadius, const int cx, const int cy, const int xDir, const int yDir,
                           const int lineWidth, const bool state) const {
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    const int nr = vp.lengthToNative(maxRadius);
+    const int ncx = vp.toNative(cx);
+    const int ncy = vp.toNative(cy);
+    const int nlw = vp.lengthToNative(lineWidth);
+    const ScopedCoordSpace native(*this);
+    drawArc(nr, ncx, ncy, xDir, yDir, nlw, state);
+    return;
+  }
   if (grayscale16Buffer != nullptr && s_grayAA_) {
     drawArcAA(maxRadius, cx, cy, xDir, yDir, lineWidth, state);
     return;
@@ -1858,6 +1976,15 @@ void GfxRenderer::drawArc(const int maxRadius, const int cx, const int cy, const
 // Border is inside the rectangle, rounded corners
 void GfxRenderer::drawRoundedRect(const int x, const int y, const int width, const int height, const int lineWidth,
                                   const int cornerRadius, bool state) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const int nlw = toNativeUiLength(lineWidth);
+    const int nr = toNativeUiLength(cornerRadius);
+    const ScopedCoordSpace native(*this);
+    drawRoundedRect(nx, ny, nw, nh, nlw, nr, state);
+    return;
+  }
   drawRoundedRect(x, y, width, height, lineWidth, cornerRadius, true, true, true, true, state);
 }
 
@@ -1865,6 +1992,15 @@ void GfxRenderer::drawRoundedRect(const int x, const int y, const int width, con
 void GfxRenderer::drawRoundedRect(const int x, const int y, const int width, const int height, const int lineWidth,
                                   const int cornerRadius, bool roundTopLeft, bool roundTopRight, bool roundBottomLeft,
                                   bool roundBottomRight, bool state) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const int nlw = toNativeUiLength(lineWidth);
+    const int nr = toNativeUiLength(cornerRadius);
+    const ScopedCoordSpace native(*this);
+    drawRoundedRect(nx, ny, nw, nh, nlw, nr, roundTopLeft, roundTopRight, roundBottomLeft, roundBottomRight, state);
+    return;
+  }
   if (lineWidth <= 0 || width <= 0 || height <= 0) {
     return;
   }
@@ -1914,6 +2050,13 @@ void GfxRenderer::drawRoundedRect(const int x, const int y, const int width, con
 }
 
 void GfxRenderer::fillRect(const int x, const int y, const int width, const int height, const bool state) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    fillRect(nx, ny, nw, nh, state);
+    return;
+  }
   const bool eff = framebufferState(renderMode, state);
   if (eff) {
     fillRectImpl<Color::Black>(x, y, width, height);
@@ -1951,6 +2094,13 @@ void GfxRenderer::drawPixelDither<Color::DarkGray>(const int x, const int y) con
 
 void GfxRenderer::fillRectShade(const int x, const int y, const int width, const int height,
                                 const uint8_t level) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    fillRectShade(nx, ny, nw, nh, level);
+    return;
+  }
   if (level == 0 || width <= 0 || height <= 0) return;
   if (level >= 15) {
     fillRect(x, y, width, height, true);
@@ -1982,6 +2132,13 @@ void GfxRenderer::fillRectShade(const int x, const int y, const int width, const
 }
 
 void GfxRenderer::fillRectDither(const int x, const int y, const int width, const int height, Color color) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    fillRectDither(nx, ny, nw, nh, color);
+    return;
+  }
   switch (color) {
     case Color::Clear:
       break;
@@ -2001,6 +2158,13 @@ void GfxRenderer::fillRectDither(const int x, const int y, const int width, cons
 }
 
 void GfxRenderer::fillRectScrim(const int x, const int y, const int width, const int height) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    fillRectScrim(nx, ny, nw, nh);
+    return;
+  }
   if (width <= 0 || height <= 0) return;
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
 
@@ -2361,6 +2525,14 @@ template void GfxRenderer::fillRectImpl<Color::DarkGray>(int, int, int, int) con
 
 void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const int width, const int height,
                                                 const int radius, const Color color) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const int nr = toNativeUiLength(radius);
+    const ScopedCoordSpace native(*this);
+    maskRoundedRectOutsideCorners(nx, ny, nw, nh, nr, color);
+    return;
+  }
   if (radius <= 0 || color == Color::Clear) {
     return;
   }
@@ -2394,25 +2566,41 @@ void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const 
   }
 }
 
-GfxRenderer::RoundedClipScope::RoundedClipScope(const GfxRenderer& r, const int x, const int y, const int width,
-                                                const int height, const int radius)
-    : renderer_(r), previous_(r.getClipRect()), x_(x), y_(y), width_(width), height_(height), radius_(radius) {
-  const int x0 = std::max(x, previous_[0]);
-  const int y0 = std::max(y, previous_[1]);
-  const int x1 = std::min(x + width, previous_[0] + previous_[2]);
-  const int y1 = std::min(y + height, previous_[1] + previous_[3]);
+GfxRenderer::RoundedClipScope::RoundedClipScope(const GfxRenderer& r, int x, int y, int width, int height,
+                                                int radius)
+    : renderer_(r),
+      previous_{r.clipLeft_, r.clipTop_, r.clipRight_, r.clipBottom_},
+      x_(x),
+      y_(y),
+      width_(width),
+      height_(height),
+      radius_(radius) {
+  if (r.isUiSpace()) {
+    r.mapUiRect(x_, y_, width_, height_);
+    radius_ = r.toNativeUiLength(radius_);
+  }
+  const int x0 = std::max(x_, previous_[0]);
+  const int y0 = std::max(y_, previous_[1]);
+  const int x1 = std::min(x_ + width_, previous_[0] + previous_[2]);
+  const int y1 = std::min(y_ + height_, previous_[1] + previous_[3]);
+  const auto setRawClip = [this](const int lx, const int ly, const int lw, const int lh) {
+    renderer_.clipLeft_ = lx;
+    renderer_.clipTop_ = ly;
+    renderer_.clipRight_ = lx + lw;
+    renderer_.clipBottom_ = ly + lh;
+  };
 
   // Degenerate shapes and radii beyond the wedge budget still get the plain
   // rectangular clip: content is bounded, it just is not corner-masked.
-  if (radius < 1 || width < radius * 2 || height < radius * 2 || radius > kMaxRadius || r._stripActive) {
-    renderer_.setClipRect(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
+  if (radius_ < 1 || width_ < radius_ * 2 || height_ < radius_ * 2 || radius_ > kMaxRadius || r._stripActive) {
+    setRawClip(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
     return;
   }
 
-  renderer_.setClipRect(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
+  setRawClip(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
 
-  const int screenW = renderer_.getScreenWidth();
-  const int screenH = renderer_.getScreenHeight();
+  const int screenW = renderer_.getNativeWidth();
+  const int screenH = renderer_.getNativeHeight();
   int n = 0;
   bool overflow = false;
   for (int corner = 0; corner < 4; ++corner) {
@@ -2445,9 +2633,12 @@ GfxRenderer::RoundedClipScope::~RoundedClipScope() {
   if (active_ && count_ > 0) {
     // Restore through a full-screen clip: the saved pixels may sit outside the
     // intersection this scope installed, and they must land exactly as saved.
-    renderer_.setClipRect(0, 0, 32767, 32767);
-    const int screenW = renderer_.getScreenWidth();
-    const int screenH = renderer_.getScreenHeight();
+    renderer_.clipLeft_ = 0;
+    renderer_.clipTop_ = 0;
+    renderer_.clipRight_ = 32767;
+    renderer_.clipBottom_ = 32767;
+    const int screenW = renderer_.getNativeWidth();
+    const int screenH = renderer_.getNativeHeight();
     int n = 0;
     for (int corner = 0; corner < 4 && n < count_; ++corner) {
       for (int dy = 0; dy < radius_ && n < count_; ++dy) {
@@ -2464,7 +2655,10 @@ GfxRenderer::RoundedClipScope::~RoundedClipScope() {
       }
     }
   }
-  renderer_.setClipRect(previous_[0], previous_[1], previous_[2], previous_[3]);
+  renderer_.clipLeft_ = previous_[0];
+  renderer_.clipTop_ = previous_[1];
+  renderer_.clipRight_ = previous_[2];
+  renderer_.clipBottom_ = previous_[3];
 }
 
 template <Color color>
@@ -2514,6 +2708,14 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
 void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, const int height, const int cornerRadius,
                                   bool roundTopLeft, bool roundTopRight, bool roundBottomLeft, bool roundBottomRight,
                                   const Color color) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const int nr = toNativeUiLength(cornerRadius);
+    const ScopedCoordSpace native(*this);
+    fillRoundedRect(nx, ny, nw, nh, nr, roundTopLeft, roundTopRight, roundBottomLeft, roundBottomRight, color);
+    return;
+  }
   if (width <= 0 || height <= 0) {
     return;
   }
@@ -2587,6 +2789,13 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
 }
 
 void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, const int width, const int height) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    drawImage(bitmap, nx, ny, nw, nh);
+    return;
+  }
   int rotatedX = 0;
   int rotatedY = 0;
   rotateCoordinates(orientation, x, y, &rotatedX, &rotatedY, panelWidth, panelHeight);
@@ -2612,6 +2821,13 @@ void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, co
 void GfxRenderer::drawMaskAA(const uint8_t* bits, const int srcW, const int srcH, const int dx, const int dy,
                              const int dstW, const int dstH, const bool maskInverted, const bool inkBlack,
                              const bool rotate90, const bool mirrorX) const {
+  if (isUiSpace()) {
+    int nx = dx, ny = dy, nw = dstW, nh = dstH;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace pixelNative(*this);
+    drawMaskAA(bits, srcW, srcH, nx, ny, nw, nh, maskInverted, inkBlack, rotate90, mirrorX);
+    return;
+  }
   if (bits == nullptr || srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
   const bool aa = grayscale16Buffer != nullptr && s_grayAA_;
   const int rowBytes = (srcW + 7) / 8;
@@ -2695,6 +2911,12 @@ void GfxRenderer::drawIconInverted(const uint8_t bitmap[], const int x, const in
 
 bool GfxRenderer::drawBitmapCropToFill(const Bitmap& bitmap, const int x, const int y, const int targetWidth,
                                        const int targetHeight) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = targetWidth, nh = targetHeight;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return drawBitmapCropToFill(bitmap, nx, ny, nw, nh);
+  }
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return false;
   const int sourceWidth = bitmap.getWidth();
   const int sourceHeight = bitmap.getHeight();
@@ -2778,6 +3000,17 @@ bool GfxRenderer::beginGrayscale16() {
   if (!grayscale16Buffer) return false;
   setRenderMode(BW);
   clearScreen();  // Retain a B/W proxy for popup drawing and subsequent AA.
+  // A new UI viewport invalidates the retained canvas: pages only draw their
+  // content, so the previous scale's pixels would survive in the gaps. Clear
+  // both the 4bpp canvas and the proxy once per viewport change.
+  const auto vp = uiViewport();
+  if (vp.scalePermille != lastGrayScale_ || vp.width != lastGrayWidth_ || vp.height != lastGrayHeight_) {
+    const ScopedCoordSpace native(*this);
+    fillRect(0, 0, getNativeWidth(), getNativeHeight(), false);
+    lastGrayScale_ = vp.scalePermille;
+    lastGrayWidth_ = vp.width;
+    lastGrayHeight_ = vp.height;
+  }
   return true;
 }
 
@@ -2790,6 +3023,12 @@ bool GfxRenderer::beginGrayscale16FromFrameBuffer() {
 }
 
 bool GfxRenderer::commitGrayscale16Area(int x, int y, int width, int height, const bool clean) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return commitGrayscale16Area(nx, ny, nw, nh, clean);
+  }
   if (!grayscale16Buffer || width <= 0 || height <= 0) return false;
 
   const int lx0 = std::max(0, x);
@@ -2823,6 +3062,16 @@ bool GfxRenderer::commitGrayscale16Area(int x, int y, int width, int height, con
 }
 
 bool GfxRenderer::commitGrayscale16Areas(const GrayAreaRect* areas, const int count, const bool clean) const {
+  if (isUiSpace()) {
+    if (areas == nullptr || count <= 0 || count > 12) return false;
+    GrayAreaRect mapped[12];
+    for (int i = 0; i < count; ++i) {
+      mapped[i] = areas[i];
+      mapUiRect(mapped[i].x, mapped[i].y, mapped[i].width, mapped[i].height);
+    }
+    const ScopedCoordSpace native(*this);
+    return commitGrayscale16Areas(mapped, count, clean);
+  }
   if (!grayscale16Buffer || areas == nullptr || count <= 0) return false;
   constexpr int kMaxAreas = 12;
   if (count > kMaxAreas) return false;
@@ -2936,6 +3185,18 @@ void GfxRenderer::cancelGrayscale16() const {
 }
 
 void GfxRenderer::drawGrayscale16Pixel(const int x, const int y, const uint8_t gray) const {
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    const int nx = vp.toNative(x);
+    const int ny = vp.toNative(y);
+    const int nw = std::max(1, vp.toNative(x + 1) - nx);
+    const int nh = std::max(1, vp.toNative(y + 1) - ny);
+    const ScopedCoordSpace native(*this);
+    for (int py = ny; py < ny + nh; ++py) {
+      for (int px = nx; px < nx + nw; ++px) drawGrayscale16Pixel(px, py, gray);
+    }
+    return;
+  }
   if (!grayscale16Buffer || x < 0 || y < 0 || x >= getScreenWidth() || y >= getScreenHeight()) return;
   int px, py;
   rotateCoordinates(orientation, x, y, &px, &py, panelWidth, panelHeight);
@@ -2953,6 +3214,12 @@ void GfxRenderer::drawGrayscale16Pixel(const int x, const int y, const uint8_t g
 
 bool GfxRenderer::drawBitmapGrayscale16(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
                                         const int maxHeight, const float cropX, const float cropY) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = maxWidth, nh = maxHeight;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace pixelNative(*this);
+    return drawBitmapGrayscale16(bitmap, nx, ny, nw, nh, cropX, cropY);
+  }
   // Match drawBitmap(): never drive the long per-row source read while the font cache is
   // mid-scan, so a cover draw cannot interleave with (or starve) a prewarm pass.
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return false;
@@ -3052,6 +3319,12 @@ bool GfxRenderer::drawBitmapGrayscale16(const Bitmap& bitmap, const int x, const
 
 bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY, const bool preserveTransparency) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = maxWidth, nh = maxHeight;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return drawBitmap(bitmap, nx, ny, nw, nh, cropX, cropY, preserveTransparency);
+  }
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return false;
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
@@ -3162,6 +3435,12 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
 bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
                                  const int maxHeight) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = maxWidth, nh = maxHeight;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return drawBitmap1Bit(bitmap, nx, ny, nw, nh);
+  }
   float scale = 1.0f;
   bool isScaled = false;
   if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
@@ -3231,6 +3510,13 @@ bool GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
 }
 
 void GfxRenderer::preserveImagePolarity(const int x, const int y, const int width, const int height) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = width, nh = height;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    preserveImagePolarity(nx, ny, nw, nh);
+    return;
+  }
   if (renderMode != BW || !display.isInverted() || _stripActive || !frameBuffer || width <= 0 || height <= 0) return;
 
   const int lx0 = std::max(x, clipLeft_);
@@ -3268,6 +3554,20 @@ void GfxRenderer::preserveImagePolarity(const int x, const int y, const int widt
 }
 
 void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state) const {
+  if (isUiSpace()) {
+    int xs[32];
+    int ys[32];
+    if (numPoints > 0 && numPoints <= 32) {
+      const auto vp = uiViewport();
+      for (int i = 0; i < numPoints; ++i) {
+        xs[i] = vp.toNative(xPoints[i]);
+        ys[i] = vp.toNative(yPoints[i]);
+      }
+      const ScopedCoordSpace native(*this);
+      fillPolygon(xs, ys, numPoints, state);
+    }
+    return;
+  }
   if (numPoints < 3) return;
 
   // Find bounding box
@@ -3824,6 +4124,12 @@ HalDisplay::GrayscaleCapabilities GfxRenderer::grayscaleCapabilities(HalDisplay:
 bool GfxRenderer::supportsAsyncGrayscaleBase() const { return grayscaleCapabilities().asyncBase; }
 
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = w, nh = h;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return readFramebufferRegion(nx, ny, nw, nh, dst, dstCapacity);
+  }
   if (dst == nullptr || w <= 0 || h <= 0) return 0;
 
   const AlignedMemRect mem = screenRectToAlignedMemRect(orientation, x, y, w, h, panelWidth, panelHeight);
@@ -3842,6 +4148,13 @@ size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* d
 }
 
 void GfxRenderer::writeFramebufferRegion(int x, int y, int w, int h, const uint8_t* src) {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = w, nh = h;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    writeFramebufferRegion(nx, ny, nw, nh, src);
+    return;
+  }
   if (src == nullptr || w <= 0 || h <= 0) return;
 
   const AlignedMemRect mem = screenRectToAlignedMemRect(orientation, x, y, w, h, panelWidth, panelHeight);
@@ -3980,31 +4293,13 @@ std::vector<std::string> GfxRenderer::wrappedText(const int fontId, const char* 
 
 // Note: Internal driver treats screen in command orientation; this library exposes a logical orientation
 int GfxRenderer::getScreenWidth() const {
-  switch (orientation) {
-    case Portrait:
-    case PortraitInverted:
-      // 480px wide in portrait logical coordinates
-      return panelHeight;
-    case LandscapeClockwise:
-    case LandscapeCounterClockwise:
-      // 800px wide in landscape logical coordinates
-      return panelWidth;
-  }
-  return panelHeight;
+  if (isUiSpace()) return uiViewport().width;
+  return getNativeWidth();
 }
 
 int GfxRenderer::getScreenHeight() const {
-  switch (orientation) {
-    case Portrait:
-    case PortraitInverted:
-      // 800px tall in portrait logical coordinates
-      return panelWidth;
-    case LandscapeClockwise:
-    case LandscapeCounterClockwise:
-      // 480px tall in landscape logical coordinates
-      return panelHeight;
-  }
-  return panelWidth;
+  if (isUiSpace()) return uiViewport().height;
+  return getNativeHeight();
 }
 
 void GfxRenderer::tapToLogical(float nx, float ny, int& outX, int& outY) const {
@@ -4034,23 +4329,31 @@ void GfxRenderer::tapToLogical(float nx, float ny, int& outX, int& outY) const {
       outY = phyY;
       break;
   }
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    outX = std::clamp(vp.toDesign(outX), 0, vp.width - 1);
+    outY = std::clamp(vp.toDesign(outY), 0, vp.height - 1);
+  }
 }
 
 void GfxRenderer::logicalToTap(const int lx, const int ly, float& nx, float& ny) const {
-  int phyX = lx;
-  int phyY = ly;
+  const auto vp = uiViewport();
+  const int nativeLx = isUiSpace() ? vp.toNative(lx) : lx;
+  const int nativeLy = isUiSpace() ? vp.toNative(ly) : ly;
+  int phyX = nativeLx;
+  int phyY = nativeLy;
   switch (orientation) {
     case Portrait:
-      phyY = panelHeight - 1 - lx;
-      phyX = ly;
+      phyY = panelHeight - 1 - nativeLx;
+      phyX = nativeLy;
       break;
     case PortraitInverted:
-      phyY = lx;
-      phyX = panelWidth - 1 - ly;
+      phyY = nativeLx;
+      phyX = panelWidth - 1 - nativeLy;
       break;
     case LandscapeClockwise:
-      phyX = panelWidth - 1 - lx;
-      phyY = panelHeight - 1 - ly;
+      phyX = panelWidth - 1 - nativeLx;
+      phyY = panelHeight - 1 - nativeLy;
       break;
     case LandscapeCounterClockwise:
     default:
@@ -4096,6 +4399,12 @@ static bool logicalRectToPhysicalBounds(GfxRenderer::Orientation orientation, in
 }
 
 size_t GfxRenderer::getRegionByteSize(int lx, int ly, int lw, int lh) const {
+  if (isUiSpace()) {
+    int nx = lx, ny = ly, nw = lw, nh = lh;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return getRegionByteSize(nx, ny, nw, nh);
+  }
   int x0, y0, x1, y1;
   if (!logicalRectToPhysicalBounds(orientation, lx, ly, lw, lh, panelWidth, panelHeight, &x0, &y0, &x1, &y1)) {
     return 0;
@@ -4110,6 +4419,12 @@ size_t GfxRenderer::getRegionByteSize(int lx, int ly, int lw, int lh) const {
 }
 
 bool GfxRenderer::copyRegionToBuffer(int lx, int ly, int lw, int lh, uint8_t* buf, size_t bufSize) const {
+  if (isUiSpace()) {
+    int nx = lx, ny = ly, nw = lw, nh = lh;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return copyRegionToBuffer(nx, ny, nw, nh, buf, bufSize);
+  }
   int x0, y0, x1, y1;
   if (!logicalRectToPhysicalBounds(orientation, lx, ly, lw, lh, panelWidth, panelHeight, &x0, &y0, &x1, &y1)) {
     return false;
@@ -4128,6 +4443,12 @@ bool GfxRenderer::copyRegionToBuffer(int lx, int ly, int lw, int lh, uint8_t* bu
 }
 
 bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8_t* buf, size_t bufSize) const {
+  if (isUiSpace()) {
+    int nx = lx, ny = ly, nw = lw, nh = lh;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    return copyBufferToRegion(nx, ny, nw, nh, buf, bufSize);
+  }
   int x0, y0, x1, y1;
   if (!logicalRectToPhysicalBounds(orientation, lx, ly, lw, lh, panelWidth, panelHeight, &x0, &y0, &x1, &y1)) {
     return false;
@@ -4146,6 +4467,10 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 }
 
 int GfxRenderer::getSpaceWidth(int fontId, const EpdFontFamily::Style style) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getSpaceWidth(fontId, style));
+  }
   // Metrics must follow a rebound id, or a row is measured in the built-in face and
   // then drawn in the SD one. See setPreferredFont().
   fontId = resolveFontFamilyId(fontId);
@@ -4167,6 +4492,10 @@ int GfxRenderer::getSpaceWidth(int fontId, const EpdFontFamily::Style style) con
 
 int GfxRenderer::getSpaceAdvance(int fontId, const uint32_t leftCp, const uint32_t rightCp,
                                  const EpdFontFamily::Style style) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getSpaceAdvance(fontId, leftCp, rightCp, style));
+  }
   // Metrics must follow a rebound id (see setPreferredFont()).
   fontId = resolveFontFamilyId(fontId);
   // Advance table fast-path for SD card fonts during layout.
@@ -4191,6 +4520,10 @@ int GfxRenderer::getSpaceAdvance(int fontId, const uint32_t leftCp, const uint32
 
 int GfxRenderer::getKerning(int fontId, const uint32_t leftCp, const uint32_t rightCp, const EpdFontFamily::Style style,
                             const int8_t tracking) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getKerning(fontId, leftCp, rightCp, style, tracking));
+  }
   fontId = resolveFontFamilyId(fontId);
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) return 0;
@@ -4200,6 +4533,10 @@ int GfxRenderer::getKerning(int fontId, const uint32_t leftCp, const uint32_t ri
 
 int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style, const int8_t tracking,
                                  const BidiUtils::BidiBaseDir baseDir, const TextMeasureMode mode) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getTextAdvanceX(fontId, text, style, tracking, baseDir, mode));
+  }
   // Match the font drawText would use for CJK-bearing strings (see resolveTextFontId).
 #ifndef CROSSMUX_UI_PROFILE_HIGH_DPI
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
@@ -4317,6 +4654,10 @@ int GfxRenderer::getTextAdvanceX(int fontId, const char* text, EpdFontFamily::St
 }
 
 int GfxRenderer::getFontAscenderSize(int fontId) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getFontAscenderSize(fontId));
+  }
   // Row height / ascender must follow a rebound id, or the row is sized for the
   // built-in face and the SD face is clipped out of it. See setPreferredFont().
   fontId = resolveFontFamilyId(fontId);
@@ -4330,6 +4671,10 @@ int GfxRenderer::getFontAscenderSize(int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(int fontId) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getLineHeight(fontId));
+  }
   // Row height must follow a rebound id (see setPreferredFont()).
   fontId = resolveFontFamilyId(fontId);
   const auto fontIt = fontMap.find(fontId);
@@ -4342,12 +4687,20 @@ int GfxRenderer::getLineHeight(int fontId) const {
 }
 
 int GfxRenderer::getLineHeight(int fontId, const float compression) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getLineHeight(fontId, compression));
+  }
   // Row height must follow a rebound id (see setPreferredFont()).
   fontId = resolveFontFamilyId(fontId);
   return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
 }
 
 int GfxRenderer::getTextHeight(int fontId) const {
+  if (isUiSpace()) {
+    const ScopedCoordSpace native(*this);
+    return toDesignUiLength(getTextHeight(fontId));
+  }
   // Text height must follow a rebound id (see setPreferredFont()).
   fontId = resolveFontFamilyId(fontId);
   const auto fontIt = fontMap.find(fontId);
@@ -4447,6 +4800,13 @@ bool GfxRenderer::getScaledCodepointMetrics(const int fontId, const uint32_t cod
 
 void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y, const char* text, const bool black,
                                       const EpdFontFamily::Style style) const {
+  if (isUiSpace()) {
+    const int nativeX = toNativeUi(x);
+    const int nativeY = toNativeUi(y);
+    const ScopedCoordSpace native(*this);
+    drawTextRotated90CW(fontId, nativeX, nativeY, text, black, style);
+    return;
+  }
   // Cannot draw a NULL / empty string
   if (text == nullptr || *text == '\0') {
     return;
@@ -4625,6 +4985,13 @@ void GfxRenderer::displayPanelWindow(int x, int y, int w, int h, DisplayRefreshC
 }
 
 void GfxRenderer::preconditionGrayscale(int x, int y, int w, int h) const {
+  if (isUiSpace()) {
+    int nx = x, ny = y, nw = w, nh = h;
+    mapUiRect(nx, ny, nw, nh);
+    const ScopedCoordSpace native(*this);
+    preconditionGrayscale(nx, ny, nw, nh);
+    return;
+  }
   if (w <= 0 || h <= 0) return;
   // Rotate the logical rect's opposite corners to physical panel coords; the
   // physical bbox stays axis-aligned for all four orientations.
@@ -4847,6 +5214,13 @@ void GfxRenderer::getOrientedViewableTRBL(int* outTop, int* outRight, int* outBo
       *outBottom = insets.left;
       *outLeft = insets.top;
       break;
+  }
+  if (isUiSpace()) {
+    const auto vp = uiViewport();
+    *outTop = vp.lengthToDesign(*outTop);
+    *outRight = vp.lengthToDesign(*outRight);
+    *outBottom = vp.lengthToDesign(*outBottom);
+    *outLeft = vp.lengthToDesign(*outLeft);
   }
 }
 

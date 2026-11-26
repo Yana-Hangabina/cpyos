@@ -9,11 +9,24 @@
 #include "CrossPointSettings.h"
 #include "ReaderFontSizes.h"
 #include "SystemFontPack.h"
+#include "UiRtlFontId.h"
 #include "UiScriptFont.h"
 #include "components/themes/BaseTheme.h"
 #include "fontIds.h"
 
 namespace typography {
+
+namespace {
+uint16_t g_layoutScalePermille = 1000;
+
+uint8_t scalePoint(uint8_t designPoint, const uint16_t permille) {
+  const int scaled = (static_cast<int>(designPoint) * permille + 500) / 1000;
+  // The system pack registers 10..34pt faces. A 75% UI scale used to ask for
+  // 8/9pt and fell back per glyph to different faces (mixed sizes inside one
+  // label, an 8pt caption beside a 12pt core glyph). Never go below 10.
+  return static_cast<uint8_t>(std::clamp(scaled, 10, 40));
+}
+}  // namespace
 
 Points pointsFor(const Scale scale) {
   switch (scale) {
@@ -28,6 +41,12 @@ Points pointsFor(const Scale scale) {
     default:
       return {14, 16, 16, 16};
   }
+}
+
+Points pointsForCurrent(const Scale scale) {
+  const Points design = pointsFor(scale);
+  return {scalePoint(design.caption, g_layoutScalePermille), scalePoint(design.body, g_layoutScalePermille),
+          scalePoint(design.title, g_layoutScalePermille), scalePoint(design.display, g_layoutScalePermille)};
 }
 
 std::size_t uiRolePointsFor(const Points points, UiRolePoint* out, const std::size_t capacity) {
@@ -74,6 +93,9 @@ int cjkFontIdForPointSize(const uint8_t pointSize) {
     case 18:
       return CJK_UI_18_FONT_ID;
     default:
+      // The system pack registers a reader id for every 10..34pt face; UI
+      // roles at a scaled size bind through it.
+      if (pointSize >= 10 && pointSize <= 34) return CJK_READER_SIZE_FONT_ID(pointSize);
       return 0;
   }
 }
@@ -82,7 +104,7 @@ size_t roleFontsFor(const uint8_t scaleIndex, RoleFont* out, const size_t capaci
   if (out == nullptr || capacity == 0) return 0;
   const Scale scale =
       scaleIndex < static_cast<uint8_t>(Scale::Count) ? static_cast<Scale>(scaleIndex) : Scale::Standard;
-  const Points p = pointsFor(scale);
+  const Points p = pointsForCurrent(scale);
   // NOTOSERIF_TITLE keeps its built-in serif design (Latin titles); it is a
   // supplement target only, so a Chinese title falls back to the reading core
   // instead of switching the whole line to the CJK sans.
@@ -125,7 +147,10 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
 #else
   if (!system_font_pack::ready()) return;
   const Scale scale = scaleIndex < static_cast<uint8_t>(Scale::Count) ? static_cast<Scale>(scaleIndex) : Scale::Standard;
-  const Points points = pointsFor(scale);
+  // The theme's design point sizes scale with the renderer viewport; the
+  // vector pack then supplies the matching native face for each role.
+  g_layoutScalePermille = renderer.uiViewport().scalePermille;
+  const Points points = pointsForCurrent(scale);
 
   // Load only the faces this target needs. A FreeType face keeps its own copy
   // of the font's cmap/loca/hmtx tables, so registering all six sizes at boot
@@ -174,17 +199,25 @@ void apply(GfxRenderer& renderer, const uint8_t scaleIndex) {
   // removeFont() cleared the fallbacks that pointed at the placeholder ids.
   // Re-point every role at the 8pt built-in emergency face so an unusual
   // codepoint still draws something instead of an empty family.
+  //
+  // The backup slot restores the RTL/shaping chain that main.cpp wired before this ran.
+  // Arabic text is shaped by lib/MiniBidi into presentation forms that neither app0 face
+  // contains (0 codepoints in U+FB50-U+FDFF / U+FE70-U+FEFF), and the only face in the
+  // image that does is the built-in RTL family -- so losing this binding does not merely
+  // change a font, it boxes Arabic and Persian copy. Hebrew is unaffected: its letters
+  // are drawn as stored. See src/UiRtlFontId.h.
   const int emergency = CJK_UI_8_FONT_ID;
+  const int shaping = hasFace(renderer, ui_rtl::kFontId) ? ui_rtl::kFontId : 0;
   for (const int id : {SMALL_FONT_ID, UI_10_FONT_ID, UI_12_FONT_ID, CONTROL_18_FONT_ID, NOTOSANS_18_FONT_ID,
                        BaseTheme::STATUS_NUMERIC_FONT_ID,
                        NOTOSERIF_18_FONT_ID, CJK_UI_18_FONT_ID, READER_STATUS_FONT_ID, READER_ESTIMATE_FONT_ID,
                        NOTOSANS_12_FONT_ID, NOTOSANS_14_FONT_ID, NOTOSANS_16_FONT_ID, NOTOSERIF_12_FONT_ID,
                        NOTOSERIF_14_FONT_ID, NOTOSERIF_16_FONT_ID}) {
-    if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
+    if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency, shaping);
   }
   for (uint8_t pt = 10; pt <= READER_MAX_POINT_SIZE; ++pt) {
     const int id = CJK_READER_SIZE_FONT_ID(pt);
-    if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency);
+    if (hasFace(renderer, id)) renderer.setFallbackFont(id, emergency, shaping);
   }
 #endif
 #if CROSSPOINT_VECTOR_FONTS

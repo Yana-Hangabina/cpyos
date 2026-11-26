@@ -144,6 +144,10 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   // (or no core carrier) this is a no-op and the reader stays on the UI subset;
   // the missing-glyph prompt then offers the downloadable core pack.
   system_core_font::releaseToSd();
+  // No card means no core family, which would leave the reader on app0's 1,520-codepoint UI
+  // face even though the data partition carries the reading glyphs. Materialise it here --
+  // main task, internal-RAM stack, the only context allowed to read the partition.
+  if (!system_core_font::faceOnSd()) system_core_font::installResident();
 #endif
   registry_.discover();
 #if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
@@ -572,6 +576,19 @@ bool SdCardFontSystem::openTtfSource(const uint8_t style, const std::string& pat
   return openTtfSourceInto(ttfSources_, style, path, 6 * 1024 * 1024, 4 * 1024 * 1024, prefix, 1024 * 1024);
 }
 
+bool SdCardFontSystem::adoptBorrowedSource(TtfSource* sources, const uint8_t style,
+                                          const uint8_t* data, const uint32_t len) {
+  if (style >= 4 || sources == nullptr || data == nullptr || len == 0) return false;
+  TtfSource& s = sources[style];
+  s.bytes.clear();
+  s.borrowed = data;
+  s.borrowedLen = len;
+  s.streamed = false;
+  s.size = len;
+  s.present = true;
+  return true;
+}
+
 bool SdCardFontSystem::openTtfSourceInto(TtfSource* sources, const uint8_t style, const std::string& path,
                                          const size_t residentMax, const size_t familyResidentMax,
                                          const size_t streamPrefix, const size_t psramReserve) {
@@ -698,6 +715,8 @@ void SdCardFontSystem::addTtfSourcesFrom(const TtfSource* sources, TtfEpdFont& f
       // written, but the file handle is used), so const_cast is intentional:
       // the source outlives every font that references it.
       font.addStreamSource(st, &SdCardFontSystem::prefixRead, const_cast<TtfSource*>(&s), s.size);
+    } else if (s.borrowed != nullptr) {
+      font.addResidentSource(st, s.borrowed, s.borrowedLen);
     } else {
       font.addResidentSource(st, s.bytes.data(), static_cast<uint32_t>(s.bytes.size()));
     }
@@ -967,7 +986,18 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   // The core released from the data partition is not an installed font-extra,
   // but it behaves exactly like one: reader-grade budgets, plus UI faces for
   // titles/authors. Prefer it when no explicit reader family was selected.
-  if (system_core_font::ready() &&
+  //
+  // faceOnSd(), not ready(): the card may hold a *wider* face this build refuses to
+  // overwrite (an older release's core, or a downloaded pack that is not in the
+  // installed list). Refusing to clobber it is right; refusing to read it would leave
+  // the device drawing tofu while holding a better font than it can ship.
+  //
+  // The `||` half is the no-card case: installResident() put the carrier's TTF in PSRAM, so
+  // the family exists as bytes rather than as a directory. Without this the name never enters
+  // `families`, and the memory-backed branch below is unreachable -- the fallback would be
+  // code that exists but never runs.
+  const bool residentCore = system_core_font::residentData(nullptr) != nullptr;
+  if ((system_core_font::faceOnSd() || residentCore) &&
       std::find(families.begin(), families.end(), system_core_font::kFamilyName) == families.end()) {
     families.insert(families.begin(), system_core_font::kFamilyName);
   }
@@ -977,7 +1007,7 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   // follow the UI scale; elsewhere the SD UI-size table is still the truth.
   std::array<typography::UiRolePoint, typography::kMaxUiRolePoints> uiRoles{};
   size_t uiRoleCount = typography::uiRolePointsFor(
-      typography::pointsFor(SETTINGS.uiFontScale < static_cast<uint8_t>(typography::Scale::Count)
+      typography::pointsForCurrent(SETTINGS.uiFontScale < static_cast<uint8_t>(typography::Scale::Count)
                                 ? static_cast<typography::Scale>(SETTINGS.uiFontScale)
                                 : typography::Scale::Standard),
       uiRoles.data(), uiRoles.size());
@@ -1014,7 +1044,13 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   const bool fourBit = renderer.getGrayscaleLevels() == 16;
   for (const auto& name : families) {
     const auto* family = registry_.findFamily(name);
-    if (family == nullptr || !family->vector || family->files.empty()) {
+    // The no-SD case: this build's carrier is resident in PSRAM, so the core family exists as
+    // bytes rather than as a directory on the card. Everything after this point is shared.
+    uint32_t residentLen = 0;
+    const uint8_t* resident = (family == nullptr && name == system_core_font::kFamilyName)
+                                  ? system_core_font::residentData(&residentLen)
+                                  : nullptr;
+    if ((family == nullptr || !family->vector || family->files.empty()) && resident == nullptr) {
       LOG_ERR("SDFS", "font supplement %s is missing or not a vector family", name.c_str());
       continue;
     }
@@ -1025,21 +1061,33 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
     }
     set->family = name;
     const bool isCore = name == system_core_font::kFamilyName;
-    const auto* regular = family->findFile(0, 0);
-    if (regular == nullptr) regular = &family->files.front();
+    // In the resident (no-card) case there is no registry entry to look into; the bytes are
+    // already in PSRAM and `regular` is never dereferenced below.
+    const auto* regular = (family != nullptr) ? family->findFile(0, 0) : nullptr;
+    if (regular == nullptr && family != nullptr && !family->files.empty()) {
+      regular = &family->files.front();
+    }
     // Rare-glyph packs get a 512 KB resident cap and a 256 KB prefix so several
     // script packs fit in one PSRAM budget. The core is page text, not a rare
     // fallback: give it the reader-family budget (4 MB resident cap, 1 MB
     // prefix) so a 2.5 MB font stays hot and page turns do not fault SD.
     char regularPath[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
-    if (!family->filePath(*regular, regularPath, sizeof(regularPath))) {
+    regularPath[0] = '\0';
+    if (resident == nullptr && !family->filePath(*regular, regularPath, sizeof(regularPath))) {
       LOG_ERR("SDFS", "font supplement %s: path does not fit", name.c_str());
       continue;
     }
     const size_t residentMax = isCore ? 4u * 1024u * 1024u : 512u * 1024u;
     const size_t familyMax = isCore ? 4u * 1024u * 1024u : 2u * 1024u * 1024u;
     const size_t prefix = isCore ? 1024u * 1024u : 256u * 1024u;
-    if (!openTtfSourceInto(set->sources, 0, regularPath, residentMax, familyMax, prefix, 512 * 1024)) {
+    if (resident != nullptr) {
+      if (!adoptBorrowedSource(set->sources, 0, resident, residentLen)) {
+        LOG_ERR("SDFS", "font supplement %s: cannot adopt the resident core", name.c_str());
+        continue;
+      }
+      LOG_INF("SDFS", "font supplement %s from resident PSRAM (%u KB, no SD card)", name.c_str(),
+              static_cast<unsigned>(residentLen / 1024));
+    } else if (!openTtfSourceInto(set->sources, 0, regularPath, residentMax, familyMax, prefix, 512 * 1024)) {
       LOG_ERR("SDFS", "font supplement %s: cannot open %s", name.c_str(), regularPath);
       continue;
     }

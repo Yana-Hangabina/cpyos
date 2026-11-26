@@ -8,6 +8,8 @@
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"
 
+class GfxRenderer;
+
 class UITheme {
   // Static instance
   static UITheme instance;
@@ -38,6 +40,9 @@ class UITheme {
                                       EpdFontFamily::Style style = EpdFontFamily::REGULAR,
                                       TextVerticalAlignment verticalAlignment = TextVerticalAlignment::CENTER);
   void reload();
+  // Push the theme's authored design size and the user's UI scale into the
+  // renderer. Call after settings load, theme changes and uiScalePercent edits.
+  void applyRendererGeometry(GfxRenderer& renderer) const;
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight = 0);

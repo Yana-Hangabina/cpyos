@@ -11,6 +11,10 @@ namespace font_extras {
 namespace {
 
 constexpr size_t kPackFields = 9;
+// FEXT2 appends one column (tier). Arity stays exact *per version* on purpose: an
+// unexpected column is a fail-closed rejection (pinned by a test), so a format change
+// has to announce itself with the header instead of loosening the check.
+constexpr size_t kPackFieldsV2 = 10;
 constexpr size_t kMaxLineBytes = 1024;
 
 bool copyField(char* dst, size_t cap, const std::string_view src, const size_t maxLen) {
@@ -156,6 +160,16 @@ bool isValidUrl(const char* text) {
   return !hasControlOrSpace(url);
 }
 
+bool isValidTier(const char* text) {
+  if (text == nullptr) return false;
+  const std::string_view tier(text);
+  if (tier.empty() || tier.size() >= kMaxTierBytes) return false;
+  for (const char c : tier) {
+    if (!(asciiAlphaNum(c) || c == '-' || c == '.' || c == '_')) return false;
+  }
+  return true;
+}
+
 bool parseKind(const char* text, Kind& kind) {
   if (text == nullptr) return false;
   if (std::strcmp(text, "fallback") == 0) {
@@ -196,6 +210,7 @@ bool parseManifest(const char* data, const size_t len, Pack* out, const size_t c
   }
 
   bool sawHeader = false;
+  bool hasTierColumn = false;
   size_t lineNumber = 0;
   size_t cursor = 0;
   while (cursor < len) {
@@ -214,8 +229,12 @@ bool parseManifest(const char* data, const size_t len, Pack* out, const size_t c
     const std::string_view line(data + lineStart, lineLength);
     if (line[0] == '#') continue;
     if (!sawHeader) {
-      if (line != "FEXT1") {
-        setError(error, errorCap, lineNumber, "missing FEXT1 header");
+      if (line == "FEXT1") {
+        hasTierColumn = false;
+      } else if (line == "FEXT2") {
+        hasTierColumn = true;
+      } else {
+        setError(error, errorCap, lineNumber, "missing FEXT1/FEXT2 header");
         return false;
       }
       sawHeader = true;
@@ -223,8 +242,11 @@ bool parseManifest(const char* data, const size_t len, Pack* out, const size_t c
     }
 
     const auto fields = splitTabs(line);
-    if (fields.size() != kPackFields || fields[0] != "pack") {
-      setError(error, errorCap, lineNumber, "expected 9 tab-separated pack fields");
+    const size_t expectedFields = hasTierColumn ? kPackFieldsV2 : kPackFields;
+    if (fields.size() != expectedFields || fields[0] != "pack") {
+      setError(error, errorCap, lineNumber,
+               hasTierColumn ? "expected 10 tab-separated pack fields"
+                             : "expected 9 tab-separated pack fields");
       return false;
     }
     if (count >= capacity || count >= kMaxPacks) {
@@ -279,6 +301,14 @@ bool parseManifest(const char* data, const size_t len, Pack* out, const size_t c
       setError(error, errorCap, lineNumber, "invalid url");
       return false;
     }
+    if (hasTierColumn) {
+      // One byte short of the buffer: copyField() needs room for the NUL it writes.
+      if (!copyField(pack.tier, sizeof(pack.tier), fields[9], kMaxTierBytes - 1) ||
+          !isValidTier(pack.tier)) {
+        setError(error, errorCap, lineNumber, "invalid tier");
+        return false;
+      }
+    }
 
     for (size_t i = 0; i < count; ++i) {
       if (std::strcmp(out[i].id, pack.id) == 0) {
@@ -294,7 +324,7 @@ bool parseManifest(const char* data, const size_t len, Pack* out, const size_t c
   }
 
   if (!sawHeader) {
-    setError(error, errorCap, 0, "missing FEXT1 header");
+    setError(error, errorCap, 0, "missing FEXT1/FEXT2 header");
     return false;
   }
   if (count == 0) {

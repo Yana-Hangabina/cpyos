@@ -8,6 +8,10 @@ class HalFile;
 
 class SleepActivity final : public Activity {
  public:
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
+
+
+ public:
   explicit SleepActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool fromTimeout = false)
       : Activity("Sleep", renderer, mappedInput), fromTimeout(fromTimeout) {}
   void onEnter() override;

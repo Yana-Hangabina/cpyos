@@ -6,9 +6,12 @@
 
 The serial handle is opened with raw termios and never touches DTR/RTS: a
 pyserial open/close can wedge the Read Pico USB-Serial/JTAG unit. The script
-opens the plugin picker, selects the first plugin row (rescan + check rows come
-first), launches it, presses Back, and checks that the plugin exited while the
-manager stayed on screen.
+opens the plugin picker, selects the first plugin row, launches it, presses
+Back, and checks that the plugin exited while the manager stayed on screen.
+
+Row offsets differ per image: the e4plus shell is built with the PDF engine, so
+its pinned "PDF engine" row is 0 and the first plugin row is ring 3; the Read
+Pico plugin image has no PDF engine and keeps the first plugin row at 2.
 """
 from __future__ import annotations
 
@@ -69,7 +72,8 @@ def main() -> int:
     try:
         dev.drain(6)
         if args.target == "e4plus":
-            sequence = ["plugins", "ring 2", "confirm", "key back"]
+            # 0 = pinned PDF engine row, 1 = rescan, 2 = check, 3 = first plugin.
+            sequence = ["plugins", "ring 3", "confirm", "key back"]
         else:
             sequence = ["CMD:PLUGINS", "CMD:ROWDOWN", "CMD:ROWDOWN", "CMD:CONFIRM", "CMD:BACK"]
         log = bytearray()

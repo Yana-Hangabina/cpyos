@@ -617,6 +617,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 #else
   uint8_t uiFontScale = 0;
 #endif
+  // UI scale for the logical viewport: 100 keeps the theme's authored size.
+  // Values are percent (100..125, step 5); a 75% downscale is parked until the font faces are rebuilt cleanly at runtime (the probe showed mixed-size glyphs after a 125->75 change); the renderer maps design units to
+  // native pixels and Typography selects the matching native font faces.
+  uint8_t uiScalePercent = 100;
   // Show front-button hints along the bottom edge on non-touch devices.
   uint8_t showButtonHints = 1;
   // Dead storage: the INX layout variants are retired, but the field stays

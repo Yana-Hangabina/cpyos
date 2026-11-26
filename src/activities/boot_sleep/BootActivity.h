@@ -8,6 +8,10 @@
 
 class BootActivity final : public Activity {
  public:
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
+
+
+ public:
   enum class Mode : uint8_t {
     Splash,
     PostOta,

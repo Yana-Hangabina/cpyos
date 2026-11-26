@@ -3,6 +3,7 @@
 #include <HalDisplay.h>
 
 #include "../hal/DisplayRefreshContext.h"
+#include "UiViewport.h"
 
 namespace BidiUtils {
 // Paragraph base direction for the Unicode BiDi algorithm (UAX#9).
@@ -41,6 +42,53 @@ bool gfxTextTraceEnabled();
 class GfxRenderer {
  public:
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
+
+  // UI code is authored in the viewport's design units; reader content and
+  // framebuffer operations stay in native logical pixels. The default is
+  // Native, so code that predates the contract keeps its old coordinates.
+  enum class CoordSpace : uint8_t { Native, Ui };
+
+  // RAII switch for one task. ActivityManager installs the activity's default
+  // space around onEnter/loop/render/onExit; mixed surfaces (reader chrome over
+  // native text) nest their own scope.
+  class ScopedCoordSpace {
+   public:
+    explicit ScopedCoordSpace(const GfxRenderer& renderer, CoordSpace space = CoordSpace::Native);
+    ~ScopedCoordSpace();
+    ScopedCoordSpace(const ScopedCoordSpace&) = delete;
+    ScopedCoordSpace& operator=(const ScopedCoordSpace&) = delete;
+
+   private:
+    const GfxRenderer& renderer_;
+    const GfxRenderer* previousOwner_;
+    CoordSpace previousSpace_;
+  };
+
+  // Theme/panel data for the logical viewport. A zero design size means the
+  // theme is authored in native pixels (CPY); a non-zero portrait design size
+  // lets one theme adapt to other panels/DPIs.
+  void setUiDesignSpec(const ui_viewport::DesignSpec& spec) {
+    if (spec.width != uiDesignSpec_.width || spec.height != uiDesignSpec_.height) fullRedrawPending_ = true;
+    uiDesignSpec_ = spec;
+  }
+  ui_viewport::DesignSpec uiDesignSpec() const { return uiDesignSpec_; }
+  void setUiScalePercent(uint16_t percent) {
+    if (percent != uiScalePercent_) fullRedrawPending_ = true;
+    uiScalePercent_ = percent;
+  }
+  // A viewport change invalidates every retained pixel; the render loop consumes
+  // this once before the next activity render and starts from a cleared buffer.
+  bool takeFullRedrawRequest() {
+    const bool pending = fullRedrawPending_;
+    fullRedrawPending_ = false;
+    return pending;
+  }
+  uint16_t uiScalePercent() const { return uiScalePercent_; }
+  ui_viewport::Viewport uiViewport() const;
+  CoordSpace coordSpace() const;
+  bool isUiSpace() const { return coordSpace() == CoordSpace::Ui; }
+  int getNativeWidth() const;
+  int getNativeHeight() const;
 
   struct TwoBitPixel {
     bool draw;
@@ -132,6 +180,26 @@ class GfxRenderer {
   uint16_t panelHeight = HalDisplay::DISPLAY_HEIGHT;
   uint16_t panelWidthBytes = HalDisplay::DISPLAY_WIDTH_BYTES;
   uint32_t frameBufferSize = HalDisplay::BUFFER_SIZE;
+
+  // UI viewport data. The active space is per task: the render task and the UI
+  // task both install their own scope around an activity, and nested scopes
+  // (reader chrome over native text) restore the previous value.
+  ui_viewport::DesignSpec uiDesignSpec_{};
+  uint16_t uiScalePercent_ = 100;
+  // Last viewport the 4bpp canvas was cleared for. A scale change must repaint
+  // every pixel; gray pages otherwise keep the previous layout's leftovers in
+  // the areas the new page leaves blank.
+  bool fullRedrawPending_ = false;
+  mutable uint16_t lastGrayScale_ = 0;
+  mutable int16_t lastGrayWidth_ = 0;
+  mutable int16_t lastGrayHeight_ = 0;
+  static thread_local const GfxRenderer* tlsUiOwner_;
+  static thread_local CoordSpace tlsUiSpace_;
+  int toNativeUi(int value) const;
+  int toDesignUi(int value) const;
+  int toNativeUiLength(int value) const;
+  int toDesignUiLength(int value) const;
+  void mapUiRect(int& x, int& y, int& w, int& h) const;
   // One-shot refresh-mode override consumed by the next displayBuffer() call.
   // Lets an activity force e.g. a HALF_REFRESH for a single frame (used by the
   // reading-stats screens) without threading the mode through every render path.
@@ -506,12 +574,17 @@ class GfxRenderer {
   // rather than restoring a previous rect (sufficient for the flat use here).
   struct ClipScope {
     const GfxRenderer& renderer;
-    const std::array<int, 4> previous;
+    const std::array<int, 4> previous;  // native edges; never re-mapped on restore
     ClipScope(const GfxRenderer& r, const int x, const int y, const int width, const int height)
-        : renderer(r), previous(r.getClipRect()) {
+        : renderer(r), previous{r.clipLeft_, r.clipTop_, r.clipRight_, r.clipBottom_} {
       renderer.setClipRect(x, y, width, height);
     }
-    ~ClipScope() { renderer.setClipRect(previous[0], previous[1], previous[2], previous[3]); }
+    ~ClipScope() {
+      renderer.clipLeft_ = previous[0];
+      renderer.clipTop_ = previous[1];
+      renderer.clipRight_ = previous[2];
+      renderer.clipBottom_ = previous[3];
+    }
     ClipScope(const ClipScope&) = delete;
     ClipScope& operator=(const ClipScope&) = delete;
   };
@@ -526,8 +599,11 @@ class GfxRenderer {
   // Create it AFTER the card/dialog background has been painted: those pixels
   // are what the corners return to.
   struct RoundedClipScope {
-    static constexpr int kMaxRadius = 24;
-    static constexpr int kMaxWedge = 4 * 128;
+    // UI scale multiplies the design radius (20 -> 25 at 125%). Keep headroom
+    // for the largest themed card and a 2x future scale; the wedge budget is
+    // per corner (r^2 * (1 - pi/4) ~= 0.215 r^2).
+    static constexpr int kMaxRadius = 32;
+    static constexpr int kMaxWedge = 4 * 256;
     RoundedClipScope(const GfxRenderer& r, int x, int y, int width, int height, int radius);
     ~RoundedClipScope();
     RoundedClipScope(const RoundedClipScope&) = delete;
@@ -550,9 +626,20 @@ class GfxRenderer {
   // Drawing
   // UI drawing clip in logical coordinates; independent of panel orientation.
   std::array<int, 4> getClipRect() const {
-    return {clipLeft_, clipTop_, clipRight_ - clipLeft_, clipBottom_ - clipTop_};
+    if (!isUiSpace()) return {clipLeft_, clipTop_, clipRight_ - clipLeft_, clipBottom_ - clipTop_};
+    const int left = toDesignUi(clipLeft_);
+    const int top = toDesignUi(clipTop_);
+    return {left, top, toDesignUi(clipRight_) - left, toDesignUi(clipBottom_) - top};
   }
   void setClipRect(int x, int y, int width, int height) const {
+    if (isUiSpace()) {
+      const int right = toNativeUi(x + width);
+      const int bottom = toNativeUi(y + height);
+      x = toNativeUi(x);
+      y = toNativeUi(y);
+      width = right - x;
+      height = bottom - y;
+    }
     clipLeft_ = x;
     clipTop_ = y;
     clipRight_ = x + width;

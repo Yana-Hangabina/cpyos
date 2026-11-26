@@ -59,7 +59,7 @@ std::string relativeDayLabel(const uint32_t timestamp) {
   return buf;
 }
 
-// CPY wave progress: a thin sine baseline, a solid 10 px band over the read
+// refreshed UI wave progress: a thin sine baseline, a solid 10 px band over the read
 // portion, and a short marker at the boundary. Drawing it per pixel keeps the
 // wave crisp on the 1-bit panel; the line is only ~600 px wide.
 void drawWaveProgress(const GfxRenderer& renderer, const Rect rect, const int percent) {

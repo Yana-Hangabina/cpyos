@@ -8,14 +8,18 @@
 #include <WiFi.h>
 
 #if !defined(SIMULATOR)
+#include <Arduino.h>  // delay(), used by the gate's bounded waits and the teardown
 #include <esp_heap_caps.h>
 #include <esp_sntp.h>
 #include <esp_memory_utils.h>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <sdkconfig.h>
 #endif
 
 #include <atomic>
+#include <cassert>
 
 #include "BackgroundWork.h"
 #include "BleInput.h"
@@ -118,6 +122,10 @@ std::atomic<uint32_t> g_lastNetworkActivityMs{0};
 std::atomic<bool> g_idleReleaseEnabled{false};
 std::atomic<uint32_t> g_psCheckMs{0};
 std::atomic<bool> g_psVerified{false};
+// Registered at boot by the app entry point so non-Activity callers can reach
+// setMode() with the render-memory reclaim intact. May legitimately stay null
+// (simulator, ports without the shared boot path).
+GfxRenderer* g_registeredRenderer = nullptr;
 
 // Modem sleep is a policy, not a one-shot request.
 //
@@ -210,6 +218,261 @@ void resumeTimeSync() {
   halClock.setAutoSyncEnabled(SETTINGS.clockAutoSync != 0);
 }
 
+// ---------------------------------------------------------------------------
+// Radio ownership -- see the block comment in NetworkStartup.h.
+//
+// The mutex is created at static-init time the way HalStorage creates its own,
+// so no path can reach a radio command before it exists and nothing has to
+// remember to initialise it.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t kRadioCommandWaitMs = 1500;
+
+struct RadioGate {
+#if !defined(SIMULATOR)
+  SemaphoreHandle_t mutex = nullptr;
+#endif
+  // Counted inside the mutex and read without it: the question is "is a command
+  // executing right now", and a stale yes only costs one extra poll.
+  std::atomic<int> commandDepth{0};
+  std::atomic<int> stationClaims{0};
+  RadioGate() {
+#if !defined(SIMULATOR)
+    mutex = xSemaphoreCreateRecursiveMutex();
+    assert(mutex != nullptr);
+#endif
+  }
+};
+
+RadioGate g_gate;
+
+// One driver command. Held far shorter than any wait a caller could mistake for
+// a hang, and never across prepare()/RenderLock -- that ordering is what would
+// make this lock deadlocked instead of merely contended.
+class CommandLock {
+ public:
+  explicit CommandLock(const uint32_t timeoutMs = kRadioCommandWaitMs) {
+#if !defined(SIMULATOR)
+    if (g_gate.mutex == nullptr) return;
+    taken_ = xSemaphoreTakeRecursive(g_gate.mutex, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+    if (!taken_) {
+      // A command holding the gate this long did not return. That is not slow
+      // networking and must not be reported as it; proceeding anyway is the
+      // lesser evil, because refusing here would turn one wedged caller into a
+      // device that can never touch the radio again.
+      LOG_ERR("NET", "radio command gate held over %lu ms; proceeding anyway",
+              static_cast<unsigned long>(timeoutMs));
+      return;
+    }
+    ++g_gate.commandDepth;
+#else
+    (void)timeoutMs;
+#endif
+  }
+  CommandLock(const CommandLock&) = delete;
+  CommandLock& operator=(const CommandLock&) = delete;
+  ~CommandLock() {
+#if !defined(SIMULATOR)
+    if (!taken_) return;
+    --g_gate.commandDepth;
+    xSemaphoreGiveRecursive(g_gate.mutex);
+#endif
+  }
+
+ private:
+#if !defined(SIMULATOR)
+  bool taken_ = false;
+#endif
+};
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Radio event clock -- see the block comment in NetworkStartup.h.
+// ---------------------------------------------------------------------------
+namespace {
+
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+std::atomic<uint32_t> g_staDisconnectEvents{0};
+std::atomic<uint8_t> g_lastDisconnectReason{0};
+
+void ensureRadioEventClock() {
+  static bool installed = false;
+  if (installed) return;
+  installed = true;
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+      const uint8_t reason = static_cast<uint8_t>(info.wifi_sta_disconnected.reason);
+      g_lastDisconnectReason.store(reason, std::memory_order_relaxed);
+      g_staDisconnectEvents.fetch_add(1, std::memory_order_relaxed);
+      LOG_DBG("NET", "station disconnected reason=%u events=%u", static_cast<unsigned>(reason),
+              static_cast<unsigned>(g_staDisconnectEvents.load(std::memory_order_relaxed)));
+    }
+  });
+}
+#else
+// The simulator has no radio, and the Plus compat layer logs the IDF reason
+// inside its own WiFi.cpp without offering an event API, so nothing can be
+// attributed to the join that is running. Callers are told, in the one place
+// that decides, rather than being handed a count that would always say zero.
+void ensureRadioEventClock() {}
+#endif
+
+}  // namespace
+
+bool tracksRadioEvents() {
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+  return true;
+#else
+  return false;
+#endif
+}
+
+wifi_attempt::Snapshot radioSnapshot() {
+  ensureRadioEventClock();
+  wifi_attempt::Snapshot snap;
+#if defined(SIMULATOR)
+  snap.status = wifi_attempt::kStatusDisconnected;
+#else
+  snap.status = static_cast<int>(WiFi.status());
+#if !defined(CROSSPOINT_PLUS_PORT)
+  snap.disconnectEvents = g_staDisconnectEvents.load(std::memory_order_relaxed);
+#endif
+#endif
+  return snap;
+}
+
+uint8_t lastDisconnectReason() {
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+  return g_lastDisconnectReason.load(std::memory_order_relaxed);
+#else
+  return 0;
+#endif
+}
+
+bool radioCommandActive() { return g_gate.commandDepth.load(std::memory_order_relaxed) > 0; }
+
+bool stationClaimed() { return g_gate.stationClaims.load(std::memory_order_relaxed) > 0; }
+
+// Deliberately only the command test, not the claim: pollIdle() re-asserts
+// "modem sleep off" once a second, and a screen may hold a claim for minutes
+// while a user reads a network list. Gating it on the claim would silently stop
+// re-asserting the policy -- the failure mode AGENTS section 85.2 already caught
+// once ("no error line" is not evidence a mitigation is in force). An
+// interleaved esp_wifi_set_ps() at worst returns ESP_ERR_WIFI_STATE and the next
+// second's pass asks again, which is recoverable.
+bool radioIdle() { return !radioCommandActive(); }
+
+bool waitForRadioQuiet(const uint32_t timeoutMs) {
+#if defined(SIMULATOR)
+  (void)timeoutMs;
+  return true;
+#else
+  const uint32_t start = millis();
+  while (radioCommandActive()) {
+    if (static_cast<uint32_t>(millis() - start) >= timeoutMs) return false;
+    delay(10);
+  }
+  return true;
+#endif
+}
+
+void claimStation(const uint32_t quietTimeoutMs) {
+  // Wait for an in-flight command before claiming so the sequence starts on a
+  // quiet driver; the claim itself is never refused, because a screen must not
+  // lose the station to a queue.
+  if (!waitForRadioQuiet(quietTimeoutMs)) {
+    LOG_INF("NET", "station claimed while a radio command was still executing");
+  }
+  ++g_gate.stationClaims;
+}
+
+void releaseStation() {
+  // Clamped, and the imbalance is reported: releasing a station nobody holds
+  // would leave background work believing a screen still owns it, which is the
+  // silent direction of this bug -- a queue parked for the rest of the session
+  // looks exactly like a network problem.
+  if (g_gate.stationClaims.load(std::memory_order_relaxed) <= 0) {
+    LOG_ERR("NET", "station release with no claim held; ignoring");
+    return;
+  }
+  --g_gate.stationClaims;
+}
+
+StationClaim::StationClaim(const uint32_t quietTimeoutMs) { claimStation(quietTimeoutMs); }
+
+StationClaim::~StationClaim() { releaseStation(); }
+
+int joinStation(const char* ssid, const char* password, const bool connect) {
+#if defined(SIMULATOR)
+  (void)ssid;
+  (void)password;
+  (void)connect;
+  return static_cast<int>(WL_DISCONNECTED);
+#else
+  if (ssid == nullptr || ssid[0] == '\0') return static_cast<int>(WL_DISCONNECTED);
+  ensureRadioEventClock();
+  // The five-argument form, so an empty passphrase is an open network rather
+  // than a literal empty string, and so a screen that runs its own connect
+  // state machine can ask the driver only to configure the station.
+  CommandLock lock;
+  // int, not wl_status_t: the Plus compatibility layer's begin() returns int and
+  // an int does not convert implicitly to an unscoped enum, so naming the enum
+  // type here would break that target while compiling fine on Arduino.
+  const int status = WiFi.begin(ssid, (password != nullptr && password[0] != '\0') ? password : nullptr,
+                                 /*channel=*/0, /*bssid=*/nullptr, connect);
+  return status;
+#endif
+}
+
+bool scanStationAsync() {
+#if defined(SIMULATOR)
+  return true;
+#else
+  CommandLock lock;
+  return WiFi.scanNetworks(true) != WIFI_SCAN_FAILED;
+#endif
+}
+
+void dropAssociation() {
+#if !defined(SIMULATOR)
+  CommandLock lock;
+  WiFi.disconnect(false);
+#endif
+}
+
+void requestNoModemSleep() {
+#if !defined(SIMULATOR)
+  CommandLock lock;
+  // WiFi.setSleep(false) is esp_wifi_set_ps(): a driver command. Rejected while
+  // the driver is down, which is why this is a request and not a guarantee --
+  // enforceNoModemSleep() on the idle path is the guarantee.
+  WiFi.setSleep(false);
+#endif
+}
+
+void shutdownStation() {
+#if !defined(SIMULATOR)
+  CommandLock lock;
+  // The three calls the screens used to write out by hand, in the same order:
+  // the association first (sockets and DHCP close on top of it), then the mode
+  // off, then the deinit that Arduino's mode() short-circuits past when it
+  // already believes itself off.
+  WiFi.disconnect(false);
+  delay(100);
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_deinit();
+#endif
+}
+
+void powerDownRadio() {
+#if !defined(SIMULATOR)
+  CommandLock lock;
+  WiFi.mode(WIFI_OFF);
+#endif
+}
+
 void releaseRadio() {
   g_idleReleaseEnabled.store(false, std::memory_order_relaxed);
   // New radio session: the next verified tick has to say so again.
@@ -239,8 +502,11 @@ void releaseRadio() {
   // Without this the station re-associates within a second (Arduino's
   // auto-reconnect), so the "release" measured status=6 forever.  setMode()
   // turns it back on for the next feature that needs the network.
-  WiFi.setAutoReconnect(false);
-  WiFi.disconnect(false);
+  {
+    CommandLock lock;
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false);
+  }
   LOG_INF("NET", "radio released (association dropped, stack intact), mode=%d",
           static_cast<int>(WiFi.getMode()));
   // The radio session ends here, so the SNTP hold that setMode() took can go.
@@ -289,6 +555,10 @@ bool releaseRadioDeep() {
   // WiFi.mode() persists the mode to NVS while storage is FLASH.  Switching the
   // driver to RAM storage first keeps this teardown entirely off internal flash;
   // the mode is re-established by whatever network feature runs next anyway.
+  // One gate for the entire teardown: a half-applied one -- driver deinit'd
+  // while another task still believes the station is up, or storage left on RAM
+  // because a second caller interleaved -- is worse than a slow one.
+  CommandLock teardownLock;
   esp_wifi_set_storage(WIFI_STORAGE_RAM);
   WiFi.disconnect(false, false);  // association only; wifioff=true would re-enter mode()
   WiFi.mode(WIFI_OFF);
@@ -347,10 +617,25 @@ bool canAffiliate(const bool verbose) {
 #endif
 }
 
-bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) {
+namespace {
+
+// The one bring-up sequence. A null renderer means the caller is a background
+// worker that never registered one: every rule below still applies, and only the
+// render-memory reclaim is skipped, because that is the step needing the object.
+bool setModeInternal(GfxRenderer* renderer, const wifi_mode_t mode) {
+  ensureRadioEventClock();
   bleinput::stop();
   logMemory("after BLE stop");
-  prepare(renderer);
+  if (renderer != nullptr) {
+    prepare(*renderer);
+  } else {
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      LOG_INF("NET", "no renderer registered; skipping the render-memory reclaim for this bring-up");
+    }
+    logMemory("before radio bring-up");
+  }
   // After prepare(): the reclaim above is frequently what makes room for the driver,
   // so deciding before it refuses work that would have succeeded.
   if ((mode & WIFI_MODE_STA) != 0 && !canAffiliate()) {
@@ -361,24 +646,54 @@ bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) {
   // clears the DNS cache; hold the clock off for the whole radio session.
   const bool wasOff = WiFi.getMode() == WIFI_MODE_NULL;
   if (wasOff) suspendTimeSync();
-  WiFi.setAutoReconnect(true);  // releaseRadio() disables it; every session re-enables
-  const bool started = WiFi.mode(mode);
-  if (started && (mode & WIFI_MODE_STA) != 0) {
-    // Kill the modem-sleep path before it can kill the device: with PS enabled,
-    // IDF toggles PHY power gating and calls phy_track_pll_init(), which creates
-    // its timer through ESP_ERROR_CHECK -- at a time chosen by the power manager,
-    // not by us.  Measured on device: that landed inside a PDF session holding
-    // 820 B of largest internal block and aborted the whole machine
-    // (`ESP_ERR_NO_MEM ... phy_common.c:118`).  Keeping PS off removes the code
-    // path entirely.  This call is only a head start -- it is rejected while the
-    // driver is still down, which is why enforceNoModemSleep() re-asserts it on the
-    // idle path.
-    WiFi.setSleep(false);
+  // The mode change and its modem-sleep setting are one pair of driver calls:
+  // both go inside the gate, and the retry sleeps *outside* it so a refused
+  // attempt never occupies the gate while it waits.
+  const auto applyMode = [&]() {
+    CommandLock lock;
+    WiFi.setAutoReconnect(true);  // releaseRadio() disables it; every session re-enables
+    const bool ok = WiFi.mode(mode);
+    if (ok && (mode & WIFI_MODE_STA) != 0) {
+      // Kill the modem-sleep path before it can kill the device: with PS enabled,
+      // IDF toggles PHY power gating and calls phy_track_pll_init(), which creates
+      // its timer through ESP_ERROR_CHECK -- at a time chosen by the power manager,
+      // not by us.  Measured on device: that landed inside a PDF session holding
+      // 820 B of largest internal block and aborted the whole machine
+      // (`ESP_ERR_NO_MEM ... phy_common.c:118`).  Keeping PS off removes the code
+      // path entirely.  This call is only a head start -- it is rejected while the
+      // driver is still down, which is why enforceNoModemSleep() re-asserts it on
+      // the idle path.
+      WiFi.setSleep(false);
+    }
+    return ok;
+  };
+
+  bool started = applyMode();
+  if (!started && (mode & WIFI_MODE_STA) != 0) {
+    // A refused mode change is what the driver answers while another task's
+    // radio command is still executing (ESP_ERR_WIFI_STATE), and every screen in
+    // the project reaches the radio through here -- so this is the one place
+    // that can absorb it instead of each caller guessing which command was in
+    // flight. Bounded to a single retry: a driver that still refuses has a real
+    // problem and the caller should say so.
+    LOG_INF("NET", "station mode refused; retrying once");
+#if !defined(SIMULATOR)
+    delay(400);
+#endif
+    started = applyMode();
   }
   if (!started && wasOff) resumeTimeSync();
   if (started) noteActivity();
   logMemory(started ? "WiFi mode ready" : "WiFi mode failed");
   return started;
 }
+
+}  // namespace
+
+void registerRenderer(GfxRenderer* renderer) { g_registeredRenderer = renderer; }
+
+bool setMode(GfxRenderer& renderer, const wifi_mode_t mode) { return setModeInternal(&renderer, mode); }
+
+bool setMode(const wifi_mode_t mode) { return setModeInternal(g_registeredRenderer, mode); }
 
 }  // namespace NetworkStartup

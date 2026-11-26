@@ -20,6 +20,7 @@
 #include <Utf8.h>
 #include <Util.h>
 #include <WiFi.h>
+#include <NetworkStartup.h>
 #include <WolfsslCrypto.h>
 #include <base64.h>
 #include <esp_efuse.h>
@@ -308,8 +309,10 @@ bool CrossPointWebServer::begin() {
   }
 
   // Disable WiFi sleep to improve responsiveness and prevent 'unreachable' errors.
-  // This is critical for reliable web server operation on ESP32.
-  WiFi.setSleep(false);
+  // This is critical for reliable web server operation on ESP32. Asked of
+  // NetworkStartup rather than the driver directly: esp_wifi_set_ps() is a
+  // command, and the web server starts while a background job may be mid-join.
+  NetworkStartup::requestNoModemSleep();
   // Default varies by ESP32 core version. The activity's loss-recovery loop
   // relies on driver retries during transient disconnects.
   WiFi.setAutoReconnect(true);

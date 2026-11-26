@@ -12,7 +12,9 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 #if defined(CROSSPOINT_PLUS_PORT)
@@ -29,6 +31,7 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "NetworkStartup.h"
+#include "WifiAttempt.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -58,6 +61,10 @@ constexpr int kSheetHeaderH = 54;
 constexpr int kSheetLegendH = 24;
 constexpr int kSheetRowH = 88;
 constexpr int kSheetFooterH = 90;
+// The list sheet is sized by the rows it actually shows, capped here. Reserving
+// a fixed five rows for a four-entry list left a phantom empty row above the
+// footer and pushed the whole sheet past the body on a 125% viewport.
+constexpr int kSheetMaxRows = 5;
 // The join acknowledgement is a state change on the existing connecting sheet,
 // not a second success layout. It lasts just long enough to be seen after the
 // band refresh (~440 ms on Read Pico); the old 2 s hold plus a full-sheet
@@ -132,24 +139,16 @@ void abandonCellularBringUp() {
 }
 #endif  // CROSSPOINT_PLUS_PORT
 
-#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
-// The Wi-Fi sheet only shows the generic wl_status_t (6 = WL_DISCONNECTED), which
-// cannot distinguish a wrong password from an auth/assoc timeout. Log the real
-// disconnect reason once so a field report says "reason=201/202/15/..." instead
-// of only "connection timeout". The Plus compatibility layer has no Arduino
-// onEvent API and already logs the IDF disconnect reason in WiFi.cpp.
-void installWifiReasonLogger() {
-  static bool installed = false;
-  if (installed) return;
-  installed = true;
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
-    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-      LOG_DBG("WIFI", "station disconnected reason=%u",
-              static_cast<unsigned>(info.wifi_sta_disconnected.reason));
-    }
-  });
-}
-#endif
+// The STA disconnect-event clock lives in NetworkStartup with the rest of the
+// radio's global state (see the block comment there): the join that has to be
+// dated is often not this screen's -- the standby silent reconnect and the
+// background queue both read a status they did not write -- so a screen is not
+// allowed to be the only place the driver's history is kept. These two are this
+// file's shorthands for it, and wifi_attempt::classifyBegin()/polledFailureIsLive()
+// are the rules that consume it.
+wifi_attempt::Snapshot readAttemptSnapshot() { return NetworkStartup::radioSnapshot(); }
+
+uint8_t lastDisconnectReason() { return NetworkStartup::lastDisconnectReason(); }
 
 int signalBarsForRssi(const int32_t rssi) {
   if (rssi >= -55) return 4;
@@ -299,7 +298,7 @@ void WifiSelectionActivity::onCancelEvent(const fui::ActionEvent&, void* user) {
   self->app.clearTapFlash();
   if (self->state == WifiSelectionState::SCANNING) WiFi.scanDelete();
   if (self->state == WifiSelectionState::CONNECTING || self->state == WifiSelectionState::AUTO_CONNECTING) {
-    WiFi.disconnect();
+    NetworkStartup::dropAssociation();
   }
   self->onComplete(false);
 }
@@ -368,16 +367,18 @@ void WifiSelectionActivity::onPromptEvent(const fui::ActionEvent& event, void* u
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+  // Own the station before anything else: this screen is about to issue mode,
+  // scan and join commands, and a background queue doing the same at the same
+  // time is what the driver answers with ESP_ERR_WIFI_STATE. Released in
+  // onExit(), after the radio teardown this screen may still do.
+  NetworkStartup::claimStation();
+  stationClaimHeld_ = true;
   // Snapshot the page that launched us before we paint anything: it is the
   // real context the sheet floats over (the design's "page stays visible").
   captureBackdrop();
   NetworkStartup::logMemory("WifiSelectionActivity enter");
   NetworkStartup::prepare(renderer);
   NetworkStartup::hold();
-#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
-  installWifiReasonLogger();
-#endif
-
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
   {
@@ -405,6 +406,10 @@ void WifiSelectionActivity::onEnter() {
   connectedAtMs_ = 0;
   completed_ = false;
   lastWifiStatus_ = 0;
+  attemptStart_ = wifi_attempt::Snapshot{};
+  beginRefused_ = false;
+  staleFailureNoted_ = false;
+  scanRetryUsed_ = false;
   const size_t savedCredentialCount = WIFI_STORE.getCredentialCount();
   autoAttemptedSsids.reserve(savedCredentialCount);
 
@@ -500,11 +505,30 @@ void WifiSelectionActivity::onExit() {
   // association gets the idle grace period.
   if (!keepRadioOnExit_ || WiFi.status() != WL_CONNECTED) NetworkStartup::releaseRadio();
 
+  // The station comes back to whoever wants it next only after this screen's
+  // own teardown has run, so a queue never resumes into a radio we are still
+  // holding down.
+  if (stationClaimHeld_) {
+    NetworkStartup::releaseStation();
+    stationClaimHeld_ = false;
+  }
+
   NetworkStartup::logMemory("WiFi selection exit end");
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }
 
-void WifiSelectionActivity::showNetworkError() {
+void WifiSelectionActivity::showNetworkError(const char* cause) {
+  // "错误:通用故障" is what the user can do nothing about; the line below is what
+  // a report needs. This state is reachable only when the radio itself refused to
+  // come up or a scan was refused, so name the refusal, the driver state, the
+  // last 802.11 reason and the heap the driver was asked to work in.
+  const wifi_attempt::Snapshot snap = readAttemptSnapshot();
+  LOG_ERR("WIFI", "radio bring-up refused: cause=%s mode=%d status=%d reason=%u events=%u", cause ? cause : "?",
+          static_cast<int>(WiFi.getMode()), snap.status, static_cast<unsigned>(lastDisconnectReason()),
+          static_cast<unsigned>(snap.disconnectEvents));
+  // The heap numbers belong to the same event; logMemory already splits them into
+  // internal / DMA / PSRAM, which is what decides whether esp_wifi_init can work.
+  NetworkStartup::logMemory("network error sheet");
   closeRouting();
   app.clearTapFlash();
   autoConnecting = false;
@@ -549,16 +573,22 @@ void WifiSelectionActivity::startWifiScan(const bool autoScan) {
   // Set WiFi mode to station
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) {
     LOG_ERR("WIFI", "Station initialization failed");
-    showNetworkError();
+    showNetworkError("station init");
     return;
   }
-  WiFi.disconnect();
+  NetworkStartup::dropAssociation();
   delay(100);
 
-  // Start async scan
-  if (WiFi.scanNetworks(true) == WIFI_SCAN_FAILED) {
-    LOG_ERR("WIFI", "Could not start scan");
-    showNetworkError();
+  // Start async scan. A refusal to start one is transient in kind -- the driver
+  // answers that way while it is still inside some other operation, and the
+  // sheet has no way to tell which. One short retry costs a frame and keeps that
+  // from becoming a screen the user can only dismiss.
+  if (!NetworkStartup::scanStationAsync()) {
+    LOG_INF("WIFI", "scan start refused; retrying once");
+    delay(300);
+    if (!NetworkStartup::scanStationAsync()) {
+      showNetworkError("scan start");
+    }
   }
 }
 
@@ -571,9 +601,19 @@ void WifiSelectionActivity::processWifiScanResults() {
   }
 
   if (scanResult == WIFI_SCAN_FAILED) {
-    LOG_ERR("WIFI", "Scan failed");
+    // "Failed" from scanComplete() means there is neither a result nor a scan in
+    // progress: the request never took. Retrying once is bounded by
+    // scanRetryUsed_, and it is cheaper than blaming the network for a driver
+    // that was simply busy a moment ago.
     WiFi.scanDelete();
-    showNetworkError();
+    if (!scanRetryUsed_) {
+      scanRetryUsed_ = true;
+      LOG_INF("WIFI", "scan did not complete; retrying once");
+      startWifiScan(autoConnecting);
+      return;
+    }
+    LOG_ERR("WIFI", "Scan failed");
+    showNetworkError("scan never completed");
     return;
   }
 
@@ -808,7 +848,7 @@ bool WifiSelectionActivity::tryNextSavedNetworkFromScan() {
 
 void WifiSelectionActivity::handleAutoConnectFailure() {
   LOG_DBG("WIFI", "Saved network failed: %s", selectedSSID.c_str());
-  WiFi.disconnect();
+  NetworkStartup::dropAssociation();
 
   if (!networks.empty()) {
     if (tryNextSavedNetworkFromScan()) {
@@ -826,7 +866,7 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
 
 void WifiSelectionActivity::showNetworkListFromAutoConnect() {
   LOG_DBG("WIFI", "User requested manual network list");
-  WiFi.disconnect();
+  NetworkStartup::dropAssociation();
   autoConnecting = false;
   manualNetworkListRequested = true;
 
@@ -872,7 +912,7 @@ void WifiSelectionActivity::attemptConnection() {
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) {
     LOG_ERR("WIFI", "Station initialization failed");
-    showNetworkError();
+    showNetworkError("station init (connect)");
     return;
   }
   // Do NOT call WiFi.disconnect(true, true) before begin(). This core's
@@ -902,13 +942,29 @@ void WifiSelectionActivity::attemptConnection() {
 
   // Arduino returns wl_status_t; the Plus compatibility layer returns int.
   // Keep it int and log it as such so both targets compile.
-  int beginStatus = static_cast<int>(WL_DISCONNECTED);
-  if (selectedRequiresPassword && !enteredPassword.empty()) {
-    beginStatus = WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
-  } else {
-    beginStatus = WiFi.begin(selectedSSID.c_str());
-  }
+  const wifi_attempt::Snapshot before = readAttemptSnapshot();
+  attemptStart_ = before;
+  beginRefused_ = false;
+  staleFailureNoted_ = false;
+
+  const bool useEnteredPassword = selectedRequiresPassword && !enteredPassword.empty();
+  const int beginStatus =
+      NetworkStartup::joinStation(selectedSSID.c_str(), useEnteredPassword ? enteredPassword.c_str() : nullptr);
   LOG_DBG("WIFI", "begin returned status=%d", beginStatus);
+
+  // begin() answers with the same value for "the driver refused to start this
+  // join" and for "an earlier attempt was rejected" (the core keeps the last
+  // event's status in one field), so the value is read against the event clock.
+  // A real refusal means no join was issued at all, and waiting 7 s for an event
+  // that can never arrive is what turned that into "错误:通用故障" for a network
+  // that was fine. The next poll takes the existing failure path immediately.
+  const wifi_attempt::Snapshot after{beginStatus, readAttemptSnapshot().disconnectEvents};
+  if (wifi_attempt::classifyBegin(before, after, NetworkStartup::tracksRadioEvents()) ==
+      wifi_attempt::Verdict::DriverRefused) {
+    beginRefused_ = true;
+    LOG_ERR("WIFI", "join not issued: ssid=%s status=%d reason=%u", selectedSSID.c_str(), beginStatus,
+            static_cast<unsigned>(lastDisconnectReason()));
+  }
 }
 
 void WifiSelectionActivity::checkConnectionStatus() {
@@ -1031,11 +1087,44 @@ void WifiSelectionActivity::checkConnectionStatus() {
     return;
   }
 
+  if (beginRefused_) {
+    // attemptConnection() found that the driver never took this join. Ending the
+    // attempt now is the whole point: waiting for an event that cannot arrive
+    // turns a transient refusal into a 7 s stall and then a generic error.
+    beginRefused_ = false;
+    LOG_ERR("WIFI", "join not issued; ending the attempt: ssid=%s status=%d reason=%u", selectedSSID.c_str(),
+            static_cast<int>(status), static_cast<unsigned>(lastDisconnectReason()));
+    connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+    if (autoConnecting) {
+      handleAutoConnectFailure();
+      return;
+    }
+    state = WifiSelectionState::CONNECTION_FAILED;
+    requestUpdate();
+    return;
+  }
+
   if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
+    // Only a disconnect event belongs to the join that is running. The core
+    // stores the last event's status, so after one rejected network every later
+    // attempt reads that rejection and used to end itself here -- a healthy
+    // association abandoned as "错误:通用故障".
+    if (!wifi_attempt::polledFailureIsLive(attemptStart_, readAttemptSnapshot(),
+                                      NetworkStartup::tracksRadioEvents())) {
+      if (!staleFailureNoted_) {
+        staleFailureNoted_ = true;
+        LOG_INF("WIFI", "ignoring a stored failure status (%d) from an earlier attempt; events=%u",
+                static_cast<int>(status), static_cast<unsigned>(readAttemptSnapshot().disconnectEvents));
+      }
+      return;
+    }
     connectionError = tr(STR_ERROR_GENERAL_FAILURE);
     if (status == WL_NO_SSID_AVAIL) {
       connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
     }
+    LOG_ERR("WIFI", "join rejected: ssid=%s status=%d reason=%u events=%u", selectedSSID.c_str(),
+            static_cast<int>(status), static_cast<unsigned>(lastDisconnectReason()),
+            static_cast<unsigned>(readAttemptSnapshot().disconnectEvents));
     if (autoConnecting) {
       handleAutoConnectFailure();
       return;
@@ -1048,7 +1137,7 @@ void WifiSelectionActivity::checkConnectionStatus() {
   // Check for timeout
   const unsigned long timeoutMs = autoConnecting ? AUTO_CONNECTION_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
   if (millis() - connectionStartTime > timeoutMs) {
-    WiFi.disconnect();
+    NetworkStartup::dropAssociation();
     connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
     if (autoConnecting) {
       handleAutoConnectFailure();
@@ -1124,7 +1213,7 @@ void WifiSelectionActivity::loop() {
   if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
     if (state == WifiSelectionState::AUTO_CONNECTING) {
       if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-        WiFi.disconnect();
+        NetworkStartup::dropAssociation();
         onComplete(false);
         return;
       }
@@ -1670,10 +1759,13 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
 
   int sheetHeight = 0;
   switch (state) {
-    case WifiSelectionState::NETWORK_LIST:
-      // grabber + header + legend + five 88 px rows + footer (design: 622-644)
-      sheetHeight = kSheetGrabberBand + kSheetHeaderH + kSheetLegendH + 5 * kSheetRowH + kSheetFooterH;
+    case WifiSelectionState::NETWORK_LIST: {
+      // grabber + header + legend + one 88 px row per entry + footer. The height
+      // follows the list, so a four-entry list no longer reserves a fifth row.
+      const int rows = std::clamp<int>(static_cast<int>(networks.size()), 1, kSheetMaxRows);
+      sheetHeight = kSheetGrabberBand + kSheetHeaderH + kSheetLegendH + rows * kSheetRowH + kSheetFooterH;
       break;
+    }
     case WifiSelectionState::CONNECTION_FAILED:
     case WifiSelectionState::NETWORK_ERROR:
       sheetHeight = 340;
@@ -1697,7 +1789,11 @@ WifiSelectionActivity::SheetGeom WifiSelectionActivity::sheetGeom() const {
                   kSheetFooterH};
   g.rows = Rect{0, (g.legend.y + g.legend.height), static_cast<int16_t>(width),
                 static_cast<int16_t>(std::max(0, g.footer.y - (g.legend.y + g.legend.height)))};
-  g.visibleRows = static_cast<int16_t>(std::max(1, g.rows.height / kSheetRowH));
+  // Never claim more rows than the list has: the scroll math and the paint loop
+  // both read this, and an over-claim is what drew an empty slot.
+  const int rowCapacity = std::max(1, g.rows.height / kSheetRowH);
+  const int rowCount = std::max(1, static_cast<int>(networks.size()));
+  g.visibleRows = static_cast<int16_t>(std::min(rowCapacity, rowCount));
 
   const int innerLeft = kSheetSidePad;
   const int innerWidth = width - 2 * kSheetSidePad;
@@ -1796,7 +1892,7 @@ void WifiSelectionActivity::cancelSheet() {
 #endif
   if (state == WifiSelectionState::SCANNING) WiFi.scanDelete();
   if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
-    WiFi.disconnect();
+    NetworkStartup::dropAssociation();
   }
   onComplete(false);
 }
@@ -2199,7 +2295,7 @@ void WifiSelectionActivity::handleSheetInput() {
       if (cellularNetworkActive()) return;
 #endif
       if (tapped(g.btn2)) {
-        WiFi.disconnect();
+        NetworkStartup::dropAssociation();
         startWifiScan();
         return;
       }

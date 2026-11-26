@@ -45,7 +45,9 @@
 #ifdef ENABLE_CHINESE_VERSION
 #ifdef BOARD_HAS_PSRAM
 #include "booksource/BookSource.h"
+#if !defined(SIMULATOR)
 #include "apps/webbrowser/WebBrowserActivity.h"
+#endif
 #endif
 #include "apps/weread/WeReadActivity.h"
 #endif
@@ -204,6 +206,11 @@ void ActivityManager::noteActivitySwitch() {
   renderer.noteContentSwitch();
 }
 
+static GfxRenderer::CoordSpace coordSpaceFor(const Activity* activity) {
+  return activity && activity->uiLayoutMode() == Activity::UiLayoutMode::Native ? GfxRenderer::CoordSpace::Native
+                                                                                : GfxRenderer::CoordSpace::Ui;
+}
+
 void ActivityManager::renderTaskLoop() {
   auto waitTicks = portMAX_DELAY;
   uint32_t idleGeneration = 0;
@@ -222,7 +229,17 @@ void ActivityManager::renderTaskLoop() {
         idleGeneration = idleRenderGeneration.load(std::memory_order_relaxed);
         display.setInverted(SETTINGS.screenInverted != 0);
         const uint32_t renderStart = millis();
-        currentActivity->render(std::move(lock));
+        {
+          // A UI-scale change invalidates the retained frame (and the retained
+          // 4bpp canvas): start the first frame at the new viewport from white
+          // instead of compositing over the previous layout.
+          if (renderer.takeFullRedrawRequest()) {
+            renderer.clearScreen();
+            renderer.noteContentSwitch();
+          }
+          const GfxRenderer::ScopedCoordSpace renderSpace(renderer, coordSpaceFor(currentActivity.get()));
+          currentActivity->render(std::move(lock));
+        }
         if (awaitingFirstFrame_) {
           awaitingFirstFrame_ = false;
           LOG_INF("PERF", "%s first frame: render=%ums since switch=%ums",
@@ -235,6 +252,7 @@ void ActivityManager::renderTaskLoop() {
         boottimings::markFirstPaint();
         if (delayMs != 0) waitTicks = pdMS_TO_TICKS(delayMs);
       } else if (!idleRenderCancelled(idleGeneration)) {
+        const GfxRenderer::ScopedCoordSpace renderSpace(renderer, coordSpaceFor(currentActivity.get()));
         currentActivity->renderIdle(idleGeneration);
       }
     }
@@ -253,6 +271,7 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+  const GfxRenderer::ScopedCoordSpace activitySpace(renderer, coordSpaceFor(currentActivity.get()));
   // One source of truth for the band-update mode: whatever activity is on top
   // decides. pushActivity/popActivity only queue the switch, so this runs before
   // any pending transition too -- the new activity's first render then already
@@ -358,7 +377,10 @@ void ActivityManager::loop() {
         // A null entry is the same kind of invalid parent.
         LOG_ERR("ACT", "Popped to an invalid parent; going home instead");
         while (!stackActivities.empty()) {
-          if (stackActivities.back()) stackActivities.back()->onExit();
+          if (stackActivities.back()) {
+            const GfxRenderer::ScopedCoordSpace exitSpace(renderer, coordSpaceFor(stackActivities.back().get()));
+            stackActivities.back()->onExit();
+          }
           stackActivities.pop_back();
         }
         lock.unlock();  // goHome may acquire its own lock
@@ -416,7 +438,10 @@ void ActivityManager::loop() {
         exitActivity(lock);
         // Clear the stack
         while (!stackActivities.empty()) {
-          if (stackActivities.back()) stackActivities.back()->onExit();
+          if (stackActivities.back()) {
+            const GfxRenderer::ScopedCoordSpace exitSpace(renderer, coordSpaceFor(stackActivities.back().get()));
+            stackActivities.back()->onExit();
+          }
           stackActivities.pop_back();
         }
       } else if (pendingAction.load() == PendingAction::Push) {
@@ -447,7 +472,10 @@ void ActivityManager::loop() {
 #endif
 
       lock.unlock();  // onEnter may acquire its own lock
-      currentActivity->onEnter();
+      {
+        const GfxRenderer::ScopedCoordSpace enterSpace(renderer, coordSpaceFor(currentActivity.get()));
+        currentActivity->onEnter();
+      }
 
       // onEnter may request another pending action, we will handle it in the next loop iteration
       continue;
@@ -623,7 +651,10 @@ bool ActivityManager::handleMainTabInput() {
 void ActivityManager::exitActivity(const RenderLock& lock) {
   // Note: lock must be held by the caller
   if (currentActivity) {
-    currentActivity->onExit();
+    {
+      const GfxRenderer::ScopedCoordSpace exitSpace(renderer, coordSpaceFor(currentActivity.get()));
+      currentActivity->onExit();
+    }
     currentActivity.reset();
   }
   // The outgoing screen's header back button must not eat taps on the next
@@ -660,7 +691,10 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     currentActivity = std::move(newActivity);
     noteActivitySwitch();
     resetHomeStandbyInput();
-    currentActivity->onEnter();
+    {
+      const GfxRenderer::ScopedCoordSpace enterSpace(renderer, coordSpaceFor(currentActivity.get()));
+      currentActivity->onEnter();
+    }
   }
 }
 
@@ -1005,7 +1039,14 @@ void ActivityManager::goToJjwxc() {
   }
   replaceActivity(std::move(activity));
 }
-void ActivityManager::goToWebBrowser() { replaceActivityWith<WebBrowserActivity>(); }
+void ActivityManager::goToWebBrowser() {
+#if defined(SIMULATOR)
+  // The browser needs FreeRTOS task and secure-HTTP APIs the host shim lacks.
+  LOG_INF("ACT", "web browser is not available in simulator builds");
+#else
+  replaceActivityWith<WebBrowserActivity>();
+#endif
+}
 #endif
 #endif
 
@@ -1182,6 +1223,11 @@ void ActivityManager::requestUpdateAndWait() {
 }
 
 void ActivityManager::debugDumpTaskStates() {
+#if defined(SIMULATOR)
+  // The native shim has no FreeRTOS task table or HAL mutex diagnostics.
+  logSerial.printf("TASKS unavailable in simulator builds\n");
+  return;
+#else
   static const char* kStateNames[] = {"run", "ready", "block", "susp", "del", "invalid"};
   TaskStatus_t tasks[24];
   const UBaseType_t count = uxTaskGetSystemState(tasks, 24, nullptr);
@@ -1195,6 +1241,7 @@ void ActivityManager::debugDumpTaskStates() {
     logSerial.printf("TASK %-20s st=%s prio=%u stackFree=%u\n", tasks[i].pcTaskName, state,
                      (unsigned)tasks[i].uxCurrentPriority, (unsigned)tasks[i].usStackHighWaterMark);
   }
+#endif
 }
 
 // RenderLock

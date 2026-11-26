@@ -126,6 +126,19 @@ inline constexpr ThemeMetrics values = makeValues();
 
 class CpyTheme final : public UpstreamStyleTheme {
  public:
+  // The CPY artwork and metrics were authored against Read Pico's 684x1216
+  // logical frame, so name it explicitly there. Any other panel lays out from
+  // its own logical size; reusing this spec on a panel with a different logical
+  // shape would letterbox the UI (the Metalio Plus happens to report the same
+  // 684x1216 today, but its theme must not depend on that). An empty spec means
+  // "design size == native size", which still honours the user scale.
+  ui_viewport::DesignSpec uiDesignSpec() const override {
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI) && FREEINK_DEVICE_READPICO
+    return {684, 1216};
+#else
+    return {};
+#endif
+  }
   void fillBatteryIcon(const GfxRenderer& renderer, Rect rect, uint16_t percentage) const override;
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle = nullptr,
                   bool backButton = true) const override;

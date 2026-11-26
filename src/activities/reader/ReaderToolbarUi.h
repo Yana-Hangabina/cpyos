@@ -150,6 +150,7 @@ class ReaderToolbarUi : public UiAppHost {
   int grabberZoneBottom() const { return sheetTop_ + 64; }
 
  private:
+  GfxRenderer& renderer_;
   static void screenFn(UiScreen& screen, void* user);
   static void onAction(const freeink::ui::ActionEvent& event, void* user);
   void buildToolbar(UiScreen& screen);

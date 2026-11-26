@@ -611,11 +611,16 @@ bool WebBrowserActivity::trySavedNetwork() {
     return false;
   }
   LOG_INF(kTag, "connecting saved network %.32s", credential->ssid.c_str());
+  // Own the station for the whole bring-up, wait included: a background queue
+  // starting its own join here is what the driver answers with
+  // ESP_ERR_WIFI_STATE, and the screen that gets refused cannot tell that from
+  // a dead network. RAII, because this function has several exits.
+  NetworkStartup::StationClaim claim;
   // setMode, not WiFi.mode: it stops BLE and reclaims render memory first.
   // Silent-connecting without it left the wolfSSL handshake short of a
   // contiguous internal block (measured: largest 9.2 KB vs 12.2 KB).
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) return false;
-  WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+  NetworkStartup::joinStation(credential->ssid.c_str(), credential->password.c_str());
   // 15 s: associations on this device have been seen to take 1.4 s warm and
   // longer after a cold radio start; the wait card stays under the 20 s slow
   // hint either way.

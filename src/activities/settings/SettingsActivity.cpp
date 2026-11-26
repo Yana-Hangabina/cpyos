@@ -36,7 +36,9 @@
 #include "AboutActivity.h"
 #include "VocabularyActivity.h"
 #include "AppVisibilitySettingsActivity.h"
+#if !defined(SIMULATOR)
 #include "BluetoothSettingsActivity.h"
+#endif
 #include "ButtonRemapActivity.h"
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
 #include "BuzzerFeedback.h"
@@ -49,7 +51,9 @@
 #endif
 #include "DictionaryDownloadActivity.h"
 #include "FontDownloadActivity.h"
+#if !defined(SIMULATOR)
 #include "FontExtrasActivity.h"
+#endif
 #include "HomeButtonSettingsActivity.h"
 #include "InxItemLayout.h"
 #include "KOReaderSettingsActivity.h"
@@ -579,11 +583,10 @@ void SettingsActivity::rebuildSettingsLists() {
   if (HalSystem::supportsUsbDownloadMode()) {
     systemSettings.push_back(SettingInfo::Action(StrId::STR_USB_DOWNLOAD_MODE, SettingAction::UsbDownloadMode));
   }
-#if defined(CROSSPOINT_PDF_XIP)
-#endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_PLUGINS, SettingAction::Plugins));
-#if defined(CROSSPOINT_PDF_XIP)
-  // Maintenance for a plugin-like component: updated from the network, never from a card.
+#if defined(CROSSPOINT_PDF_XIP) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
+  // The engine is maintained from the Plugins page whenever that page exists;
+  // only images without the native plugin runtime keep the settings door.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_PDF_ENGINE_UPDATE, SettingAction::PdfEngine));
 #endif
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
@@ -1072,6 +1075,16 @@ void SettingsActivity::toggleCurrentSetting() {
     } else {
       SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
     }
+    if (setting.valuePtr == &CrossPointSettings::uiScalePercent) {
+      // Geometry and native font faces both follow the new viewport. Keep this
+      // in the UI task: the render task must never resize faces mid-frame.
+      UITheme::getInstance().applyRendererGeometry(renderer);
+      RenderLock lock;
+      typography::apply(renderer, SETTINGS.uiFontScale);
+#if CROSSPOINT_VECTOR_FONTS
+      sdFontSystem.loadSupplementFonts(renderer, SETTINGS.fontPointSize);
+#endif
+    }
   } else if (setting.type == SettingType::ACTION) {
     // Every child page returns here through ActivityManager's Pop; make sure the
     // settings list is both rebuilt (values may have changed) and repainted.
@@ -1098,6 +1111,10 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::Bluetooth:
 #if FREEINK_CAP_BLE_HID_HOST
         releaseListsForMemoryHungryChild();
+#if defined(SIMULATOR)
+        rebuildSettingsLists();
+        requestUpdate();
+#else
         if (!startActivityForResultWith<BluetoothSettingsActivity>(resultHandler)) {
           rebuildSettingsLists();
           requestUpdate();
@@ -1283,14 +1300,20 @@ void SettingsActivity::toggleCurrentSetting() {
           rebuildSettingsLists();
           requestUpdate();
         }
+#endif
         break;
       case SettingAction::DownloadFontExtras:
+#if defined(SIMULATOR)
+        // Font Extras streams vector packs from SD; the host shim has no faces.
+        break;
+#else
         releaseListsForMemoryHungryChild();
         if (!startActivityForResultWith<FontExtrasActivity>(resultHandler)) {
           rebuildSettingsLists();
           requestUpdate();
         }
         break;
+#endif
       case SettingAction::ManageDictionaries:
         startActivityForResultWith<DictionaryDownloadActivity>([this](const ActivityResult&) {
           SETTINGS.saveToFile();
@@ -1641,6 +1664,9 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
       snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
                static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
       return valueBuffer;
+    }
+    if (setting.valuePtr == &CrossPointSettings::uiScalePercent) {
+      return std::to_string(SETTINGS.uiScalePercent) + "%";
     }
     if (setting.valuePtr == &CrossPointSettings::readerLineSpacingPercent) {
       // The raw field is a percentage where 0 means "keep the level factors";

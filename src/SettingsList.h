@@ -311,6 +311,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #if CROSSPOINT_CAP_BUZZER_FEEDBACK
                                   + 3
 #endif
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+                                  + 1
+#endif
 #if defined(CROSSPOINT_PLUS_PORT)
                                   + 1
 #endif
@@ -388,6 +391,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_FONT_SCALE_COMPACT, StrId::STR_FONT_SCALE_STANDARD,
                            StrId::STR_FONT_SCALE_LARGE, StrId::STR_FONT_SCALE_XLARGE},
                           "uiFontScale", StrId::STR_CAT_DISPLAY),
+#endif
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+        SettingInfo::Value(StrId::STR_UI_SCALE, &CrossPointSettings::uiScalePercent, {100, 125, 5}, "uiScalePercent",
+                           StrId::STR_CAT_DISPLAY),
 #endif
     });
     v.insert(v.end(), {

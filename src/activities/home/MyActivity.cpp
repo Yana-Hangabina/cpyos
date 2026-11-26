@@ -25,7 +25,9 @@
 #include "activities/apps/reading-stats/ReadingHeatmapActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/settings/AboutActivity.h"
+#if !defined(SIMULATOR)
 #include "activities/settings/BluetoothSettingsActivity.h"
+#endif
 #include "activities/settings/ScreenRepairActivity.h"
 #include "activities/settings/SettingsSearchActivity.h"
 #include "activities/settings/SettingsActivity.h"
@@ -47,7 +49,6 @@ constexpr int kCardH = 296;
 constexpr int kCardGapX = 20;
 constexpr int kCardGapY = 20;
 constexpr int kCardHeader = 56;
-constexpr int kCardRow = 80;
 constexpr int kToolW = 139;
 constexpr int kToolH = 120;
 constexpr int kToolGap = 16;
@@ -196,6 +197,48 @@ Rect MyActivity::bodyRect() const {
   return Rect{content.x, content.y + kTabH, content.width, std::max(0, content.height - kTabH)};
 }
 
+MyActivity::RecordsLayout MyActivity::recordsLayout() const {
+  const Rect body = bodyRect();
+  const uint16_t uiPermille = renderer.uiViewport().scalePermille;
+  const auto scaled = [uiPermille](const int value) { return value * uiPermille / 1000; };
+  RecordsLayout l;
+  // Header block stacked by real line heights: the serif "9h34" is taller than
+  // the fixed 52/82 offsets assumed, so the delta line and the wave used to be
+  // painted through the digits whenever there was weekly reading time.
+  const int line10 = renderer.getLineHeight(UI_10_FONT_ID);
+  const int bigLine = renderer.getLineHeight(NOTOSERIF_TITLE_FONT_ID);
+  l.titleY = body.y + scaled(28);
+  l.bigY = l.titleY + line10 + 4;
+  l.deltaY = l.bigY + bigLine - 2;
+  l.waveY = l.deltaY + line10 + 8;
+  l.barsTop = std::max(body.y + scaled(150), l.waveY + 16);
+  const int bottomLimit = body.y + body.height - 52 - 8;  // session line + air
+  // The absolute stack (baseline 104, 24 px heat cells, three book rows and the
+  // achievements row) needs 872 px plus the 52 px session line. Keep it
+  // byte-identical when the logical viewport is at least that tall.
+  constexpr int kBaseNeed = 872 + 52 + 8;
+  // The header stack can push the bars below the authored 150 px; everything
+  // below moves with it so the month title never lands on the weekday labels.
+  const int headerPush = l.barsTop - (body.y + scaled(150));
+  if (body.height >= kBaseNeed) {
+    l.heatTop = body.y + scaled(300) + headerPush;
+    l.listTop = body.y + scaled(508) + headerPush;
+    l.moreY = body.y + scaled(816) + headerPush;
+    return l;
+  }
+  const int deficit = kBaseNeed - body.height;
+  l.barMaxH = std::clamp(96 - deficit / 3, 36, 96);
+  l.cellPitch = std::clamp(24 - deficit / 24, 16, 24);
+  l.heatTop = l.barsTop + l.barMaxH + 8 + 46;
+  l.listTop = l.heatTop + 34 + 7 * l.cellPitch + 6;
+  l.moreY = std::min(body.y + scaled(816) + headerPush, bottomLimit - 56);
+  const int rowsTop = l.listTop + 32;
+  if (l.moreY <= rowsTop + 44) l.moreY = 0;
+  const int rowsBottom = l.moreY > 0 ? l.moreY - 12 : bottomLimit;
+  l.rows = std::clamp((rowsBottom - rowsTop) / 88, 0, 3);
+  return l;
+}
+
 Rect MyActivity::cardRect(const int index) const {
   const Rect body = bodyRect();
   // Quick pills (14), search row (52), then 18 px of air before the cards.
@@ -205,13 +248,20 @@ Rect MyActivity::cardRect(const int index) const {
   // inside a 594 content band, so the grid ended 9-10 px past the right margin
   // (left 45 / right 36 on a 684 px screen).
   const int w = (body.width - kMargin * 2 - kCardGapX) / 2;
+  // A UI scale above 100% shrinks the logical viewport, so the 296 px tiles
+  // plus the about row no longer fit. Keep 296 whenever it does, and shrink the
+  // tiles (their rows follow) instead of drawing under the tab bar.
+  constexpr int kAboutBlock = 16 + 64;
+  const int avail = body.y + body.height - 8 - top - kAboutBlock - kCardGapY;
+  const int h = std::clamp(avail / 2, kCardHeader + 3 * 48, kCardH);
   return Rect{body.x + kMargin + (index % 2) * (w + kCardGapX),
-              top + (index / 2) * (kCardH + kCardGapY), w, kCardH};
+              top + (index / 2) * (h + kCardGapY), w, h};
 }
 
 Rect MyActivity::cardRowRect(const int card, const int row) const {
   const Rect r = cardRect(card);
-  return Rect{r.x, r.y + kCardHeader + row * kCardRow, r.width, kCardRow};
+  const int rowH = std::max(48, (r.height - kCardHeader) / 3);
+  return Rect{r.x, r.y + kCardHeader + row * rowH, r.width, rowH};
 }
 
 Rect MyActivity::quickPillRect(const int index) const {
@@ -236,18 +286,34 @@ Rect MyActivity::searchRowRect() const {
 Rect MyActivity::aboutRect() const {
   const Rect body = bodyRect();
   const Rect last = cardRect(3);
-  return Rect{body.x + kMargin, last.y + kCardH + 16, body.width - kMargin * 2, 64};
+  return Rect{body.x + kMargin, last.y + last.height + 16, body.width - kMargin * 2, 64};
 }
 
 Rect MyActivity::toolCellRect(const int index) const {
   const Rect body = bodyRect();
   const int column = index % kToolColumns;
   const int row = index / kToolColumns;
-  const int top = body.y + 12 + row * (kToolH + 16);
+  const int total = toolCount();
+  const int rows = (total + kToolColumns - 1) / kToolColumns;
+  // A larger UI scale shrinks the logical height while the catalogue keeps
+  // growing (18 tiles = six rows). Compress the row pitch instead of letting
+  // the last row slide under the tab bar. 100% keeps kToolH (body ~940 px).
+  int gap = kToolGap;
+  int cellH = kToolH;
+  if (rows > 0) {
+    const int avail = body.height - 12 - 8;
+    int fit = (avail - (rows - 1) * kToolGap) / rows;
+    if (fit < kToolH) {
+      if (fit < 96) gap = 8;
+      fit = (avail - (rows - 1) * gap) / rows;
+      cellH = std::clamp(fit, 80, kToolH);
+    }
+  }
+  const int top = body.y + 12 + row * (cellH + gap);
   // Fill the content axis: 4 * 139 + 3 * 16 = 604 was 10 px wider than the
   // 594 px band, so the last column ran under the right margin.
   const int w = (body.width - kMargin * 2 - (kToolColumns - 1) * kToolGap) / kToolColumns;
-  return Rect{body.x + kMargin + column * (w + kToolGap), top, w, kToolH};
+  return Rect{body.x + kMargin + column * (w + kToolGap), top, w, cellH};
 }
 
 int MyActivity::toolCount() const {
@@ -304,7 +370,8 @@ void MyActivity::drawRecords() {
   const bool clock = validClock();
   const uint32_t today = clock ? dayOrdinalFor(now) : 0;
 
-  renderer.drawText(UI_10_FONT_ID, x, body.y + 28, tr(STR_READING_WEEKLY), true, EpdFontFamily::BOLD);
+  const RecordsLayout layout = recordsLayout();
+  renderer.drawText(UI_10_FONT_ID, x, layout.titleY, tr(STR_READING_WEEKLY), true, EpdFontFamily::BOLD);
   if (clock) {
     struct tm local {};
     localtime_r(&now, &local);
@@ -317,12 +384,12 @@ void MyActivity::drawRecords() {
         TimeUtils::getDateFromDayOrdinal(today, y2, m2, d2)) {
       std::snprintf(range, sizeof(range), "%u.%u – %u.%u", m1, d1, m2, d2);
       const int rw = renderer.getTextWidth(UI_10_FONT_ID, range);
-      renderer.drawText(UI_10_FONT_ID, x + w - rw, body.y + 28, range);
+      renderer.drawText(UI_10_FONT_ID, x + w - rw, layout.titleY, range);
     }
   }
 
   const std::string big = compactDuration(weekMs);
-  renderer.drawText(NOTOSERIF_TITLE_FONT_ID, x, body.y + 52, big.c_str(), true, EpdFontFamily::BOLD);
+  renderer.drawText(NOTOSERIF_TITLE_FONT_ID, x, layout.bigY, big.c_str(), true, EpdFontFamily::BOLD);
   const int bigW = renderer.getTextWidth(NOTOSERIF_TITLE_FONT_ID, big.c_str(), EpdFontFamily::BOLD);
   if (prevMs > 0) {
     const int delta = static_cast<int>(static_cast<int64_t>(weekMs - prevMs) * 100 / static_cast<int64_t>(prevMs));
@@ -330,13 +397,13 @@ void MyActivity::drawRecords() {
     std::snprintf(deltaText, sizeof(deltaText), "%+d%%", delta);
     char vs[64];
     std::snprintf(vs, sizeof(vs), I18N.get(StrId::STR_VS_LAST_WEEK_FMT), deltaText);
-    renderer.drawText(UI_10_FONT_ID, x + bigW + 18, body.y + 82, vs);
+    renderer.drawText(UI_10_FONT_ID, x + bigW + 18, layout.deltaY, vs);
   }
-  drawWaveLine(x, body.y + 122, w);
+  drawWaveLine(x, layout.waveY, w);
 
   // Seven day columns.
-  const int barsTop = body.y + 150;
-  const int baseline = barsTop + 104;
+  const int barsTop = layout.barsTop;
+  const int baseline = barsTop + layout.barMaxH + 8;
   const int colW = w / 7;
   std::array<uint64_t, 7> weekMsDays{};
   uint64_t maxMs = 1;
@@ -351,7 +418,7 @@ void MyActivity::drawRecords() {
   for (int i = 0; i < 7; ++i) {
     const size_t daysAgo = 6 - static_cast<size_t>(i);
     const uint64_t ms = clock ? weekMsDays[daysAgo] : 0;
-    const int h = ms == 0 ? 4 : 4 + static_cast<int>(ms * 96 / maxMs);
+    const int h = ms == 0 ? 4 : 4 + static_cast<int>(ms * layout.barMaxH / maxMs);
     const int bx = x + i * colW + (colW - 44) / 2;
     if (i == 6) {
       renderer.fillRoundedRect(bx, baseline - h, 44, h, 4, Color::Black);
@@ -372,8 +439,10 @@ void MyActivity::drawRecords() {
     }
   }
 
-  // Month heatmap: 7 rows (Sun..Sat) x week columns, 20 px cells.
-  const int hmTop = body.y + 300;
+  // Month heatmap: 7 rows (Sun..Sat) x week columns.
+  const int hmTop = layout.heatTop;
+  const int cellPitch = layout.cellPitch;
+  const int cellSize = cellPitch - 4;
   renderer.drawText(UI_10_FONT_ID, x, hmTop, tr(STR_HEATMAP_MONTH), true, EpdFontFamily::BOLD);
   {
     const char* less = tr(STR_LESS);
@@ -401,7 +470,7 @@ void MyActivity::drawRecords() {
     const uint32_t days = ordinalDaysInMonth(first);
     const int firstWeekday = weekdayOf(first);
     const int columns = (firstWeekday + static_cast<int>(days) + 6) / 7;
-    const int gridW = columns * 20 + (columns - 1) * 4;
+    const int gridW = columns * cellSize + (columns - 1) * 4;
     const int gx = x + (w - gridW) / 2;
     const int gy = hmTop + 34;
     for (uint32_t d = 0; d < days; ++d) {
@@ -419,22 +488,22 @@ void MyActivity::drawRecords() {
           break;
         }
       }
-      const int cx = gx + col * 24;
-      const int cy = gy + row * 24;
+      const int cx = gx + col * cellPitch;
+      const int cy = gy + row * cellPitch;
       if (minutes == 0) {
-        renderer.drawRoundedRect(cx, cy, 20, 20, 2, 2, true);
+        renderer.drawRoundedRect(cx, cy, cellSize, cellSize, 2, 2, true);
       } else if (minutes < 15) {
-        renderer.fillRoundedRect(cx, cy, 20, 20, 2, Color::LightGray);
+        renderer.fillRoundedRect(cx, cy, cellSize, cellSize, 2, Color::LightGray);
       } else if (minutes < 45) {
-        renderer.fillRoundedRect(cx, cy, 20, 20, 2, Color::DarkGray);
+        renderer.fillRoundedRect(cx, cy, cellSize, cellSize, 2, Color::DarkGray);
       } else {
-        renderer.fillRoundedRect(cx, cy, 20, 20, 2, Color::Black);
+        renderer.fillRoundedRect(cx, cy, cellSize, cellSize, 2, Color::Black);
       }
     }
   }
 
   // Books with reading time this week.
-  const int listTop = body.y + 508;
+  const int listTop = layout.listTop;
   renderer.drawText(UI_10_FONT_ID, x, listTop, tr(STR_BOOK_BREAKDOWN), true, EpdFontFamily::BOLD);
   std::vector<std::pair<uint64_t, const ReadingBookStats*>> weekly;
   const uint32_t weekStart = clock ? today - 6 : 0;
@@ -446,7 +515,8 @@ void MyActivity::drawRecords() {
     if (ms > 0) weekly.push_back({ms, &book});
   }
   std::sort(weekly.begin(), weekly.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-  if (weekly.size() > 3) weekly.resize(3);
+  const size_t maxRows = static_cast<size_t>(std::max(0, layout.rows));
+  if (weekly.size() > maxRows) weekly.resize(maxRows);
   const int listHeaderY = listTop;
   {
     char count[32];
@@ -475,8 +545,8 @@ void MyActivity::drawRecords() {
 
   // Achievements and the reading profile live behind their own page; this
   // quiet row keeps them reachable from the chart without another card.
-  const int moreY = body.y + 816;
-  if (moreY + 56 < body.y + body.height) {
+  const int moreY = layout.moreY;
+  if (moreY > 0 && moreY + 56 <= body.y + body.height - 52) {
     renderer.drawLine(x, moreY, x + w, moreY, true);
     drawMaskIcon(renderer, icon_trophy_48, x, moreY + 12, 24);
     renderer.drawText(UI_10_FONT_ID, x + 36, moreY + 14, tr(STR_ACHIEVEMENTS_PROFILE), true,
@@ -484,8 +554,9 @@ void MyActivity::drawRecords() {
     drawChevron(renderer, x + w - 10, moreY + 18);
   }
 
-  // Session line at the foot.
-  const int sessionY = body.y + body.height - 52;
+  // Session line at the foot. A compressed viewport puts it right against the
+  // tab bar's duck/ripple art, so lift it by the ornament's overhang.
+  const int sessionY = body.y + body.height - 52 - (body.height < 932 ? 20 : 0);
   drawMaskIcon(renderer, icon_clock_48, x, sessionY + 2, 20);
   renderer.drawText(UI_10_FONT_ID, x + 28, sessionY + 4, tr(STR_SESSION_READING));
   const auto& session = READING_STATS.getLastSessionSnapshot();
@@ -711,10 +782,14 @@ void MyActivity::drawAboutRow() {
   drawChevron(renderer, r.x + r.width - 18, r.y + r.height / 2 - 6);
 
   const int noteY = r.y + r.height + 8;
-  if (noteY + 24 < body.y + body.height) {
+  const bool noteVisible = noteY + 24 < body.y + body.height;
+  if (noteVisible) {
     renderer.drawText(SMALL_FONT_ID, r.x, noteY, tr(STR_SETTINGS_EFFECT_NOTE));
   }
-  drawRipples(body.x + body.width - 100, body.y + body.height - 60, 62);
+  // The ripples are a footer ornament: when the compressed layout pushes the
+  // about row down to the body edge they would paint over its version label,
+  // so they only appear when the note row still leaves room for them.
+  if (noteVisible) drawRipples(body.x + body.width - 100, body.y + body.height - 60, 62);
 }
 
 void MyActivity::drawSettings() {
@@ -772,21 +847,24 @@ bool MyActivity::handleTabTouch(const int x, const int y) {
 
 bool MyActivity::handleRecordTouch(const int x, const int y) {
   const Rect body = bodyRect();
+  const RecordsLayout layout = recordsLayout();
   const int contentX = body.x + kMargin;
   const int contentW = body.width - kMargin * 2;
-  if (y >= body.y + 290 && y <= body.y + 430) {
+  const int baseline = layout.barsTop + layout.barMaxH + 8;
+  const int rowsTop = layout.listTop + 32;
+  if (y >= layout.heatTop - 6 && y <= layout.heatTop + 34 + 7 * layout.cellPitch + 6) {
     activityManager.pushActivity(std::make_unique<ReadingHeatmapActivity>(renderer, mappedInput));
     return true;
   }
-  if (y >= body.y + 816 && y <= body.y + 872) {
+  if (layout.rows > 0 && y >= rowsTop && y <= rowsTop + layout.rows * 88) {
     openBookList();
     return true;
   }
-  if (y >= body.y + 500 && y <= body.y + 815) {
+  if (layout.moreY > 0 && y >= layout.moreY && y <= layout.moreY + 56) {
     openBookList();
     return true;
   }
-  if (y >= body.y + 130 && y <= body.y + 280) {
+  if (y >= layout.barsTop - 20 && y <= baseline + 30) {
     const time_t now = time(nullptr);
     if (validClock()) {
       const uint32_t today = dayOrdinalFor(now);
@@ -830,7 +908,15 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
             std::make_unique<WifiSelectionActivity>(renderer, mappedInput, /*autoConnect=*/false,
                                                     /*keepRadioOnExit=*/true));
       } else if (i == 1) {
+#if !defined(SIMULATOR)
+#if !defined(SIMULATOR)
         activityManager.pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput));
+#else
+        openSettingsCategory(2);
+#endif
+#else
+        openSettingsCategory(2);
+#endif
       } else {
         openSettingsCategory(0);
       }
@@ -950,7 +1036,19 @@ void MyActivity::render(RenderLock&&) {
   // by Home would otherwise force a whole-screen GC16 on the way here (a visible
   // flash), and the tabs must be able to trade places without one.
   const bool gray = renderer.beginGrayscale16();
-  if (!gray) renderer.clearScreen();
+  if (gray) {
+    // The gray canvas is retained between pages: without this fill, a page that
+    // came from another activity keeps the previous layout's lines in the gaps
+    // My never paints (seen after a UI-scale change left the settings list's
+    // row dividers crossing the dashboard labels).
+    renderer.fillRect(0, 0, renderer.getScreenWidth(), renderer.getScreenHeight(), false);
+    // fillRect's nibble fast path does not always bring the 1-bit proxy along;
+    // the proxy is what overlays and screenshot dumps read, and it kept the
+    // previous scale's icons. Clear it explicitly after the white fill.
+    renderer.clearScreen();
+  } else {
+    renderer.clearScreen();
+  }
   const auto& metrics = UITheme::getInstance().getMetrics();
   drawPageHeader(Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, tr(STR_MINE));
   drawTabs();

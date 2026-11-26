@@ -18,7 +18,7 @@ if [ "${1:-}" = "--port" ]; then port="${2:?}"; fi
 python3 "$repo/scripts/generate_data_manifest.py" \
   --partitions ports/metalio_plus/partitions_plus_ota.csv \
   --out build/data_manifest_plus.txt
-cmd=(python3 "$here/scripts/flash_metalio_plus.py" --layout port-ota --slot both --allow-versioned --skip-backup
+cmd=(python3 "$here/scripts/flash_metalio_plus.py" --layout port-ota --slot both --allow-versioned
      --firmware "$image")
 if [ -n "$port" ]; then cmd+=(--port "$port"); fi
 # One 16 MiB backup is the restore point for the whole chip; reuse it on later

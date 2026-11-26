@@ -20,6 +20,20 @@ namespace fui = freeink::ui;
 LanguageSelectActivity::LanguageSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const Mode mode)
     : UiListActivity("LanguageSelect", renderer, mappedInput), mode_(mode) {}
 
+namespace {
+// Whether a language can actually be used on this device right now.
+//
+// The two I18n predicates answer different questions and are deliberately kept apart:
+// isLanguagePackAvailable() is about strings (a pack that was never flashed), and
+// isLanguageAvailable() is about glyphs (strings compiled, but nothing to draw them --
+// ZH_CN on a non-CJK build, and Arabic/Persian here, where the UI has no shaping face).
+// A row is selectable only when both hold; otherwise the user picks a language, sees
+// boxes, and only finds out after a reboot that settings silently reverted it.
+bool languageUsable(Language language) {
+  return I18n::isLanguagePackAvailable(language) && I18n::isLanguageAvailable(language);
+}
+}  // namespace
+
 void LanguageSelectActivity::onEnter() {
   UiListActivity::onEnter();
   saveFailed_ = false;
@@ -43,7 +57,7 @@ void LanguageSelectActivity::onEnter() {
     // A packed language whose blob is not in the data partition falls back to
     // English at runtime. Say so here instead of letting the user pick it and
     // silently get English; the stored choice is never rewritten for them.
-    if (!I18n::isLanguagePackAvailable(language)) {
+    if (!languageUsable(language)) {
       item.value = tr(STR_NOT_AVAILABLE);
     } else if (SORTED_LANGUAGE_INDICES[i] == selectedLang) {
       item.value = tr(STR_SELECTED);
@@ -65,7 +79,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
   // The row already reads "Not available"; refusing the selection keeps a
   // known-unusable language out of settings.json. It is not a permanent state:
   // flash the pack and the same row becomes selectable again.
-  if (!I18n::isLanguagePackAvailable(static_cast<Language>(langIndex))) {
+  if (!languageUsable(static_cast<Language>(langIndex))) {
     LOG_ERR("LANG", "language row %d has no usable string pack; selection refused", index);
     requestUpdate();
     return;
@@ -103,7 +117,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
     LOG_ERR("LANG", "Failed to save language selection");
     saveFailed_ = true;
     for (int i = 0; i < totalItems; ++i) {
-      if (!I18n::isLanguagePackAvailable(static_cast<Language>(SORTED_LANGUAGE_INDICES[i]))) {
+      if (!languageUsable(static_cast<Language>(SORTED_LANGUAGE_INDICES[i]))) {
         rowItems[i].value = tr(STR_NOT_AVAILABLE);
       } else {
         rowItems[i].value = SORTED_LANGUAGE_INDICES[i] == previousLanguage ? tr(STR_SELECTED) : nullptr;

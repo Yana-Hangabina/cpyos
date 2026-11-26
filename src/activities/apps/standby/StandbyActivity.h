@@ -8,6 +8,10 @@
 
 #include "StandbyFace.h"
 #include "activities/Activity.h"
+// Pure header (fixed-width ints only): the silent connect needs the same
+// attempt-attribution rules the Wi-Fi sheet uses, without pulling Arduino
+// radio types into this header.
+#include "activities/network/WifiAttempt.h"
 
 
 /* Bench-only: paint the light-sleep badge on the standby face without parking
@@ -33,6 +37,9 @@ class StandbyActivity final : public Activity {
   // is fixed, but a band push drives only the changed strip: less panel current
   // and no re-driving of the whole face every minute.
   bool wantsBandUpdates() const override { return true; }
+  // The standby face is full-bleed art sized for the physical panel; UI scaling
+  // must not shrink it into a letterboxed card.
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
 
   // Standby manages its own timer/GPIO light-sleep cycles. Automatic deep sleep
   // is allowed once the device has reached light sleep, but never while a
@@ -82,6 +89,10 @@ class StandbyActivity final : public Activity {
   bool canEnterLightSleep() const;
 
   void startTimeSync();
+  // The silent connect owns the station for as long as it is cycling candidates;
+  // see the comment on the definitions.
+  void claimSilentStation();
+  void releaseSilentStation();
   bool trySilentWifiConnect();
   bool tryNextSilentCandidate();
   void beginClockSync();
@@ -96,4 +107,8 @@ class StandbyActivity final : public Activity {
   std::vector<std::pair<std::string, std::string>> silentCandidates_;
   size_t silentCandidateIndex_ = 0;
   bool silentNetworkHold_ = false;
+  bool silentStationClaimed_ = false;
+  // Where the candidate being tried now started, so a failure status seen later
+  // can be told apart from the one the previous candidate left behind.
+  wifi_attempt::Snapshot attemptStart_;
 };

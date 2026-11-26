@@ -10,6 +10,7 @@
 #include "activities/MainTab.h"
 #include "components/Rect.h"
 #include "fontIds.h"
+#include "UiViewport.h"
 
 class Bitmap;
 class GfxRenderer;
@@ -294,6 +295,11 @@ class BaseTheme {
 #endif
 
   virtual ~BaseTheme() = default;
+
+  // Logical space this theme was authored in (portrait pixels). Empty means
+  // native pixels; CPY reports 684x1216 so the same theme can adapt to another
+  // panel/DPI and to the user's UI scale.
+  virtual ui_viewport::DesignSpec uiDesignSpec() const { return {}; }
 
  private:
   // Last fixed row cadence rendered by the legacy list adapter, used by its

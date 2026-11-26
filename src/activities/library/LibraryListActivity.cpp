@@ -33,6 +33,7 @@
 #include "components/icons/search32.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookFormat.h"
 #ifdef BOARD_HAS_PSRAM
 #include "booksource/BookSource.h"
 #endif
@@ -1401,7 +1402,15 @@ void LibraryListActivity::buildRows(UiScreen& screen) {
 
     item.label = title.c_str();
     // Group headings stay bare; every book row gets its file-type icon.
-    if (!groupsCollapsed && !rowFile.empty()) item.icon = listIconFor(UITheme::getFileIcon(rowFile), 32);
+    if (!groupsCollapsed && !rowFile.empty()) {
+      item.icon = listIconFor(UITheme::getFileIcon(rowFile), 32);
+      // Right-aligned format tag for card-local books. The WeRead and JJWXC
+      // shelves are read through their apps, so their rows keep the bare icon.
+      if (const char* format = book_format::badgeFor(rowFile)) {
+        std::string path;
+        if (!slotBookPath(entry, path) || !book_format::isStorePath(path)) item.value = format;
+      }
+    }
     item.actionValue = static_cast<int16_t>(entry);
     winItems.push_back(item);
     rows++;
@@ -1810,6 +1819,18 @@ void LibraryListActivity::drawGridBadges(const int slot, const Rect& cover) cons
   const int lineH = renderer.getLineHeight(font);
   const int badgeGap = 6;
 
+  // Top-left: the file format of a local book. Store shelves (WeRead/JJWXC)
+  // never carry one — their rows are the app's own library, not a card file.
+  if (const char* format = gridSlotFormat[slot]) {
+    const int w = renderer.getTextWidth(font, format, EpdFontFamily::BOLD) + 12;
+    const int h = lineH + 6;
+    const int x = cover.x + badgeGap;
+    const int y = cover.y + badgeGap;
+    renderer.fillRoundedRect(x, y, w, h, 4, Color::White);
+    renderer.drawRoundedRect(x, y, w, h, 1, 4, true);
+    renderer.drawText(font, x + 6, y + 3, format, true, EpdFontFamily::BOLD);
+  }
+
   // Bottom-left: which shelf this book came from, as a 28px seal.
   const uint8_t source = gridSlotSource[slot];
   if (source != 0) {
@@ -1933,6 +1954,7 @@ void LibraryListActivity::buildCoverGrid(UiScreen& screen) {
           gridSlotSource[slot] = 0;
           gridSlotNew[slot] = 0;
           gridSlotProgress[slot] = 0xFF;
+          gridSlotFormat[slot] = nullptr;
           std::string badgePath;
           if (slotBookPath(entry, badgePath)) {
             if (badgePath.rfind("/WeRead/", 0) == 0) {
@@ -1945,6 +1967,7 @@ void LibraryListActivity::buildCoverGrid(UiScreen& screen) {
 #endif
             } else {
               gridSlotSource[slot] = 1;  // local
+              gridSlotFormat[slot] = book_format::badgeFor(badgePath);
             }
             const ReadingBookStats* stats = READING_STATS.findBook(badgePath);
             if (stats != nullptr) gridSlotProgress[slot] = stats->lastProgressPercent;

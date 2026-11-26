@@ -60,6 +60,31 @@ EXT_TTF = ROOT / "assets" / "fonts" / "CPYOSWorldScripts-UI.ttf"
 EXT_DEF = ROOT / "assets" / "fonts" / "cpyos_ui_ext.def"
 CORE_DAT = ROOT / "build" / "cjk_core.dat"
 
+
+def core_tier_path(tier: str) -> pathlib.Path:
+    """The blob for one specific tier.
+
+    Two targets read the same SystemCoreFont offset but fit different tiers: the Read
+    Pico XIP layout takes 3,500, the Plus layout takes 8,105. With a single filename the
+    second manifest generated on a machine described a blob the first one had already
+    overwritten, so flashing the Plus from an older manifest would write the smaller core
+    at the Plus offset -- and the partition would still pass every header check, just with
+    less Han coverage. Naming the artifact after its tier makes that impossible rather
+    than merely detectable; CORE_DAT stays as an alias for the last one built.
+    """
+    return ROOT / "build" / f"cjk_core_{tier}.dat"
+
+# Tier-1 reading core, by name of what it covers. The carrier is one file at one
+# partition offset, but the partition is not the same size on every target: the
+# Read Pico XIP layout has 2.0 MiB of spiffs behind five other blobs, which only
+# the 3,500-glyph carrier fits, while the Plus layout's 3.125 MiB also holds the
+# full 8,105. When both devices shared one hardcoded source the smaller tier was
+# applied to the larger partition too, which silently reduced the Plus reader's
+# Han coverage; so the tier is now an argument, chosen from the partition table by
+# scripts/generate_data_manifest.py rather than assumed here.
+CORE_TIERS = {"3500": CORE_SOURCE, "8105": CJK_SOURCE}
+DEFAULT_CORE_TIER = "3500"
+
 # Codepoints the CJK source family does not carry but the UI uses. The CJK
 # zero (U+3007, used by the standby calendar and TXT chapter numerals) maps to
 # the family's full-width circle, which is the same glyph shape.
@@ -257,18 +282,52 @@ def _subset(src: pathlib.Path, cps: set[int], *, layout: bool = False,
     return data
 
 
-def _carrier(raw: bytes) -> bytes:
+def _carrier(raw: bytes, tier: str | None = None) -> bytes:
+    """Wrap a TTF in the CPFZ container the device reads.
+
+    ``tier`` is written into the header's reserved field as an ASCII label. The published
+    blob name is the same for every tier (cjk_core.dat, because devices on 0.8.0 ask for
+    that name), so without a label nothing downstream can tell which coverage a given set of
+    bytes carries -- not the device, not exp/verify_device_packs.py, not the person holding
+    the file. The device treats it as a label only; size, CRC and version still decide use.
+    """
     crc = zlib.crc32(raw) & 0xFFFFFFFF
     compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
     packed = compressor.compress(raw) + compressor.flush()
-    header = MAGIC + struct.pack("<HHIII", VERSION, HEADER_SIZE, len(raw), crc, len(packed)) + bytes(12)
+    tag = bytes(12)
+    if tier is not None:
+        encoded = tier.encode("ascii")
+        if len(encoded) > 8:
+            raise SystemExit(f"core tier label {tier!r} does not fit the 8-byte field")
+        tag = encoded.ljust(8, b"\0") + bytes(4)
+    header = MAGIC + struct.pack("<HHIII", VERSION, HEADER_SIZE, len(raw), crc, len(packed)) + tag
     assert len(header) == HEADER_SIZE
     return header + packed
 
 
-def build(*, core: bool = True, core_only: bool = False) -> dict[str, bytes]:
+def core_outputs(tier: str) -> dict[str, bytes]:
+    """The tiered blob plus the compatibility alias."""
+    blob = core_carriers()[tier]
+    return {str(core_tier_path(tier)): blob, str(CORE_DAT): blob}
+
+
+def core_carriers() -> dict[str, bytes]:
+    """Every tier's compressed carrier, largest coverage first.
+
+    Both sources are committed TTFs and the container is plain raw-deflate, so this
+    costs two zlib passes and needs no fontTools -- which is what lets the manifest
+    generator measure the options before it commits to one.
+    """
+    return {tier: _carrier(path.read_bytes(), tier) for tier, path in CORE_TIERS.items()}
+
+
+def build(*, core: bool = True, core_only: bool = False,
+          core_tier: str = DEFAULT_CORE_TIER) -> dict[str, bytes]:
+    if core_tier not in CORE_TIERS:
+        raise SystemExit(f"unknown --core-tier {core_tier!r}; expected one of "
+                         + ", ".join(sorted(CORE_TIERS)))
     if core_only:
-        return {str(CORE_DAT): _carrier(CORE_SOURCE.read_bytes())}
+        return core_outputs(core_tier)
     from fontTools.ttLib import TTFont
 
     cjk = TTFont(str(CJK_SOURCE))
@@ -305,9 +364,9 @@ def build(*, core: bool = True, core_only: bool = False) -> dict[str, bytes]:
         str(UI_CHARS): ("\n".join(chr(cp) for cp in sorted(ui_cjk)) + "\n").encode("utf-8"),
     }
     if core:
-        # The reader face is the committed level-1 subset, not the 8,105
-        # family: the compressed carrier must fit the XIP data partition.
-        outputs[str(CORE_DAT)] = _carrier(CORE_SOURCE.read_bytes())
+        # The reader face tier is the caller's decision (see CORE_TIERS); a full
+        # build defaults to the tier that fits the tightest shipping layout.
+        outputs.update(core_outputs(core_tier))
     return outputs
 
 
@@ -319,13 +378,76 @@ def write(outputs: dict[str, bytes]) -> None:
         print(f"{path.relative_to(ROOT)}: {len(data)} B  sha256={hashlib.sha256(data).hexdigest()[:16]}")
 
 
+def _rel(path: pathlib.Path) -> str:
+    """Repo-relative for readability, absolute when the path is outside the repo.
+
+    A staleness report must never be the thing that crashes: relative_to() raises for any
+    path outside ROOT, which is exactly what a caller passing an alternate --out dir does.
+    """
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def carriers_only_check() -> int:
+    """Verify the committed carriers without fontTools, and say what it did not cover.
+
+    Neither CI (ci.yml installs only pioarduino) nor a bare checkout has fontTools, so the
+    full `--check` was unrunnable there -- which meant the "committed .def matches the
+    committed .ttf" guarantee no automated step enforced. The carrier comparison needs
+    nothing but zlib and the committed TTFs, so it can run anywhere; the subset byte
+    comparison genuinely cannot, and this function refuses to pretend otherwise: callers get
+    a nonzero exit so a green result always means the whole check actually ran.
+    """
+    failed = False
+    carriers = core_carriers()
+    for tier in sorted(CORE_TIERS):
+        path = core_tier_path(tier)
+        if not path.exists():
+            print(f"MISSING {_rel(path)}")
+            failed = True
+        elif path.read_bytes() != carriers[tier]:
+            print(f"STALE {_rel(path)}; re-run scripts/generate_data_manifest.py")
+            failed = True
+    for ttf, carrier in ((UI_TTF, UI_DEF), (EXT_TTF, EXT_DEF)):
+        if not ttf.exists() or not carrier.exists():
+            print(f"MISSING {_rel(ttf)} or {_rel(carrier)}")
+            failed = True
+            continue
+        if _carrier(ttf.read_bytes()) != carrier.read_bytes():
+            print(f"STALE {_rel(carrier)}; it is not the compressed form of "
+                  f"{_rel(ttf)} -- re-run scripts/build_ui_font_subset.py")
+            failed = True
+    if not failed:
+        print("carriers match their committed TTFs "
+              "(subset byte-comparison still needs fontTools)")
+    return 1 if failed else 0
+
+
 def check(outputs: dict[str, bytes]) -> int:
     failed = False
+    carriers = core_carriers()
     for name, data in outputs.items():
         path = pathlib.Path(name)
         if not path.exists():
-            print(f"MISSING {path.relative_to(ROOT)}")
+            print(f"MISSING {_rel(path)}")
             failed = True
+            continue
+        if name == str(core_tier_path(core_tier)):
+            # Tiered names are unambiguous, so this is a byte-exact comparison again --
+            # which it could not be while one file served two targets.
+            if path.read_bytes() != carriers[core_tier]:
+                print(f"STALE {_rel(path)}; re-run scripts/generate_data_manifest.py")
+                failed = True
+            continue
+        if name == str(CORE_DAT):
+            # The alias is whatever was built last on this machine; only require that it
+            # is some current tier, never that it matches a particular target.
+            if path.read_bytes() not in carriers.values():
+                print(f"STALE {path.relative_to(ROOT)}; it is not the compressed form "
+                      "of any tier in CORE_TIERS -- re-run scripts/generate_data_manifest.py")
+                failed = True
             continue
         if path.read_bytes() != data:
             print(f"STALE {path.relative_to(ROOT)}; re-run scripts/build_ui_font_subset.py")
@@ -341,8 +463,29 @@ def main() -> None:
     parser.add_argument("--no-core", action="store_true")
     parser.add_argument("--core-only", action="store_true",
                         help="only rebuild build/cjk_core.dat (no fontTools subsets)")
+    parser.add_argument("--core-tier", default=DEFAULT_CORE_TIER, choices=sorted(CORE_TIERS),
+                        help="which reading core to compress into the carrier "
+                             "(default: %(default)s, the tier the tightest layout fits)")
+    parser.add_argument("--core-sizes", action="store_true",
+                        help="print '<tier> <bytes>' for every core tier and exit without writing")
+    parser.add_argument("--check-carriers", action="store_true",
+                        help="verify only the carrier/asset pairs, which needs no fontTools")
     args = parser.parse_args()
-    outputs = build(core=not args.no_core, core_only=args.core_only)
+    if args.check_carriers:
+        raise SystemExit(carriers_only_check())
+    if args.core_sizes:
+        for tier, blob in sorted(core_carriers().items()):
+            print(f"{tier} {len(blob)}")
+        return
+    try:
+        outputs = build(core=not args.no_core, core_only=args.core_only, core_tier=args.core_tier)
+    except ModuleNotFoundError as exc:
+        if args.check and exc.name and exc.name.startswith("fontTools"):
+            print(f"error: --check needs {exc.name}; it cannot say whether the subsets are "
+                  "current. Run --check-carriers for the part that works without it, or "
+                  "install fontTools. Exiting nonzero rather than reporting a partial pass.")
+            raise SystemExit(1)
+        raise
     if args.check:
         raise SystemExit(check(outputs))
     write(outputs)

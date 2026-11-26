@@ -136,8 +136,11 @@ void ReadingStatsMenuActivity::layoutCards(Rect out[kEntryCount], const int coun
   const int w = std::max(1, safe.width - margin * 2);
   const int gap = 24;
   const int cw = (w - gap) / 2;
-  const int avail = std::max(1, bottom - top - 8);
-  const int ch = std::min(400, (avail - gap) / 2);
+  // Two rows plus the base inset must end above the hint band: the old
+  // `avail = bottom - top - 8` ignored the extra 8 px added when placing the
+  // first row, so at 125% the bottom cards ran under the hints.
+  const int avail = std::max(1, bottom - top - 16);
+  const int ch = std::max(1, std::min(400, (avail - gap) / 2));
   const int left = safe.x + margin;
   for (int i = 0; i < kEntryCount; ++i) {
     out[i] = Rect{left + (i % 2) * (cw + gap), top + 8 + (i / 2) * (ch + gap), cw, ch};
@@ -160,10 +163,27 @@ void ReadingStatsMenuActivity::drawCard(const Rect& rect, const int index, const
   const int iconSize = 40;
   drawStatsIcon(renderer, *icons[index], rect.x + 20, rect.y + 18, iconSize);
   const int titleY = rect.y + 26;
-  renderer.drawText(UI_12_FONT_ID, rect.x + 20 + iconSize + 12, titleY, I18N.get(kEntries[index].titleId), true,
-                    EpdFontFamily::BOLD);
   const int chevW = renderer.getTextWidth(UI_10_FONT_ID, ">");
-  renderer.drawText(UI_10_FONT_ID, rect.x + rect.width - 20 - chevW, titleY, ">");
+  const int titleX = rect.x + 16 + iconSize + 10;
+  const int innerRight = rect.x + rect.width - 12;
+  const int roomNoChev = std::max(20, innerRight - titleX);
+  const char* fullTitle = I18N.get(kEntries[index].titleId);
+  const int fullW = renderer.getTextWidth(UI_12_FONT_ID, fullTitle, EpdFontFamily::BOLD);
+  // The chevron is an affordance, not a requirement: localized titles such as
+  // "阅读统计" are wider than "阅读…" but still fit the card, and the previous
+  // code reserved chevron space unconditionally, ellipsizing titles that used
+  // to render in full. Keep the full title and drop the chevron instead; only
+  // ellipsize when the string really cannot fit inside the card.
+  const bool withChevron = fullW <= roomNoChev - chevW - 6;
+  const int titleMax = withChevron ? roomNoChev - chevW - 6 : roomNoChev;
+  const std::string title = fullW <= titleMax
+                                ? std::string(fullTitle)
+                                : renderer.truncatedText(UI_12_FONT_ID, fullTitle, titleMax,
+                                                         EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, titleX, titleY, title.c_str(), true, EpdFontFamily::BOLD);
+  if (withChevron) {
+    renderer.drawText(UI_10_FONT_ID, innerRight - chevW, titleY, ">");
+  }
 
   std::string value;
   std::string label;

@@ -1120,7 +1120,7 @@ Hardware driver audit against the vendor BSP and kiikoread rc110 metalio47 (2026
 Four read-only audits (SD, kiikoread board diff, peripherals, display) were run
 against: the CloudZao vendor board support vendored in this port, the vendor SDK
 copy, and kiikoread rc110 `boards/metalio47` (the only reference that runs on
-this exact S31 board; it lives at `repos/kiikoread-rc110`, and `.scratch/rpr`
+this exact S31 board; it lives at `repos/kiikoread-rc110`, and `.scratch/kiikoread`
 is a compatibility symlink to it).
 
 Fixed in this round (build + on-device evidence where noted):

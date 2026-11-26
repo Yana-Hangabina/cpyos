@@ -309,9 +309,12 @@ void PlusOtaActivity::render(RenderLock&&) {
   int rowY = y + pad;
   auto infoRow = [&](const char* label, const char* value) {
     renderer.drawText(UI_10_FONT_ID, x + pad, rowY, label);
-    const int valueW = renderer.getTextWidth(UI_10_FONT_ID, value);
-    const int valueX = std::max(x + pad + 120, x + cardW - pad - valueW);
-    renderer.drawText(UI_10_FONT_ID, valueX, rowY, value, true);
+    // A long model string must wrap its column with an ellipsis instead of
+    // running through the card border (Metalio E-Ink4 Plus · esp32s31 did).
+    const int valueMax = std::max(40, cardW - pad * 2 - 130);
+    const std::string shown = renderer.truncatedText(UI_10_FONT_ID, value, valueMax);
+    const int valueW = renderer.getTextWidth(UI_10_FONT_ID, shown.c_str());
+    renderer.drawText(UI_10_FONT_ID, x + cardW - pad - valueW, rowY, shown.c_str(), true);
     rowY += rowH;
   };
   infoRow("当前版本", plus_ota::currentVersion());
@@ -387,12 +390,15 @@ void PlusOtaActivity::render(RenderLock&&) {
   secondaryRect_ = Rect{safe.x + btnW + gap, btnY, btnW, btnH};
   renderer.fillRoundedRect(primaryRect_.x, primaryRect_.y, primaryRect_.width, primaryRect_.height, btnH / 2,
                            Color::Black);
-  renderer.drawCenteredText(UI_12_FONT_ID, primaryRect_.y + (btnH - line12) / 2, primary, false,
-                            EpdFontFamily::BOLD);
+  const int primaryW = renderer.getTextWidth(UI_12_FONT_ID, primary, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, primaryRect_.x + (btnW - primaryW) / 2,
+                    primaryRect_.y + (btnH - line12) / 2, primary, false, EpdFontFamily::BOLD);
   renderer.drawRoundedRect(secondaryRect_.x, secondaryRect_.y, secondaryRect_.width, secondaryRect_.height, 2,
                            btnH / 2, true);
   const char* secondary = busy() ? "取消" : "返回";
-  renderer.drawCenteredText(UI_12_FONT_ID, secondaryRect_.y + (btnH - line12) / 2, secondary, true);
+  const int secondaryW = renderer.getTextWidth(UI_12_FONT_ID, secondary);
+  renderer.drawText(UI_12_FONT_ID, secondaryRect_.x + (btnW - secondaryW) / 2,
+                    secondaryRect_.y + (btnH - line12) / 2, secondary, true);
   // Like every activity, this one owns its push; without it the page only
   // appeared when some later frame happened to flush the framebuffer.
   renderer.displayBuffer();

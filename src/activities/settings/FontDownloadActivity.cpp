@@ -213,7 +213,7 @@ void FontDownloadActivity::onExit() {
 
   const bool wifiWasEnabled = WiFi.getMode() != WIFI_MODE_NULL;
   if (wifiWasEnabled) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
   }
   if (exitRoute_ == ExitRoute::ReaderPreloadChineseFont) {

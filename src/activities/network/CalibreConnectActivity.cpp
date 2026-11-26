@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <NetworkStartup.h>
 #include <WiFi.h>
 
 #include <algorithm>
@@ -59,7 +60,7 @@ void CalibreConnectActivity::onExit() {
   MDNS.end();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
     silentRestart();
   }

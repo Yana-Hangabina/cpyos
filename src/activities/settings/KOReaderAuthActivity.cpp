@@ -78,7 +78,7 @@ void KOReaderAuthActivity::onExit() {
   Activity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
     silentRestart();
   }

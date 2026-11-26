@@ -68,6 +68,11 @@ UITheme::UITheme() {
   setTheme(themeType);
 }
 
+void UITheme::applyRendererGeometry(GfxRenderer& renderer) const {
+  renderer.setUiDesignSpec(currentTheme->uiDesignSpec());
+  renderer.setUiScalePercent(std::clamp<uint16_t>(SETTINGS.uiScalePercent, 100, 125));
+}
+
 void UITheme::reload() {
   const bool modern = usesModernLayout();
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI

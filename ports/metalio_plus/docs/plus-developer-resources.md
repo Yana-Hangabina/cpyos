@@ -127,7 +127,11 @@ missing-glyph prompts and an English-only UI.
   `code=0`. This is why a “no activation code” response is not treated as a
   failure.
 - Row 2 **Fetch resources** refreshes the pending list. Each resource row shows
-  type and file size; tapping downloads/verifies/acks it. `BADGE` entries with
+  type and file size; tapping downloads/verifies/acks it. A resource whose file
+  is already on the card shows **Downloaded** in the value column; tapping it,
+  long-pressing it or swiping it left opens one inline delete confirmation, and
+  removing it drops the file (books re-index the library, fonts clear their
+  family and the active-font setting). `BADGE` entries with
   `communityResourceType=wallpaper` are labelled as images; they are stored in
   `/badges` and are not auto-applied as a sleep screen (CPYOS has no vendor
   wallpaper surface).

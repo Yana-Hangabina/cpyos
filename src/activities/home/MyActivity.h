@@ -60,6 +60,25 @@ class MyActivity final : public Activity {
   Rect searchRowRect() const;
   Rect aboutRect() const;
 
+  // The Records tab was laid out at absolute offsets tuned for the 1216 px
+  // design height. A larger UI scale shrinks the logical viewport, so the same
+  // stack must compress instead of running under the tab bar. Drawing and hit
+  // zones both read this, so they cannot drift apart.
+  struct RecordsLayout {
+    int titleY = 0;
+    int bigY = 0;
+    int deltaY = 0;
+    int waveY = 0;
+    int barsTop = 0;
+    int barMaxH = 96;
+    int heatTop = 0;
+    int cellPitch = 24;
+    int listTop = 0;
+    int rows = 3;
+    int moreY = 0;  // 0 = hidden
+  };
+  RecordsLayout recordsLayout() const;
+
   void drawTabs();
   void drawRecords();
   void drawTools();

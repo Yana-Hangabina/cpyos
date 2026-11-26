@@ -100,7 +100,7 @@ class NightlyTargetTest(unittest.TestCase):
             'environments': {'nightly': 'readpico_nightly'},
             'supportedChannels': ['nightly'],
             'fullInstall': True,
-            'partitionsCsv': 'partitions_readpico_xip.csv',
+            'partitionsCsv': 'partitions_readpico.csv',
         })
         for flavor in nightly_targets.FLAVOR_TOKENS:
             self.assertEqual(nightly_targets.environment_for('readpico', 'nightly', flavor), 'readpico_nightly')
@@ -724,3 +724,92 @@ class PublishedNightlyTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PartitionLayoutGateTest(unittest.TestCase):
+    """The release must flash the table the firmware was compiled against.
+
+    A target's partitionsCsv drives the packaged partition binary, the full-install
+    segment offsets and the app0/app1 fit check. If it names a different map than the
+    environment built for, the image still boots (app0 is at 0x10000 in every map in
+    this repo) and then reads its data packs from addresses nothing wrote -- so the
+    failure is silent on the device and invisible in CI unless it is checked here.
+    """
+
+    def test_shipped_tree_has_no_declared_table_drift(self):
+        # Regression lock: three targets were carrying a partitionsCsv that no env
+        # ever selected (readpico -> the XIP table while packaging readpico_nightly,
+        # eego_a4 and metalio_eink4 -> the 7.19 MiB table their envs never chose).
+        self.assertEqual(nightly_targets.partition_layout_conflicts(ROOT), [])
+
+    def test_extends_chain_is_followed_to_the_hardware_section(self):
+        # readpico_pdf_jjwxc -> env:readpico_pdf -> readpico_hardware, none of which
+        # declare the table on the same line, so a flat lookup would miss it.
+        self.assertEqual(nightly_targets.env_partition_csv(ROOT, 'readpico_pdf_jjwxc'),
+                         'partitions_readpico_xip.csv')
+        self.assertEqual(nightly_targets.env_partition_csv(ROOT, 'readpico_nightly'),
+                         'partitions_readpico.csv')
+        self.assertEqual(nightly_targets.env_partition_csv(ROOT, 'gh_release'), 'partitions.csv')
+
+    def test_firmware_path_decides_the_table_not_the_target_declaration(self):
+        # One target id, two layouts: the CPYOS release verifies a PDF build while the
+        # nightly channel packages the non-PDF env. Measuring either against the
+        # other's slot would hide an overflow or invent one.
+        self.assertEqual(
+            nightly_targets.partitions_csv_for(
+                ROOT, firmware='.pio/build/readpico_pdf_jjwxc/firmware.bin',
+                target=nightly_targets.TARGETS['readpico']),
+            'partitions_readpico_xip.csv')
+        self.assertEqual(
+            nightly_targets.partitions_csv_for(
+                ROOT, firmware='.pio/build/readpico_nightly/firmware.bin',
+                target=nightly_targets.TARGETS['readpico']),
+            'partitions_readpico.csv')
+        # A packaged artifact path carries no environment, so fall back to the target.
+        self.assertIsNone(nightly_targets.environment_from_firmware('dist/cpyos/0.8.0/readpico-firmware.bin'))
+        self.assertEqual(
+            nightly_targets.partitions_csv_for(ROOT, target=nightly_targets.TARGETS['readpico']),
+            'partitions_readpico.csv')
+
+    def test_packaging_refuses_a_target_declaring_another_environments_table(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'platformio.ini').write_text(
+                '[env:widget_nightly]\n'
+                'extends = widget_hardware\n'
+                '[widget_hardware]\n'
+                'board_build.partitions = built_by_the_compiler.csv\n',
+                encoding='utf-8')
+            target = {
+                'deviceSlug': 'widget',
+                'models': ['widget'],
+                'boardTag': 'widget',
+                'chip': 'ESP32-S3',
+                'chipId': 0x0009,
+                'environments': {'nightly': 'widget_nightly'},
+                'supportedChannels': ['nightly'],
+                'fullInstall': True,
+                'partitionsCsv': 'named_by_the_release.csv',
+            }
+            with mock.patch.dict(nightly_targets.TARGETS, {'widget': target}):
+                problems = nightly_targets.partition_layout_conflicts(root)
+                self.assertEqual(len(problems), 1)
+                self.assertIn('named_by_the_release.csv', problems[0])
+                self.assertIn('built_by_the_compiler.csv', problems[0])
+                # package_target must refuse before it writes anything, so a wrong
+                # declaration cannot leave a half-built dist behind.
+                with self.assertRaises(SystemExit) as caught:
+                    package_nightly_target.package_target(root, 'widget', 'nightly', root / 'dist/widget')
+                self.assertIn('packaging refused', str(caught.exception))
+                self.assertFalse((root / 'dist/widget').exists())
+
+    def test_environment_without_a_declared_table_leaves_the_declaration_alone(self):
+        # Not a conflict: there is nothing to compare against, so the declaration is
+        # the only statement of intent. Synthetic packaging roots depend on this.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'platformio.ini').write_text(
+                '[env:widget_nightly]\nextends = base\n', encoding='utf-8')
+            target = {'environments': {'nightly': 'widget_nightly'}}
+            with mock.patch.dict(nightly_targets.TARGETS, {'widget': target}):
+                self.assertEqual(nightly_targets.partition_layout_conflicts(root), [])

@@ -298,8 +298,11 @@ bool FontExtrasActivity::trySilentSavedNetwork() {
     return false;
   }
   LOG_INF("FEXT", "connecting saved network %.32s", credential->ssid.c_str());
+  // Claimed bring-up: this runs on the font worker, which is exactly the kind
+  // of task that used to interleave a mode change with the sheet's join.
+  NetworkStartup::StationClaim stationClaim;
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) return false;
-  WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+  NetworkStartup::joinStation(credential->ssid.c_str(), credential->password.c_str());
   const uint32_t deadline = millis() + 15000;
   while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(deadline - millis()) > 0) {
     delay(100);

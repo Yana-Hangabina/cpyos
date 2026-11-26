@@ -12,6 +12,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "util/BookFormat.h"
 
 namespace fui = freeink::ui;
 
@@ -38,6 +39,8 @@ void RecentBooksActivity::rebuildRowItems() {
     fui::ListItem item;
     item.label = book.title.c_str();
     if (!book.author.empty()) item.subtitle = book.author.c_str();
+    // Format tag for card-local books; the WeRead/JJWXC shelves stay bare.
+    item.value = book_format::badgeForLocalPath(book.path);
     item.icon = listIconFor(UITheme::getFileIcon(book.path), 32);  // subtitle rows carry the larger icon
     item.actionValue = static_cast<int16_t>(rowItems.size());
     rowItems.push_back(item);

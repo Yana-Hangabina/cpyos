@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "components/InlineConfirm.h"
 #include "plus_resources.h"
 
 // Settings -> System -> Device resources on the Metalio E-INK4 Plus.
@@ -19,7 +20,7 @@
 class PlusResourcesActivity final : public UiListActivity {
  public:
   explicit PlusResourcesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : UiListActivity("PlusResources", renderer, mappedInput) {}
+      : UiListActivity("PlusResources", renderer, mappedInput, /*wantsTouchLongPress=*/true) {}
 
   void onEnter() override;
   void onExit() override;
@@ -35,6 +36,9 @@ class PlusResourcesActivity final : public UiListActivity {
   int listCount() const override;
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
+  void onRowLongPress(int index) override;
+  bool canSwipeDelete(int index) const override;
+  void swipeDelete(int index) override;
   const char* headerTitle() const override;
   bool handleCustomInput() override;
   void drawFooter() override;
@@ -50,6 +54,13 @@ class PlusResourcesActivity final : public UiListActivity {
   void startBind();
   void startFetch();
   void startDownload(int item_index);
+  // Appends resources recorded in the local install list that the server no
+  // longer lists (acknowledged deliveries), so they stay visible and deletable.
+  void mergeInstalledIntoItems();
+  // Downloaded rows: tap, long-press and swipe all funnel into one inline
+  // confirmation, so nothing leaves the card on a single accidental touch.
+  void promptRemove(int index);
+  void removeItem(int item_index);
   void queueJob(PendingAction action, int item_index);
   void beginBindJob();
   void beginFetchJob();
@@ -104,6 +115,7 @@ class PlusResourcesActivity final : public UiListActivity {
   bool time_sync_suspended_ = false;
 
   plus_resources::Items items_;
+  plus_resources::InstalledList installed_;
   plus_resources::Item job_item_;
   plus_resources::BindResult bind_result_;
   plus_resources::FetchResult fetch_result_;
@@ -135,4 +147,5 @@ class PlusResourcesActivity final : public UiListActivity {
   Rect bind_check_rect_{};
   Rect bind_retry_rect_{};
   Rect bind_back_rect_{};
+  InlineConfirm confirm_;
 };

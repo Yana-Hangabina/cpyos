@@ -10,6 +10,10 @@
 
 class ImageViewerActivity final : public Activity {
  public:
+  UiLayoutMode uiLayoutMode() const override { return UiLayoutMode::Native; }
+
+
+ public:
   ImageViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string filePath);
 
   void onEnter() override;

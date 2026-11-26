@@ -146,9 +146,10 @@ constexpr int kPanelHeightMaxPercent = 72;
 constexpr int kLandscapePanelHeightPercent = 88;
 }  // namespace
 
-ReaderToolbarUi::ReaderToolbarUi(GfxRenderer& renderer) : UiAppHost(renderer, true) {}
+ReaderToolbarUi::ReaderToolbarUi(GfxRenderer& renderer) : UiAppHost(renderer, true), renderer_(renderer) {}
 
 void ReaderToolbarUi::begin() {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer_, GfxRenderer::CoordSpace::Ui);
   resetUi();
   pending_ = Routed{};
   nav_.reset();
@@ -161,6 +162,7 @@ void ReaderToolbarUi::begin() {
 }
 
 void ReaderToolbarUi::render() {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer_, GfxRenderer::CoordSpace::Ui);
   renderUi();
   // Wrapped rows can fit fewer than the fixed-height estimate; the nav then
   // advances the viewport after layout and asks for a rebuild. Converges (top
@@ -169,6 +171,7 @@ void ReaderToolbarUi::render() {
 }
 
 ReaderToolbarUi::Routed ReaderToolbarUi::route(const MappedInputManager& input) {
+  const GfxRenderer::ScopedCoordSpace uiSpace(renderer_, GfxRenderer::CoordSpace::Ui);
   pending_ = Routed{};
   // routeHeld: the scrub track is a drag target, so held frames must reach it.
   const auto touch = routeTouch(input, false, /*routeHeld=*/true);

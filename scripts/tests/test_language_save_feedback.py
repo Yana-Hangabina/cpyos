@@ -28,7 +28,13 @@ struct CrossPointSettings {
   bool saveToFile() { return saveOk; }
 } SETTINGS;
 // Real I18n exposes this as a static helper next to the singleton.
-struct I18n { static bool isLanguagePackAvailable(Language) { return true; } };
+struct I18n {
+  static bool isLanguagePackAvailable(Language) { return true; }
+  // Deliberately disagrees with the pack predicate for one language: that is the
+  // case the combined rule exists for. With both stubs returning true, && and ||
+  // are indistinguishable and the harness proves nothing about the combination.
+  static bool isLanguageAvailable(Language l) { return l != Language::FR; }
+};
 struct {
   Language language=Language::EN;
   int changes=0;
@@ -54,6 +60,10 @@ struct LanguageSelectActivity {
   void activateIndex(int);
 };
 '''
+        # The real combined rule, extracted rather than re-typed: if the source
+        # stops requiring both predicates, this harness sees the change too.
+        program += method(source, "bool languageUsable(Language language) {")
+        program += "\n"
         program += method(source, "void LanguageSelectActivity::activateIndex")
         program += r'''
 int main() {
@@ -70,7 +80,11 @@ int main() {
       assert(SETTINGS.onboardingVersion==0 && I18N.changes==0 && timezones::changes==0);
       assert(bootlang::remembers==0);
       assert(activity.rowItems[1].value==tr(STR_SELECTED));
-      assert(activity.rowItems[0].value==nullptr && activity.rowItems[2].value==nullptr);
+      assert(activity.rowItems[0].value==nullptr);
+      // Row 2 is FR: strings present, glyphs not. The save-failure recompute path must
+      // apply the same combined rule as the initial build, or the row would look
+      // selectable again after a failed write.
+      assert(activity.rowItems[2].value==tr(STR_NOT_AVAILABLE));
     }
     assert(activity.updates==2);
     SETTINGS.saveOk=true;

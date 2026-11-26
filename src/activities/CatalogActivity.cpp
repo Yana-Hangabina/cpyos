@@ -6,6 +6,7 @@
 #include <FreeInkUIIcon.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <NetworkStartup.h>
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
@@ -24,7 +25,7 @@ void CatalogActivity::onEnter() {
 void CatalogActivity::onExit() {
   Activity::onExit();
   if (WiFi.getMode() != WIFI_OFF) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
     silentRestart();
   }

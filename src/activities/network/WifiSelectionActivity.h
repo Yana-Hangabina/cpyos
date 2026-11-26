@@ -9,6 +9,7 @@
 #include <Memory.h>
 
 #include "activities/Activity.h"
+#include "activities/network/WifiAttempt.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
@@ -154,6 +155,22 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   static constexpr unsigned long AUTO_CONNECTION_TIMEOUT_MS = 7000;
   unsigned long connectionStartTime = 0;
 
+  // What the driver had already reported when this join was issued, and whether
+  // the join is actually running. The core stores the *previous* attempt's
+  // failure in the same field a new attempt reads (see WifiAttempt.h), so these
+  // are what keep a healthy association from being ended by an error it did not
+  // cause -- and what keep a genuine refusal from waiting out the timeout.
+  wifi_attempt::Snapshot attemptStart_;
+  bool beginRefused_ = false;
+  bool staleFailureNoted_ = false;
+  // One re-ask per sheet for a scan the driver refused because it was busy.
+  bool scanRetryUsed_ = false;
+  // The sheet holds the station for its entire lifetime, so a background queue
+  // never starts a join on top of this one (see NetworkStartup.h: radio
+  // ownership). Tracked as a flag because the claim is paired with onExit, not
+  // with a scope.
+  bool stationClaimHeld_ = false;
+
   // The UiAppHost app hosts the network list and the save/forget prompts
   // (themed rows and dialogs, touch routing). Connecting/scanning share the
   // centered-text renderer; touch screens reserve their controls first.
@@ -178,7 +195,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void renderConnecting(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const;
 
-  void showNetworkError();
+  void showNetworkError(const char* cause);
   void startWifiScan(bool autoScan = false);
   void processWifiScanResults();
   void appendHiddenNetworkEntry();

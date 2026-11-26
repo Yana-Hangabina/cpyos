@@ -46,9 +46,11 @@ constexpr uint32_t kPdfModuleRodataVaddr = 0x53A00000;
 constexpr uint32_t kPdfModuleDataVaddr = 0x53B00000;
 #else
 // The allocator's first free instruction slot for THIS app layout.  It moves
-// when the app IROM grows (0x42D30000 -> 0x42D50000 on 2026-11-24); the loader
-// reports the chosen address when it differs.
-constexpr uint32_t kPdfModuleCodeVaddr = 0x42D50000;
+// when the app IROM grows (0x42D30000 -> 0x42D50000 on 2026-11-24, then
+// -> 0x42DA0000 on 2026-11-26 when the ui-contract merge added ~320 KB); the
+// loader reports the chosen address when it differs.  The value must equal what
+// esp_mmu_map returns for this app image, not merely "some free window".
+constexpr uint32_t kPdfModuleCodeVaddr = 0x42DA0000;
 constexpr uint32_t kPdfModuleRodataVaddr = 0x3DF00000;
 // The mutable window lives high in the external-RAM VA space.  The allocator
 // behind esp_mmu_map hands out the first free page range, and that range moved
@@ -132,7 +134,7 @@ constexpr uint32_t compute() {
 #if defined(CROSSPOINT_PDF_XIP_SD)
 constexpr uint32_t kPdfModuleLayoutKey = 0xEE4B634Fu;
 #else
-constexpr uint32_t kPdfModuleLayoutKey = 0x7D84634Fu;
+constexpr uint32_t kPdfModuleLayoutKey = 0x6735634Fu;
 #endif
 static_assert(pdf_module_layout::compute() == kPdfModuleLayoutKey,
               "update kPdfModuleLayoutKey when the module layout constants change");

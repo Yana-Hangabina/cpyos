@@ -113,8 +113,54 @@ def sha256(path):
     return digest.hexdigest()
 
 
+# Widest Han coverage first: the tier that fits wins, the rest are only reported.
+CORE_TIER_ORDER = ("8105", "3500")
+
+
+def core_tier_sizes(root):
+    """Compressed carrier size per core tier, measured without writing anything."""
+    script = os.path.join(root, "scripts", "build_ui_font_subset.py")
+    probe = subprocess.run([sys.executable, script, "--core-sizes"], check=True,
+                           capture_output=True, text=True)
+    sizes = {}
+    for line in probe.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1].isdigit():
+            sizes[fields[0]] = int(fields[1])
+    if not sizes:
+        fail("%s --core-sizes reported no tiers: %r" % (script, probe.stdout))
+    return sizes
+
+
+def choose_core_tier(sizes, offset, partition_size):
+    """The tier with the most coverage that still ends inside the data partition.
+
+    Pure so the decision is testable: it is the only place that knows a target's
+    partition size and the carrier sizes are both real, and getting it wrong either
+    overflows a partition (esptool writes past the end) or ships the small font to a
+    device that had room for the large one.
+    """
+    for tier in CORE_TIER_ORDER:
+        size = sizes.get(tier)
+        if size is not None and offset + size <= partition_size:
+            return tier
+    return None
+
+
+def core_blob_path(root, tier):
+    """Where the chosen tier's carrier lives.
+
+    Tier-named on purpose: Read Pico's XIP layout and the Plus layout share one partition
+    offset but fit different carriers, and while both wrote build/cjk_core.dat the second
+    manifest generated on a machine silently described a blob the first build had
+    overwritten. scripts/build_ui_font_subset.py owns the naming; keep the two in step.
+    """
+    name = f"cjk_core_{tier}.dat" if tier else "cjk_core.dat"
+    return os.path.join(root, "build", name)
+
+
 def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset, core_offset,
-            no_core=False):
+            no_core=False, core_tier=None):
     """Build the row list from whatever data blobs actually exist.
 
     pinyin/hyphen/i18n degrade to a note when absent. The web pack does not:
@@ -132,12 +178,30 @@ def collect(root, base, partition_size, hyphen_offset, i18n_offset, web_offset, 
         # Required for a full install; an app-only OTA runs without it and the
         # reader falls back to the embedded UI subset plus the font-extras
         # download prompt.
-        ("core", core_offset, os.path.join(root, "build", "cjk_core.dat"), True),
+        ("core", core_offset, core_blob_path(root, core_tier), True),
     ]
     rows = []
     for name, offset, path, required in candidates:
-        if no_core and name == "core":
-            continue
+        if name == "core":
+            # The carrier is what keeps 3,500 common Han characters readable in
+            # dynamic UI strings (book titles, authors, shelf rows). Omitting it
+            # used to be justified by a 1.6 MiB blob that genuinely did not fit
+            # the 2.0 MiB XIP partition; the committed core is now 642,887 B and
+            # does fit. Refuse the flag whenever it would fit, so "no core" can
+            # only ever mean "there is no room", never "someone passed a flag".
+            if no_core:
+                probe = next((candidate for candidate in (
+                    path, os.path.join(root, "build", "cjk_core.dat")) if os.path.exists(candidate)), path)
+                if os.path.exists(probe) and offset + os.path.getsize(probe) <= partition_size:
+                    fail("--no-core asked to drop %s (%d bytes at partition offset 0x%x), but it "
+                         "fits: the partition is %d bytes. Shipping without the reading core is how "
+                         "a release ends up drawing tofu for ordinary Chinese in the UI. Drop the "
+                         "flag, or shrink the carrier in scripts/build_ui_font_subset.py if the "
+                         "layout really has no room."
+                         % (os.path.relpath(probe, root), os.path.getsize(probe), offset, partition_size))
+                print("warning: the data partition cannot hold cjk_core.dat; the reader falls back "
+                      "to the embedded UI subset and the font-extras download prompt.")
+                continue
         if not os.path.exists(path):
             if required:
                 fail("%s is absent (%s). Read Pico's web server reads its pages from that pack; "
@@ -210,13 +274,32 @@ def main():
     parser.add_argument("--repo", default=repo_root(), help="crossmux repository root (default: %(default)s)")
     parser.add_argument("--out", default=None, help="output path (default: <repo>/build/data_manifest.txt)")
     parser.add_argument("--check", action="store_true", help="fail if the existing manifest is stale")
+    parser.add_argument("--env", default=None,
+                        help="PlatformIO environment whose board_build.partitions selects the "
+                             "table (e.g. readpico_pdf_jjwxc); takes precedence over --partitions. "
+                             "Without either, the Read Pico non-XIP default is used.")
     parser.add_argument("--partitions", default=PARTITIONS_CSV,
                         help="partition CSV relative to --repo (default: %(default)s); "
                              "pass ports/metalio_plus/partitions_plus_ota.csv for the Plus")
     parser.add_argument("--no-core", action="store_true",
-                        help="omit cjk_core.dat (the XIP PDF app embeds the system font; its "
-                             "2.0 MiB spiffs cannot hold the 1.6 MiB core blob)")
+                        help="omit cjk_core.dat, for a layout whose data partition genuinely "
+                             "cannot hold it; refused when the blob would fit")
     args = parser.parse_args()
+
+    if args.env:
+        # One place decides which partition table a target has; nightly_targets.py also
+        # answers it for packaging and artifact verification, and a second copy of that
+        # lookup here is how a manifest came to describe a layout the firmware does not
+        # have (docs/plans/2026-11-26-... 15.2).
+        sys.path.insert(0, os.path.join(args.repo, "scripts"))
+        import nightly_targets
+
+        derived = nightly_targets.env_partition_csv(args.repo, args.env)
+        if not derived:
+            fail("--env %s declares no board_build.partitions, so this script cannot know "
+                 "which data partition it has; pass --partitions explicitly" % args.env)
+        args.partitions = derived
+        print("partition table for env %s: %s" % (args.env, args.partitions))
 
     base, partition_size = read_spiffs_partition(args.repo, args.partitions)
     hyphen_offset = read_cpp_constant(os.path.join(args.repo, STORE_HEADER), "HYPN_PARTITION_OFFSET")
@@ -242,15 +325,43 @@ def main():
     if core_offset <= emoji_offset:
         fail("SystemCoreFont.h puts the core font at 0x%x, which is not after the emoji slot (0x%x)"
              % (core_offset, emoji_offset))
+    # The reading core is chosen by the partition, not by a constant: the same
+    # SystemCoreFont.h offset has to serve a 2.0 MiB spiffs (only the 3,500-glyph
+    # carrier fits behind the other five blobs) and a 3.125 MiB one (which also
+    # holds the full 8,105). Picking the largest tier that fits keeps both devices at
+    # their best coverage without a device-name table, and refusing to pick at all
+    # when nothing fits forces the decision into the open instead of shipping a
+    # reader that draws tofu for ordinary Chinese.
+    sizes = core_tier_sizes(args.repo)
+    tier = choose_core_tier(sizes, core_offset, partition_size)
+    if tier is None:
+        if not args.no_core:
+            fail("no reading core fits partition offset 0x%x of a %d byte partition: %s. "
+                 "Free space after the other blobs is %d bytes. Either shrink the carrier "
+                 "source, move the offset, or pass --no-core deliberately."
+                 % (core_offset, partition_size,
+                    ", ".join("%s=%d B" % (name, size) for name, size in sorted(sizes.items())),
+                    max(partition_size - core_offset, 0)))
+        print("warning: --no-core with no fitting tier (%s); the reader keeps only the "
+              "embedded UI subset until a core pack is downloaded"
+              % ", ".join("%s=%d B" % (name, size) for name, size in sorted(sizes.items())))
+    else:
+        print("core tier: %s (%d bytes at partition offset 0x%x, %d bytes left after it)"
+              % (tier, sizes[tier], core_offset, partition_size - core_offset - sizes[tier]))
+        if args.no_core:
+            fail("--no-core was passed but the %s core fits (offset 0x%x + %d <= %d); "
+                 "omit the flag or make room, do not ship a partition without the reading face"
+                 % (tier, core_offset, sizes[tier], partition_size))
     # The pack is generated from the committed subset every time the manifest is
     # rebuilt, so a missing/stale pack cannot describe a partition the firmware
     # would reject at boot.
     subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "generate_emoji_pack.py"),
                     "--repo", args.repo], check=True)
-    subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "build_ui_font_subset.py"),
-                    "--core-only"], check=True)
+    if tier is not None:
+        subprocess.run([sys.executable, os.path.join(args.repo, "scripts", "build_ui_font_subset.py"),
+                        "--core-only", "--core-tier", tier], check=True)
     rows = collect(args.repo, base, partition_size, hyphen_offset, i18n_offset, web_offset, emoji_offset,
-                   core_offset, args.no_core)
+                   core_offset, args.no_core, tier)
     text = render(base, partition_size, rows)
 
     out = args.out or os.path.join(args.repo, "build", "data_manifest.txt")

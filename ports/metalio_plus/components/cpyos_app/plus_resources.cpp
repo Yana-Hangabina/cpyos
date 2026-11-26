@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <strings.h>
@@ -23,6 +25,7 @@
 #include "SdCardFontRegistry.h"
 #include "SdCardFontSystem.h"
 #include "plus_cloudzao_ids.h"
+#include "plus_resources_record.h"
 #include "plus_ota.h"
 
 namespace plus_resources {
@@ -430,18 +433,27 @@ bool prepareItem(Item& item) {
   item.local_path.clear();
   item.supported = false;
   item.state = ItemState::Pending;
+  item.downloaded = false;
   if (item.task_id.empty() || item.name.empty() || item.download_url.empty()) return false;
+  bool ok = false;
   switch (item.type) {
     case Type::Book:
-      return prepareBook(item);
+      ok = prepareBook(item);
+      break;
     case Type::Badge:
-      return prepareBadge(item);
+      ok = prepareBadge(item);
+      break;
     case Type::Font:
-      return prepareFont(item);
+      ok = prepareFont(item);
+      break;
     default:
       item.state = ItemState::Unsupported;
       return false;
   }
+  // The row shows "downloaded" for a file that is already on the card; a
+  // resource the user fetched earlier therefore survives app restarts.
+  item.downloaded = item.supported && isDownloaded(item);
+  return ok;
 }
 
 std::string hashFile(const char* path, bool& ok) {
@@ -521,6 +533,135 @@ std::string listError(const std::string& body, int status) {
 }
 
 }  // namespace
+
+bool isDownloaded(const Item& item) {
+  if (item.local_path.empty() || !Storage.exists(item.local_path.c_str())) return false;
+  HalFile file = Storage.open(item.local_path.c_str(), O_RDONLY);
+  if (!file) return false;
+  const uint64_t size = file.fileSize64();
+  file.close();
+  return item.file_size == 0 || size == item.file_size;
+}
+
+namespace {
+
+// The record's line format lives in plus_resources_record.h so its parser is
+// covered by a host test; these two helpers only map it to the runtime types.
+constexpr const char* kInstalledPath = "/.crosspoint/cloudzao_resources.txt";
+
+char typeCode(const Type type) {
+  switch (type) {
+    case Type::Book:
+      return 'B';
+    case Type::Badge:
+      return 'G';
+    case Type::Font:
+      return 'F';
+    default:
+      return '?';
+  }
+}
+
+Type typeFromCode(const char code) {
+  if (code == 'B') return Type::Book;
+  if (code == 'G') return Type::Badge;
+  if (code == 'F') return Type::Font;
+  return Type::Unknown;
+}
+
+void saveInstalled(const InstalledList& list) {
+  std::vector<plus_resources_record::Entry> entries;
+  entries.reserve(list.size());
+  for (const auto& entry : list) {
+    if (entry.path.empty()) continue;
+    plus_resources_record::Entry encoded;
+    encoded.type = typeCode(entry.type);
+    encoded.path.assign(entry.path.c_str());
+    encoded.file_size = entry.file_size;
+    encoded.sha256.assign(entry.sha256.c_str());
+    entries.push_back(std::move(encoded));
+  }
+  // Atomic (".tmp" + replace): a power cut must not resurrect a torn record.
+  writeSmallFile(kInstalledPath, plus_resources_record::encode(entries));
+}
+
+void loadInstalled(InstalledList& out) {
+  out.clear();
+  std::string data;
+  if (!Storage.readFileToString("RES", kInstalledPath, plus_resources_record::kMaxBytes, data)) return;
+  std::vector<plus_resources_record::Entry> entries;
+  if (!plus_resources_record::decode(data, entries)) return;
+  for (const auto& entry : entries) {
+    InstalledResource resource;
+    resource.type = typeFromCode(entry.type);
+    if (resource.type == Type::Unknown) continue;
+    resource.path = entry.path.c_str();
+    resource.file_size = entry.file_size;
+    resource.sha256 = entry.sha256.c_str();
+    out.push_back(std::move(resource));
+  }
+}
+
+}  // namespace
+
+void listInstalled(InstalledList& out) {
+  loadInstalled(out);
+  bool pruned = false;
+  for (size_t i = 0; i < out.size();) {
+    if (Storage.exists(out[i].path.c_str())) {
+      ++i;
+      continue;
+    }
+    out.erase(out.begin() + static_cast<std::ptrdiff_t>(i));
+    pruned = true;
+  }
+  if (pruned) saveInstalled(out);
+}
+
+bool recordInstalled(const Item& item) {
+  if (item.local_path.empty() || !plus_resources_record::pathIsSafe(item.local_path.c_str())) return false;
+  InstalledList list;
+  loadInstalled(list);
+  const char* path = item.local_path.c_str();
+  bool replaced = false;
+  for (auto& entry : list) {
+    if (strcmp(entry.path.c_str(), path) == 0) {
+      entry.type = item.type;
+      entry.file_size = item.file_size;
+      entry.sha256 = item.sha256;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    if (list.size() >= plus_resources_record::kMaxEntries) return false;
+    InstalledResource entry;
+    entry.type = item.type;
+    entry.path = path;
+    entry.file_size = item.file_size;
+    entry.sha256 = item.sha256;
+    list.push_back(std::move(entry));
+  }
+  saveInstalled(list);
+  return true;
+}
+
+bool forgetInstalled(const char* path) {
+  if (path == nullptr || *path == '\0') return false;
+  InstalledList list;
+  loadInstalled(list);
+  bool removed = false;
+  for (size_t i = 0; i < list.size();) {
+    if (strcmp(list[i].path.c_str(), path) == 0) {
+      list.erase(list.begin() + static_cast<std::ptrdiff_t>(i));
+      removed = true;
+      continue;
+    }
+    ++i;
+  }
+  if (removed) saveInstalled(list);
+  return removed;
+}
 
 bool configured() { return true; }
 const char* keySource() { return "partner"; }

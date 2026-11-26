@@ -117,6 +117,9 @@ bash ports/metalio_plus/test/run_touch_map_test.sh
 echo "== font name validation (ASan/UBSan)"
 bash ports/metalio_plus/test/run_font_store_test.sh
 
+echo "== CloudZao installed-resource record (ASan/UBSan)"
+bash ports/metalio_plus/test/run_plus_resources_record_test.sh
+
 echo "== two-finger pinch classification (ASan/UBSan)"
 bash ports/metalio_plus/test/run_touch_pair_test.sh
 

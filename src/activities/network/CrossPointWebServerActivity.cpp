@@ -21,7 +21,9 @@
 #include "WifiCredentialStore.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
+#if !defined(SIMULATOR)
 #include "activities/settings/BluetoothSettingsActivity.h"
+#endif
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "components/icons/listIcons48.h"
@@ -194,7 +196,7 @@ void CrossPointWebServerActivity::onExit() {
     if (isApMode) {
       WiFi.softAPdisconnect(true);
     } else {
-      WiFi.disconnect(false);
+      NetworkStartup::dropAssociation();
     }
     delay(30);
     NetworkStartup::logMemory("web exit before restart");
@@ -545,7 +547,7 @@ void CrossPointWebServerActivity::stopNetworkingForNavigation() {
     if (isApMode) {
       WiFi.softAPdisconnect(true);
     } else {
-      WiFi.disconnect(false);
+      NetworkStartup::dropAssociation();
     }
     delay(20);
   }
@@ -610,7 +612,11 @@ void CrossPointWebServerActivity::openBluetooth() {
   stopNetworkingForNavigation();
   state = WebServerActivityState::TRANSFER_PAGE;
   requestUpdate();
+#if !defined(SIMULATOR)
+#if !defined(SIMULATOR)
   startActivityForResultWith<BluetoothSettingsActivity>([this](const ActivityResult&) { requestUpdate(); });
+#endif
+#endif
 }
 
 void CrossPointWebServerActivity::handleTransferPageInput() {

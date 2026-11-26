@@ -57,7 +57,9 @@ void openChineseChess() { activityManager.goToChineseChess(); }
 void openJjwxc() { activityManager.goToJjwxc(); }
 #endif
 #ifdef BOARD_HAS_PSRAM
+#if !defined(SIMULATOR)
 void openWebBrowser() { activityManager.goToWebBrowser(); }
+#endif
 #endif
 #endif
 
@@ -75,7 +77,9 @@ constexpr app_catalog::Entry kEntries[] = {
 #ifdef BOARD_HAS_PSRAM
     // The browser keeps a 2 MiB fetch buffer and a PSRAM-backed document; the
     // same -fno-exceptions abort applies to C3's internal-RAM budget.
+#if !defined(SIMULATOR)
     {AppId::WebBrowser, StrId::STR_BROWSER_TITLE, UIIcon::Browser, &openWebBrowser},
+#endif
 #endif
 #endif
     {AppId::AirPage, StrId::STR_AIRPAGE_TITLE, UIIcon::AirPage, &openAirPage},

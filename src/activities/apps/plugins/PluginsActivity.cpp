@@ -25,6 +25,9 @@
 #include "components/UITheme.h"
 #include "components/icons/listIcons.h"
 #include "network/HttpDownloader.h"
+#if defined(CROSSPOINT_PDF_XIP)
+#include "activities/settings/PdfEngineUpdateActivity.h"
+#endif
 
 namespace fui = freeink::ui;
 
@@ -125,6 +128,21 @@ void PluginsActivity::rebuildRows() {
     rowIndexes_.push_back(index);
   };
 
+#if defined(CROSSPOINT_PDF_XIP)
+  // Pinned maintenance row. The MuPDF engine updates from the network like a
+  // plugin, but it is firmware infrastructure rather than an installable
+  // package: it sits first (never scrolling away behind the package list),
+  // carries its own document icon and names its loader so it cannot be mistaken
+  // for an SD plugin.
+  addRow(RowKind::PdfEngine, 0, tr(STR_PDF_ENGINE_UPDATE),
+#if defined(CROSSPOINT_PDF_XIP_SD)
+         "MuPDF \xC2\xB7 SD",
+#else
+         "MuPDF \xC2\xB7 XIP",
+#endif
+         "", fui::bitmapFromIcon(icon_file_32), true);
+#endif
+
   addRow(RowKind::Rescan, 0, tr(STR_RETRY),
          plugins_.empty() ? tr(STR_NO_PLUGINS_INSTALLED) : native_plugins::kPluginRoot,
          std::to_string(plugins_.size()).c_str(), fui::bitmapFromIcon(icon_refresh_cw_32), true);
@@ -199,6 +217,18 @@ void PluginsActivity::activateIndex(const int index) {
   app.clearTapFlash();
   const RowKind kind = rowKinds_[index];
   const int rowIndex = rowIndexes_[index];
+
+#if defined(CROSSPOINT_PDF_XIP)
+  if (kind == RowKind::PdfEngine) {
+    auto activity = makeUniqueNoThrow<PdfEngineUpdateActivity>(renderer, mappedInput);
+    if (!activity) {
+      setError(tr(STR_MEMORY_ERROR), tr(STR_PDF_ENGINE_UPDATE));
+      return;
+    }
+    activityManager.pushActivity(std::move(activity));
+    return;
+  }
+#endif
 
   if (kind == RowKind::Rescan) {
     rescan();
@@ -283,9 +313,13 @@ bool PluginsActivity::ensureWifi() {
     LOG_INF("PLUG", "catalog: no saved network");
     return false;
   }
+  // The catalog fetch waits for the association below, so the whole bring-up is
+  // one sequence: claimed, gated, and joined through NetworkStartup like every
+  // other station command.
+  NetworkStartup::StationClaim stationClaim;
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) return false;
   LOG_INF("PLUG", "catalog: connecting saved network %.32s", credential->ssid.c_str());
-  WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+  NetworkStartup::joinStation(credential->ssid.c_str(), credential->password.c_str());
   const uint32_t deadline = millis() + 15000;
   while (WiFi.status() != WL_CONNECTED && static_cast<int32_t>(deadline - millis()) > 0) {
     delay(100);

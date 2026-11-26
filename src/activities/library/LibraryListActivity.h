@@ -227,6 +227,9 @@ class LibraryListActivity final : public UiTabListActivity {
   uint8_t gridSlotSource[kGridCoverSlots] = {};  // 0 unknown, 1 local, 2 WeRead, 3 JJWXC
   uint16_t gridSlotNew[kGridCoverSlots] = {};    // new chapters (0 = unknown/none)
   uint8_t gridSlotProgress[kGridCoverSlots] = {};  // 0xFF = unknown
+  // Format tag ("EPUB"/"PDF"/...) for local books only; nullptr = no tag. Points
+  // at a static literal, so it is safe to keep across repaints.
+  const char* gridSlotFormat[kGridCoverSlots] = {};
   void drawGridBadges(int slot, const Rect& cover) const;
   // Paints the invitation pill inside `band` and records emptySourceRect_.
   void drawEmptySourceAction(const Rect& band);
@@ -256,7 +259,7 @@ class LibraryListActivity final : public UiTabListActivity {
   // destination. Drawn after the frame (like the invitation pill), so the hit
   // rects live here and are tested in handleCustomInput().
   static constexpr int kEmptyPathKinds = 3;
-  Rect emptyPathRects_[kEmptyPathKinds] = {};
+  Rect emptyPathRects_[kEmptyPathKinds];
   uint8_t emptyPathKind_[kEmptyPathKinds] = {};
   int emptyPathCount_ = 0;
   bool showEmptyPaths() const;

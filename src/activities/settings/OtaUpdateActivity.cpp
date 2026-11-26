@@ -223,7 +223,7 @@ void OtaUpdateActivity::onExit() {
 
   const bool wifiWasEnabled = WiFi.getMode() != WIFI_MODE_NULL;
   if (wifiWasEnabled) {
-    WiFi.disconnect(false);
+    NetworkStartup::dropAssociation();
     delay(30);
   }
   // Reload saved statistics even if Wi-Fi allocation/selection never completed.

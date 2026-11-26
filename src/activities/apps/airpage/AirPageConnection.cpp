@@ -275,13 +275,17 @@ bool AirPageConnection::startWifiAssociation() {
   }
 
   WiFi.persistent(false);
+  // One claim for the mode change and the join. A background queue that slipped
+  // its own mode change between the two is the refusal this module now removes,
+  // and joinStation() is the form that carries the gate. The claim is scoped to
+  // the bring-up rather than to the whole MQTT session on purpose: holding the
+  // station for as long as a page keeps a live connection would park the queue
+  // indefinitely, which is a different bug with a different name.
+  NetworkStartup::StationClaim stationClaim;
   NetworkStartup::setMode(renderer_, WIFI_STA);
   delay(100);
-  if (credential->password.empty()) {
-    WiFi.begin(credential->ssid.c_str());
-  } else {
-    WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
-  }
+  NetworkStartup::joinStation(credential->ssid.c_str(),
+                             credential->password.empty() ? nullptr : credential->password.c_str());
   if (!ownsWifi_) {
     NetworkStartup::hold();
     ownsWifi_ = true;
@@ -293,10 +297,7 @@ bool AirPageConnection::startWifiAssociation() {
 
 void AirPageConnection::teardownWifi() {
   if (!ownsWifi_) return;
-  WiFi.disconnect(false);
-  delay(100);
-  WiFi.mode(WIFI_OFF);
-  esp_wifi_deinit();
+  NetworkStartup::shutdownStation();
   NetworkStartup::releaseHold();
   ownsWifi_ = false;
 }

@@ -14,7 +14,6 @@
 #include <JpegToBmpConverter.h>
 #include "bmp_export.h"
 #include "HalClock.h"
-#include "HalSystem.h"
 #include "HalDisplay.h"
 #include "HalGPIO.h"
 #include "HalFrontlight.h"
@@ -181,6 +180,8 @@ extern "C" void plus_boot_hang_request(void);
 #include "activities/home/MyActivity.h"
 #include "activities/apps/standby/StandbyActivity.h"
 #include "plus_ota_activity.h"
+#include "plus_transfer_activity.h"
+#include "plus_voice_memo_activity.h"
 #include "plus_resources_activity.h"
 #include "power_off_activity.h"
 #include "cpyos_sd.h"
@@ -625,6 +626,11 @@ extern "C" void cpyos_shell_demo(void) {
     // Mirror ESP_LOG to the card before anything else: the USB console has
     // died mid-session before, and then there is no other trace.
     plusLogMirrorStart();
+    // Non-Activity workers (the JJWXC cache queue service) enable the radio
+    // through NetworkStartup::setMode(), which needs the renderer to reclaim
+    // render memory. Registering it once here keeps those workers on the same
+    // rules as every screen instead of a second, weaker bring-up.
+    NetworkStartup::registerRenderer(&renderer);
     // First line of every boot: the hardware session needs to tell a cold boot
     // from a watchdog/panic/brownout reset and from a wake-up.
     printf("plus boot: reset=%d wake=%d\n", static_cast<int>(esp_reset_reason()),
@@ -953,13 +959,13 @@ void consoleHelp() {
     printf("commands: help info dmaheap cryptotest tracetext batt rtc sd imu touch keys slpinfo i2c sdwrite haptic [ms] panel [fast] window screenshot screenshotgray browser <url> tlsprobe <host> putfile <path> <bytes> flash <sd path> lang <zh|en> tap <lx> <ly> key <name> swipe <x0> <y0> <x1> <y1> crypto pinyin hyphen wifi light <0-100> [warm 0-100]\n"
            "          ap <ssid> [pass] | apoff | radiooff | web [ssid] [pass] | weboff | usbmsc on|off\n"
            "          wificonnect <ssid> <password> | wificonnect_saved <ssid> | selftest | touchraw | rtcset <epoch> | bt on|off|scan [seconds]\n"
-           "          settings [tab] | my [tab] | camera | slptest [s] | stats | stab <tab> | saction <n> | slist\n"
+           "          settings [tab] | my [tab] | uiscale <100..125> | camera | transfer | voicememo | aivoice | otaui | slptest [s] | stats | stab <tab> | saction <n> | slist\n"
            "          wipe <dir> | ota [check|url <u>|channel 0|1] | resources | pageturn 0|1 | pwroff\n");
     // Bench/debug hooks (kept on one line so `help` stays scannable).
     printf("          act aikey areatest audio badge btmap cleanrect vcom battlog boothang btaudio cat cellprobe cellular cellularforget clean "
            " confirm readerpanel cpu dict dns embfont fastturn fbclear fbink flpresent hash httpprobe imgtest jjwxc logtest ls mkdir open orient "
            " part pdfassets pdfengineupdate pdfengineurl <https://url> plugindemo [path] pluginloop <n> [path] plugins pluginlaunch <id> putfilefast <path> <bytes> pdfengineinstall <path> "
-           " pwrdemo pwrhold reboot bootdownload resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
+           " pwrdemo pwrhold reboot resolve retrysd ring rm sdformat sdhealth sdhealthfail sdremount sdpark sdrename "
            " sdstress sleepbadge slpdiag slpusb standby sync tail textaa touchdown touchup voiceprobe volume vtext wave wifisaved\n");
 }
 
@@ -2365,6 +2371,25 @@ void consoleSettings(const char* args) {
     printf("settings: opening\n");
 }
 
+void consoleUiScale(const char* args) {
+    const int value = args != nullptr ? atoi(args) : 0;
+    if (value < 100 || value > 125) {
+        printf("usage: uiscale 100..125 (current %u)\n", (unsigned)SETTINGS.uiScalePercent);
+        return;
+    }
+    SETTINGS.uiScalePercent = static_cast<uint8_t>(value);
+    {
+        RenderLock lock;
+        UITheme::getInstance().applyRendererGeometry(renderer);
+        typography::apply(renderer, SETTINGS.uiFontScale);
+    }
+    SETTINGS.saveToFile();
+    const auto vp = renderer.uiViewport();
+    printf("uiscale: %d%% native=%dx%d design=%dx%d scale=%u\n", value, renderer.getNativeWidth(),
+           renderer.getNativeHeight(), vp.width, vp.height, (unsigned)vp.scalePermille);
+    activityManager.requestUpdate(true);
+}
+
 void consoleMy(const char* args) {
     int tab = 0;
     if (args != nullptr && *args != '\0') (void)sscanf(args, "%d", &tab);
@@ -2533,8 +2558,18 @@ void consoleExec(char* line) {
         consoleSelect(args);
     } else if (strcmp(command, "settings") == 0) {
         consoleSettings(args);
+    } else if (strcmp(command, "uiscale") == 0) {
+        consoleUiScale(args);
     } else if (strcmp(command, "camera") == 0) {
         activityManager.goToCamera();
+    } else if (strcmp(command, "transfer") == 0) {
+        activityManager.replaceActivityWith<PlusTransferActivity>();
+    } else if (strcmp(command, "voicememo") == 0) {
+        activityManager.replaceActivityWith<PlusVoiceMemoActivity>();
+    } else if (strcmp(command, "aivoice") == 0) {
+        activityManager.replaceActivityWith<PlusVoiceActivity>();
+    } else if (strcmp(command, "otaui") == 0) {
+        activityManager.replaceActivityWith<PlusOtaActivity>();
     } else if (strcmp(command, "btaudio") == 0) {
         activityManager.pushActivity(
             std::make_unique<PlusBtAudioActivity>(renderer, mappedInputManager));
@@ -3343,11 +3378,6 @@ void consoleExec(char* line) {
         consoleRtcSet(args);
     } else if (strcmp(command, "selftest") == 0) {
         consoleSelfTest();
-    } else if (strcmp(command, "bootdownload") == 0) {
-        printf("bootdownload: rebooting into ROM USB download mode\n");
-        fflush(stdout);
-        HalSystem::rebootToUsbDownload();
-        printf("bootdownload: reset did not take effect\n");
     } else if (strcmp(command, "reboot") == 0) {
         // Unattended bring-up: when a subsystem (typically SDMMC) wedges there
         // is no shell, no reset key, and replugging needs a human. A plain
@@ -3850,7 +3880,10 @@ extern "C" void cpyos_shell_loop(void) {
 #endif
     // Same network idle window as the reference main loop. Without this the
     // Plus port ignored SETTINGS.wifiIdleTimeoutSeconds completely.
-    NetworkStartup::pollIdle(millis());
+    // Skipped while a radio command is executing: pollIdle re-asserts
+    // WIFI_PS_NONE once a second, and that driver call is not something to
+    // interleave with another task's mode change.
+    if (NetworkStartup::radioIdle()) NetworkStartup::pollIdle(millis());
 #if defined(ENABLE_CHINESE_VERSION) && defined(BOARD_HAS_PSRAM)
     maybeOfferFontExtrasForMissingUiGlyph();
 #endif
