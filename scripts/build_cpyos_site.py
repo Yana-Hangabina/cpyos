@@ -79,7 +79,8 @@ def firmware_is_xip_build(firmware: Path) -> bool:
     return b'refusing the XIP engine' in blob
 
 
-def check_pdf_engine(output: Path, firmware: Path | None = None) -> None:
+def check_pdf_engine(output: Path, firmware: Path | None = None,
+                     release_dir: Path | None = None) -> None:
     """Verify the rolling engine index that ships beside the site.
 
     The device reads `manifest-v2.txt` (PDFENG2) and picks the newest entry for
@@ -93,12 +94,19 @@ def check_pdf_engine(output: Path, firmware: Path | None = None) -> None:
     """
     engine = output / 'pdf-engine'
     if not engine.is_dir():
-        if firmware is not None and firmware_is_xip_build(firmware):
-            fail(f'{firmware} is an XIP PDF build (it carries the engine loader) but '
-                 f'{engine} does not exist: stage the paired engine and its index -- '
-                 f'scripts/build_pdf_module.py, scripts/build_pdf_engine_manifest.py, then '
-                 f'copy both into site/pdf-engine/ (recipe in '
-                 f'docs/engineering/pdf-xip.md "Publishing an engine build")')
+        if firmware is None or not firmware_is_xip_build(firmware):
+            return
+        # The engine index moved to the rolling `pdf-engine` release (see
+        # docs/engineering/pdf-xip.md "Publishing an engine build"); the site no
+        # longer carries a copy. A release that publishes the paired blob is
+        # therefore complete without site/pdf-engine -- but the pairing still
+        # has to hold, measured against the blob that will actually be served.
+        published = sorted(release_dir.glob('*-pdfmod.bin')) if release_dir else []
+        if not published:
+            fail(f'{firmware} is an XIP PDF build (it carries the engine loader) but neither '
+                 f'{engine} nor a paired *-pdfmod.bin in the release exists: stage the engine '
+                 f'(scripts/build_pdf_module.py) or publish it with the release')
+        check_release_engine(release_dir, firmware, published)
         return
     manifest = engine / 'manifest-v2.txt'
     if not manifest.is_file():
@@ -175,6 +183,58 @@ def check_pdf_engine(output: Path, firmware: Path | None = None) -> None:
           f'{firmware.name} and the {manifest.name} index')
 
 
+
+def check_release_engine(release_dir: Path, firmware: Path, blobs: list[Path]) -> None:
+    """The release-hosted engine must still be the one linked from this app.
+
+    Same contract as the staged copy: magic, ABI, layout key and the ELF build id
+    the firmware carries at 0xB0. A release that ships an engine from another
+    build would make every device download ~1.9 MB and then refuse it, which is
+    exactly the failure the staged check exists to prevent.
+    """
+    api = (Path(__file__).resolve().parent.parent / 'src/pdf/PdfModuleApi.h').read_text()
+    host = (Path(__file__).resolve().parent.parent / 'src/pdf/PdfModuleHost.h').read_text()
+
+    def const(name: str, text: str) -> int:
+        match = re.search(rf"{name}\s*=\s*(0x[0-9A-Fa-f]+|\d+)[uU]?", text)
+        if not match:
+            fail(f'{name} not found in the module headers')
+        return int(match.group(1), 0)
+
+    want_abi = const('kPdfModuleAbiVersion', api)
+    want_major = const('kPdfModuleHostApiMajor', host)
+    want_minor = const('kPdfModuleHostApiMinor', host)
+    keys = re.findall(r"kPdfModuleLayoutKey\s*=\s*(0x[0-9A-Fa-f]+)u;", api)
+    if len(keys) < 2:
+        fail('kPdfModuleLayoutKey literals not found')
+    want_layout = int(keys[1], 16)  # readpico flash mapping
+
+    image = firmware.read_bytes()
+    if len(image) < 0xD0:
+        fail(f'{firmware} is too short to carry an ESP app ELF SHA at 0xb0')
+    build_id = image[0xB0:0xD0].hex()
+
+    for path in blobs:
+        blob = path.read_bytes()
+        if len(blob) < 100:
+            fail(f'{path.name} is too short to be a PDF engine image')
+        magic = int.from_bytes(blob[0:4], 'little')
+        abi = int.from_bytes(blob[6:8], 'little')
+        host_api = int.from_bytes(blob[8:12], 'little')
+        layout = int.from_bytes(blob[12:16], 'little')
+        build = blob[68:100].hex()
+        if magic != const('kPdfModuleMagic', api):
+            fail(f'{path.name} is not a CPM1 engine image')
+        if abi != want_abi or (host_api >> 16) != want_major or (host_api & 0xFFFF) > want_minor:
+            fail(f'{path.name} is built for abi {abi} hostApi {host_api >> 16}.{host_api & 0xFFFF}, '
+                 f'this tree needs abi {want_abi} hostApi {want_major}.{want_minor}')
+        if layout != want_layout:
+            fail(f'{path.name} uses layout 0x{layout:08X}, this tree needs 0x{want_layout:08X}')
+        if build != build_id:
+            fail(f'{path.name} was linked from another ELF (build {build[:12]}…, '
+                 f'{firmware.name} carries {build_id[:12]}…); rebuild the engine with the release')
+    print(f'pdf-engine: {blobs[0].name} is published with the release and matches '
+          f'{firmware.name} (ABI {want_abi}, layout 0x{want_layout:08X})')
 
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -312,7 +372,7 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
                       flags=re.S)
     index.write_text(html, encoding='utf-8')
     if ota_path.exists():
-        check_pdf_engine(output, release_dir / firmware_name)
+        check_pdf_engine(output, release_dir / firmware_name, release_dir)
     else:
         print('  full-install release: engine is inside manifest-install.json; '
               'site engine updates use the rolling pdf-engine release')

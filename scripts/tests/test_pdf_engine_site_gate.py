@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Host tests for the pdf-engine gate in scripts/build_cpyos_site.py.
 
-`site/pdf-engine/` is the mechanism behind "update the PDF engine without
-re-flashing": the device reads the PDFENG2 index, picks the newest entry for its
-compatibility class, downloads the blob and checks size + sha256.  A fresh index
-beside a stale blob (or a missing file) used to reach production and make
-检查更新 fail on every device.
+The engine is published two ways and the gate accepts either: a `site/pdf-engine/`
+copy (legacy) or a `*-pdfmod.bin` blob published inside the release itself, with
+the PDFENG2 index living in the rolling `pdf-engine` release.  The device reads
+that index, picks the newest entry for its compatibility class, downloads the
+blob and checks size + sha256.  A fresh index beside a stale blob (or a missing
+file) used to reach production and make 检查更新 fail on every device.
 
 The gate also checks that the staged engine was linked from the firmware image
 published in the same release (build id), because that is a packaging mistake the
@@ -83,14 +84,29 @@ class PdfEngineSiteGate(unittest.TestCase):
                           str(MAJOR), str(MINOR), f"0x{layout:08X}", str(rev), build])
         (self.engine / "manifest-v2.txt").write_text("PDFENG2\n" + line + "\n", encoding="utf-8")
 
-    def refused(self, site: Path, firmware: Path | None = None) -> str:
+    def refused(self, site: Path, firmware: Path | None = None,
+                release_dir: Path | None = None) -> str:
         import contextlib, io
         firmware = self.fw if firmware is None else firmware
         buf = io.StringIO()
         with self.assertRaises(SystemExit):
             with contextlib.redirect_stderr(buf):
-                check_pdf_engine(site, firmware)
+                check_pdf_engine(site, firmware, release_dir)
         return buf.getvalue()
+
+    def xip_firmware(self) -> Path:
+        fw = self._tmp / "xip-firmware.bin"
+        fw.write_bytes(firmware_image() + b"\0refusing the XIP engine\0")
+        return fw
+
+    def release_with_engine(self, blob: bytes | None = None) -> Path:
+        """A release directory carrying the paired engine, no site/pdf-engine."""
+        import shutil
+        shutil.rmtree(self.engine)
+        release = self._tmp / "release"
+        release.mkdir()
+        (release / "readpico-pdfmod.bin").write_bytes(module_blob() if blob is None else blob)
+        return release
 
     def test_absent_directory_is_not_an_error(self):
         check_pdf_engine(self._tmp / "no-such-site")
@@ -98,7 +114,36 @@ class PdfEngineSiteGate(unittest.TestCase):
     def test_xip_firmware_without_an_engine_is_refused(self):
         fw = self._tmp / "xip-firmware.bin"
         fw.write_bytes(firmware_image() + b"\0refusing the XIP engine\0")
-        self.assertIn("does not exist", self.refused(self._tmp / "no-such-site", fw))
+        self.assertIn("neither", self.refused(self._tmp / "no-such-site", fw))
+
+    def test_release_hosted_engine_satisfies_the_gate(self):
+        fw = self.xip_firmware()
+        # The index moved to the rolling `pdf-engine` release; the site no longer
+        # stages a copy. Refusing here made the 0.8.1 Pages job fail after the
+        # release itself had already published this exact blob.
+        release = self.release_with_engine()
+        check_pdf_engine(self.site, fw, release)
+
+    def test_release_hosted_engine_must_match_the_firmware(self):
+        fw = self.xip_firmware()
+        release = self.release_with_engine(module_blob(build="b" * 64))
+        message = self.refused(self.site, fw, release)
+        self.assertIn("another ELF", message)
+
+    def test_release_hosted_engine_must_carry_the_contract(self):
+        fw = self.xip_firmware()
+        release = self.release_with_engine(module_blob(abi=ABI - 1))
+        message = self.refused(self.site, fw, release)
+        self.assertIn("needs abi", message)
+
+    def test_release_without_an_engine_is_still_refused(self):
+        fw = self.xip_firmware()
+        import shutil
+        shutil.rmtree(self.engine)
+        release = self._tmp / "release"
+        release.mkdir()
+        message = self.refused(self.site, fw, release)
+        self.assertIn("neither", message)
 
     def test_plain_firmware_needs_no_engine_directory(self):
         fw = self._tmp / "plain-firmware.bin"
