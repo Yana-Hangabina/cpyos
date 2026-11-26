@@ -214,15 +214,23 @@ def check_release_engine(release_dir: Path, firmware: Path, blobs: list[Path]) -
         fail(f'{firmware} is too short to carry an ESP app ELF SHA at 0xb0')
     build_id = image[0xB0:0xD0].hex()
 
+    # A release carries every device's engine; the Plus blob uses the SD/PSRAM
+    # layout and was linked from the Plus ELF, so it is not a candidate here.
+    # Select by the ELF build id the firmware carries -- the pairing rule -- and
+    # then validate the contract of the one that belongs to this image.
+    paired = []
     for path in blobs:
         blob = path.read_bytes()
-        if len(blob) < 100:
-            fail(f'{path.name} is too short to be a PDF engine image')
+        if len(blob) >= 100 and blob[68:100].hex() == build_id:
+            paired.append((path, blob))
+    if not paired:
+        fail(f'none of the published engines ({", ".join(p.name for p in blobs)}) was linked '
+             f'from {firmware.name} (build {build_id[:12]}…); rebuild the engine with this release')
+    for path, blob in paired:
         magic = int.from_bytes(blob[0:4], 'little')
         abi = int.from_bytes(blob[6:8], 'little')
         host_api = int.from_bytes(blob[8:12], 'little')
         layout = int.from_bytes(blob[12:16], 'little')
-        build = blob[68:100].hex()
         if magic != const('kPdfModuleMagic', api):
             fail(f'{path.name} is not a CPM1 engine image')
         if abi != want_abi or (host_api >> 16) != want_major or (host_api & 0xFFFF) > want_minor:
@@ -230,10 +238,7 @@ def check_release_engine(release_dir: Path, firmware: Path, blobs: list[Path]) -
                  f'this tree needs abi {want_abi} hostApi {want_major}.{want_minor}')
         if layout != want_layout:
             fail(f'{path.name} uses layout 0x{layout:08X}, this tree needs 0x{want_layout:08X}')
-        if build != build_id:
-            fail(f'{path.name} was linked from another ELF (build {build[:12]}…, '
-                 f'{firmware.name} carries {build_id[:12]}…); rebuild the engine with the release')
-    print(f'pdf-engine: {blobs[0].name} is published with the release and matches '
+    print(f'pdf-engine: {paired[0][0].name} is published with the release and matches '
           f'{firmware.name} (ABI {want_abi}, layout 0x{want_layout:08X})')
 
 def file_sha256(path: Path) -> str:

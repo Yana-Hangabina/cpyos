@@ -128,13 +128,20 @@ class PdfEngineSiteGate(unittest.TestCase):
         fw = self.xip_firmware()
         release = self.release_with_engine(module_blob(build="b" * 64))
         message = self.refused(self.site, fw, release)
-        self.assertIn("another ELF", message)
+        self.assertIn("was linked", message)
 
     def test_release_hosted_engine_must_carry_the_contract(self):
         fw = self.xip_firmware()
         release = self.release_with_engine(module_blob(abi=ABI - 1))
         message = self.refused(self.site, fw, release)
         self.assertIn("needs abi", message)
+
+    def test_another_devices_engine_is_not_a_candidate(self):
+        # Pages downloads the whole release, so the Plus engine sits beside the
+        # Read Pico one; only the blob linked from this firmware may be judged.
+        release = self.release_with_engine()
+        (release / "plus-pdfmod.bin").write_bytes(module_blob(build="b" * 64, layout=0xEE4B634F))
+        check_pdf_engine(self.site, self.xip_firmware(), release)
 
     def test_release_without_an_engine_is_still_refused(self):
         fw = self.xip_firmware()
