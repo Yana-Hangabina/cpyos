@@ -113,7 +113,12 @@ def sha256(path):
     return digest.hexdigest()
 
 
-# Widest Han coverage first: the tier that fits wins, the rest are only reported.
+# One tier for every target: the 3,500-character core ships, and the 8,105 core is the
+# "Chinese extras" download (family CPYOSCJKCore, installed over the same path).  Two
+# shipped tiers made the extras pack redundant on the device that already had 8,105 and
+# absent on the one that did not; the wide tier also cannot fit Read Pico's 2.0 MiB
+# data partition (1,640,306 B vs 642,887 B, ~968 KB short).
+CORE_TIER_POLICY = "3500"
 CORE_TIER_ORDER = ("8105", "3500")
 
 
@@ -132,14 +137,17 @@ def core_tier_sizes(root):
     return sizes
 
 
-def choose_core_tier(sizes, offset, partition_size):
-    """The tier with the most coverage that still ends inside the data partition.
+def choose_core_tier(sizes, offset, partition_size, preferred=CORE_TIER_POLICY):
+    """The preferred tier when it fits, otherwise the widest tier that does.
 
     Pure so the decision is testable: it is the only place that knows a target's
     partition size and the carrier sizes are both real, and getting it wrong either
     overflows a partition (esptool writes past the end) or ships the small font to a
     device that had room for the large one.
     """
+    size = sizes.get(preferred)
+    if size is not None and offset + size <= partition_size:
+        return preferred
     for tier in CORE_TIER_ORDER:
         size = sizes.get(tier)
         if size is not None and offset + size <= partition_size:
@@ -150,10 +158,11 @@ def choose_core_tier(sizes, offset, partition_size):
 def core_blob_path(root, tier):
     """Where the chosen tier's carrier lives.
 
-    Tier-named on purpose: Read Pico's XIP layout and the Plus layout share one partition
-    offset but fit different carriers, and while both wrote build/cjk_core.dat the second
-    manifest generated on a machine silently described a blob the first build had
-    overwritten. scripts/build_ui_font_subset.py owns the naming; keep the two in step.
+    Tier-named on purpose: a shared build/cjk_core.dat let one target's manifest describe a
+    blob the other target's build had since overwritten.  Both targets now ship the same
+    tier (CORE_TIER_POLICY), so the name is stable today, but the name still carries the
+    tier so a future policy change cannot silently reuse the wrong file.
+    scripts/build_ui_font_subset.py owns the naming; keep the two in step.
     """
     name = f"cjk_core_{tier}.dat" if tier else "cjk_core.dat"
     return os.path.join(root, "build", name)

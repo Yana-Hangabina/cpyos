@@ -57,13 +57,9 @@ GITHUB_RELEASES = 'https://github.com/Yana-Hangabina/cpyos/releases/download'
 # downloads through the fastest route.
 OTA_MIRROR_PREFIX = 'https://gh-proxy.com/'
 
-DATA_FILES = {
-    'pinyin': 'pinyin.dat',
-    'hyphen': 'hyphen.dat',
-    'i18n': 'i18n_pack.dat',
-    'web': 'web_pack.dat',
-    'emoji': 'emoji.dat',
-}
+# Data blobs are published under their build file names (the manifest's last column):
+# the reading core is tiered (cjk_core_3500.dat on Read Pico), and an alias table here
+# once disagreed with the pack list the device reads.
 
 
 def fail(message: str) -> None:
@@ -108,7 +104,7 @@ def read_data_manifest(root: Path) -> list[dict]:
             'size': int(size),
             'sha256': digest,
             'source': blob,
-            'name': DATA_FILES.get(name, blob.name),
+            'name': blob.name,
         })
     if not rows:
         fail('the data manifest contains no blobs')
@@ -329,6 +325,19 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     subprocess.run([sys.executable, str(root / 'scripts' / 'generate_pack_manifest.py'), '--repo', str(root)],
                    check=True)
     copy(root / 'build' / 'readpico-packs.txt', output / 'readpico-packs.txt')
+    # The device fetches each blob by this name from the release.  A name the
+    # bundle does not carry fails as a skipped pack (data packs are optional), so
+    # compare the list against what was just copied instead of trusting two
+    # scripts to agree.
+    for line in (output / 'readpico-packs.txt').read_text(encoding='utf-8').splitlines():
+        if not line or line.startswith('#'):
+            continue
+        asset, _offset, size, digest, _limit = line.split()
+        path = output / asset
+        if not path.is_file():
+            fail(f'readpico-packs.txt names {asset}, which the bundle does not carry')
+        if path.stat().st_size != int(size) or sha256_file(path) != digest:
+            fail(f'readpico-packs.txt disagrees with the bundle for {asset}')
     print('  data packs manifest: readpico-packs.txt')
 
     install_app_parts = app_parts + ([pdfmod_part] if pdfmod_part is not None else [])

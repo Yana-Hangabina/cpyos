@@ -170,30 +170,36 @@ class SystemFontPackTest(unittest.TestCase):
                 self.assertEqual(Path(name).read_bytes(), data,
                                  f'{name} is stale; run scripts/build_ui_font_subset.py')
 
-    def test_core_tier_is_chosen_by_the_partition_not_the_device(self):
-        # The regression this locks: one shared constant picked the 3,500 tier for a
-        # Plus partition that has room for 8,105, silently cutting Han coverage on
-        # the device with the larger data partition.
+    def test_every_device_ships_the_same_core_tier(self):
+        # Both devices ship the 3,500 tier; the 8,105 core is the "Chinese extras"
+        # download, not a second preinstalled tier. Two shipped tiers made the extras
+        # pack redundant on Plus (already 8,105) and absent on Read Pico (can only fit
+        # 3,500: 1,640,306 B against ~29 KB of free spiffs).
         import generate_data_manifest as gen
 
         sizes = {'3500': 642887, '8105': 1640306}
-        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 3 * 1024 * 1024 + 256 * 1024), '8105')
-        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 2 * 1024 * 1024), '3500')
         # Exactly the Read Pico and Plus partitions as shipped today.
-        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 3145728), '8105')
         self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 2097152), '3500')
+        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 3145728), '3500')
+        # An explicit wider preference still falls back when it does not fit, so a
+        # future target can ask for 8,105 without breaking a tight partition.
+        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 2097152, preferred='8105'), '3500')
+        self.assertEqual(gen.choose_core_tier(sizes, 0x15C000, 3145728, preferred='8105'), '8105')
         # Nothing fits -> no tier, which the caller must turn into a refusal rather
         # than a silent downgrade to a font the reader cannot use.
         self.assertIsNone(gen.choose_core_tier(sizes, 0x15C000, 0x15C000 + 1000))
         self.assertIsNone(gen.choose_core_tier({}, 0x15C000, 8 * 1024 * 1024))
 
-    def test_core_tier_order_prefers_coverage_over_spare_space(self):
+    def test_policy_tier_wins_even_when_a_wider_one_fits(self):
         import generate_data_manifest as gen
 
         sizes = {'3500': 100, '8105': 200}
-        self.assertEqual(gen.choose_core_tier(sizes, 0, 400), '8105')
+        # Spare space alone must not upgrade the shipped tier; the extras pack is
+        # how a reader gets 8,105.
+        self.assertEqual(gen.choose_core_tier(sizes, 0, 400), '3500')
+        self.assertEqual(gen.choose_core_tier(sizes, 0, 400, preferred='8105'), '8105')
         # A tier that would end exactly on the last byte still counts as fitting.
-        self.assertEqual(gen.choose_core_tier(sizes, 200, 400), '8105')
+        self.assertEqual(gen.choose_core_tier(sizes, 200, 400), '3500')
         self.assertEqual(gen.choose_core_tier(sizes, 201, 400), '3500')
 
     def test_core_carrier_round_trips_to_the_reading_font(self):
@@ -299,30 +305,36 @@ class CoreTierArtifactsTest(unittest.TestCase):
         # would make them indistinguishable in practice.
         self.assertNotEqual(carriers['3500'][0x04:0x14], carriers['8105'][0x04:0x14])
 
-    def test_manifests_for_two_layouts_point_at_different_files(self):
+    def test_both_layouts_publish_the_same_core_file(self):
+        # Unified tier: one carrier, one name, one hash for every target -- which is
+        # also what makes the shared release asset unambiguous. The tiered name stays
+        # (never the bare cjk_core.dat alias) so a stale build/ file cannot be mistaken
+        # for the one this manifest describes.
         xip = self._manifest('readpico_pdf_jjwxc')
         wide = self._manifest('readpico_jjwxc')
         row = re.compile(r'^data\tcore\t(\S+)\t(\S+)\t(\d+)\t(\S+)\t(\S+)$', re.M)
         a, b = row.search(xip).groups(), row.search(wide).groups()
         self.assertEqual(a[4], 'build/cjk_core_3500.dat')
-        self.assertEqual(b[4], 'build/cjk_core_8105.dat')
-        self.assertNotEqual(a[2], b[2], 'both layouts describe the same carrier size')
+        self.assertEqual(b[4], a[4], 'the two layouts disagree on the core carrier')
+        self.assertEqual(a[2], b[2], 'the two layouts describe different carrier sizes')
+        self.assertEqual(a[3], b[3], 'the two layouts describe different carrier hashes')
         for cells in (a, b):
             blob = ROOT / cells[4]
             self.assertEqual(blob.stat().st_size, int(cells[2]))
             self.assertEqual(hashlib.sha256(blob.read_bytes()).hexdigest(), cells[3],
                              f'{cells[4]} does not match the manifest that names it')
 
-    def test_tier_selection_follows_the_partition(self):
-        # The XIP partition leaves 2,097,152 - 0x15c000 bytes behind the other blobs,
-        # which only the smaller carrier fits; assert the choice, not just the arithmetic.
+    def test_tier_selection_is_uniform_across_layouts(self):
+        # Read Pico's XIP partition leaves ~29 KB behind the other blobs and Plus has
+        # room for more, but both ship the policy tier; only a partition that cannot
+        # hold it at all refuses.
         sys.path.insert(0, str(ROOT / 'scripts'))
         import generate_data_manifest as gen
 
         offset = gen.read_cpp_constant(str(ROOT / 'src' / 'SystemCoreFont.h'), 'kPartitionOffset')
         sizes = gen.core_tier_sizes(str(ROOT))
         self.assertEqual(gen.choose_core_tier(sizes, offset, 2 * 1024 * 1024), '3500')
-        self.assertEqual(gen.choose_core_tier(sizes, offset, 3125 * 1024), '8105')
+        self.assertEqual(gen.choose_core_tier(sizes, offset, 3125 * 1024), '3500')
         self.assertIsNone(gen.choose_core_tier(sizes, offset, 700 * 1024))
 
     def test_no_tier_would_fall_back_to_the_ambiguous_alias(self):

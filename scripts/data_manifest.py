@@ -16,31 +16,16 @@ from typing import Optional
 
 ROW = re.compile(r"^data\t(\w+)\t(0x[0-9a-fA-F]+)\t(0x[0-9a-fA-F]+)\t(\d+)\t([0-9a-fA-F]{64})\t(\S+)$")
 
-#: The file name each role is *published* under, which is not necessarily the file name in
-#: build/.  The reading core has one carrier per tier (``cjk_core_3500.dat`` for the XIP
-#: layout, ``cjk_core_8105.dat`` for the wide one) chosen by the partition size, but a
-#: device asks for ``cjk_core.dat``: ``readpico-packs.txt`` names that alias, and every
-#: device already shipped resolves its OTA asset URL from that file.  Publishing the tiered
-#: name instead would make the download 404, and because an app update is still useful
-#: without its data packs the updater would log "data packs skipped" and boot with no core
-#: font -- the exact silent failure the tier split was supposed to avoid.
-#:
-#: The bundler (scripts/build_cpyos_release.py) and the pack manifest
-#: (scripts/generate_pack_manifest.py) both read this table, and the bundler additionally
-#: compares its own output against the generated pack manifest line by line.
-PACK_ASSETS = {
-    "pinyin": "pinyin.dat",
-    "web": "web_pack.dat",
-    "hyphen": "hyphen.dat",
-    "i18n": "i18n_pack.dat",
-    "emoji": "emoji.dat",
-    "core": "cjk_core.dat",
-}
-
-
 def asset(name: str) -> Optional[str]:
-    """The published name for a manifest role, or None when the role is unknown."""
-    return PACK_ASSETS.get(name)
+    """The published name for a manifest role.
+
+    There is no rename table any more: a blob is published under the build file
+    name the manifest lists (``cjk_core_3500.dat`` for the XIP layout).  The pack
+    list is fetched fresh from the release, so devices follow the current name;
+    a separate alias could drift from what the bundle actually shipped, and a
+    missing pack is skipped silently because data packs are optional.
+    """
+    return name
 
 
 def rows(manifest: pathlib.Path) -> list[dict[str, object]]:

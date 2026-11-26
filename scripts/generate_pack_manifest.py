@@ -27,13 +27,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import data_manifest  # noqa: E402
-
-# The names a device asks for.  Deliberately shared with the release bundler: the core
-# carrier is built per tier (cjk_core_3500.dat / cjk_core_8105.dat) but published and
-# fetched under its stable alias, and if the two scripts each kept their own table the
-# bundle could ship a file this manifest never names.
-ASSETS = data_manifest.PACK_ASSETS
+# The name a device asks for is the file name the bundle actually copies.  The core
+# carrier is built per tier (cjk_core_3500.dat / cjk_core_8105.dat); an alias here while
+# the bundle shipped the tiered file made every device fetch a name that does not exist,
+# which the updater silently skips because data packs are optional.  Roles are still
+# validated so a renamed role cannot slip in unnoticed.
+ASSET_ROLES = ('pinyin', 'web', 'hyphen', 'i18n', 'emoji', 'core')
 
 
 def fail(message: str) -> None:
@@ -68,10 +67,10 @@ def render(repo: Path) -> str:
                 fail(f'{relative} is missing')
             if blob.stat().st_size != int(size) or sha256_file(blob) != digest:
                 fail(f'{relative} no longer matches data_manifest.txt')
-            if name not in ASSETS:
+            if name not in ASSET_ROLES:
                 fail(f'unknown data pack role {name!r}')
             rows.append({
-                'asset': ASSETS[name],
+                'asset': Path(relative).name,
                 'offset': int(offset, 0),
                 'size': int(size, 0),
                 'sha256': digest,
