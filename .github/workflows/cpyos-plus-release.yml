@@ -217,14 +217,19 @@ jobs:
           # The image runs without them, but the UI subset lacks the common
           # Han reading face and 33 languages fall back to English; flash them
           # with ports/metalio_plus/scripts/flash_plus_data.py.
-          cp build/pinyin.dat "dist/cpyos-plus/$BASE/pinyin.dat"
-          cp build/web_pack.dat "dist/cpyos-plus/$BASE/web_pack.dat"
-          cp build/hyphen.dat "dist/cpyos-plus/$BASE/hyphen.dat"
-          cp build/i18n_pack.dat "dist/cpyos-plus/$BASE/i18n_pack.dat"
-          cp build/emoji.dat "dist/cpyos-plus/$BASE/emoji.dat"
-          cp build/cjk_core.dat "dist/cpyos-plus/$BASE/cjk_core.dat"
+          # Copy exactly the blobs the manifest names. A hardcoded list drifted
+          # (build/cjk_core.dat is an alias the generator may leave holding the
+          # other tier), and the device-facing names must match what
+          # data_manifest_plus.txt tells flash_plus_data.py to find.
+          while IFS=$'\t' read -r kind role offset address size digest relative; do
+            [ "$kind" = "data" ] || continue
+            cp "$relative" "dist/cpyos-plus/$BASE/$(basename "$relative")"
+          done < build/data_manifest_plus.txt
           cp build/data_manifest_plus.txt "dist/cpyos-plus/$BASE/data_manifest_plus.txt"
-          (cd "dist/cpyos-plus/$BASE" && sha256sum * > SHA256SUMS)
+          # Both device jobs publish into one release. The readpico job keeps the
+          # plain SHA256SUMS; this one is named so neither overwrites the other
+          # and a Plus user can verify the assets it actually downloads.
+          (cd "dist/cpyos-plus/$BASE" && sha256sum * > plus-SHA256SUMS)
 
       - name: Publish to the CloudZao firmware market
         env:
