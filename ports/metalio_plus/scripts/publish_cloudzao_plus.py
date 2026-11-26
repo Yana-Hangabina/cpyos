@@ -32,6 +32,7 @@ import pathlib
 import re
 import struct
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -229,12 +230,22 @@ def upload(
             "Content-Type": content_type,
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:600]
-        raise RuntimeError(f"{method} {url}: HTTP {exc.code}: {detail}") from None
+    # One ~6.5 MB multipart POST. CloudZao has answered with a socket write
+    # timeout on consecutive releases, so retry transport failures (never an
+    # HTTP status: that is an answer) and give a slow link more than 3 minutes.
+    raw = b""
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=600) as response:
+                raw = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:600]
+            raise RuntimeError(f"{method} {url}: HTTP {exc.code}: {detail}") from None
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == 3:
+                raise RuntimeError(f"{method} {url}: upload failed after 3 attempts: {exc}") from None
+            time.sleep(30 * attempt)
     if not raw:
         return {}
     try:

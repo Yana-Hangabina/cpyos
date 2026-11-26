@@ -231,35 +231,6 @@ jobs:
           # and a Plus user can verify the assets it actually downloads.
           (cd "dist/cpyos-plus/$BASE" && sha256sum * > plus-SHA256SUMS)
 
-      - name: Publish to the CloudZao firmware market
-        env:
-          CLOUDZAO_ACCESS_TOKEN: ${{ secrets.CLOUDZAO_ACCESS_TOKEN }}
-          CLOUDZAO_EMAIL: ${{ secrets.CLOUDZAO_EMAIL }}
-          CLOUDZAO_PASSWORD: ${{ secrets.CLOUDZAO_PASSWORD }}
-          CLOUDZAO_FIRMWARE_ID: ${{ vars.CLOUDZAO_FIRMWARE_ID }}
-          CLOUDZAO_HARDWARE_MODEL_ID: ${{ vars.CLOUDZAO_HARDWARE_MODEL_ID }}
-          CLOUDZAO_PRODUCT_NAME: ${{ vars.CLOUDZAO_PRODUCT_NAME }}
-        run: |
-          set -euo pipefail
-          # CloudZao caps a version remark at 500 characters. Prefer the short
-          # market-specific note; fall back to the release notes only for a
-          # standalone plus tag.
-          SHORT="docs/releases/plus-$BASE.cloudzao.txt"
-          NOTES="docs/releases/plus-$BASE.md"
-          if [ -f "$SHORT" ]; then
-            REMARK=(--remark-file "$SHORT")
-          elif [ -f "$NOTES" ]; then
-            REMARK=(--remark-file "$NOTES")
-          else
-            REMARK=(--remark "CPYOS Plus $APP_VERSION")
-          fi
-          python3 ports/metalio_plus/scripts/publish_cloudzao_plus.py \
-            --firmware "dist/cpyos-plus/$BASE/cpyos-plus-$APP_VERSION.bin" \
-            --version "$APP_VERSION" \
-            --status "$STATUS" \
-            --flash-start-address 0x10000 \
-            "${REMARK[@]}"
-
       - name: Create or update the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -286,3 +257,43 @@ jobs:
             gh release create "$TAG" "dist/cpyos-plus/$BASE/"* --repo "$GITHUB_REPOSITORY" \
               --draft=false "${NOTES_ARGS[@]}" "${PRERELEASE[@]}"
           fi
+      - name: Publish to the CloudZao firmware market
+        env:
+          CLOUDZAO_ACCESS_TOKEN: ${{ secrets.CLOUDZAO_ACCESS_TOKEN }}
+          CLOUDZAO_EMAIL: ${{ secrets.CLOUDZAO_EMAIL }}
+          CLOUDZAO_PASSWORD: ${{ secrets.CLOUDZAO_PASSWORD }}
+          CLOUDZAO_FIRMWARE_ID: ${{ vars.CLOUDZAO_FIRMWARE_ID }}
+          CLOUDZAO_HARDWARE_MODEL_ID: ${{ vars.CLOUDZAO_HARDWARE_MODEL_ID }}
+          CLOUDZAO_PRODUCT_NAME: ${{ vars.CLOUDZAO_PRODUCT_NAME }}
+        run: |
+          set -euo pipefail
+          # CloudZao caps a version remark at 500 characters. Prefer the short
+          # market-specific note; fall back to the release notes only for a
+          # standalone plus tag.
+          SHORT="docs/releases/plus-$BASE.cloudzao.txt"
+          NOTES="docs/releases/plus-$BASE.md"
+          if [ -f "$SHORT" ]; then
+            REMARK=(--remark-file "$SHORT")
+          elif [ -f "$NOTES" ]; then
+            REMARK=(--remark-file "$NOTES")
+          else
+            REMARK=(--remark "CPYOS Plus $APP_VERSION")
+          fi
+          # The firmware is one ~6.5 MB multipart POST; CloudZao answered with a
+          # write timeout on two consecutive 0.8.2 attempts, so retry rather
+          # than lose the market release to a slow window.
+          for attempt in 1 2 3; do
+            if python3 ports/metalio_plus/scripts/publish_cloudzao_plus.py \
+                 --firmware "dist/cpyos-plus/$BASE/cpyos-plus-$APP_VERSION.bin" \
+                 --version "$APP_VERSION" \
+                 --status "$STATUS" \
+                 --flash-start-address 0x10000 \
+                 "${REMARK[@]}"; then
+              exit 0
+            fi
+            echo "::warning::CloudZao publish attempt $attempt failed; retrying"
+            sleep $((attempt * 30))
+          done
+          echo "::error::CloudZao publish failed three times"
+          exit 1
+
