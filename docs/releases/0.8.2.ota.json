@@ -1,0 +1,16 @@
+{
+  "en": [
+    "One reading core for every device; the 8,105 core is a download",
+    "Fixes the data-pack update fetching the wrong core",
+    "Font-extras pack names no longer show missing glyphs",
+    "Data packs are now published under their real file names",
+    "No functional changes to reading, PDF or apps"
+  ],
+  "zh": [
+    "两设备统一阅读核心；8,105 改为可选下载",
+    "修复仅更新数据包时取错核心的问题",
+    "扩展字体包名不再出现缺字方框",
+    "数据包按真实文件名发布",
+    "阅读、PDF 与应用功能无变化"
+  ]
+}

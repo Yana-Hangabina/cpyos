@@ -2,6 +2,17 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.8.2 — 2026-11-26
+
+> Read Pico `0.8.2-rp` · Metalio E-INK4 Plus `0.8.2-e4p`
+
+### 字体与数据包
+
+- **统一阅读核心**：两设备都预装 3,500 字档；8,105 字核心改为「中文扩展」下载（同一家族、就地升级）。
+- **修复“仅更新数据包”取错核心**：包清单曾按别名请求，而发布包用 tier 文件名，落空被静默跳过；现在清单名即发布名，打包时逐行校验。
+- **UI 字面补齐**：扩展字体包名的用字并入 UI 字面（包名不再出方框），并加回归测试。
+- 发布卫生：Plus 数据包按 manifest 暂存，校验和拆分为每设备一份。
+
 ## 0.8.1 — 2026-11-26
 
 > Read Pico `0.8.1-rp` · Metalio E-INK4 Plus `0.8.1-e4p`
