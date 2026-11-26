@@ -103,6 +103,25 @@ class SystemFontPackTest(unittest.TestCase):
         missing = sorted(ui - covered)
         self.assertEqual(missing, [], 'no face can draw ' + ', '.join(f'U+{c:04X}' for c in missing[:20]))
 
+    def test_manifest_pack_names_are_covered_by_the_ui_face(self):
+        # The font-extras list prints each pack's `name` straight out of the
+        # published manifest, and UI text falls back only to the 8pt emergency
+        # subset -- never to the reading core. 「多语言文字（韩泰阿希梵越）」
+        # therefore showed 梵 as a box on the Plus even though the 8,105 core
+        # has it. ui_codepoints() unions those names; this pins it.
+        import json
+
+        import build_ui_font_subset
+
+        spec = ROOT / 'font-extras' / 'packs.json'
+        packs = json.loads(spec.read_text(encoding='utf-8')).get('packs', [])
+        self.assertTrue(packs, 'packs.json declares none; the test would be vacuous')
+        names = {c for pack in packs for c in pack.get('name', '') if not c.isspace()}
+        ui = build_ui_font_subset.ui_codepoints()
+        missing = sorted(ord(c) for c in names if ord(c) not in ui)
+        self.assertEqual(missing, [], 'UI subset misses manifest name characters: '
+                         + ', '.join(f'U+{cp:04X}' for cp in missing[:20]))
+
     def test_non_cjk_ui_is_in_the_supplement(self):
         import build_ui_font_subset
 

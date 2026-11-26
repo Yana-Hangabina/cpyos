@@ -226,8 +226,28 @@ def almanac_codepoints() -> set[int]:
     return {ord(c) for c in text if not c.isspace()}
 
 
+def manifest_codepoints() -> set[int]:
+    """Characters the device shows from data files instead of from i18n.
+
+    The font-extras list prints each pack's `name` verbatim out of the published
+    manifest, so neither the translation set nor the C++ literals contain them:
+    「多语言文字（韩泰阿希梵越）」 drew 梵 as a box on the Plus although the
+    8,105 reading core covers it -- UI faces fall back only to the 8pt emergency
+    subset and never to the reading core, so a manifest string has to be in the
+    UI face itself.
+    """
+    import json
+
+    spec = ROOT / "font-extras" / "packs.json"
+    if not spec.is_file():
+        return set()
+    packs = json.loads(spec.read_text(encoding="utf-8")).get("packs", [])
+    return {ord(c) for pack in packs for c in pack.get("name", "") if not c.isspace()}
+
+
 def ui_codepoints() -> set[int]:
-    cps = translation_codepoints() | hardcoded_codepoints() | almanac_codepoints() | REQUIRED_UI
+    cps = (translation_codepoints() | hardcoded_codepoints() | almanac_codepoints()
+           | manifest_codepoints() | REQUIRED_UI)
     cps.discard(0x0A)
     cps.discard(0x0D)
     return cps
