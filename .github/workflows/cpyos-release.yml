@@ -157,7 +157,11 @@ jobs:
             --build-dir .pio/build/readpico_pdf_jjwxc \
             --notes-json "docs/releases/$VERSION.ota.json"
           cp build/pdfmod.bin "dist/cpyos/$VERSION/readpico-pdfmod.bin"
-          (cd "dist/cpyos/$VERSION" && rm -f SHA256SUMS && sha256sum * > SHA256SUMS)
+          # Files only: a version with an OTA manifest also writes dist/ota/,
+          # and `sha256sum *` aborts on a directory (that is how the first
+          # 0.8.1 release run failed after the bundle itself was built).
+          (cd "dist/cpyos/$VERSION" && rm -f SHA256SUMS && \
+             find . -maxdepth 1 -type f -printf "%f\0" | sort -z | xargs -0 sha256sum > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
