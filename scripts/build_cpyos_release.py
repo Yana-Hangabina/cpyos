@@ -225,10 +225,18 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
         fail(f'platformio.ini version is {configured}, but --version is {version}')
 
     target = nightly_targets.TARGETS[TARGET_ID]
-    partitions = package_nightly_target.verify_partition_csv(root, target['partitionsCsv'])
     firmware_source = build_dir / 'firmware.bin'
     if not firmware_source.is_file():
         fail(f'no {firmware_source}; run pio run -e {ENVIRONMENT} first')
+    # The table must describe the image being packaged, not whichever env the
+    # target id names: this bundle is built from readpico_pdf_jjwxc (XIP: 6.0 MiB
+    # app slots, pdfmod, 2.0 MiB spiffs), while target['partitionsCsv'] still
+    # describes the nightly env. Measuring the PDF image against that table made
+    # every 0.8.1 bundle "move app1/spiffs" and refuse to emit an OTA manifest.
+    partitions_csv = nightly_targets.partitions_csv_for(
+        root, TARGET_ID, firmware=firmware_source, target=target)
+    print(f'partition table: {partitions_csv}')
+    partitions = package_nightly_target.verify_partition_csv(root, partitions_csv)
 
     blob, desc, notes_lines = verify_release_artifacts.check_image(
         root, firmware_source, target, release=not allow_dirty)
@@ -270,15 +278,20 @@ def build(version: str, root: Path, build_dir: Path, output: Path, notes: dict,
     elif full_install_only:
         fail('build/pdfmod.bin is missing; build the paired PDF engine before a full install')
 
-    # The font tiers moved app1 and spiffs. An OTA/manifest written at the new
-    # addresses would land inside an old device's app1 slot (the new spiffs base
-    # is the old app1 range), so the transition release must be a full install.
-    layout_moved = partitions['app1'][0] != 0x740000 or partitions['spiffs'][0] != 0xE70000
+    # 0.8.0 was the transition release that moved app1/spiffs for the XIP PDF
+    # layout (app1 0x740000 -> 0x610000, spiffs 0xE70000 -> 0xDF0000) and was
+    # published as a full install only. From 0.8.1 on, those addresses ARE the
+    # shipping layout, so an app-only OTA writes where every 0.8.0+ device
+    # already has its slots. The guard stays for any future move: comparing
+    # against the old 0x740000/0xE70000 baseline would refuse every release
+    # since 0.8.0 and silently push everyone back onto full installs.
+    LAYOUT_BASELINE = (0x610000, 0xDF0000)  # app1 base, spiffs base as shipped by 0.8.0
+    layout_moved = (partitions['app1'][0] != LAYOUT_BASELINE[0]
+                    or partitions['spiffs'][0] != LAYOUT_BASELINE[1])
     if layout_moved and not full_install_only:
-        fail('this tree moved app1/spiffs for the font tiers (app1=0x%x, spiffs=0x%x); '
-             'an OTA manifest would write at offsets an older device does not have and can '
-             'corrupt its app1 slot. Publish with --full-install-only; later app-only OTA '
-             'releases from the new layout are safe.'
+        fail('this tree moved app1/spiffs away from the 0.8.0 layout (app1=0x%x, spiffs=0x%x); '
+             'an OTA manifest would write at offsets an existing device does not have and can '
+             'corrupt its app1 slot. Publish that transition as a full install.'
              % (partitions['app1'][0], partitions['spiffs'][0]))
 
     for part in app_parts:

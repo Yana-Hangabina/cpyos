@@ -155,8 +155,7 @@ jobs:
           python3 scripts/build_cpyos_release.py \
             --version "$VERSION" \
             --build-dir .pio/build/readpico_pdf_jjwxc \
-            --notes-json "docs/releases/$VERSION.ota.json" \
-            --full-install-only
+            --notes-json "docs/releases/$VERSION.ota.json"
           cp build/pdfmod.bin "dist/cpyos/$VERSION/readpico-pdfmod.bin"
           (cd "dist/cpyos/$VERSION" && rm -f SHA256SUMS && sha256sum * > SHA256SUMS)
 

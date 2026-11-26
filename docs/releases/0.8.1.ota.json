@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Adds UI scaling (100-125%) and fixes 125% layouts",
+    "Wi-Fi: serialized radio commands, silent reconnect, readable failures",
+    "PDF engine is now decoupled; update it from Settings if asked",
+    "Reading core font tiers (3,500 / 8,105 characters) ship in the data packs",
+    "Ordinary OTA is back; 0.7.0 and older still need a full install",
+    "Language pack grew to 1,879 keys: update it with this version"
+  ],
+  "zh": [
+    "新增界面缩放（100–125%）并修复 125% 布局",
+    "Wi-Fi：射频命令串行化、静默重连、失败原因可读",
+    "PDF 引擎改为解耦，需要时在设置里更新引擎",
+    "阅读核心字体分档（3,500 / 8,105 字）随数据包发布",
+    "恢复普通 OTA；0.7.0 及更早版本仍需完整安装",
+    "语言包增至 1,879 键，请随本版本一起更新"
+  ]
+}
