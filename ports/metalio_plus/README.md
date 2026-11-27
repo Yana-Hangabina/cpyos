@@ -412,6 +412,7 @@ Every `cpyos-plus-*` release carries, next to the firmware:
 | Asset | Purpose | Where it goes |
 |---|---|---|
 | `cpyos-plus-<ver>.bin` | app image | app slot (CloudZao OTA writes this only) |
+| `cpyos-plus-<ver>-partition-table.bin` | partition table for the full install (offset `0x8000`) | `flash_metalio_plus.py --partition-table`, and the web installer's manifest |
 | `plus-pdfmod.bin` | MuPDF engine, paired to that image's ELF SHA | `/.crosspoint/pdf/pdfmod.bin` on the card (or the pinned **PDF engine** row on the Plugins page) |
 | `plus-pdf-assets.bin` | font/CMap bundle for the engine | card root `/pdf_assets.bin`; installed at boot |
 | `plus-pdf-engine-manifest.txt` | one manifest line for this exact tag | consumed by the in-reader updater |

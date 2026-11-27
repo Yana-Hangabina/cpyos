@@ -285,9 +285,18 @@ def write_plus_flash_manifest(release_dir: Path, downloads: Path, version: str) 
     firmware = next((p for p in release_dir.glob('cpyos-plus-*.bin')
                      if 'partition-table' not in p.name and 'pdf' not in p.name), None)
     data_manifest = release_dir / 'data_manifest_plus.txt'
-    if not table or not firmware or not data_manifest.is_file():
-        print('  no E-INK4 Plus full-install assets in this release; Plus web install omitted')
+    if not firmware:
+        print('  no E-INK4 Plus firmware in this release; Plus web install omitted')
         return
+    # A Plus firmware without the table used to print one line and move on, so the
+    # install page silently served a 404 for flash-plus.json from 0.8.1 through
+    # 0.8.4 while the release looked complete. One missing piece here means the
+    # documented one-shot install cannot work, so refuse the site build instead.
+    if not table:
+        fail(f'{firmware.name} is published without cpyos-plus-*-partition-table.bin; '
+             'the Plus web installer cannot place the app slots without it')
+    if not data_manifest.is_file():
+        fail(f'{firmware.name} is published without data_manifest_plus.txt')
     partitions = read_partition_binary(table)
     apps = sorted((row for row in partitions if row['type'] == 0), key=lambda row: row['offset'])
     if len(apps) < 2:

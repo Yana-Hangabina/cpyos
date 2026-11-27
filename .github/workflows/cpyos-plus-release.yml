@@ -216,6 +216,11 @@ jobs:
           cp build/pdf_full_assets.bin "dist/cpyos-plus/$BASE/plus-pdf-assets.bin"
           cp build/pdf-engine-manifest.txt \
             "dist/cpyos-plus/$BASE/plus-pdf-engine-manifest.txt"
+          # The partition table travels with the release: the site generator needs
+          # it to place both app slots, and its absence (0.8.1..0.8.4) is what left
+          # the Plus one-shot web install serving a 404.
+          cp ports/metalio_plus/build_shell/partition_table/partition-table.bin \
+            "dist/cpyos-plus/$BASE/cpyos-plus-$APP_VERSION-partition-table.bin"
           # Data-partition blobs (i18n/web/pinyin/hyphen/emoji/reading core).
           # The image runs without them, but the UI subset lacks the common
           # Han reading face and 33 languages fall back to English; flash them
