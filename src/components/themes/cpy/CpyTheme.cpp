@@ -1,4 +1,6 @@
 #include "CpyTheme.h"
+
+#include <InvokeCallback.h>
 #include "booksource/BookSource.h"
 
 #include <GfxRenderer.h>
@@ -418,20 +420,26 @@ void CpyTheme::drawList(const GfxRenderer& renderer, const Rect rect, const int 
     std::string value;
     int valueWidth = 0;
     if (rowValue) {
-      value = renderer.truncatedText(UI_10_FONT_ID, rowValue(index).c_str(), kMaxValueWidth);
+      value = renderer.truncatedText(UI_10_FONT_ID,
+                                 callbacks::callOr<std::string>("cpy.rowValue", rowValue, std::string{}, index).c_str(),
+                                 kMaxValueWidth);
       valueWidth = value.empty() ? 0 : renderer.getTextWidth(UI_10_FONT_ID, value.c_str()) + kIconGap;
     }
     const bool heading = rowHeading && rowHeading(index);
     const int titleFont = heading ? UI_12_FONT_ID : UI_10_FONT_ID;
     const auto titleStyle = heading ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
     const int textWidth = std::max(1, contentRight - kRowPadding - textX - valueWidth);
-    const std::string title = renderer.truncatedText(titleFont, rowTitle(index).c_str(), textWidth, titleStyle);
+    const std::string titleText =
+        callbacks::callOr<std::string>("cpy.rowTitle", rowTitle, std::string{}, index);
+    const std::string title = renderer.truncatedText(titleFont, titleText.c_str(), textWidth, titleStyle);
     const int titleY = rowY + (rowSubtitle ? (UiHighDpiProfile::enabled ? 20 : 12)
                                            : (rowHeight - renderer.getLineHeight(titleFont)) / 2);
     renderer.drawText(titleFont, textX, titleY, title.c_str(), !selected, titleStyle);
 
     if (rowSubtitle) {
-      const std::string subtitle = renderer.truncatedText(SMALL_FONT_ID, rowSubtitle(index).c_str(), textWidth);
+      const std::string subtitleText =
+          callbacks::callOr<std::string>("cpy.rowSubtitle", rowSubtitle, std::string{}, index);
+      const std::string subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), textWidth);
       renderer.drawText(SMALL_FONT_ID, textX,
                         rowY + (UiHighDpiProfile::enabled ? 20 + renderer.getLineHeight(titleFont) + 6 : 36),
                         subtitle.c_str(), !selected);
@@ -483,7 +491,9 @@ void CpyTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int 
       }
     }
 
-    const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(index).c_str(),
+    const std::string labelText =
+        callbacks::callOr<std::string>("cpy.buttonLabel", buttonLabel, std::string{}, index);
+    const std::string label = renderer.truncatedText(UI_12_FONT_ID, labelText.c_str(),
                                                      std::max(1, rect.x + rect.width - kRowPadding - textX));
     const int textY = rowY + (rowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
     renderer.drawText(UI_12_FONT_ID, textX, textY, label.c_str(), !selected);
@@ -621,7 +631,7 @@ void CpyTheme::drawMainTabBar(const GfxRenderer& renderer, const Rect rect, cons
   const int barCut = panel_insets::cornerCut(UITheme::getInstance().getBottomCornerRadius(), barDepth);
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
-  // refreshed UI baseline: a shallow wave instead of a straight hairline. The active
+  // Pond baseline: a shallow wave instead of a straight hairline. The active
   // item gets three ripple arcs behind its icon and a small duck on the top
   // edge; the bar itself stays 88 px so it stops eating the page.
   constexpr float kTwoPi = 6.2831853f;
@@ -864,7 +874,7 @@ void CpyTheme::drawEmptyState(const GfxRenderer& renderer, const Rect rect, cons
 
 void CpyTheme::drawSleepScreen(const GfxRenderer& renderer, const char* status, const char* bookTitle,
                                const int readPercent) const {
-  // refreshed UI frame 12: a night scene only. No current book, no reading stats
+  // Pond v5 frame 12: a night scene only. No current book, no reading stats
   // and no Wi-Fi line -- standby must not claim anything the device cannot
   // know while asleep (ALIGNMENT-AUDIT.md).
   (void)bookTitle;
@@ -1012,7 +1022,7 @@ void CpyTheme::drawMainTabTitle(const GfxRenderer& renderer, const Rect rect, co
 
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   {
-  // refreshed UI mast (design frame 01): one quiet row. Page label on the left,
+  // Pond v5 mast (design frame 01): one quiet row. Page label on the left,
   // date + clock + battery capsule on the right. No large serif page title:
   // the designed pages put their own display type in the content area.
   (void)masthead;

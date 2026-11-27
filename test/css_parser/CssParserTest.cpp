@@ -190,8 +190,46 @@ TEST_F(CssParserTest, CanonicalCacheRoundTripPreservesStyles) {
   EXPECT_FLOAT_EQ(paragraph.marginTop.value, 2.0f);
 }
 
-TEST_F(CssParserTest, PartialCacheIsValidatedDuringInspection) {
+TEST_F(CssParserTest, BordersAndShadeParseAndSurviveTheCache) {
   CssParser writer(cachePath());
+  ASSERT_EQ(loadCss(writer,
+                    "p.box { border: 2px solid #000; background-color: #eeeeee; }\n"
+                    ".rule { border-top: 1px dashed; border-left: none; }\n"
+                    ".wide { border-width: 3pt; border-style: double; }\n"),
+            CssParser::ParseResult::Complete);
+
+  const CssStyle box = writer.resolveStyle("p", "box");
+  ASSERT_TRUE(box.hasBorderTop());
+  EXPECT_EQ(box.borderTop.style, CssBorderStyle::Solid);
+  EXPECT_EQ(box.borderTop.widthPx, 2);
+  EXPECT_EQ(box.borderRight.style, CssBorderStyle::Solid);
+  ASSERT_TRUE(box.hasShaded());
+  EXPECT_TRUE(box.shaded);
+  EXPECT_EQ(box.shadeLevel, 1);  // #eee is one step off white
+
+  const CssStyle rule = writer.resolveStyle("span", "rule");
+  EXPECT_EQ(rule.borderTop.style, CssBorderStyle::Dashed);
+  EXPECT_EQ(rule.borderTop.widthPx, 1);
+  EXPECT_EQ(rule.borderLeft.style, CssBorderStyle::None);
+
+  const CssStyle wide = writer.resolveStyle("div", "wide");
+  EXPECT_EQ(wide.borderBottom.style, CssBorderStyle::Double);
+  EXPECT_EQ(wide.borderBottom.widthPx, 4);  // 3pt resolves to ~4 px
+
+  ASSERT_TRUE(writer.saveToCache(true));
+  CssParser reader(cachePath());
+  ASSERT_EQ(reader.loadFromCache(), CssParser::CacheLoadResult::Complete);
+  const CssStyle restored = reader.resolveStyle("p", "box");
+  EXPECT_EQ(restored.borderTop.style, CssBorderStyle::Solid);
+  EXPECT_EQ(restored.borderTop.widthPx, 2);
+  EXPECT_TRUE(restored.shaded);
+  EXPECT_EQ(restored.shadeLevel, 1);
+  const CssStyle restoredWide = reader.resolveStyle("div", "wide");
+  EXPECT_EQ(restoredWide.borderLeft.style, CssBorderStyle::Double);
+  EXPECT_EQ(restoredWide.borderLeft.widthPx, 4);
+}
+
+TEST_F(CssParserTest, PartialCacheIsValidatedDuringInspection) {  CssParser writer(cachePath());
   ASSERT_EQ(loadCss(writer, ".a { font-weight: bold; }\n"), CssParser::ParseResult::Complete);
   ASSERT_TRUE(writer.saveToCache(false));
   ASSERT_EQ(writer.inspectCache(), CssParser::CacheStatus::Partial);

@@ -66,6 +66,7 @@ const char* recoveryPage(size_t& size) {
 }  // namespace web_assets
 
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include <esp_memory_utils.h>
@@ -100,7 +101,9 @@ const esp_partition_t* dataPartition() {
 // cannot run then (ESP-IDF asserts). begin() is expected on the loop task, which
 // owns the web server; this turns a future caller's mistake into a log line
 // instead of a panic. Same guard as I18nPack.cpp.
-bool stackIsInPsram() { return esp_ptr_external_ram(esp_cpu_get_sp()); }
+bool stackIsInPsram(const fault::Code site, const uint32_t detail = 0) {
+  return !memory::internalFlashAllowed(site, detail);
+}
 
 bool readPartition(const esp_partition_t* partition, uint32_t offset, uint8_t* dst, size_t size) {
   for (size_t at = 0; at < size; at += kChunkBytes) {
@@ -123,7 +126,7 @@ void releaseBuffer() {
 
 bool begin() {
   if (gInitialized) return gStatus == web_pack::Validity::Ok;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::WebPackReadRefused)) {
     // Not latched: the web server may start on a PSRAM-stack task in a future
     // caller, and a later begin() from the loop task must be allowed to
     // succeed. Same rule as I18nPack::init(), which this guard mirrors.

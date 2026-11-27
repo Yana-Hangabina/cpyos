@@ -478,7 +478,7 @@ void PluginCatalogActivity::enterPluginPicker() {
 
   manifestPath.clear();
   manifest = Manifest{};
-  catalogTitle = tr(STR_PLUGINS);
+  catalogTitle = tr(STR_WEB_PLUGINS);
   token.clear();
   config.clear();
   resetBrowse();

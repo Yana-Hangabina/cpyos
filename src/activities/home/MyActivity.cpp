@@ -317,7 +317,10 @@ Rect MyActivity::toolCellRect(const int index) const {
 }
 
 int MyActivity::toolCount() const {
-  return 2 + app_catalog::visibleCount(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers()) + 1;
+  // Join network + file browser + catalog rows. The browser-run JS plugin
+  // catalog used to be a trailing tile here that actually opened Settings; it
+  // now lives under Settings -> Network & Transfer -> Web plugins.
+  return 2 + app_catalog::visibleCount(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers());
 }
 
 void MyActivity::drawTabs() {
@@ -604,9 +607,6 @@ void MyActivity::drawTools() {
         maskIcon = &icon_volume_2_48;
       }
 #endif
-    } else {
-      title = tr(STR_PLUGIN_DIRECTORY);
-      maskIcon = &icon_blocks_48;
     }
 
     if (i == toolSelected_) {
@@ -827,9 +827,7 @@ void MyActivity::openTool(const int index) {
   if (index >= 2 && index < 2 + visibleApps) {
     const int appIndex = app_catalog::visibleToAppIndex(SETTINGS.hiddenAppsMask, OPDS_STORE.hasServers(), index - 2);
     if (appIndex >= 0) app_catalog::activate(appIndex);
-    return;
   }
-  openSettingsCategory(3);
 }
 
 void MyActivity::openBookList() { activityManager.goToReadingStatsMenu(); }

@@ -60,7 +60,7 @@ constexpr ThemeMetrics makeValues() {
   // main bar's height comes from mainTabBarHeight() above.
   metrics.tabBarHeight = UiHighDpiProfile::enabled ? 96 : 60;
   metrics.tabSpacing = 8;
-  // refreshed UI mast: page label left, date/clock/battery right. 80 px replaces the
+  // Pond v5 mast: page label left, date/clock/battery right. 80 px replaces the
   // old 88 title + 48 status pair, giving the content the design's top edge.
   metrics.mainTabTitleHeight = UiHighDpiProfile::enabled ? 72 : 64;
 

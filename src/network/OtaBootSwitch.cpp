@@ -1,6 +1,7 @@
 #include "OtaBootSwitch.h"
 
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_rom_crc.h>
 #include <spi_flash_mmap.h>
 #include <string.h>
@@ -12,6 +13,12 @@ uint32_t computeSeqCrc(uint32_t seq) {
 }
 
 bool switchTo(const esp_partition_t* dest) {
+  // otadata lives in internal flash; writing it with the caller's stack in PSRAM
+  // trips the IDF cache guard. Refuse so the caller can report the failure.
+  if (!memory::internalFlashAllowed(fault::Code::OtaBootSwitchRefused)) {
+    LOG_ERR("OTA", "otadata write refused: this task stack is in PSRAM");
+    return false;
+  }
   if (!dest) return false;
 
   const esp_partition_t* otadata =

@@ -8,7 +8,10 @@ class Epub {
  public:
   Epub(std::string path, const std::string&) : path(std::move(path)) {}
 
-  bool load(bool buildIfMissing, bool) const { return buildIfMissing && path.find("load-fail") == std::string::npos; }
+  bool load(bool buildIfMissing, bool) const {
+    ++cover_stub::epubLoadAttempts;
+    return buildIfMissing && path.find("load-fail") == std::string::npos;
+  }
   void setupCacheDir() const { Storage.mkdir("/.crosspoint/epub"); }
   bool hasCoverOverride() const {
     HalFile file;

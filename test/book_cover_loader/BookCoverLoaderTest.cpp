@@ -1,3 +1,4 @@
+#include <Bitmap.h>
 #include <HalStorage.h>
 #include <gtest/gtest.h>
 
@@ -23,8 +24,10 @@ class BookCoverLoaderTest : public ::testing::Test {
     ASSERT_EQ(setenv("CROSSPOINT_SIM_SD", root.c_str(), 1), 0);
     ASSERT_TRUE(Storage.begin());
     cover_stub::epubThumbnailGenerations = 0;
+    cover_stub::epubLoadAttempts = 0;
     cover_stub::fullCoverGenerations = 0;
     cover_stub::overrideConversions = 0;
+    BookCoverLoader::clearCoverFailures();
   }
 
   void TearDown() override {
@@ -367,5 +370,39 @@ TEST_F(BookCoverLoaderTest, HomeShortcutRemovesEmptyFullCover) {
   EXPECT_EQ(BookCoverLoader::checkCachedCover("/.crosspoint/epub/cover.bmp", false),
             BookCoverLoader::CachedCoverState::Missing);
   EXPECT_FALSE(std::filesystem::exists(hostPath("/.crosspoint/epub/cover.bmp")));
+}
+
+TEST_F(BookCoverLoaderTest, FailedConversionIsMemoisedUntilInvalidated) {
+  // This book fails while opening the container, so nothing is left on disk to
+  // make the next probe terminal: without the memo every screen entry retries
+  // the whole conversion.
+  writeBook("/book-load-fail.epub");
+
+  EXPECT_EQ(BookCoverLoader::ensureThumbnail("/book-load-fail.epub", 226, nullptr), "");
+  EXPECT_EQ(cover_stub::epubLoadAttempts, 1);
+
+  EXPECT_EQ(BookCoverLoader::ensureThumbnail("/book-load-fail.epub", 226, nullptr), "");
+  EXPECT_EQ(cover_stub::epubLoadAttempts, 1);
+
+  // A library rebuild drops the memo; the book may have been replaced.
+  BookCoverLoader::clearCoverFailures();
+  EXPECT_EQ(BookCoverLoader::ensureThumbnail("/book-load-fail.epub", 226, nullptr), "");
+  EXPECT_EQ(cover_stub::epubLoadAttempts, 2);
+}
+
+TEST_F(BookCoverLoaderTest, FailureMemoIsKeyedByContainerSize) {
+  writeBook("/book-load-fail.epub");
+  EXPECT_EQ(BookCoverLoader::ensureThumbnail("/book-load-fail.epub", 226, nullptr), "");
+  EXPECT_EQ(cover_stub::epubLoadAttempts, 1);
+
+  {
+    std::ofstream replaced(hostPath("/book-load-fail.epub"), std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(replaced.good());
+    replaced << "replaced book with a longer body";
+  }
+
+  // Different container size => different key => the conversion is retried.
+  EXPECT_EQ(BookCoverLoader::ensureThumbnail("/book-load-fail.epub", 226, nullptr), "");
+  EXPECT_EQ(cover_stub::epubLoadAttempts, 2);
 }
 }  // namespace

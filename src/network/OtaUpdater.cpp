@@ -10,6 +10,7 @@
 #include <HalSystem.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <StackSafety.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -28,6 +29,7 @@
 #include <vector>
 
 #include "CrossMuxEndpoints.h"
+#include "DownloadProbe.h"
 #include "DownloadRoutes.h"
 #include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
@@ -79,35 +81,10 @@ std::string selectFastestDownloadUrl(const std::string& advertised, const int pr
       advertised, preferredMirror, CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS,
       CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT, includeAllMirrors ? 8 : 3, probeTimeoutMs,
       includeAllMirrors);
-  if (candidates.size() == 1) return candidates.front().url;
-
-  size_t best = SIZE_MAX;
-  uint32_t bestBps = 0;
-  uint32_t bestFirstByte = UINT32_MAX;
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    const auto probe = HttpDownloader::probeUrl(candidates[i].url, 32768, probeTimeoutMs);
-    if (!probe.ok) {
-      LOG_INF("OTA", "probe %s: failed after %u ms", candidates[i].label.c_str(),
-              static_cast<unsigned>(probe.elapsedMs));
-      continue;
-    }
-    const uint32_t bps = probe.bytesPerSecond();
-    LOG_INF("OTA", "probe %s: %u KB in %u ms (%u KB/s, first byte %u ms)", candidates[i].label.c_str(),
-            static_cast<unsigned>(probe.bytes / 1024), static_cast<unsigned>(probe.elapsedMs),
-            static_cast<unsigned>(bps / 1024), static_cast<unsigned>(probe.firstByteMs));
-    if (best == SIZE_MAX || bps > bestBps || (bps == bestBps && probe.firstByteMs < bestFirstByte)) {
-      best = i;
-      bestBps = bps;
-      bestFirstByte = probe.firstByteMs;
-    }
-  }
-  if (best == SIZE_MAX) {
-    LOG_ERR("OTA", "all download routes failed to probe; falling back to %s", advertised.c_str());
-    return advertised;
-  }
-  LOG_INF("OTA", "download route: %s (%u KB/s)", candidates[best].label.c_str(),
-          static_cast<unsigned>(bestBps / 1024));
-  return candidates[best].url;
+  // The measuring loop is shared with the font packs (download_probe). It used
+  // to live here, which is why font downloads never measured anything and just
+  // walked the list in order -- the slowest route that answered won.
+  return download_probe::selectUrl(candidates, advertised, 32768, probeTimeoutMs, "OTA");
 }
 
 // Which mirror (if any) served the release manifest. The firmware and pack
@@ -241,8 +218,15 @@ bool packRangeValid(const esp_partition_t* partition, const uint32_t offset, con
   return true;
 }
 
+// Erasing and writing a data partition from a PSRAM-stack task invalidates that
+// task's own stack mid-image: the result is a half-written pack, not a failed
+// download. Packs are written from the loop task by contract; this is the backstop.
 bool writePackFromFile(const esp_partition_t* partition, const char* path, const uint32_t offset, const uint32_t size,
                        const uint32_t limit, const std::function<void(size_t)>& onProgress) {
+  if (!memory::internalFlashAllowed(fault::Code::OtaPackWriteRefused)) {
+    LOG_ERR("OTA", "pack write refused: this task stack is in PSRAM");
+    return false;
+  }
   if (!packRangeValid(partition, offset, size, limit)) {
     LOG_ERR("OTA", "pack range rejected: off=0x%x size=%u limit=0x%x", static_cast<unsigned>(offset),
             static_cast<unsigned>(size), static_cast<unsigned>(limit));
@@ -766,6 +750,16 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   LOG_ERR("OTA", "refusing to install: OTA is disabled on this port");
   return WRONG_DEVICE_ERROR;
 #endif
+  // esp_ota_begin/write/end and esp_ota_set_boot_partition all erase or program
+  // internal flash, which disables the cache while they run. On a PSRAM-stacked
+  // task that removes the caller's own stack from under it (IDF asserts), and a
+  // half-written slot is worse than no update at all. The install is driven by
+  // an Activity on the loop task by contract; this is the backstop, and it
+  // refuses before the partition is opened so the running image stays intact.
+  if (!memory::internalFlashAllowed(fault::Code::OtaInstallRefused)) {
+    LOG_ERR("OTA", "install refused: this task stack is in PSRAM");
+    return INTERNAL_UPDATE_ERROR;
+  }
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }

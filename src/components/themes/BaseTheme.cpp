@@ -1,5 +1,7 @@
 #include "BaseTheme.h"
 
+#include <InvokeCallback.h>
+
 #include <ChangedRegion.h>
 #include <FreeInkUIGfxRenderer.h>
 #include <GfxRenderer.h>
@@ -544,7 +546,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
   props.rowProviderCtx = &rows;
   props.rowProvider = [](void* ctx, uint16_t index, fui::ListItem& item) {
     auto& row = *static_cast<Rows*>(ctx);
-    row.titleText = row.title(index);
+    row.titleText = callbacks::callOr<std::string>("theme.rowTitle", row.title, std::string{}, index);
     row.subtitleText = row.subtitle ? row.subtitle(index) : std::string{};
     row.valueText = row.value ? row.value(index) : std::string{};
     item.label = row.titleText.c_str();
@@ -911,7 +913,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
           // No bookmark ribbon when cover is shown - it would just cover the art
 
           // Store the buffer with cover image for fast navigation
-          coverBufferStored = storeCoverBuffer();
+          coverBufferStored = callbacks::callOr<bool>("theme.storeCoverBuffer", storeCoverBuffer, false);
           coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
 
           // First render: if selected, draw selection indicators now
@@ -1081,7 +1083,7 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, const int butto
       renderer.fillRect(tile.x, tile.y, tile.width, tile.height);
     else
       renderer.drawRect(tile.x, tile.y, tile.width, tile.height);
-    const std::string label = buttonLabel(i);
+    const std::string label = callbacks::callOr<std::string>("theme.buttonLabel", buttonLabel, std::string{}, i);
     const int textX = rect.x + (rect.width - renderer.getTextWidth(UI_10_FONT_ID, label.c_str())) / 2;
     const int textY = tileY + (tile.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
     renderer.drawText(UI_10_FONT_ID, textX, textY, label.c_str(), !selected);

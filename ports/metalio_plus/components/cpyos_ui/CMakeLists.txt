@@ -88,6 +88,17 @@ idf_component_register(
         "${REPO_ROOT}/lib/SoundFeedback/SoundFeedback.cpp"
         "compat/HalAudioOutput.cpp"
         "${REPO_ROOT}/lib/Memory/BuildScratch.cpp"
+        # Shared invariant owners. Both are called from the portable tree
+        # (FirmwareFlasher/SystemFontPack/PinyinDb/... ask memory::internalFlashAllowed();
+        # themes, ButtonNavigator and the parsers route callbacks through callbacks::),
+        # so listing only their headers would link-fail this port. A stub branch
+        # that omits a symbol is not a missing feature: it is an undefined
+        # reference at link (the same trap as the C3 SystemCoreFont stub).
+        "${REPO_ROOT}/lib/Memory/StackSafety.cpp"
+        # The guard records a fault code at every refusal, so the recorder is part
+        # of every target that links the guard.
+        "${REPO_ROOT}/lib/Diagnostics/FaultLog.cpp"
+        "${REPO_ROOT}/lib/Callbacks/InvokeCallback.cpp"
         "HalDisplay.cpp"
         "HalStorage.cpp"
         "HalClock.cpp"
@@ -138,6 +149,8 @@ idf_component_register(
         "${REPO_ROOT}/lib/MiniBidi"
         "${REPO_ROOT}/lib/Utf8"
         "${REPO_ROOT}/lib/Memory"
+        "${REPO_ROOT}/lib/Diagnostics"
+        "${REPO_ROOT}/lib/Callbacks"
         "${REPO_ROOT}/lib/Logging"
         "${PORT_I18N_DIR}"
         "${REPO_ROOT}/lib/I18n"

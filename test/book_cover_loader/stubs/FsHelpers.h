@@ -9,6 +9,8 @@ inline bool hasSuffix(const std::string& path, const char* suffix) {
 }
 inline bool hasEpubExtension(const std::string& path) { return hasSuffix(path, ".epub"); }
 inline bool hasXtcExtension(const std::string& path) { return hasSuffix(path, ".xtc"); }
+inline bool hasCbzExtension(const std::string& path) { return hasSuffix(path, ".cbz"); }
+inline bool hasFb2Extension(const std::string& path) { return hasSuffix(path, ".fb2"); }
 inline bool hasTxtExtension(const std::string& path) { return hasSuffix(path, ".txt"); }
 inline bool hasMarkdownExtension(const std::string& path) { return hasSuffix(path, ".md"); }
 }  // namespace FsHelpers

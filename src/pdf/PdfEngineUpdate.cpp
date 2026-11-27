@@ -1,5 +1,7 @@
 #include "pdf/PdfEngineUpdate.h"
+#include <FaultLog.h>
 
+#include <StackSafety.h>
 #include <esp_cpu.h>
 #include <esp_memory_utils.h>
 
@@ -335,7 +337,7 @@ bool startUpdate() {
   if (g_task != nullptr) return false;
   // The worker runs on a PSRAM stack; nothing below it may touch internal flash.
   // Compatibility is compile-time, so there is no digest to read here.
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+  if (!memory::internalFlashAllowed(fault::Code::PdfEngineStartRefused)) {
     LOG_ERR("PDFENG", "startUpdate refused on a PSRAM stack");
     return false;
   }
@@ -353,11 +355,13 @@ bool startUpdate() {
   g_taskInPsram = ok == pdPASS;
 #endif
   if (ok != pdPASS) {
+    fault::raise(fault::Code::WorkerStackFallback, static_cast<uint32_t>(ok));
     g_taskInPsram = false;
     ok = xTaskCreatePinnedToCore(workerTrampoline, "pdfEngUpd", kWorkerStackBytes / sizeof(StackType_t), nullptr,
                                  tskIDLE_PRIORITY, &g_task, 0);
   }
   if (ok != pdPASS) {
+    fault::raise(fault::Code::WorkerCreateFailed, static_cast<uint32_t>(ok));
     g_task = nullptr;
     g_state = State::Idle;
     return false;

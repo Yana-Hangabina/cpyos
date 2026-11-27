@@ -44,4 +44,46 @@ bool isRebootDeliberate();
 
 bool supportsUsbDownloadMode();
 bool rebootToUsbDownload();
+
+// --- crash context ---------------------------------------------------------------------
+// Mirrors lib/hal/HalSystem.h, which is the source of truth: the shared
+// main.cpp, ActivityManager.cpp and CrashActivity.cpp call these unconditionally,
+// so a compat header that omits them is a compile error in the portable tree
+// (the same trap as HalDisplay's getControllerName()). The port implements them
+// inertly -- Plus installs no panic hooks yet -- and an empty record is the
+// truthful answer, not a default-filled one.
+struct CrashContext {
+  bool hasPanicRecord = false;
+  const char* task = "";
+  int core = -1;
+  uint32_t pc = 0;
+  uint32_t lr = 0;
+  uint32_t sp = 0;
+  const char* exceptionName = "";
+  const char* activity = "";
+  const char* stage = "";
+  uint32_t frames[12] = {};
+  uint8_t frameCount = 0;
+  uint32_t heapFree = 0;
+  uint32_t heapLargest = 0;
+  uint32_t psramFree = 0;
+  uint32_t uptimeMs = 0;
+};
+
+CrashContext getCrashContext();
+
+struct CrashHistory {
+  static constexpr uint8_t kDepth = 4;
+  uint32_t streak = 0;
+  uint8_t count = 0;
+  uint32_t pc[kDepth] = {};
+  uint32_t uptimeMs[kDepth] = {};
+  bool repeats() const { return count > 1 && pc[0] != 0 && pc[0] == pc[1]; }
+};
+
+CrashHistory getCrashHistory();
+
+void noteActivityStage(const char* activityName, const char* stage);
+void snapshotCrashAmbience();
+void installCppFailureHandlers();
 }  // namespace HalSystem

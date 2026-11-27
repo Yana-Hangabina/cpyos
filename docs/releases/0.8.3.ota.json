@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Fixes the crash when opening a book with characters the UI font lacks",
+    "Fixes the short std::terminate abort from unset callbacks",
+    "Crash screen now shows fault codes and can be paged",
+    "Cached books survive an erase-device flash (hardware-bound keys)",
+    "Missing-glyph boxes after using the network are gone",
+    "Update data packs and the PDF engine together with this release"
+  ],
+  "zh": [
+    "修复打开含生僻字书籍时的崩溃",
+    "修复空回调导致的短 abort 崩溃",
+    "崩溃屏显示故障码并可翻页",
+    "整片擦除刷写不再让已缓存书籍失效（密钥绑定硬件）",
+    "联网后不再出现缺字方框",
+    "请与固件一并更新数据包与 PDF 引擎"
+  ]
+}

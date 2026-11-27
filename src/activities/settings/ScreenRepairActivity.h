@@ -2,7 +2,7 @@
 
 #include "activities/Activity.h"
 
-// Screen repair (docs/07 D1; the same recovery kiikoread ships in Settings > Upgrade
+// Screen repair (docs/07 D1; the same recovery rpr ships in Settings > Upgrade
 // and Recovery). Push the whole panel through white -> black -> white with FULL
 // refreshes, then return to the settings page with one more full refresh.
 //

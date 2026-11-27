@@ -1,5 +1,7 @@
 #include "UpstreamStyleTheme.h"
 
+#include <InvokeCallback.h>
+
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
@@ -310,7 +312,7 @@ void UpstreamStyleTheme::drawListWithMetrics(const GfxRenderer& renderer, Rect r
       rowTextWidth -= valueWidth;
     }
 
-    auto itemName = rowTitle(i);
+    const auto itemName = callbacks::callOr<std::string>("theme.rowTitle", rowTitle, std::string{}, i);
     auto item = renderer.truncatedText(UI_10_FONT_ID, itemName.c_str(), rowTextWidth);
     renderer.drawText(UI_10_FONT_ID, textX, itemY + 7, item.c_str(), foregroundBlack);
     if (dimmed) {
@@ -506,7 +508,7 @@ void UpstreamStyleTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, c
                                             UpstreamStyleMetrics::values.homeCoverHeight});
       }
 
-      coverBufferStored = storeCoverBuffer();
+      coverBufferStored = callbacks::callOr<bool>("theme.storeCoverBuffer", storeCoverBuffer, false);
       coverRendered = coverBufferStored;  // Only consider it rendered if we successfully stored the buffer
     }
 
@@ -574,7 +576,7 @@ void UpstreamStyleTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int bu
       renderer.fillRoundedRect(tileRect.x, tileRect.y, tileRect.width, tileRect.height, cornerRadius, Color::LightGray);
     }
 
-    std::string labelStr = buttonLabel(i);
+    const std::string labelStr = callbacks::callOr<std::string>("theme.buttonLabel", buttonLabel, std::string{}, i);
     const char* label = labelStr.c_str();
     int textX = tileRect.x + 16;
     const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);

@@ -1,4 +1,7 @@
 #include "ActivityManager.h"
+#include <FaultLog.h>
+
+#include "HalSystem.h"  // crash-context stamps
 
 #include <BoardConfig.h>
 #include <FontCacheManager.h>
@@ -173,6 +176,10 @@ void ActivityManager::begin() {
     // Practically unreachable (PSRAM boards have MBs free) but never silent:
     // fall back to an internal stack so the panel still gets a render thread.
     LOG_ERR("ACT", "PSRAM render stack refused (%d); falling back to internal RAM", static_cast<int>(created));
+    // This fallback is not cosmetic: with the render stack in internal RAM the
+    // network has that much less to work with, and AGENTS 7 records a handshake
+    // dying at free=3015. It has to be visible in a photograph.
+    fault::raise(fault::Code::RenderStackFallback, static_cast<uint32_t>(renderTaskStackBytes));
     xTaskCreatePinnedToCore(&renderTaskTrampoline, "ActivityManagerRender", renderTaskStackBytes, this, 1,
                             &renderTaskHandle, renderTaskCore);
   } else {
@@ -206,6 +213,20 @@ void ActivityManager::noteActivitySwitch() {
   renderer.noteContentSwitch();
 }
 
+
+namespace {
+// Which screen is executing which lifecycle step. The crash screen shows this:
+// a panic on the render task otherwise reports only a PC, and "it died in
+// Settings while rendering" is the difference between a guess and a cause.
+// RAII so a step that never returns is still attributed.
+class StageStamp {
+ public:
+  StageStamp(const Activity* activity, const char* stage) {
+    if (activity != nullptr) HalSystem::noteActivityStage(activity->debugName(), stage);
+  }
+};
+}  // namespace
+
 static GfxRenderer::CoordSpace coordSpaceFor(const Activity* activity) {
   return activity && activity->uiLayoutMode() == Activity::UiLayoutMode::Native ? GfxRenderer::CoordSpace::Native
                                                                                 : GfxRenderer::CoordSpace::Ui;
@@ -238,6 +259,7 @@ void ActivityManager::renderTaskLoop() {
             renderer.noteContentSwitch();
           }
           const GfxRenderer::ScopedCoordSpace renderSpace(renderer, coordSpaceFor(currentActivity.get()));
+          const StageStamp stamp(currentActivity.get(), "render");
           currentActivity->render(std::move(lock));
         }
         if (awaitingFirstFrame_) {
@@ -283,6 +305,7 @@ void ActivityManager::loop() {
   }
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
+    const StageStamp stamp(currentActivity.get(), "loop-exclusive");
     currentActivity->loop();
     // An exclusive-storage activity must restart rather than navigate away:
     // processing a pending action here could re-enable filesystem users while
@@ -334,7 +357,10 @@ void ActivityManager::loop() {
     }
 
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
-    if (!handleHomeStandbyInput()) currentActivity->loop();
+    if (!handleHomeStandbyInput()) {
+      const StageStamp stamp(currentActivity.get(), "loop");
+      currentActivity->loop();
+    }
   }
 
   while (pendingAction.load() != PendingAction::None || deferredPush) {
@@ -474,6 +500,7 @@ void ActivityManager::loop() {
       lock.unlock();  // onEnter may acquire its own lock
       {
         const GfxRenderer::ScopedCoordSpace enterSpace(renderer, coordSpaceFor(currentActivity.get()));
+        const StageStamp stamp(currentActivity.get(), "enter");
         currentActivity->onEnter();
       }
 
@@ -653,6 +680,7 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
   if (currentActivity) {
     {
       const GfxRenderer::ScopedCoordSpace exitSpace(renderer, coordSpaceFor(currentActivity.get()));
+      const StageStamp stamp(currentActivity.get(), "exit");
       currentActivity->onExit();
     }
     currentActivity.reset();
@@ -693,6 +721,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     resetHomeStandbyInput();
     {
       const GfxRenderer::ScopedCoordSpace enterSpace(renderer, coordSpaceFor(currentActivity.get()));
+      const StageStamp stamp(currentActivity.get(), "enter-immediate");
       currentActivity->onEnter();
     }
   }

@@ -44,7 +44,7 @@ namespace fui = freeink::ui;
 namespace {
 constexpr int SIDE_PADDING = 12;
 constexpr unsigned long LONG_PRESS_MS = 1000;
-// CPY (refreshed UI frame 02): under the shared mast sit a 92px headline row (48px
+// CPY (Pond v5 frame 02): under the shared mast sit a 92px headline row (48px
 // serif page title on the left, shelf count + quiet search/sync actions on the
 // right) and an 80px source tab strip with real counts and a 4px underline
 // under the active tab, closed by the design's 2px rule.
@@ -58,7 +58,7 @@ constexpr int16_t kCpyTouchTarget = 64;  // quiet header actions keep a 64px hit
 // Empty-shelf path rows (frame 15): 112px each, hairline separated.
 constexpr int16_t kCpyEmptyPathHeight = UiHighDpiProfile::enabled ? 112 : 84;
 
-// CPY cover grid (refreshed UI frame 02): 32px side padding, four columns, the
+// CPY cover grid (Pond v5 frame 02): 32px side padding, four columns, the
 // covers at the mockup's 188:250 ratio, a single-line title under each cover
 // and 22px of air before the next row.
 constexpr int16_t kGridSidePad = 32;
@@ -1459,7 +1459,7 @@ void LibraryListActivity::buildHeader(UiScreen& screen) {
   const auto& theme = screen.theme();
   const bool cpyChrome = UITheme::getInstance().usesCpyLayout();
   if (cpyChrome) {
-    // refreshed UI frame 02: the shared mast (drawn by drawChrome) carries the page
+    // Pond v5 frame 02: the shared mast (drawn by drawChrome) carries the page
     // label, duck, clock and battery. Below it this screen owns a headline row
     // (48px serif title, shelf count, quiet search/sync) and the source tab
     // strip. The fui header is not drawn at all: its bordered action buttons

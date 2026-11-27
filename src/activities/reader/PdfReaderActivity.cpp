@@ -17,6 +17,7 @@
 #endif
 
 #include <BookCachePrune.h>
+#include <StackSafety.h>
 #include <Utf8.h>
 #include <Bitmap.h>
 #include <FontCacheManager.h>
@@ -1166,7 +1167,7 @@ void PdfReaderActivity::onExit() {
     // external memory flushes/invalidates caches, which corrupts exactly that
     // stack (this branch has the Double-exception tee-shirt).  Defer to the main
     // loop's internal stack.
-    if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+    if (!memory::internalFlashAllowed(fault::Code::PdfReaderCacheRefused)) {
       pdf_module::scheduleUnload();
       LOG_INF("PDF", "engine unmap deferred: onExit ran on a PSRAM stack");
     } else {
@@ -1182,7 +1183,7 @@ void PdfReaderActivity::onExit() {
   // loadBook() released the hyphenation tries to make room for MuPDF.  Reload
   // them only on an internal-RAM stack: preloadAll() reads the data partition,
   // and an internal-flash read from a PSRAM stack trips the IDF cache guard.
-  if (!esp_ptr_external_ram(esp_cpu_get_sp())) {
+  if (memory::internalFlashAllowed(fault::Code::PdfReaderCacheRefused)) {
     hyphenation::HyphenationStore::shared().preloadAll();
   } else {
     LOG_ERR("PDF", "hyphenation reload skipped on PSRAM stack; next boot will reload");
@@ -1195,7 +1196,7 @@ void PdfReaderActivity::onExit() {
   // 2.5 MB of PSRAM) and the emoji TTF.  Reload emoji first: it needs one
   // 0.9 MB contiguous block, which the 2.5 MB core family would fragment away.
   emoji_font::reload(renderer, SETTINGS.fontPointSize);
-  if (!esp_ptr_external_ram(esp_cpu_get_sp())) {
+  if (memory::internalFlashAllowed(fault::Code::PdfReaderCacheRefused)) {
     sdFontSystem.ensureLoaded(renderer);
   } else {
     LOG_ERR("PDF", "SD font reload skipped on PSRAM stack; next reader will reload");

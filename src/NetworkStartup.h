@@ -38,6 +38,30 @@ void logMemory(const char* stage);
 // release it before the Wi-Fi driver starts allocating.
 void prepare(GfxRenderer& renderer);
 
+// ---------------------------------------------------------------------------
+// Render-memory reclaim, paired
+//
+// prepare() releasing the font state is not free: on the system-font-pack
+// targets the font-extension supplements (which carry the reading core) are the
+// only registered faces covering CJK past the UI subset baked into app0, so an
+// unreverted reclaim makes every later screen box characters the data partition
+// has. The pairing therefore belongs to the module that owns both halves:
+// prepare() arms it when it really released something, and the main loop performs
+// the restore once font_restore::due() says the network no longer needs the room.
+// ---------------------------------------------------------------------------
+// True while a reclaim is waiting to be undone.
+bool renderMemoryRestorePending();
+// Millis() at the moment the reclaim happened; 0 when nothing is pending.
+uint32_t renderMemoryArmedAtMs();
+// Called by the main loop immediately before it reloads, so a failed reload
+// re-arms with a fresh timestamp instead of retrying every loop pass.
+void rearmRenderMemoryRestore();
+// Called by the main loop once the reload has been attempted.
+void clearRenderMemoryRestore();
+// True while a request, download or web-server operation holds the radio
+// session. The restore waits for this.
+bool networkHeld();
+
 // The only entry point for enabling STA/AP mode in application code.
 bool setMode(GfxRenderer& renderer, wifi_mode_t mode);
 

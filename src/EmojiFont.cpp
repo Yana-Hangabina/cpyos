@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <StackSafety.h>
 #include <TtfEpdFont.h>
 #include <esp_partition.h>
 
@@ -99,6 +100,14 @@ bool loadSdPack() {
 bool loadPack() {
   if (ttfBytes_) return true;
   if (loadSdPack()) return true;
+  // The pack lives in the data partition, and reading it disables the cache.
+  // `install()` is reached from ReaderActivity::onEnter(), which can run on the
+  // render task whose stack is in PSRAM -- there this read would panic instead of
+  // merely failing, so refuse through the shared guard and leave emoji disabled.
+  if (!memory::internalFlashAllowed(fault::Code::EmojiPackReadRefused)) {
+    LOG_ERR(kTag, "emoji pack read refused: this task stack is in PSRAM");
+    return false;
+  }
   const esp_partition_t* part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "spiffs");
   if (part == nullptr) {
     LOG_ERR(kTag, "no spiffs partition; emoji fallback disabled");

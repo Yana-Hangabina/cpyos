@@ -77,6 +77,7 @@
 #include "UsbDownloadModeActivity.h"
 #include "UiCjkFallbacks.h"
 #include "SdFirmwareUpdateActivity.h"
+#include "SettingsHubActivity.h"
 #include "SettingsList.h"
 #include "SilentRestart.h"
 #include "StatusBarSettingsActivity.h"
@@ -91,7 +92,7 @@
 #include "components/UITheme.h"
 #include "components/UIThemeTokens.h"
 #include "components/UiAppHelpers.h"
-#include "util/PluginEvents.h"
+
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/ReadingBackground.h"
@@ -137,6 +138,15 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
   using CS = CrossPointSettings;
   const auto ptr = setting.valuePtr;
 
+  // Ranks are per tab (each label is used by exactly one tab): Display is
+  // interface -> screen -> sleep, Reader is fonts -> images -> paging -> status,
+  // Controls is keys -> touch -> board extras, System is power -> network ->
+  // storage -> apps/maintenance -> time/language -> about.
+  //
+  // Every row that can reach these four tabs must land in a named group. The
+  // catch-all "Other" card is where a row's home becomes invisible: UI scale,
+  // the two refresh rows, Wi-Fi idle timeout and the USB download row all used
+  // to sit there, one card away from the settings they belong to.
   switch (setting.action) {
     case SettingAction::RemapFrontButtons:
     case SettingAction::HomeButton:
@@ -146,13 +156,15 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     case SettingAction::DownloadFontExtras:
     case SettingAction::ManageDictionaries:
     case SettingAction::VocabularyHistory:
-      return {StrId::STR_SET_GROUP_FONTS_DICTS, 4};
+    case SettingAction::FontsHub:
+      return {StrId::STR_SET_GROUP_FONTS_DICTS, 0};
     case SettingAction::CustomiseStatusBar:
     case SettingAction::ReadingStatsSettings:
-      return {StrId::STR_SET_GROUP_STATUS_STATS, 5};
+      return {StrId::STR_SET_GROUP_STATUS_STATS, 3};
     case SettingAction::Network:
     case SettingAction::KOReaderSync:
     case SettingAction::OPDSBrowser:
+    case SettingAction::WebPluginsHub:
       return {StrId::STR_SET_GROUP_NETWORK_TRANSFER, 1};
     case SettingAction::ClockSettings:
     case SettingAction::Language:
@@ -167,69 +179,75 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
     case SettingAction::PdfEngine:
     case SettingAction::Plugins:
     case SettingAction::KeyboardLayouts:
+    case SettingAction::UsbDownloadMode:
+    case SettingAction::PlusResources:
+    case SettingAction::UpdatesHub:
       return {StrId::STR_SET_GROUP_APPS_MAINTENANCE, 3};
     case SettingAction::About:
       return {StrId::STR_ABOUT, 5};
     case SettingAction::Bluetooth:
-      return {StrId::STR_SET_GROUP_OTHER, 2};
     case SettingAction::TapZones:
       return {StrId::STR_SET_GROUP_TOUCH_GESTURES, 1};
+    case SettingAction::ChargingStatus:
+      return {StrId::STR_SET_GROUP_POWER_FEEDBACK, 0};
+    case SettingAction::CellularStatus:
+      return {StrId::STR_SET_GROUP_NETWORK_TRANSFER, 1};
+    case SettingAction::BluetoothAudio:
+      // Plus-only module with no dedicated group on this board family; it keeps
+      // its existing row position at the end of the Controls tab.
+      return {StrId::STR_SET_GROUP_OTHER, 9};
     case SettingAction::StandbyImage:
     case SettingAction::LightSleepImage:
     case SettingAction::DeepSleepImage:
-      return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
-    case SettingAction::BluetoothAudio:
-    case SettingAction::CellularStatus:
-    case SettingAction::ChargingStatus:
-      // Metalio Plus only; there is no dedicated group, so it lands with the
-      // rest of the board-specific rows at the end of the Controls tab.
-      return {StrId::STR_SET_GROUP_OTHER, 9};
+      return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 2};
     case SettingAction::None:
       break;
   }
 
   // Display
+  if (ptr == &CS::uiScalePercent || ptr == &CS::uiFontScale || ptr == &CS::uiDensity ||
+      ptr == &CS::inxLibraryLayout || ptr == &CS::inxAppsLayout || ptr == &CS::inxTabPosition) {
+    return {StrId::STR_SET_GROUP_LAYOUT, 0};
+  }
+  if (ptr == &CS::screenInverted || ptr == &CS::hideBatteryPercentage || ptr == &CS::periodicFullRefresh ||
+      ptr == &CS::readerRefreshPages || ptr == &CS::fadingFix || ptr == &CS::showButtonHints ||
+      ptr == &CS::frontlightRestoreOnWake) {
+    return {StrId::STR_SET_GROUP_SCREEN_REFRESH, 1};
+  }
   if (ptr == &CS::standbyStyle || ptr == &CS::lightSleepStyle || ptr == &CS::deepSleepStyle ||
       ptr == &CS::sleepStateBadge || ptr == &CS::sleepScreenCoverMode || ptr == &CS::sleepScreenCoverFilter ||
       ptr == &CS::standbyShortcutEnabled) {
-    return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 0};
-  }
-  if (ptr == &CS::hideBatteryPercentage || ptr == &CS::refreshFrequency || ptr == &CS::fadingFix ||
-      ptr == &CS::showButtonHints || ptr == &CS::frontlightRestoreOnWake || ptr == &CS::screenInverted) {
-    return {StrId::STR_SET_GROUP_SCREEN_REFRESH, 1};
-  }
-  if (ptr == &CS::inxLibraryLayout || ptr == &CS::inxAppsLayout || ptr == &CS::inxTabPosition ||
-      ptr == &CS::uiDensity
-#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
-      || ptr == &CS::uiFontScale
-#endif
-  ) {
-    return {StrId::STR_SET_GROUP_LAYOUT, 2};
+    return {StrId::STR_SET_GROUP_SLEEP_STANDBY, 2};
   }
 
-  // Reader
+  // Reader. The typography rows are surfaced in Text Settings, and the
+  // vocabulary rows moved into the Fonts & Dictionaries hub; their mappings are
+  // kept so those subpages never fall into the catch-all if a flag changes.
   if (ptr == &CS::fontFamily || ptr == &CS::fakeBold || ptr == &CS::extraParagraphSpacing ||
       ptr == &CS::firstLineIndent || ptr == &CS::paragraphIndentSpaces || ptr == &CS::textAntiAliasing ||
       ptr == &CS::hyphenationEnabled) {
     return {StrId::STR_SET_GROUP_TEXT_LAYOUT, 0};
   }
-  if (ptr == &CS::focusReadingEnabled || ptr == &CS::readingBackgroundEnabled ||
-      ptr == &CS::readingGuideLineEnabled || ptr == &CS::readingGuideLineStyle ||
-      setting.signedValuePtr == &CS::readingGuideLineOffset) {
+  if (ptr == &CS::focusReadingEnabled || ptr == &CS::readingGuideLineEnabled ||
+      ptr == &CS::readingGuideLineStyle || setting.signedValuePtr == &CS::readingGuideLineOffset) {
     return {StrId::STR_SET_GROUP_READING_AIDS, 1};
+  }
+  if (ptr == &CS::readingBackgroundEnabled || ptr == &CS::imageRendering || ptr == &CS::imageScaling) {
+    return {StrId::STR_SET_GROUP_IMAGES, 1};
   }
   if (ptr == &CS::pageTurnEffect || ptr == &CS::fastPageTurn || ptr == &CS::pageTurnDirection ||
       ptr == &CS::orientation || ptr == &CS::readerMenuStyle) {
     return {StrId::STR_SET_GROUP_PAGE_DIRECTION, 2};
   }
-  if (ptr == &CS::imageRendering || ptr == &CS::imageScaling) {
-    return {StrId::STR_SET_GROUP_IMAGES, 3};
+  if (ptr == &CS::vocabularyHistoryEnabled) {
+    return {StrId::STR_SET_GROUP_FONTS_DICTS, 0};
   }
 
   // Controls
   if (ptr == &CS::sideButtonLayout || ptr == &CS::frontButtonFollowOrientation ||
-      ptr == &CS::longPressButtonBehavior || ptr == &CS::longPressMenuFunction || ptr == &CS::shortPwrBtn ||
-      ptr == &CS::pwrBtnFootnoteBack || ptr == &CS::doubleClickPwrLight) {
+      ptr == &CS::sideButtonFollowOrientation || ptr == &CS::longPressButtonBehavior ||
+      ptr == &CS::longPressMenuFunction || ptr == &CS::shortPwrBtn || ptr == &CS::pwrBtnFootnoteBack ||
+      ptr == &CS::doubleClickPwrLight) {
     return {StrId::STR_SET_GROUP_KEYS, 0};
   }
   if (ptr == &CS::touchReaderControls || ptr == &CS::pageTurnGesture || ptr == &CS::previousPageGesture ||
@@ -240,7 +258,7 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
   }
 
   // System
-  if (ptr == &CS::sleepTimeoutMinutes
+  if (ptr == &CS::sleepTimeoutMinutes || ptr == &CS::wifiIdleTimeoutSeconds
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
       || ptr == &CS::soundFeedbackLevel
 #endif
@@ -253,12 +271,20 @@ SettingsGroup groupForSetting(const SettingInfo& setting) {
   ) {
     return {StrId::STR_SET_GROUP_POWER_FEEDBACK, 0};
   }
+  if (ptr == &CS::networkType) {
+    return {StrId::STR_SET_GROUP_NETWORK_TRANSFER, 1};
+  }
   if (ptr == &CS::showHiddenFiles || ptr == &CS::libraryUseMetadata ||
       ptr == &CS::removeReadBooksFromRecents || ptr == &CS::moveFinishedToReadFolder) {
     return {StrId::STR_SET_GROUP_STORAGE_DATA, 2};
   }
+  // Murphy M4's hardware-batch picker has no valuePtr (it is a managed dynamic
+  // enum), so it needs an identity match to avoid the catch-all card.
+  if (setting.nameId == StrId::STR_M4_HARDWARE_BATCH) {
+    return {StrId::STR_SET_GROUP_APPS_MAINTENANCE, 3};
+  }
 
-  return {StrId::STR_SET_GROUP_OTHER, 9};
+  return {StrId::STR_SET_GROUP_OTHER, 90};
 }
 
 class InxAboutActivity final : public Activity {
@@ -498,11 +524,27 @@ void SettingsActivity::rebuildSettingsLists() {
       if (setting.valuePtr == &CrossPointSettings::uiDensity && !UITheme::getInstance().usesCpyLayout()) {
         continue;
       }
+      // A page interval only exists once periodic full refresh is on; a visible
+      // row with no effect reads as a broken setting, not as a dependency.
+      if (setting.valuePtr == &CrossPointSettings::readerRefreshPages &&
+          SETTINGS.periodicFullRefresh == 0) {
+        continue;
+      }
+      // Cover crop/filter only apply to the two cover sleep styles.
+      if ((setting.valuePtr == &CrossPointSettings::sleepScreenCoverMode ||
+           setting.valuePtr == &CrossPointSettings::sleepScreenCoverFilter) &&
+          SETTINGS.deepSleepStyle != CrossPointSettings::DEEP_SLEEP_COVER &&
+          SETTINGS.deepSleepStyle != CrossPointSettings::DEEP_SLEEP_COVER_TRANSPARENT) {
+        continue;
+      }
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
       if (setting.inTextSettings || setting.inReadingStatsSettings) continue;
+      // Vocabulary lookups moved into the Fonts & Dictionaries hub, next to the
+      // dictionary picker and the lookup history they belong to.
+      if (setting.valuePtr == &CrossPointSettings::vocabularyHistoryEnabled) continue;
       readerSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
@@ -522,6 +564,30 @@ void SettingsActivity::rebuildSettingsLists() {
     }
   }
 
+  // Custom sleep images are only reachable while their style says so. The three
+  // ACTION rows stay in the shared list for the settings API; the device UI
+  // inserts the visible picker directly under the style that needs it, so
+  // picking "custom image" can never leave the user without a way to choose one
+  // (the picker rows used to be rendered nowhere at all).
+  const auto insertPickerAfter = [](std::vector<SettingInfo>& list, const StrId style, SettingInfo picker) {
+    const auto it = std::find_if(list.begin(), list.end(), [style](const SettingInfo& s) { return s.nameId == style; });
+    if (it != list.end()) list.insert(it + 1, std::move(picker));
+  };
+  if (SETTINGS.standbyStyle == CrossPointSettings::STANDBY_CUSTOM_IMAGE) {
+    insertPickerAfter(displaySettings, StrId::STR_STANDBY_STYLE,
+                      SettingInfo::Action(StrId::STR_STANDBY_IMAGE, SettingAction::StandbyImage));
+  }
+  if (SETTINGS.lightSleepStyle == CrossPointSettings::LIGHT_SLEEP_CUSTOM_IMAGE) {
+    insertPickerAfter(displaySettings, StrId::STR_LIGHT_SLEEP_STYLE,
+                      SettingInfo::Action(StrId::STR_LIGHT_SLEEP_IMAGE, SettingAction::LightSleepImage));
+  }
+#if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
+  if (SETTINGS.deepSleepStyle == CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE) {
+    insertPickerAfter(displaySettings, StrId::STR_DEEP_SLEEP_STYLE,
+                      SettingInfo::Action(StrId::STR_DEEP_SLEEP_IMAGE, SettingAction::DeepSleepImage));
+  }
+#endif
+
   // Append device-only ACTION items
   if (!BoardConfig::hasTouch()) {
     controlsSettings.insert(controlsSettings.begin(),
@@ -538,14 +604,25 @@ void SettingsActivity::rebuildSettingsLists() {
   // SettingsList.h carries no category (like the standby-image actions), so the
   // visible row is appended here, at the end of the Controls tab.
   controlsSettings.push_back(SettingInfo::Action(StrId::STR_BT_AUDIO, SettingAction::BluetoothAudio));
-  controlsSettings.push_back(SettingInfo::Action(StrId::STR_CHARGER, SettingAction::ChargingStatus));
-  if (SETTINGS.cellularPresent) {
-    controlsSettings.push_back(SettingInfo::Action(StrId::STR_NETWORK_4G, SettingAction::CellularStatus));
-  }
 #endif
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_APPS_TITLE, SettingAction::Apps));
+  // System tab. Push order is the order inside each group (the list is
+  // stable-sorted by group rank only), so this reads apps -> maintenance,
+  // network, power, time/language, about.
+  // No "Open apps" row here: the tool drawer is the launcher, and a Settings
+  // row that opens another launcher duplicated it. "Tool drawer" (formerly
+  // "App visibility") is what this page actually configures.
   systemSettings.push_back(SettingInfo::Action(StrId::STR_APP_VISIBILITY, SettingAction::AppVisibility));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_DATE_AND_TIME, SettingAction::ClockSettings));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
+  // One door for OTA / SD firmware / PDF engine / Plus resources instead of
+  // three sibling rows that all mean "update something".
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_UPDATE, SettingAction::UpdatesHub));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_SCREEN_REPAIR, SettingAction::ScreenRepair));
+  systemSettings.push_back(
+      SettingInfo::Action(StrId::STR_RESTORE_SYSTEM_SETTINGS, SettingAction::RestoreSystemSettings));
+  if (HalSystem::supportsUsbDownloadMode()) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_USB_DOWNLOAD_MODE, SettingAction::UsbDownloadMode));
+  }
   if (BoardConfig::hasHomeKey()) {
     controlsSettings.insert(controlsSettings.begin(),
                             SettingInfo::Action(StrId::STR_HOME_BUTTON, SettingAction::HomeButton));
@@ -553,9 +630,18 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  systemSettings.push_back(
-      SettingInfo::Action(StrId::STR_RESTORE_SYSTEM_SETTINGS, SettingAction::RestoreSystemSettings));
+  // Browser-run JS plugins live with the other network services now.
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEB_PLUGINS, SettingAction::WebPluginsHub));
+#if defined(CROSSPOINT_PLUS_PORT)
+  if (SETTINGS.cellularPresent) {
+    systemSettings.push_back(SettingInfo::Action(StrId::STR_NETWORK_4G, SettingAction::CellularStatus));
+  }
+  // Charger status is power information, not a control.
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CHARGER, SettingAction::ChargingStatus));
+#endif
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_DATE_AND_TIME, SettingAction::ClockSettings));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
 #if FREEINK_DEVICE_MURPHY_M4 && !defined(SIMULATOR)
   systemSettings.push_back(
       SettingInfo::DynamicEnum(
@@ -572,42 +658,14 @@ void SettingsActivity::rebuildSettingsLists() {
           })
           .withManagedEnumPicker());
 #endif
-  // Keep the existing CrossMux OTA proxy flow. Build-only boards compile this
-  // UI but are intentionally absent from release assets in this sync.
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
-#if defined(CPYOS_PLUS_VENDOR_OTA)
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_DEVICE_RESOURCES, SettingAction::PlusResources));
-#endif
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SCREEN_REPAIR, SettingAction::ScreenRepair));
-  if (HalSystem::supportsUsbDownloadMode()) {
-    systemSettings.push_back(SettingInfo::Action(StrId::STR_USB_DOWNLOAD_MODE, SettingAction::UsbDownloadMode));
-  }
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_PLUGINS, SettingAction::Plugins));
-#if defined(CROSSPOINT_PDF_XIP) && !defined(CROSSPOINT_PLUGIN_RUNTIME)
-  // The engine is maintained from the Plugins page whenever that page exists;
-  // only images without the native plugin runtime keep the settings door.
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_PDF_ENGINE_UPDATE, SettingAction::PdfEngine));
-#endif
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KEYBOARD_LAYOUTS, SettingAction::KeyboardLayouts));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_ABOUT, SettingAction::About));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  // Typography stays one tap away; everything that installs or selects
+  // reference material (font downloads, font extensions, dictionaries and the
+  // vocabulary history) moved into one hub. Five adjacent management rows read
+  // as a flat pile of unrelated actions next to the other reading settings.
   readerSettings.insert(readerSettings.begin(),
                         SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
   readerSettings.insert(readerSettings.begin() + 1,
-                        SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
-#if defined(BOARD_HAS_PSRAM)
-  // Font extensions stream from the SD card and register extra faces; without
-  // PSRAM the C3 keeps its single resident face and this entry would only be a
-  // path to memory pressure.
-  readerSettings.insert(readerSettings.begin() + 2,
-                        SettingInfo::Action(StrId::STR_MANAGE_FONT_EXTRAS, SettingAction::DownloadFontExtras));
-  readerSettings.insert(readerSettings.begin() + 3,
-                        SettingInfo::Action(StrId::STR_MANAGE_DICTIONARIES, SettingAction::ManageDictionaries));
-#else
-  readerSettings.insert(readerSettings.begin() + 2,
-                        SettingInfo::Action(StrId::STR_MANAGE_DICTIONARIES, SettingAction::ManageDictionaries));
-#endif
+                        SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::FontsHub));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_READING_STATS, SettingAction::ReadingStatsSettings));
 
@@ -1138,9 +1196,6 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::ReadingStatsSettings:
         startActivityForResultWith<ReadingStatsSettingsActivity>(resultHandler);
         break;
-      case SettingAction::Apps:
-        activityManager.goToApps();
-        break;
       case SettingAction::AppVisibility:
         startActivityForResultWith<AppVisibilitySettingsActivity>(resultHandler);
         break;
@@ -1349,24 +1404,16 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::VocabularyHistory:
         startActivityForResultWith<VocabularyActivity>(resultHandler);
         break;
-      case SettingAction::Plugins: {
-        // The Plugins row is the global on/off switch for the SD plugin
-        // system; the catalog itself is opened from the home menu once
-        // enabled.
-        static constexpr StrId OPTIONS[] = {StrId::STR_ENABLED, StrId::STR_DISABLED, StrId::STR_CANCEL};
-        optionPopup.show(StrId::STR_PLUGINS, OPTIONS, static_cast<int>(std::size(OPTIONS)),
-                         SETTINGS.pluginsEnabled ? 0 : 1, [this](const int idx) {
-                           if (idx == 2) return;
-                           SETTINGS.pluginsEnabled = idx == 0 ? 1 : 0;
-                           SETTINGS.saveToFile();
-                           // Applies to event delivery now, not after a reboot.
-                           pluginevents::refreshSubscriptions();
-                           rebuildSettingsLists();
-                           requestUpdate();
-                         });
-        requestUpdate();
-        return;
-      }
+      case SettingAction::WebPluginsHub: {
+        // The enable switch lives inside the page so this row cannot read as
+        // another native-plugin manager.
+        releaseListsForMemoryHungryChild();
+        if (!startActivityForResultWith<SettingsHubActivity>(
+                resultHandler, SettingsHubActivity::Page::WebPlugins)) {
+          rebuildSettingsLists();
+          requestUpdate();
+        }
+      } break;
       case SettingAction::KeyboardLayouts:
         if (auto activity = makeUniqueNoThrow<KeyboardLayoutsActivity>(renderer, mappedInput)) {
           startActivityForResult(std::move(activity), nullptr);
@@ -1390,6 +1437,22 @@ void SettingsActivity::toggleCurrentSetting() {
         openSleepImagePicker("/sleep.bmp", &CrossPointSettings::deepSleepStyle,
                              CrossPointSettings::DEEP_SLEEP_CUSTOM_IMAGE);
         break;
+      case SettingAction::FontsHub:
+      case SettingAction::UpdatesHub: {
+        // Read the action BEFORE releasing the lists: `setting` references the
+        // vector releaseListsForMemoryHungryChild() swaps out.
+        const SettingAction action = setting.action;
+        // The hubs hold at most six rows of their own, but their children
+        // (font downloads, OTA, the PDF engine image) are the memory-hungry
+        // ones; give them the settings table's heap and rebuild on return.
+        releaseListsForMemoryHungryChild();
+        const auto page = action == SettingAction::FontsHub ? SettingsHubActivity::Page::Fonts
+                                                           : SettingsHubActivity::Page::Updates;
+        if (!startActivityForResultWith<SettingsHubActivity>(resultHandler, page)) {
+          rebuildSettingsLists();
+          requestUpdate();
+        }
+      } break;
       case SettingAction::None:
         // Do nothing
         break;
@@ -1625,7 +1688,7 @@ std::string SettingsActivity::settingValueText(const SettingInfo& setting) {
     return SETTINGS.readingBackgroundEnabled ? tr(STR_CUSTOM_IMAGE) : tr(STR_STATE_OFF);
   }
   if (setting.action == SettingAction::HomeButton) return tr(STR_CONFIGURE);
-  if (setting.action == SettingAction::Plugins) return SETTINGS.pluginsEnabled ? tr(STR_ENABLED) : tr(STR_DISABLED);
+  
   // The getter/setter pair owns its stored-value -> row mapping, so it is read
   // before the raw field; see toggleSetting().
   if (setting.type == SettingType::ENUM && setting.valueGetter) {

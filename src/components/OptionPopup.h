@@ -1,5 +1,6 @@
 #pragma once
 #include <I18n.h>
+#include <InvokeCallback.h>
 
 #include <algorithm>
 #include <atomic>
@@ -106,7 +107,7 @@ class OptionPopup {
         const int step = std::max(1, visibleOptionRows.load());
         selectedIndex =
             std::clamp(selectedIndex + (swipe == MappedInputManager::SwipeDir::Up ? step : -step), 0, total - 1);
-        requestUpdate();
+        callbacks::call("popup.requestUpdate", requestUpdate);
         return true;
       }
     }
@@ -120,7 +121,7 @@ class OptionPopup {
           selectedIndex = event.value;
           active = false;
           if (onSelectCallback) onSelectCallback(selectedIndex);
-          requestUpdate();
+          callbacks::call("popup.requestUpdate", requestUpdate);
           return true;
         }
         if (event && event.action == ACTION_CHROME) {
@@ -131,7 +132,7 @@ class OptionPopup {
           // Tap released outside the dialog: dismiss without firing. Swipe-end
           // releases arrive with -1,-1 coords and fall through (no dismiss).
           active = false;
-          requestUpdate();
+          callbacks::call("popup.requestUpdate", requestUpdate);
           return true;
         }
         if (snap.touchPressed) {
@@ -142,7 +143,7 @@ class OptionPopup {
             const freeink::ui::Interaction& hit = interactions.publishedData()[idx];
             if (hit.action == ACTION_OPTION && selectedIndex != hit.value) {
               selectedIndex = hit.value;
-              requestUpdate();
+              callbacks::call("popup.requestUpdate", requestUpdate);
             }
           }
         }
@@ -152,11 +153,11 @@ class OptionPopup {
 
     if (input.wasPressed(MappedInputManager::Button::NavPrevious)) {
       selectedIndex = (selectedIndex - 1 + count) % count;
-      requestUpdate();
+      callbacks::call("popup.requestUpdate", requestUpdate);
       return true;
     } else if (input.wasPressed(MappedInputManager::Button::NavNext)) {
       selectedIndex = (selectedIndex + 1) % count;
-      requestUpdate();
+      callbacks::call("popup.requestUpdate", requestUpdate);
       return true;
     }
 
@@ -206,11 +207,11 @@ class OptionPopup {
     if (confirmReleased) {
       active = false;
       if (onSelectCallback) onSelectCallback(selectedIndex);
-      requestUpdate();
+      callbacks::call("popup.requestUpdate", requestUpdate);
       return true;
     } else if (input.wasReleased(MappedInputManager::Button::Back)) {
       active = false;
-      requestUpdate();
+      callbacks::call("popup.requestUpdate", requestUpdate);
       return true;
     }
     return true;

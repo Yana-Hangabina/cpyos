@@ -8,6 +8,7 @@
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
+#include <FaultLog.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalDisplay.h>
@@ -47,6 +48,8 @@
 #include "BackgroundWork.h"
 #include "CrossPointSettings.h"
 #include "NetworkStartup.h"
+#include <MemoryLedger.h>
+#include "FontRestorePolicy.h"  // the pairing rule for NetworkStartup's render-memory reclaim
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -69,6 +72,8 @@
 #endif
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "SystemFontPack.h"
+#include <InvokeCallback.h>
+#include <StackSafety.h>
 #include "SystemCoreFont.h"
 #include "Typography.h"
 #endif
@@ -227,6 +232,11 @@ void scanWatchdogTask(void*) {
     const unsigned long deadline = s_scanWatchdogDeadlineMs;
     if (deadline != 0 && static_cast<long>(millis() - deadline) > 0) {
       ESP_LOGE("SCANWD", "panel push did not return in time; restarting");
+      // Recorded before the restart, which is the only reason it can be recorded
+      // at all: a hung push produces no panic message, so without this the ring
+      // would show a clean boot followed by nothing. raise() neither allocates nor
+      // locks, so it is safe to call from here.
+      fault::raise(fault::Code::PanelPushHang);
       vTaskDelay(pdMS_TO_TICKS(100));
       esp_restart();
     }
@@ -241,6 +251,7 @@ void armScanWatchdog(const uint32_t timeoutMs) {
       s_scanWatchdogStarted = true;
     } else {
       ESP_LOGE("SCANWD", "watchdog task creation failed (internal RAM); area push unguarded");
+      fault::raise(fault::Code::ScanWatchdogAbsent);
     }
   }
   s_scanWatchdogDeadlineMs = millis() + timeoutMs;
@@ -606,11 +617,6 @@ enum class BootResume : uint8_t {
 static bool deepSleepInProgress = false;
 
 #if FREEINK_CAP_TOUCH
-#if FREEINK_DEVICE_READPICO
-// Defer font I/O until after activity teardown releases its render lock.
-static bool sdFontReloadPending = false;
-#endif
-
 static bool finishWifiSessionWithoutRestart() {
   if (!BoardConfig::hasTouch()) return false;
   if (esp_sntp_enabled()) esp_sntp_stop();
@@ -621,9 +627,11 @@ static bool finishWifiSessionWithoutRestart() {
   NetworkStartup::powerDownRadio();
   delay(100);
   LOG_DBG("MAIN", "WiFi stopped without restart on touch device");
-#if FREEINK_DEVICE_READPICO
-  sdFontReloadPending = true;
-#endif
+  // The session that just ended reclaimed render memory on the way in, so the
+  // font state has to come back. This is no longer a local flag: arming the
+  // reclaim owner keeps a single reload path for both ways the state goes away
+  // (see NetworkStartup::prepare() and font_restore::due()).
+  NetworkStartup::rearmRenderMemoryRestore();
   return true;
 }
 #endif
@@ -1230,6 +1238,10 @@ void setup() {
     LOG_INF("TLS", "wolfSSL allocations: PSRAM (8-byte aligned)");
   }
 #endif
+  // The allocation ledger's baseline is taken here, before the display, the UI
+  // and the radio have asked for anything, so every later number is "what this
+  // session did" rather than "what the boot left behind".
+  memory::ledger::begin();
   BoardConfig::holdPowerRails();
 
   // --- Read Pico boot order (read-pico.md 1.4) ------------------------------
@@ -1274,6 +1286,12 @@ void setup() {
 #endif
 
   HalSystem::begin();
+  // -fno-exceptions means a thrown std::exception (empty std::function, absurd
+  // container size, failed allocation) reaches std::terminate and abort() with
+  // nothing but a PC. These two hooks turn that PC into a named exception plus
+  // the live screen/stage/heap context, which is what a photo of the crash
+  // screen can actually be diagnosed from. Installed before any allocation.
+  HalSystem::installCppFailureHandlers();
 #if defined(CROSSPOINT_PDF_XIP) && defined(CROSSPOINT_PDF_DEBUG_LOG_HEADER)
   // Read-only: says whether the installed engine is for this app contract before
   // any document is opened (the board's console cannot be driven). The dev HEAD
@@ -1728,7 +1746,11 @@ void setup() {
   allowSleepAt = millis() + 2000;
 
   // Serial-only: start the stuck detector that names the blocking lock.
-  xTaskCreate(stuckDetectorTask, "stuckdet", 3072, nullptr, 0, nullptr);
+  if (xTaskCreate(stuckDetectorTask, "stuckdet", 3072, nullptr, 0, nullptr) != pdPASS) {
+    // The forensics reporter itself could not start: a later freeze would then be
+    // unfalsifiable (AGENTS 49), so that fact belongs in the ring.
+    fault::raise(fault::Code::StuckDetectorAbsent);
+  }
 }
 
 
@@ -1795,20 +1817,44 @@ void loop() {
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
-#if FREEINK_CAP_TOUCH && FREEINK_DEVICE_READPICO
-  if (sdFontReloadPending) {
-    sdFontReloadPending = false;
-    const unsigned long reloadStart = millis();
-    LOG_DBG("MAIN", "Reloading SD font family after the network session");
-    {
-      // The independent render task shares the font maps and resident font objects.
-      RenderLock lock;
-      sdFontSystem.ensureLoaded(renderer);
-    }
-    LOG_DBG("MAIN", "SD font reload after network took %lu ms", millis() - reloadStart);
-    activityManager.requestUpdate();
-  }
+  // The render-memory reclaim in NetworkStartup::prepare() releases the font
+  // state, and on the pack targets that state includes the font-extension
+  // supplements -- the only registered faces covering CJK beyond app0's UI
+  // subset. Reload it as soon as the network no longer needs the room. Until
+  // this pairing existed every screen drawn after a network entry boxed
+  // characters the data partition carries (0.8.2: "晋江书籍列表一堆缺字").
+  {
+    font_restore::Situation situation;
+    situation.pending = NetworkStartup::renderMemoryRestorePending();
+    situation.radioIdle = NetworkStartup::radioIdle();
+    situation.stationClaimed = NetworkStartup::stationClaimed();
+    situation.networkHeld = NetworkStartup::networkHeld() || background_work::active();
+    situation.elapsedMs = static_cast<uint32_t>(millis() - NetworkStartup::renderMemoryArmedAtMs());
+    if (font_restore::due(situation)) {
+      NetworkStartup::clearRenderMemoryRestore();
+      const unsigned long reloadStart = millis();
+      {
+        // The independent render task shares the font maps and resident font objects.
+        RenderLock lock;
+        sdFontSystem.ensureLoaded(renderer);
+      }
+      // INFO, not DBG: this is the line that proves the reclaim was reverted, and
+      // the serial default level hides debug output (the 0.8.2 report was exactly
+      // a missing revert nobody could see).
+      LOG_INF("MAIN", "render memory reclaimed for the network was given back: %lu ms",
+              static_cast<unsigned long>(millis() - reloadStart));
+#if CROSSPOINT_VECTOR_FONTS
+      if (!sdFontSystem.hasSupplementFonts()) {
+        // Nothing could be stood up (usually PSRAM). Keep the pairing armed with a
+        // fresh timestamp so a later quiet window tries again; re-arming is what
+        // stops this from spinning the reload on every loop pass.
+        LOG_ERR("MAIN", "reload left no font supplement registered; retrying in a later quiet window");
+        NetworkStartup::rearmRenderMemoryRestore();
+      }
 #endif
+      activityManager.requestUpdate();
+    }
+  }
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
@@ -1893,6 +1939,11 @@ void loop() {
   static uint16_t lastBatteryShown = 0xFFFF;
   if (millis() - lastBatterySampleMs >= 1000) {
     lastBatterySampleMs = millis();
+    // The crash record reads these numbers instead of querying the heap inside
+    // the panic handler: a mutex-taking heap walk in panic context is not safe,
+    // and "how much memory did it have when it died" is the one thing both
+    // crash classes need answered.
+    HalSystem::snapshotCrashAmbience();
     powerManager.getBatteryPercentage();
     if (powerManager.batteryPercentageKnown()) {
       const uint16_t shown = powerManager.batteryDisplayPercent();
@@ -2602,6 +2653,39 @@ void loop() {
         // Radio state probe for the power experiments (mode, status, CPU, USB).
         logSerial.printf("NET mode=%d status=%d cpu=%u\n", static_cast<int>(WiFi.getMode()),
                          static_cast<int>(WiFi.status()), static_cast<unsigned>(getCpuFrequencyMhz()));
+      } else if (cmd == "MEMLEDGER") {
+        // Who holds what, and whether the ledger agrees with the heap. The
+        // caller addresses are resolved to function names offline:
+        //   python3 exp/memledger_resolve.py <dump> <firmware.elf>
+        {
+          const auto counters = memory::ledger::counters();
+          const auto base = memory::ledger::baseline();
+          const auto now = memory::ledger::measured();
+          const auto check = memory::ledger::check(4096u);
+          logSerial.printf(
+              "MEMLEDGER wired=%d internal=%u psram=%u blocks=%u steals=%u early=%u untrackedFrees=%u "
+              "small=%u B x%u\n",
+              memory::ledger::wired() ? 1 : 0, static_cast<unsigned>(counters.internalBytes),
+              static_cast<unsigned>(counters.psramBytes), static_cast<unsigned>(counters.blocks),
+              static_cast<unsigned>(counters.steals), static_cast<unsigned>(counters.earlySkips),
+              static_cast<unsigned>(counters.untrackedFrees), static_cast<unsigned>(counters.smallAllocBytes),
+              static_cast<unsigned>(counters.smallAllocBlocks));
+          logSerial.printf("MEMBASE internal %u->%u (largest %u->%u) psram %u->%u (largest %u->%u)\n",
+                           static_cast<unsigned>(base.internalFree), static_cast<unsigned>(now.internalFree),
+                           static_cast<unsigned>(base.internalLargest), static_cast<unsigned>(now.internalLargest),
+                           static_cast<unsigned>(base.psramFree), static_cast<unsigned>(now.psramFree),
+                           static_cast<unsigned>(base.psramLargest), static_cast<unsigned>(now.psramLargest));
+          logSerial.printf("MEMCHECK %s cause=%s unexplained=%u internalGap=%d psramGap=%d\n",
+                           memory::ledger::name(check.verdict), memory::ledger::name(check.gapCause),
+                           static_cast<unsigned>(check.unexplainedBytes), static_cast<int>(check.internalGap),
+                           static_cast<int>(check.psramGap));
+          memory::ledger::Live sites[24];
+          const size_t n = memory::ledger::snapshot(sites, 24);
+          for (size_t i = 0; i < n; ++i) {
+            logSerial.printf("MEMSITE 0x%08x %u bytes x%u\n", sites[i].caller, static_cast<unsigned>(sites[i].bytes),
+                             static_cast<unsigned>(sites[i].blocks));
+          }
+        }
       } else if (cmd == "HEAPINFO") {
         // Full internal-heap region/block map; tells fragmentation apart from
         // "not enough RAM" when a TLS handshake fails at a low largest block.
@@ -2609,6 +2693,77 @@ void loop() {
                          (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getFreePsram());
         heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
         logSerial.flush();
+#if CROSSPOINT_SERIAL_BENCH
+      } else if (cmd.startsWith("CRASHTEST")) {
+        // The crash screen is only worth having if it can be proven to carry a
+        // diagnosis, and the field reports had nothing to carry. Each mode is a
+        // deliberate end-to-end test of one failure class:
+        //   guarded  - an unset callback through the owner: must NOT crash, and
+        //              must log "empty callback skipped" (the fix working).
+        //   func     - an unset callback called bare: aborts, and the crash
+        //              screen must come back naming St17bad_function_call.
+        //   new      - a failed allocation: same, naming bad_alloc, with the
+        //              heap numbers from the last snapshot.
+        //   flash    - forces the PSRAM-stack verdict and asks a guarded flash
+        //              site: must refuse and report "unknown", never read.
+        // Bench-only: a release image must not be able to crash itself.
+        const String mode = cmd.substring(9);
+        if (mode == "guarded") {
+          const std::function<int(int)> unset;
+          const int value = callbacks::callOr<int>("bench.guarded", unset, -1, 3);
+          logSerial.printf("CRASHTEST guarded: degraded to fallback=%d, no crash\n", value);
+        } else if (mode == "func") {
+          const std::function<void(int)> unset;
+          logSerial.println("CRASHTEST func: calling an empty std::function");
+          logSerial.flush();
+          unset(1);  // cb-fixture: deliberate bad_function_call -> terminate -> abort
+        } else if (mode == "new") {
+          logSerial.println("CRASHTEST new: asking for an impossible allocation");
+          logSerial.flush();
+          const auto* block = new char[1u << 30];  // cb-fixture: deliberate bad_alloc
+          logSerial.printf("CRASHTEST new: unexpectedly ok %p\n", static_cast<const void*>(block));
+          delete[] block;
+        } else if (mode == "flash") {
+          memory::debugOverrideFlashGuard(1);
+          const bool present = system_core_font::carrierPresent();
+          const auto status = system_core_font::status();
+          memory::debugOverrideFlashGuard(-1);
+          logSerial.printf("CRASHTEST flash: carrierPresent=%d problem=%s\n", static_cast<int>(present),
+                           system_core_font::problemName(status.problem));
+        } else {
+          logSerial.println("CRASHTEST: use guarded|func|new|flash");
+        }
+      } else if (cmd.startsWith("CRASHSTATS")) {
+        // Correlating two field reports needs one number and one address, not a
+        // log. `same` means the newest two failures share a crash PC.
+        const auto history = HalSystem::getCrashHistory();
+        const auto ctx = HalSystem::getCrashContext();
+        logSerial.printf("CRASHSTATS streak=%u recorded=%u repeats=%d current=%08X",
+                         static_cast<unsigned>(history.streak), static_cast<unsigned>(history.count),
+                         static_cast<int>(history.repeats()), static_cast<unsigned>(ctx.pc));
+        for (uint8_t i = 0; i < history.count; ++i) {
+          logSerial.printf("\n  #%u pc=%08X at %ums", static_cast<unsigned>(i), static_cast<unsigned>(history.pc[i]),
+                           static_cast<unsigned>(history.uptimeMs[i]));
+        }
+        logSerial.println();
+      } else if (cmd.startsWith("FAULTS")) {
+        // The ring in the exact form the crash screen and crash_report.txt use.
+        // Reading it after CMD:CRASHTEST, or after a refused flash read, is how the
+        // whole chain -- site, guard, code, screen -- is verified without needing
+        // anybody to take a photograph.
+        char codes[fault::kLineCapacity];
+        fault::formatLine(codes, sizeof(codes), fault::kCapacity, nullptr);
+        logSerial.printf("FAULTS %s", codes[0] != '\0' ? codes : "none recorded");
+        if (fault::assertLocation()[0] != '\0') logSerial.printf(" at %s", fault::assertLocation());
+        logSerial.println();
+        fault::Slot slots[fault::kCapacity];
+        const uint8_t recorded = fault::copy(slots, fault::kCapacity);
+        for (uint8_t i = 0; i < recorded; ++i) {
+          char detail[160];
+          fault::formatDetail(detail, sizeof(detail), slots[i]);
+          logSerial.printf("  %s\n", detail);
+        }
+#endif
 #if defined(BOARD_HAS_PSRAM) && defined(CROSSPOINT_BOOKSOURCE_JJWXC)
       } else if (cmd.startsWith("TLSPROBE")) {
         // Diagnostic-only: handshake probe, plus an optional HTTP/1.1 exchange.
@@ -3231,7 +3386,7 @@ void loop() {
           LOG_INF("DBG", "MAKEPDF wrote %u bytes", static_cast<unsigned>(sizeof(kPdf) - 1));
         }
       } else if (cmd == "PDF" || cmd.startsWith("PDF ")) {
-        String openPath = "/BOOKS/test.pdf";
+        String openPath = "/BOOKS/陈天宇.pdf";
         if (cmd.length() > 4) {
           openPath = cmd.substring(4);
           openPath.trim();
@@ -3265,7 +3420,7 @@ void loop() {
         PdfReaderActivity::debugInitialPage = page;
         LOG_ERR("PDF", "serial CMD:PDFNOTE seeding a note on page %d", page + 1);
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
       } else if (cmd.startsWith("PDFHL")) {
         int page = 0;
         const int space = cmd.indexOf(' ');
@@ -3275,13 +3430,13 @@ void loop() {
         PdfReaderActivity::debugInitialPage = page;
         LOG_ERR("PDF", "serial CMD:PDFHL seeding a highlight on page %d", page + 1);
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
       } else if (cmd == "SELFTEST") {
         PdfReaderActivity::debugSelfTest = true;
         PdfReaderActivity::debugInitialPage = -1;
         LOG_ERR("PDF", "serial CMD:SELFTEST walking every page");
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
       } else if (cmd == "REFLOW") {
         PdfReaderActivity::debugReflowEnabled = true;
         LOG_ERR("PDF", "serial CMD:REFLOW enabled for the next page render");
@@ -3293,7 +3448,7 @@ void loop() {
         PdfReaderActivity::debugInitialPage = -1;
         LOG_ERR("PDF", "serial CMD:PDFCACHE rebuilding the big-PDF cache");
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
       } else if (cmd.startsWith("PRUNE")) {
         // "CMD:PRUNE <book path>": run the product's per-book cache clear and report what
         // it kept.  This is the check that matters for that action -- a cleared cache must
@@ -3335,7 +3490,7 @@ void loop() {
         if (Storage.exists(stale.c_str())) Storage.remove(stale.c_str());
         LOG_ERR("PDF", "serial CMD:PDFBIG opening big PDF at page %d", page + 1);
         activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/test.pdf", false));
+            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
       } else if (cmd.startsWith("PDFSEL ")) {
         // ★ The trailing space is load-bearing: "PDFSELACTION" also starts with
         // "PDFSEL", and with a bare prefix here every chip / key-widen code fell into

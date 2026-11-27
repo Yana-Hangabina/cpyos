@@ -122,7 +122,7 @@ constexpr app_catalog::Entry kEntries[] = {
     // Out-of-tree native ELF packages on the SD card. The tile reuses the
     // existing plugins label and the generic app-grid glyph; no new i18n key
     // fits the 15-bit English blob.
-    {AppId::NativePlugins, StrId::STR_PLUGINS, UIIcon::Apps, &openNativePlugins},
+    {AppId::NativePlugins, StrId::STR_PLUGIN_MANAGER, UIIcon::Apps, &openNativePlugins},
 #endif
 };
 

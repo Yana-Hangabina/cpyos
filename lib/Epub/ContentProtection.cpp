@@ -153,8 +153,13 @@ std::unique_ptr<ContentDecryptor> openProtectedBook(const std::string& epubPath,
 
   uint8_t key[bookkey::KEY_LEN];
   int64_t expiresAt = 0;
-  if (!bookkey::read(epubPath, key, &expiresAt)) {
-    err = "no content key for this book";
+  const bookkey::ReadStatus keyStatus = bookkey::readStatus(epubPath, key, &expiresAt);
+  if (keyStatus != bookkey::ReadStatus::Ok) {
+    // The two failures need different words. "No key" is a book that was never
+    // fulfilled here; a key this device cannot open is what an erase-install of a
+    // previous scheme looks like, and only that one is repaired by re-caching.
+    // Exact strings are matched by EpubReaderActivity::handleLoadFailure().
+    err = keyStatus == bookkey::ReadStatus::ForeignDevice ? "book key not for this device" : "no content key for this book";
     return nullptr;
   }
   book->setContentKey(key);

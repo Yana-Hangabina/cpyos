@@ -5,6 +5,7 @@
 #include <Utf8.h>
 
 #include <deque>
+#include <map>
 #include <string>
 
 namespace BidiUtils {
@@ -14,6 +15,12 @@ enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
 class GfxRenderer {
  public:
   FontCacheManager fontCache;
+  // PageLine::render() checks whether a block's serialised font id is live. The
+  // fixture has no font registry, so every block falls back to the section font.
+  const std::map<int, EpdFontFamily>& getFontMap() const {
+    static const std::map<int, EpdFontFamily> empty;
+    return empty;
+  }
   FontCacheManager* getFontCacheManager() { return &fontCache; }
   enum class TextMeasureMode { Layout, Rendered };
   // Fixture metrics: every glyph is 8 px wide, a space is 4 px, kerning is zero.

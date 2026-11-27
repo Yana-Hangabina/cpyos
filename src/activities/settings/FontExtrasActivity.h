@@ -116,6 +116,11 @@ class FontExtrasActivity final : public UiListActivity {
   void removePack(int packIndex);
   void setError(const char* message, font_extras::Failure failure = font_extras::Failure::None);
   const char* failureText(font_extras::Failure failure) const;
+  // The translated reason plus the language-neutral diagnostics FontExtras
+  // recorded (path, byte counts, publish outcome). Without the second half every
+  // storage problem reads as the same sentence and a field report cannot say
+  // which file or which step failed.
+  std::string failureBody(font_extras::Failure failure) const;
   void drawWait();
   void drawErrorCard();
   bool handleErrorActions();

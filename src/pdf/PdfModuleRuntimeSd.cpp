@@ -21,6 +21,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_cache.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
@@ -338,7 +339,7 @@ bool flushScheduledUnload(const bool readerIdle) {
     gUnloadPending = false;
     return false;
   }
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) return false;
+  if (!memory::internalFlashAllowed(fault::Code::PdfRuntimeSdRefused)) return false;
   gUnloadPending = false;
   if (!g_loaded) return false;
   unload();

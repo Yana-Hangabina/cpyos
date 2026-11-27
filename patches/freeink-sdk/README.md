@@ -17,6 +17,10 @@ much trouble they cause:
 
 So the local work travels as `d9a1304c-local.patch`, applied with `./apply.sh`
 (idempotent: it detects its own marker and refuses to double-apply).
+`ui-viewport-touch.patch` is applied after it: it adds the UI viewport's native
+size/scale fields to `DeviceContext` and maps panel-native touch back to design
+units. Existing trees that already carry the display patch receive only this
+second hunk on the next `./apply.sh`.
 
 ## What is in the patch
 

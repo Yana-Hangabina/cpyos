@@ -47,7 +47,7 @@ constexpr fui::ActionId ACTION_PROMPT = 3;
 constexpr fui::ActionId ACTION_CANCEL = 4;
 constexpr fui::ActionId ACTION_RETURN = 5;
 
-// --- refreshed UI Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
+// --- Pond v5 Wi-Fi sheet (design frame 17 + wifi-sheet/index.html) ----------
 // Units are device px on the 684-wide UI frame: 20 top radius, 2 px border,
 // 48x4 grabber, 54 header, 88 rows, 90 footer. The heights are state
 // properties, not animations: each change is one FULL paint.

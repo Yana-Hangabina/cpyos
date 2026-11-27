@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
@@ -66,6 +67,8 @@ const char* resultName(Result r) {
       return "WRITE_FAIL";
     case Result::OTADATA_FAIL:
       return "OTADATA_FAIL";
+    case Result::WRONG_TASK_STACK:
+      return "WRONG_TASK_STACK";
   }
   return "?";
 }
@@ -74,6 +77,11 @@ uint16_t runningPartitionChipId() {
   // esp_partition_read hits SPI flash; cache the running slot's chip_id so we
   // only pay that cost once per boot. The running image is immutable at
   // runtime, so a function-local static is safe here.
+  //
+  // Asked from a PSRAM-stacked task the read would panic, and it must not
+  // poison the cache either: answer "unknown" before the static is ever
+  // initialised, so the next internal-RAM caller still gets the real value.
+  if (!memory::internalFlashAllowed(fault::Code::FlasherChipIdRefused)) return 0xFFFF;
   static uint16_t cached = [] {
     const esp_partition_t* run = esp_ota_get_running_partition();
     if (!run) return static_cast<uint16_t>(0xFFFF);
@@ -273,6 +281,14 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
 }
 
 Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, bool alreadyValidated) {
+  // Erasing and writing internal flash disables the cache for the duration, so
+  // this must never run on a task whose stack lives in PSRAM (the render task,
+  // or any worker built with xTaskCreatePinnedToCoreWithCaps). Refusing costs
+  // nothing: the partition is untouched and the old image still boots.
+  if (!memory::internalFlashAllowed(fault::Code::FlasherWriteRefused)) {
+    LOG_ERR("FLASH", "flash write refused: this task stack is in PSRAM");
+    return Result::WRONG_TASK_STACK;
+  }
   // Resolve destination first so we can size-check during validation. The full image-integrity
   // pass below verifies header, segment table, XOR checksum and SHA256 trailer end-to-end before
   // we touch otadata, so a truncated/corrupted .bin can never become the next boot target.

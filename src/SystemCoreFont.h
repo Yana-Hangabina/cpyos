@@ -26,6 +26,10 @@ inline constexpr const char* kCrcPath = "/fonts/CPYOSCJKCore/.core-crc";
 inline constexpr const char* kMarkerPath = "/fonts/CPYOSCJKCore/.cpyos-core";
 
 // True when a valid core carrier is present in the data partition.
+//
+// Reads internal flash. On a PSRAM-stack task this returns false *without
+// caching anything*, so a later internal-stack caller still gets the real
+// answer -- see memory::guardInternalFlash() and Status::Problem::WrongTaskStack.
 bool carrierPresent();
 
 // Inflate the carrier and install it under /fonts/CPYOSCJKCore. Idempotent; a
@@ -85,6 +89,10 @@ struct Status {
     NotInstalled,    // carrier is fine, no matching SD file yet
     SidecarStale,    // size matches, marker missing or wrong (repaired when possible)
     ForeignCopy,     // /fonts/CPYOSCJKCore holds a different font; never overwritten, but used
+    WrongTaskStack,  // never evaluated: the caller's stack is in PSRAM, so reading the
+                     // carrier would panic. Distinct from BadCarrier on purpose -- the
+                     // carrier may be perfectly fine, and "unknown" must not be reported
+                     // or acted on as "missing" (see memory::guardInternalFlash).
   };
 
   bool carrierPresent = false;
@@ -105,8 +113,9 @@ struct Status {
   Problem problem = Problem::None;
 };
 
-// Cheap: one partition header read plus one file stat. Safe to call from a render
-// path; it never inflates and never writes.
+// Cheap: one partition header read plus one file stat. It never inflates and never
+// writes, but it does read internal flash -- on a PSRAM-stack task it reports
+// WrongTaskStack and caches nothing, which is the honest "unknown", not "absent".
 Status status();
 
 // "carrier-present" / "foreign-copy" / ... for logs and the font status page.

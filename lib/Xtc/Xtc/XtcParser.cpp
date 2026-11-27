@@ -6,6 +6,7 @@
  */
 
 #include "XtcParser.h"
+#include <FaultLog.h>
 
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -476,6 +477,17 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
 XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
                                       std::function<void(const uint8_t* data, size_t size, size_t offset)> callback,
                                       size_t chunkSize) {
+  // Calling an unset std::function aborts this build (-fno-exceptions, so
+  // bad_function_call reaches std::terminate). Checked here, once, because the
+  // alternative is a corrupt page: the loop below has nowhere to put the bytes.
+  if (!callback) {
+    LOG_ERR("XTC", "loadPageStreaming called without a page callback");
+    // An XTC page has nowhere to deliver its text: the book opens and shows
+    // nothing, which is exactly what a user photographs. Recorded here rather
+    // than at the callback owner because this site knows the format.
+    fault::raise(fault::Code::XtcNoCallback);
+    return XtcError::NO_PAGE_CALLBACK;
+  }
   if (!m_isOpen) {
     return XtcError::FILE_NOT_FOUND;
   }

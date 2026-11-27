@@ -12,6 +12,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <LibraryBuilder.h>
+#include <InvokeCallback.h>
 #include <Logging.h>
 #include <MD5Builder.h>
 #include <Memory.h>
@@ -912,7 +913,7 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<bool(c
         info.isEpub = isEpubFile(info.name);
       }
 
-      keepScanning = callback(info);
+      keepScanning = callbacks::callOr<bool>("web.scanFile", callback, true, info);
     }
 
     file.close();

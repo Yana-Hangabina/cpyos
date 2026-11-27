@@ -32,6 +32,9 @@ enum class Result {
   ERASE_FAIL,
   WRITE_FAIL,
   OTADATA_FAIL,
+  // The caller's task stack is in PSRAM, so erasing/writing internal flash
+  // would take that stack away. Nothing was touched; retry from the UI task.
+  WRONG_TASK_STACK,
 };
 
 // Progress callback: called after every chunk write. `written`/`total` are bytes.

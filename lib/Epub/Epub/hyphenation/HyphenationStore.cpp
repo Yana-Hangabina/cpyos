@@ -10,6 +10,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 
 #include <algorithm>
 #include <cstring>
@@ -30,15 +31,14 @@ constexpr size_t kChunkBytes = 16 * 1024;
 // working while a trie loads. Same reserve PinyinDb uses.
 constexpr size_t kContiguousReserve = 64 * 1024;
 
-#if !defined(SIMULATOR)
 // esp_partition_read disables the flash cache.  A render task whose stack lives
 // in PSRAM must never enter that path: the IDF cache guard asserts and reboots
 // the device.  preloadAll() runs on the main task; this check is the safety net
-// for languages it did not get to (or a missing preload call).
-bool stackIsInPsram() { return esp_ptr_external_ram(esp_cpu_get_sp()); }
-#else
-bool stackIsInPsram() { return false; }
-#endif
+// for languages it did not get to (or a missing preload call).  The decision
+// itself is memory::guardInternalFlash() -- one rule for every flash site.
+bool stackIsInPsram(const fault::Code site, const uint32_t detail = 0) {
+  return !memory::internalFlashAllowed(site, detail);
+}
 
 }  // namespace
 
@@ -199,7 +199,7 @@ bool HyphenationStore::ensureIndex() {
 #if !defined(SIMULATOR)
   // Internal flash reads disable the cache.  A render task with a PSRAM stack
   // must not enter this path; preloadAll() runs on the main task instead.
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::HyphenReadRefused)) {
     LOG_ERR(kTag, "partition index read refused: PSRAM stack");
     return false;
   }
@@ -295,7 +295,7 @@ bool HyphenationStore::readIndexFromCard() {
 #if !defined(SIMULATOR)
 
 bool HyphenationStore::readIndexFromPartition() {
-  if (stackIsInPsram()) return false;
+  if (stackIsInPsram(fault::Code::HyphenProbeRefused)) return false;
   const esp_partition_t* partition =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
   if (partition == nullptr) return false;
@@ -341,7 +341,7 @@ bool HyphenationStore::readIndexFromPartition() {
 
 bool HyphenationStore::loadBlob(const HyphEntry& entry, Slot& slot, bool& outOfMemory) {
   outOfMemory = false;
-  if (source_ == Source::Partition && stackIsInPsram()) {
+  if (source_ == Source::Partition && stackIsInPsram(fault::Code::HyphenLoadRefused)) {
     LOG_ERR(kTag, "partition blob read refused: PSRAM stack");
     return false;
   }

@@ -1,4 +1,5 @@
 #include <HalDisplay.h>
+#include <FaultLog.h>
 #include <HalGPIO.h>
 
 #if FREEINK_DEVICE_READPICO
@@ -48,6 +49,7 @@ void HalDisplay::begin(bool seamless) {
   // going — the panel will simply stay dark instead of aborting the boot.
   if (!BoardReadPico::ready()) {
     LOG_ERR("DISP", "FCA9555 expander is not up; EPD rails cannot be sequenced");
+    fault::raise(fault::Code::ExpanderNotUp);
   }
   // epdiy owns 4bpp front/back/difference buffers in PSRAM (~1.59 MiB here),
   // plus the SDK's B/W base and selector planes. Feed queues, DMA buffers and
@@ -290,6 +292,10 @@ bool HalDisplay::waitForScanIdle(uint32_t timeoutMs) {
   while (freeink::epdiyLcdScanInProgress()) {
     if (millis() - start >= timeoutMs) {
       LOG_ERR("HAL", "present barrier timed out after %ums", static_cast<unsigned>(timeoutMs));
+      // The caller goes ahead with its SD write while a scan is still running --
+      // the underrun this barrier exists to prevent -- so reaching the deadline is
+      // itself the evidence that the scan did not finish.
+      fault::raise(fault::Code::PresentBarrierTimeout, timeoutMs);
       return false;
     }
     delay(1);
@@ -332,6 +338,7 @@ bool HalDisplay::cleanWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 #if FREEINK_DEVICE_READPICO
   if (freeink::epdiyLcdCleanArea(getFrameBuffer(), x, y, w, h)) return true;
   ESP_LOGE("HAL", "area clean refused; falling back to a full clean");
+  fault::raise(fault::Code::AreaCleanRefused);
 #endif
   einkDisplay.displayBuffer(convertRefreshMode(FULL_REFRESH), false, EInkDisplay::RefreshContext::Normal);
   return false;

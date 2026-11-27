@@ -12,15 +12,14 @@ inline constexpr char OTA_MANIFEST_FORMAT[] = "https://%s/api/ota/manifest?varia
 // query parsing is needed; it uses the same GitHub-release-shaped JSON that
 // OtaUpdater already understands. Defined only for Read Pico environments
 // (platformio.ini); other upstream targets keep the CrossMux endpoints.
-#ifdef CPYOS_OTA_MANIFEST_URL
-inline constexpr char CPYOS_OTA_URL[] = CPYOS_OTA_MANIFEST_URL;
-// Same release manifest served by GitHub Pages. Used as a bounded fallback when
-// the mirror-prefixed release URL is unreachable (the 0.6.0 failure mode was a
-// hung gh-proxy connection that blocked the OTA check past its socket timeout).
-inline constexpr char CPYOS_OTA_PAGES_URL[] = "https://yana-hangabina.github.io/cpyos/ota/readpico.json";
 // Mainland-China GitHub mirrors. The release manifest points at a mirror-prefixed
 // release asset so older firmware (which cannot probe) also gets a fast path;
 // 0.1.2+ strips the prefix and measures every candidate before downloading.
+//
+// This is the only mirror list. It is deliberately outside the CPYOS_OTA_MANIFEST_URL
+// guard because the font-extension downloader needs it in development builds too;
+// FontExtras used to keep a second copy there, and the two drifted the moment one
+// of them gained an entry.
 inline constexpr const char* CPYOS_DOWNLOAD_MIRRORS[] = {
     "https://gh-proxy.org/",
     "https://git.yylx.win/",
@@ -29,9 +28,20 @@ inline constexpr const char* CPYOS_DOWNLOAD_MIRRORS[] = {
     "https://github.tbap.top/",
     "https://gh.dpik.top/",
     "https://ghproxy.net/",
+    // Added 2026-11-27 at the user's request. Kept last: the 0.2.2 round of
+    // measurements found it answering 403 for release assets, so it is a route
+    // to have available, not one to prefer. The probe in download_probe::selectUrl
+    // is what decides, and a dead route simply loses.
+    "https://ghproxy.homeboyc.cn/",
 };
 inline constexpr size_t CPYOS_DOWNLOAD_MIRROR_COUNT =
     sizeof(CPYOS_DOWNLOAD_MIRRORS) / sizeof(CPYOS_DOWNLOAD_MIRRORS[0]);
+#ifdef CPYOS_OTA_MANIFEST_URL
+inline constexpr char CPYOS_OTA_URL[] = CPYOS_OTA_MANIFEST_URL;
+// Same release manifest served by GitHub Pages. Used as a bounded fallback when
+// the mirror-prefixed release URL is unreachable (the 0.6.0 failure mode was a
+// hung gh-proxy connection that blocked the OTA check past its socket timeout).
+inline constexpr char CPYOS_OTA_PAGES_URL[] = "https://yana-hangabina.github.io/cpyos/ota/readpico.json";
 #endif
 inline constexpr char FONT_MANIFEST_FORMAT[] = "https://%s/api/assets/fonts/m%s-b%s/fonts.json";
 inline constexpr char DICTIONARY_MANIFEST_FORMAT[] = "https://%s/api/assets/dictionaries/manifest?version=1&lang=%s";

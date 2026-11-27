@@ -3589,6 +3589,7 @@ bool EpubReaderActivity::handleLoadFailure() {
   const std::string& perr = loadProtectionError;
   StrId msg = StrId::STR_DRM_PROTECTED_FILE;
   bool offerSync = false;
+  bool offerRecache = false;
   if (perr == "txt progress migration failed") {
     msg = StrId::STR_TXT_PROGRESS_MIGRATION_FAILED;
   } else if (perr == "fb2 conversion failed") {
@@ -3598,16 +3599,38 @@ bool EpubReaderActivity::handleLoadFailure() {
   } else if (perr == "loan date unverified") {
     msg = StrId::STR_LOAN_TIME_UNVERIFIED;
     offerSync = true;
+  } else if (perr == "book key not for this device") {
+    // The book carries a key this device cannot unwrap -- what a full-erase
+    // install of a previous key scheme leaves behind (BookKey.h explains why the
+    // wrap is identity-bound). Unlike every other protection failure this one is
+    // repairable by the app that owns the book, so say so instead of "DRM".
+    msg = StrId::STR_BOOK_KEY_LOST;
+#if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
+    // The re-cache entry only exists in a build that carries the app, and only
+    // for its own books; otherwise the option would be a dead button.
+    offerRecache = bookPath.rfind("/JJWXC/", 0) == 0;
+#endif
   }
-  const char* options[2] = {I18N.get(offerSync ? StrId::STR_CLOCK_SYNC_NOW : StrId::STR_OK_BUTTON),
-                            I18N.get(StrId::STR_OK_BUTTON)};
-  loadFailurePopup.showMessage("", I18N.get(msg), options, offerSync ? 2 : 1, 0, [this, offerSync](const int index) {
-    if (offerSync && index == 0) {
-      beginLoanTimeSync();
-      return;
-    }
-    finish();
-  });
+  const char* firstOption = I18N.get(offerSync      ? StrId::STR_CLOCK_SYNC_NOW
+                                     : offerRecache ? StrId::STR_WEREAD_RECACHE_BOOK  // value is generic ("Cache again")
+                                                    : StrId::STR_OK_BUTTON);
+  const char* options[2] = {firstOption, I18N.get(StrId::STR_OK_BUTTON)};
+  loadFailurePopup.showMessage("", I18N.get(msg), options, (offerSync || offerRecache) ? 2 : 1, 0,
+                               [this, offerSync, offerRecache](const int index) {
+                                 if (index == 0 && offerSync) {
+                                   beginLoanTimeSync();
+                                   return;
+                                 }
+                                 if (index == 0 && offerRecache) {
+                                   // Hand the book to the app that can regenerate its
+                                   // key and repack it. The reader stays behind and
+                                   // retries the open when the app returns, so a
+                                   // successful re-cache lands straight in the book.
+                                   openJjwxcBookDetail();
+                                   return;
+                                 }
+                                 finish();
+                               });
   requestUpdate();
   return true;  // stay alive; the popup's Back dismiss lands in loop()'s !epub finish
 }

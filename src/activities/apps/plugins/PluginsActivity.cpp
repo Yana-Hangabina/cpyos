@@ -103,7 +103,9 @@ void PluginsActivity::rebuildRows() {
   rowKinds_.clear();
   rowIndexes_.clear();
 
-  const size_t estimate = 2 + plugins_.size() + catalog_.size();
+  // Rescan + check + (XIP) engine row + the package rows. Only a reserve hint:
+// row strings are bound after the last push, so growth cannot dangle them.
+  const size_t estimate = 4 + plugins_.size() + catalog_.size();
   labels_.reserve(estimate);
   subtitles_.reserve(estimate);
   values_.reserve(estimate);
@@ -118,9 +120,10 @@ void PluginsActivity::rebuildRows() {
     values_.emplace_back(value != nullptr ? value : "");
     rows_.push_back(fui::ListItem{});
     auto& row = rows_.back();
-    row.label = labels_.back().c_str();
-    row.subtitle = subtitles_.back().c_str();
-    row.value = values_.back().c_str();
+    // The string pointers are bound after the last push: c_str() into a vector
+    // that grows past its reserve dangles, and losing them blanks every earlier
+    // row (offline the catalog is empty, so the row count exceeded the estimate
+    // and the plugin names disappeared).
     row.actionValue = static_cast<int16_t>(rowKinds_.size());
     row.icon = icon;
     row.enabled = enabled;
@@ -177,9 +180,6 @@ void PluginsActivity::rebuildRows() {
     values_.push_back(std::move(value));
     rows_.push_back(fui::ListItem{});
     auto& row = rows_.back();
-    row.label = labels_.back().c_str();
-    row.subtitle = subtitles_.back().c_str();
-    row.value = values_.back().c_str();
     row.actionValue = static_cast<int16_t>(rowKinds_.size());
     row.icon = listIconFor(UIIcon::Plugins, 32);
     row.enabled = enabled;
@@ -205,11 +205,18 @@ void PluginsActivity::rebuildRows() {
     addRow(RowKind::Catalog, static_cast<int>(i), localized != nullptr ? localized : entry.name.c_str(), meta,
            tr(STR_FONT_EXTRAS_NOT_INSTALLED), listIconFor(UIIcon::Plugins, 32), true);
   }
+
+  // Single binding point, after every string vector has stopped growing.
+  for (size_t i = 0; i < rows_.size(); ++i) {
+    rows_[i].label = labels_[i].c_str();
+    rows_[i].subtitle = subtitles_[i].c_str();
+    rows_[i].value = values_[i].c_str();
+  }
 }
 
 int PluginsActivity::listCount() const { return static_cast<int>(rows_.size()); }
 
-const char* PluginsActivity::headerTitle() const { return tr(STR_PLUGINS); }
+const char* PluginsActivity::headerTitle() const { return tr(STR_PLUGIN_MANAGER); }
 
 void PluginsActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) return;

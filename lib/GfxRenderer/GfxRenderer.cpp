@@ -1,4 +1,5 @@
 #include "GfxRenderer.h"
+#include <FaultLog.h>
 
 namespace {
 bool s_traceText = false;
@@ -4003,6 +4004,7 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode, DisplayRefr
       // invariant holds; log loudly if a future caller breaks it.
       if ((bx & 3) != 0 || (bw & 3) != 0) {
         ESP_LOGE("GFX", "unaligned band %d,%d %dx%d (needs multiples of 4)", bx, by, bw, bh);
+        fault::raise(fault::Code::UnalignedBand, (static_cast<uint32_t>(bx) << 16) | by);
       }
       if (s_bandPushFullPage || !s_areaPushAllowed_) {
             display.displayBuffer(effectiveRefreshMode, fadingFix, context);

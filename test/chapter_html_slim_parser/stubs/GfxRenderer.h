@@ -5,6 +5,7 @@
 #include <Utf8.h>
 
 #include <deque>
+#include <map>
 #include <string>
 
 namespace BidiUtils {
@@ -28,6 +29,26 @@ class GfxRenderer {
   }
   bool isFontCacheScanning() const { return false; }
   void drawLine(int, int, int, int, int, bool) const {}
+  void fillRect(int, int, int, int, bool) const {}
+  void fillRectShade(int, int, int, int, uint8_t) const {}
+  const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
+  std::map<int, EpdFontFamily> fontMap;
+  bool drawScaledCodepoint(const EpdFontFamily&, uint32_t, int, int, int, EpdFontFamily::Style = EpdFontFamily::REGULAR,
+                           bool = true) const {
+    return false;
+  }
+  bool drawScaledCodepointTop(const EpdFontFamily&, uint32_t, int, int, int,
+                              EpdFontFamily::Style = EpdFontFamily::REGULAR, bool = true) const {
+    return false;
+  }
+  // A drop cap's ink box in the fixture's metrics: 8 px wide, 12 px tall, scaled.
+  bool getScaledCodepointMetrics(int, uint32_t codepoint, int scale256, EpdFontFamily::Style, int& width,
+                                 int& height) const {
+    if (codepoint == 0) return false;
+    width = 8 * scale256 / 256;
+    height = 12 * scale256 / 256;
+    return width > 0 && height > 0;
+  }
   void drawText(int, int, int, const char*, bool, EpdFontFamily::Style,
                 BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO, int8_t = 0) const {}
   int getTextWidth(int font, const char* text, EpdFontFamily::Style style,

@@ -29,9 +29,18 @@ TEST(TokenBoundary, LiteralAttachedSpaceRemainsJustifiable) {
   EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*isStretchableSpace=*/true));
 }
 
-// ... but a space token whose continuation was dropped (it ends the line) is not a gap.
-TEST(TokenBoundary, TrailingSpaceTokenIsNotJustifiable) {
-  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*isStretchableSpace=*/true));
+// A literal space token that carries a continuation stretches even when the
+// boundary before it is an ordinary gap ("-  next"): the carried-space rule from
+// the NBSP/justify absorption. Line-end spaces never reach this call because a
+// gap is only justified between two tokens that both stay on the line.
+TEST(TokenBoundary, SpaceTokenWithContinuationStretches) {
+  EXPECT_TRUE(TokenBoundary::isJustifiableGap(/*continues=*/false, /*isStretchableSpace=*/true));
+}
+
+// Attached text never stretches, and an unattached non-space token is an ordinary
+// gap only when it is not the last thing on the line.
+TEST(TokenBoundary, AttachedNonSpaceTokenIsNotJustifiable) {
+  EXPECT_FALSE(TokenBoundary::isJustifiableGap(/*continues=*/true, /*isStretchableSpace=*/false));
 }
 
 TEST(TokenBoundary, VisibleExplicitHyphensAllowBreaks) {

@@ -2,7 +2,7 @@
 # Set the target first: idf.py --preview set-target esp32s31
 #
 # Hardware facts cross-checked against the reference firmware's board config
-# (kiikoread-rc110 boards/metalio47/sdkconfig.defaults) and the vendor BSP sources
+# (rpr-rc110 boards/metalio47/sdkconfig.defaults) and the vendor BSP sources
 # vendored under components/cpyos_metalio_bsp/vendor/: 16 MB DIO-80 flash,
 # 16 MB Octal PSRAM at 200 MHz, 320 MHz CPU.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y

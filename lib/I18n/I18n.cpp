@@ -307,12 +307,16 @@ bool I18n::isLanguageAvailable(Language lang) {
   // strings are compiled in. Treat it as unavailable here.
   if (lang == Language::ZH_CN) return false;
 #endif
-#if defined(CROSSPOINT_SYSTEM_FONT_PACK)
+#if defined(CROSSPOINT_I18N_PACK)
   // Arabic and Persian are the same class of failure as the case above: the strings are
   // compiled, but the UI has no shaping face, so presentation-form codepoints draw as
   // separate boxes. The generated coverage table owns that judgement, so a tier change here
   // follows without touching this function. Gated on the pack build because the table's
   // numbers are measured against the system font tiers; other configs carry different faces.
+  //
+  // The guard must match the one around the LanguageFontCoverage.h include above: C3 sets
+  // CROSSPOINT_SYSTEM_FONT_PACK but not CROSSPOINT_I18N_PACK, so gating this call on the
+  // former left `language_font` undeclared and broke the shared baseline build.
   if (language_font::mustRefuse(static_cast<uint8_t>(lang))) return false;
 #endif
   return true;

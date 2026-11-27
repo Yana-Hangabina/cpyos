@@ -1,5 +1,7 @@
 #include "ButtonNavigator.h"
 
+#include <InvokeCallback.h>
+
 #include <algorithm>
 
 const MappedInputManager* ButtonNavigator::mappedInput = nullptr;
@@ -37,7 +39,7 @@ void ButtonNavigator::onPress(const Buttons& buttons, const Callback& callback) 
   });
 
   if (wasPressed) {
-    callback();
+    callbacks::call("nav.press", callback);
   }
 }
 
@@ -48,7 +50,7 @@ void ButtonNavigator::onRelease(const Buttons& buttons, const Callback& callback
 
   if (wasReleased) {
     if (lastContinuousNavTime == 0) {
-      callback();
+      callbacks::call("nav.release", callback);
     }
 
     lastContinuousNavTime = 0;
@@ -69,7 +71,7 @@ void ButtonNavigator::onContinuous(const Buttons& buttons, const Callback& callb
   });
 
   if (isPressed) {
-    callback();
+    callbacks::call("nav.continuous", callback);
     lastContinuousNavTime = millis();
   }
 }

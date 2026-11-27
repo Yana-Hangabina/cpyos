@@ -159,16 +159,20 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
                                                              ProgressCallback progress, const bool* cancelFlag,
                                                              const std::string& username, const std::string& password,
                                                              const std::vector<Header>& headers,
-                                                             bool downgradeRedirectsToHttp, const int timeoutMs) {
+                                                             bool downgradeRedirectsToHttp, const int timeoutMs,
+                                                             const Staging staging) {
   LOG_DBG("HTTP", "Downloading: %s -> %s", url.c_str(), destPath.c_str());
 
-  // Stage in <dest>.part: a failed or cancelled download never replaces an
-  // existing copy, and a partial file never sits under the real name.
-  const std::string partPath = destPath + ".part";
+  // Staging::InPlace keeps the partial out of the real name: a failed or
+  // cancelled download never replaces an existing copy. CallerOwned means the
+  // caller picked this path as its own scratch file and will verify it before
+  // publishing -- staging it again here is what produced `<name>.part.part`.
+  const bool ownsStaging = staging == Staging::InPlace;
+  const std::string partPath = ownsStaging ? destPath + ".part" : destPath;
   Storage.remove(partPath.c_str());
   HalFile file;
   if (!Storage.openFileForWrite("HTTP", partPath.c_str(), file)) {
-    LOG_ERR("HTTP", "Failed to open file for writing");
+    LOG_ERR("HTTP", "cannot open %s for writing", partPath.c_str());
     return FILE_ERROR;
   }
 
@@ -190,16 +194,23 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   if (file.isOpen()) file.close();
 
   if (result != OK) {
-    Storage.remove(partPath.c_str());
+    if (!Storage.remove(partPath.c_str())) {
+      // A scratch file that will not delete keeps a partial body on the card, and
+      // every later attempt to the same path then fails the same way. Say so with
+      // the path: this is the state that made the 0.8.2 pack downloads look like
+      // a dead card reader.
+      LOG_ERR("HTTP", "could not remove %s after a failed download (%zu bytes received)", partPath.c_str(),
+              downloaded);
+    }
     return result;
   }
   if (downloaded == 0) {
-    LOG_ERR("HTTP", "no data received");
+    LOG_ERR("HTTP", "no data received for %s", destPath.c_str());
     Storage.remove(partPath.c_str());
     return HTTP_ERROR;
   }
-  if (!Storage.replaceFile(partPath.c_str(), destPath.c_str())) {
-    LOG_ERR("HTTP", "Failed to move download into place: %s", destPath.c_str());
+  if (ownsStaging && !Storage.replaceFile(partPath.c_str(), destPath.c_str())) {
+    LOG_ERR("HTTP", "Failed to move download into place: %s -> %s", partPath.c_str(), destPath.c_str());
     Storage.remove(partPath.c_str());
     return FILE_ERROR;
   }

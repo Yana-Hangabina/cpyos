@@ -18,6 +18,29 @@ void checkPanic() {}
 void clearPanic() {}
 std::string getPanicInfo(bool /*full*/) { return {}; }
 
+// --- crash context, as far as this port can take it -------------------------------------
+// The shared build keeps its panic record in RTC_NOINIT and hooks
+// panic_abort/panic_print_backtrace through the linker wrappers in
+// lib/hal/HalSystem.cpp, which this port does not use (see the empty
+// checkPanic()/getPanicInfo() above: Plus has no panic reporting yet). The five
+// entry points below exist because the shared main.cpp, ActivityManager.cpp and
+// CrashActivity.cpp call them unconditionally; without them the port would fail
+// to link, which is a build error, not a missing feature.
+//
+// They are deliberately *inert* rather than faked: an empty CrashContext and a
+// zero-count CrashHistory make the crash screen show the version and the panic
+// reason and nothing else, which is the truth. Filling `streak` or `activity`
+// with defaults would put invented evidence on a screen whose whole purpose is
+// to be believed. Closing the gap needs IDF panic hooks registered in this
+// port's own startup; that work is open, not done here.
+void installCppFailureHandlers() {}
+void noteActivityStage(const char* /*activityName*/, const char* /*stage*/) {}
+void snapshotCrashAmbience() {}
+
+CrashContext getCrashContext() { return {}; }
+
+CrashHistory getCrashHistory() { return {}; }
+
 bool isRebootFromPanic() { return esp_reset_reason() == ESP_RST_PANIC; }
 
 bool isRebootDeliberate() {

@@ -114,6 +114,15 @@ jobs:
           git clone --depth 1 git@github.com:Yana-Hangabina/cpyos-jjwxc.git src/jjwxc
           test -f src/jjwxc/app/JjwxcActivity.cpp
 
+      # A release must not carry an internal-flash read that runs on a PSRAM-stack
+      # task. 0.8.1/0.8.2 did (SystemFontPack/EmojiFont/...): copying the field
+      # report, the device asserted in esp_task_stack_is_sane_cache_disabled() the
+      # moment a book needed a glyph the UI subset didn't have. Failing here is
+      # cheaper than failing there, and it makes the rule survive a file copied
+      # back from an older tree.
+      - name: Gate: no unguarded internal-flash access
+        run: python3 -m unittest scripts.tests.test_internal_flash_guard -v
+
       - name: Build Read Pico (XIP PDF + private book source)
         run: |
           set -euo pipefail

@@ -1,6 +1,7 @@
 #include "HalOtaSlot.h"
 
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_cpu.h>
 #include <esp_memory_utils.h>
 #include <esp_ota_ops.h>
@@ -18,7 +19,9 @@ const esp_partition_t* asPartition(const void* partition) { return static_cast<c
 // / 读/写/擦内部 flash 期间 cache 是关闭的；栈在 PSRAM 的任务此时不可运行，
 // IDF 会直接断言。渲染任务的栈就在 PSRAM（CFF 需要 32 KB），字体 prewarm 会
 // 经 SdCardFontCache 走到这里。这里拒绝，让调用方走既有回退（字体改读 SD）。
-bool stackIsInPsram() { return esp_ptr_external_ram(esp_cpu_get_sp()); }
+bool stackIsInPsram(const fault::Code site, const uint32_t detail = 0) {
+  return !memory::internalFlashAllowed(site, detail);
+}
 
 constexpr HalOtaSlot::RunningImageState classifyImageState(esp_ota_img_states_t state) {
   switch (state) {
@@ -69,6 +72,14 @@ HalOtaSlot::RunningImageState HalOtaSlot::runningImageState() {
 }
 
 bool HalOtaSlot::confirmRunningImage() {
+  // Cancelling a rollback programs the otadata page, which runs with the caches
+  // disabled. Called from a PSRAM-stacked task that would not survive it, so
+  // leave the image pending -- a rollback window stays armed, which is the
+  // safe direction, rather than panicking the device mid-confirm.
+  if (stackIsInPsram(fault::Code::SlotRollbackRefused)) {
+    LOG_ERR("OTA", "rollback confirm skipped: current task stack is in PSRAM");
+    return false;
+  }
   switch (runningImageState()) {
     case RunningImageState::Confirmed:
     case RunningImageState::Untracked:
@@ -101,7 +112,7 @@ bool HalOtaSlot::safeForScratchWrite() const {
 
 bool HalOtaSlot::read(size_t offset, void* data, size_t length) const {
   if (!contains(offset, length)) return false;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::SlotReadRefused, static_cast<uint32_t>(length))) {
     LOG_ERR("OTA", "flash read refused: current task stack is in PSRAM (%u bytes)", static_cast<unsigned>(length));
     return false;
   }
@@ -110,7 +121,7 @@ bool HalOtaSlot::read(size_t offset, void* data, size_t length) const {
 
 bool HalOtaSlot::erase(size_t offset, size_t length) const {
   if (!contains(offset, length) || offset % ERASE_SIZE != 0 || length % ERASE_SIZE != 0) return false;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::SlotEraseRefused, static_cast<uint32_t>(length))) {
     LOG_ERR("OTA", "flash erase refused: current task stack is in PSRAM");
     return false;
   }
@@ -119,7 +130,7 @@ bool HalOtaSlot::erase(size_t offset, size_t length) const {
 
 bool HalOtaSlot::write(size_t offset, const void* data, size_t length) const {
   if (!contains(offset, length)) return false;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::SlotWriteRefused, static_cast<uint32_t>(length))) {
     LOG_ERR("OTA", "flash write refused: current task stack is in PSRAM (%u bytes)", static_cast<unsigned>(length));
     return false;
   }

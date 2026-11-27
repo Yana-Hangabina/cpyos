@@ -90,7 +90,10 @@ FindBooksActivity::Action FindBooksActivity::primaryFor(const int row) {
   if (index < 0 || index >= kEntryCount) return Action::None;
   switch (kEntries[index].id) {
     case Source::Jjwxc:
-      return Action::JjwxcShelf;
+      // The card is the app's door. Landing straight on the online shelf made
+      // the source card skip the app's own menu (发现/搜索/账号), which is what
+      // "打开晋江" is expected to show.
+      return Action::JjwxcApp;
     case Source::WeRead:
       return Action::WeRead;
     case Source::Local:
@@ -105,7 +108,7 @@ FindBooksActivity::Action FindBooksActivity::secondaryFor(const int row) {
   const int index = row - 1;
   if (index < 0 || index >= kEntryCount) return Action::None;
   if (kEntries[index].id == Source::Local) return Action::LocalTransfer;
-  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcDiscover;
+  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcShelf;
   if (kEntries[index].id == Source::WeRead) return Action::WeReadAccount;
   return Action::None;
 }
@@ -113,14 +116,14 @@ FindBooksActivity::Action FindBooksActivity::secondaryFor(const int row) {
 FindBooksActivity::Action FindBooksActivity::tertiaryFor(const int row) {
   const int index = row - 1;
   if (index < 0 || index >= kEntryCount) return Action::None;
-  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcSearch;
+  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcDiscover;
   return Action::None;
 }
 
 FindBooksActivity::Action FindBooksActivity::quaternaryFor(const int row) {
   const int index = row - 1;
   if (index < 0 || index >= kEntryCount) return Action::None;
-  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcAccount;
+  if (kEntries[index].id == Source::Jjwxc) return Action::JjwxcSearch;
   return Action::None;
 }
 
@@ -158,6 +161,9 @@ void FindBooksActivity::onExit() {
 
 StrId FindBooksActivity::labelFor(const Action action) const {
   switch (action) {
+    case Action::JjwxcApp:
+      // The primary pill is the app itself; the app menu owns shelf/search/…
+      return StrId::STR_OPEN;
     case Action::JjwxcShelf:
     case Action::WeRead:
       return StrId::STR_LIBRARY;
@@ -185,8 +191,10 @@ void FindBooksActivity::openJjwxc(const Action action) {
 #ifdef BOARD_HAS_PSRAM
   booksource::ISource* source = booksource::active();
   if (source == nullptr) return;
-  // 0 shelf, 1 discover, 2 search, 3 account; 0xFF clears a pending shortcut.
-  uint8_t shortcut = 0;
+  // 0 shelf, 1 discover, 2 search, 3 account; 0xFF clears a pending shortcut so
+  // the app opens on its own menu.
+  uint8_t shortcut = 0xFF;
+  if (action == Action::JjwxcShelf) shortcut = 0;
   if (action == Action::JjwxcDiscover) shortcut = 1;
   if (action == Action::JjwxcSearch) shortcut = 2;
   if (action == Action::JjwxcAccount) shortcut = 3;
@@ -210,6 +218,7 @@ void FindBooksActivity::openAction(const Action action) {
     case Action::LocalTransfer:
       activityManager.goToFileTransfer();
       return;
+    case Action::JjwxcApp:
     case Action::JjwxcShelf:
     case Action::JjwxcDiscover:
     case Action::JjwxcSearch:
@@ -445,9 +454,10 @@ void FindBooksActivity::render(RenderLock&&) {
         renderer.truncatedText(detailFont, status, std::max(1, textRight - statusX));
     renderer.drawText(detailFont, statusX, statusY, statusShown.c_str());
 
-    // Pills: the card's real entry points. JJWXC exposes shelf, discovery,
-    // search and login/account directly instead of hiding them one level down
-    // in the app menu. Two to four pills share the card's text column.
+    // Pills: the card's real entry points. The JJWXC card opens the app (its
+    // menu) first, then exposes shelf, discovery and search; account is one tap
+    // inside the app menu, which keeps the four-slot row balanced. Two to four
+    // pills share the card's text column.
     const int pillY = card.y + card.height - plan.pillH - plan.padY;
     int pillX = textX;
     const Action actions[kMaxPills] = {primaryFor(row), secondaryFor(row), tertiaryFor(row),

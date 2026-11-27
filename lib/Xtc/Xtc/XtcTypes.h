@@ -117,6 +117,10 @@ enum class XtcError {
   WRITE_ERROR,
   MEMORY_ERROR,
   DECOMPRESSION_ERROR,
+  // loadPageStreaming() had no page callback: the bytes have nowhere to go, and
+  // half a page is worse than no page.  A caller that reaches this forgot to
+  // hand over the sink it reads the page into.
+  NO_PAGE_CALLBACK,
 };
 
 // Convert error code to string
@@ -142,6 +146,8 @@ inline const char* errorToString(XtcError err) {
       return "Memory allocation error";
     case XtcError::DECOMPRESSION_ERROR:
       return "Decompression error";
+    case XtcError::NO_PAGE_CALLBACK:
+      return "No page callback";
     default:
       return "Unknown error";
   }

@@ -319,22 +319,33 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #endif
         ;
     // Four-entry batches bound C3 stack use; recheck ELF frames when SettingInfo grows.
-    v.reserve(entryCount);
+    v.reserve(entryCount + 8);
     // clang-format off
+    // Display rows are ordered by the group they land in (see groupForSetting in
+    // SettingsActivity): "interface" scale/layout first, then screen/refresh,
+    // then sleep/standby. Within a group the list keeps this physical order, so
+    // the most-used rows sit at the top of their card.
     v.insert(v.end(), {
-        // --- Display ---
+        // --- Display: sleep & standby ---
         SettingInfo::Enum(StrId::STR_STANDBY_STYLE, &CrossPointSettings::standbyStyle, standbyStyleValues,
                           "standbyStyle", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_STANDBY_TITLE, &CrossPointSettings::standbyShortcutEnabled,
+                            "standbyShortcutEnabled", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_LIGHT_SLEEP_STYLE, &CrossPointSettings::lightSleepStyle, lightSleepStyleValues,
                           "lightSleepStyle", StrId::STR_CAT_DISPLAY),
 #if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
         SettingInfo::Enum(StrId::STR_DEEP_SLEEP_STYLE, &CrossPointSettings::deepSleepStyle, deepSleepStyleValues,
                           "deepSleepStyle", StrId::STR_CAT_DISPLAY),
 #endif
+    });
+    v.insert(v.end(), {
+        // Badge on the sleep face; kept next to the styles it annotates.
         SettingInfo::Toggle(StrId::STR_SLEEP_STATE_BADGE, &CrossPointSettings::sleepStateBadge,
                             "sleepStateBadge", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
+        // Only meaningful while the deep-sleep style is a cover; hidden otherwise
+        // by rebuildSettingsLists().
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                           {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
@@ -342,6 +353,10 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
+        // Kept in the shared list for the Web Settings API. The device UI inserts
+        // the visible row right below its style row, and only while that style
+        // is "custom image" — otherwise it would be a row that opens a picker
+        // for an image nothing displays.
         SettingInfo::Action(StrId::STR_STANDBY_IMAGE, SettingAction::StandbyImage),
         SettingInfo::Action(StrId::STR_LIGHT_SLEEP_IMAGE, SettingAction::LightSleepImage),
 #if !defined(CROSSPOINT_PORT_NO_DEEP_SLEEP_SCREENS)
@@ -349,8 +364,11 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
 #endif
     });
     v.insert(v.end(), {
-        SettingInfo::Toggle(StrId::STR_STANDBY_TITLE, &CrossPointSettings::standbyShortcutEnabled,
-                            "standbyShortcutEnabled", StrId::STR_CAT_DISPLAY),
+        // --- Display: screen & refresh ---
+        // Night mode = inverted output polarity everywhere (ActivityManager
+        // applies it to every activity), so it lives in the Display category.
+        SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
+                            StrId::STR_CAT_DISPLAY),
         SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY),
@@ -362,11 +380,38 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                             "periodicFullRefresh", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
-        SettingInfo::Enum(StrId::STR_NETWORK_TYPE, &CrossPointSettings::networkType,
-                          {StrId::STR_NETWORK_WIFI, StrId::STR_NETWORK_4G}, "networkType",
-                          StrId::STR_CAT_SYSTEM),
         SettingInfo::Value(StrId::STR_REFRESH_INTERVAL, &CrossPointSettings::readerRefreshPages, {5, 120, 5},
                            "readerRefreshPages", StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
+                            StrId::STR_CAT_DISPLAY),
+    });
+    v.insert(v.end(), {
+        SettingInfo::Toggle(StrId::STR_SHOW_BUTTON_HINTS, &CrossPointSettings::showButtonHints, "showButtonHints",
+                            StrId::STR_CAT_DISPLAY),
+#if FREEINK_CAP_FRONTLIGHT
+        SettingInfo::Toggle(StrId::STR_RESTORE_LIGHT_ON_WAKE, &CrossPointSettings::frontlightRestoreOnWake,
+                            "frontlightRestoreOnWake", StrId::STR_CAT_DISPLAY),
+#endif
+    });
+    v.insert(v.end(), {
+        // --- Display: interface & layout ---
+        // The three "how big is the UI" knobs, in coarse-to-fine order: whole
+        // viewport, text roles, row rhythm. They used to be split across the
+        // layout group and the catch-all "other" card.
+#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
+        SettingInfo::Value(StrId::STR_UI_SCALE, &CrossPointSettings::uiScalePercent, {100, 125, 5}, "uiScalePercent",
+                           StrId::STR_CAT_DISPLAY),
+#endif
+#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
+        SettingInfo::Enum(StrId::STR_UI_FONT_SCALE, &CrossPointSettings::uiFontScale,
+                          {StrId::STR_FONT_SCALE_COMPACT, StrId::STR_FONT_SCALE_STANDARD,
+                           StrId::STR_FONT_SCALE_LARGE, StrId::STR_FONT_SCALE_XLARGE},
+                          "uiFontScale", StrId::STR_CAT_DISPLAY),
+#endif
+        // CPY-only row rhythm; hidden under INX in rebuildSettingsLists.
+        SettingInfo::Enum(StrId::STR_UI_DENSITY, &CrossPointSettings::uiDensity,
+                          {StrId::STR_DENSITY_COMFORTABLE, StrId::STR_DENSITY_COMPACT}, "uiDensity",
+                          StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_INX_RECENT_LAYOUT, &CrossPointSettings::inxRecentLayout,
@@ -382,34 +427,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                           {StrId::STR_TOP, StrId::STR_BOTTOM}, "inxTabPosition", StrId::STR_CAT_DISPLAY),
     });
     v.insert(v.end(), {
-        // CPY-only row rhythm; hidden under INX in rebuildSettingsLists.
-        SettingInfo::Enum(StrId::STR_UI_DENSITY, &CrossPointSettings::uiDensity,
-                          {StrId::STR_DENSITY_COMFORTABLE, StrId::STR_DENSITY_COMPACT}, "uiDensity",
-                          StrId::STR_CAT_DISPLAY),
-#if defined(CROSSPOINT_FONT_PACK_EMBEDDED)
-        SettingInfo::Enum(StrId::STR_UI_FONT_SCALE, &CrossPointSettings::uiFontScale,
-                          {StrId::STR_FONT_SCALE_COMPACT, StrId::STR_FONT_SCALE_STANDARD,
-                           StrId::STR_FONT_SCALE_LARGE, StrId::STR_FONT_SCALE_XLARGE},
-                          "uiFontScale", StrId::STR_CAT_DISPLAY),
-#endif
-#if defined(CROSSMUX_UI_PROFILE_HIGH_DPI)
-        SettingInfo::Value(StrId::STR_UI_SCALE, &CrossPointSettings::uiScalePercent, {100, 125, 5}, "uiScalePercent",
-                           StrId::STR_CAT_DISPLAY),
-#endif
-    });
-    v.insert(v.end(), {
-        SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
-                            StrId::STR_CAT_DISPLAY),
-        SettingInfo::Toggle(StrId::STR_SHOW_BUTTON_HINTS, &CrossPointSettings::showButtonHints, "showButtonHints",
-                            StrId::STR_CAT_DISPLAY),
-#if FREEINK_CAP_FRONTLIGHT
-        SettingInfo::Toggle(StrId::STR_RESTORE_LIGHT_ON_WAKE, &CrossPointSettings::frontlightRestoreOnWake,
-                            "frontlightRestoreOnWake", StrId::STR_CAT_DISPLAY),
-#endif
-        // Night mode = inverted output polarity everywhere (ActivityManager
-        // applies it to every activity), so it lives in the Display category.
-        SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
-                            StrId::STR_CAT_DISPLAY),
+        SettingInfo::Enum(StrId::STR_NETWORK_TYPE, &CrossPointSettings::networkType,
+                          {StrId::STR_NETWORK_WIFI, StrId::STR_NETWORK_4G}, "networkType",
+                          StrId::STR_CAT_SYSTEM),
     });
     v.insert(v.end(), {
         // --- Reader ---
@@ -436,11 +456,14 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
         // Advanced override for the four levels above: an exact percentage of
         // the font's natural line height. 0 (the default) keeps the level and
         // per-family factors, so this row is inert until the user opts in.
-        // It also appears in the in-reader Text sheet (Layout tab).
+        // It lives in the Text Settings Layout tab next to the level it
+        // overrides; showing it in the flat Reader list split the pair across
+        // two screens and left it under the catch-all group.
         SettingInfo::Value(StrId::STR_LINE_SPACING_PERCENT, &CrossPointSettings::readerLineSpacingPercent,
                            {reader_line_spacing::PERCENT_MIN, reader_line_spacing::PERCENT_MAX,
                             reader_line_spacing::PERCENT_STEP},
-                           "readerLineSpacingPercent", StrId::STR_CAT_READER),
+                           "readerLineSpacingPercent", StrId::STR_CAT_READER)
+            .withTextSettings(),
     });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_CHARACTER_SPACING, &CrossPointSettings::characterSpacing,
@@ -483,6 +506,20 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                             StrId::STR_CAT_READER),
     });
 #endif
+    // 翻页方向（左右对调）。枚举而不是开关：两个选项各自有名字，"从左到右 / 从右到左"
+    // 比"开 / 关"更能说明对调后是什么样子 —— 同样按 imageScaling 的写法。
+    // 放在阅读分类而不是控制分类：它是"这本书怎么翻"的阅读行为，和它旁边的阅读菜单样式
+    // 同类；控制分类里那些是手势类型本身。
+    // / Page-turn direction (mirrored). The two option labels name the gesture that
+    // turns to the NEXT page (swipe left/tap right vs swipe right/tap left), because
+    // "left to right / right to left" was read as a reading direction and contradicted
+    // the actual left-hand mirror. Sits in the reader category rather than controls
+    // because it is a reading behaviour, like the reader-menu style next to it.
+    v.insert(v.end(), {
+        SettingInfo::Enum(StrId::STR_PAGE_TURN_DIRECTION, &CrossPointSettings::pageTurnDirection,
+                          {StrId::STR_PAGE_TURN_LTR, StrId::STR_PAGE_TURN_RTL}, "pageTurnDirection",
+                          StrId::STR_CAT_READER),
+    });
     v.insert(v.end(), {
         SettingInfo::Enum(StrId::STR_FAKE_BOLD, &CrossPointSettings::fakeBold,
                           {StrId::STR_STATE_OFF, StrId::STR_FAKE_BOLD_LIGHT, StrId::STR_FAKE_BOLD_STANDARD,
@@ -550,19 +587,9 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
                             "vocabularyHistoryEnabled", StrId::STR_CAT_READER),
     });
     v.insert(v.end(), {
+        // Kept for the shared list/API; the device UI appends its own row inside
+        // the Fonts & Dictionaries page next to the toggle it belongs to.
         SettingInfo::Action(StrId::STR_VIEW_VOCABULARY, SettingAction::VocabularyHistory),
-        // 翻页方向（左右对调）。枚举而不是开关：两个选项各自有名字，"从左到右 / 从右到左"
-        // 比"开 / 关"更能说明对调后是什么样子 —— 同样按 imageScaling 的写法。
-        // 放在阅读分类而不是控制分类：它是"这本书怎么翻"的阅读行为，和它旁边的阅读菜单样式
-        // 同类；控制分类里那些是手势类型本身。
-        // / Page-turn direction (mirrored). The two option labels name the gesture that
-        // turns to the NEXT page (swipe left/tap right vs swipe right/tap left), because
-        // "left to right / right to left" was read as a reading direction and contradicted
-        // the actual left-hand mirror. Sits in the reader category rather than controls
-        // because it is a reading behaviour, like the reader-menu style next to it.
-        SettingInfo::Enum(StrId::STR_PAGE_TURN_DIRECTION, &CrossPointSettings::pageTurnDirection,
-                          {StrId::STR_PAGE_TURN_LTR, StrId::STR_PAGE_TURN_RTL}, "pageTurnDirection",
-                          StrId::STR_CAT_READER),
     });
     v.insert(v.end(), {
         // --- Controls ---
@@ -657,10 +684,12 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     });
     v.insert(v.end(), {
 #if defined(CROSSPOINT_BOOKSOURCE_JJWXC)
-        // Home's once-a-day check-in reminder. The same field is the checkbox in
-        // the app's dialog; this row is the way back after the user unchecks it.
+        // Home's once-a-day check-in reminder. Category-less on purpose: this
+        // is a JJWXC-app preference, not a system setting, and the app's sign-in
+        // calendar already owns the visible switch (plus the popup checkbox).
+        // The base row stays for persistence and the Web Settings API.
         SettingInfo::Toggle(StrId::STR_JJWXC_REMIND_DAILY, &CrossPointSettings::jjwxcSignInReminder,
-                            "jjwxcSignInReminder", StrId::STR_CAT_SYSTEM),
+                            "jjwxcSignInReminder"),
 #endif
 #if CROSSPOINT_CAP_SOUND_FEEDBACK
         SettingInfo::Enum(StrId::STR_SOUND_FEEDBACK, &CrossPointSettings::soundFeedbackLevel,
@@ -909,7 +938,15 @@ inline const std::vector<SettingInfo>& getBaseSettingsList() {
     // capacity) or carries slack. Log it rather than fail: the reservation is a
     // memory optimization, and the compile-time half of the check in
     // test/settings_api/test_settings_api_keys.py is what keeps CI green.
-    if (v.size() != entryCount) {
+    // Bounded headroom rather than an exact reservation. The exact model below is
+    // enumerated by hand per capability, and it had drifted by one row on the
+    // shipping readpico build (the touch-only block is not part of the model):
+    // every boot logged an [ERR] while nothing was actually wrong, which is how a
+    // real drift would end up being ignored. Slack is bounded and small (8 rows
+    // of 144 B, only while this table is built), and the alarm now fires only
+    // when reality exceeds the model by more than that -- i.e. on a real drift.
+    constexpr size_t kRowHeadroom = 8;
+    if (v.size() > entryCount + kRowHeadroom) {
       LOG_ERR("SETTINGS", "base settings has %u rows but entryCount reserves %u", static_cast<unsigned>(v.size()),
               static_cast<unsigned>(entryCount));
     }

@@ -24,13 +24,14 @@ TEST(HtmlToPlainText, BlockElementsBecomeBreaks) {
   EXPECT_EQ(htmlToPlainText("a<br><br><br>b"), "a\nb");
 }
 
-TEST(HtmlToPlainText, HeadingsBreakLikeParagraphs) {
-  // tagBreak() lists h1-h6 among the paragraph-breaking names, so they must
-  // actually reach that comparison -- a name scan that stops at the first digit
-  // reads "h1" as "h" and the heading runs into the text after it.
+TEST(HtmlToPlainText, HeadingsGetTheirOwnLine) {
+  // tagBreak() recognises h1-h6, so they must reach that comparison -- a name scan
+  // that stops at the first digit reads "h1" as "h" and the heading runs into the
+  // text after it. A heading is a label line (dictionary headwords), one break,
+  // not a paragraph gap: the implementation and upstream both emit "title\nbody".
   for (const char* tag : {"h1", "h2", "h3", "h4", "h5", "h6"}) {
     const std::string html = std::string("<") + tag + ">title</" + tag + ">body";
-    EXPECT_EQ(htmlToPlainText(html), "title\n\nbody") << tag;
+    EXPECT_EQ(htmlToPlainText(html), "title\nbody") << tag;
   }
   EXPECT_EQ(htmlToPlainText("<hr>after"), "after");
 }

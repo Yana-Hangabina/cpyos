@@ -17,6 +17,11 @@ fi
 # Marker: the water-ripple engine directory only this patch creates. Its presence means
 # the work is already in place (idempotent on repeated runs).
 if [ -f freeink-sdk/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c ]; then
+  # The display patch predates the UI viewport; existing trees still need the
+  # two FreeInkUI device-context hunks applied once.
+  if ! grep -q "int16_t nativeWidth" freeink-sdk/libs/ui/FreeInkUI/include/FreeInkUICore.h; then
+    patch -p1 -d freeink-sdk < patches/freeink-sdk/ui-viewport-touch.patch
+  fi
   echo "freeink-sdk local patch already applied" >&2
   exit 0
 fi
@@ -28,4 +33,5 @@ if [ -f freeink-sdk/libs/display/FreeInkDisplay/src/driver/EpdiyLcdDriver.cpp ] 
   exit 1
 fi
 patch -p1 -d freeink-sdk < patches/freeink-sdk/d9a1304c-local.patch
+patch -p1 -d freeink-sdk < patches/freeink-sdk/ui-viewport-touch.patch
 echo "freeink-sdk local patch applied"

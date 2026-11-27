@@ -7,6 +7,7 @@
 
 #include <Arduino.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_cache.h>
 #include <esp_mmu_map.h>
 #include <esp_heap_caps.h>
@@ -53,6 +54,13 @@ void IRAM_ATTR itlbMissHandler(XtExcFrame* frame) {
 }
 
 void runFlashXip() {
+  // Reading the slot directly is an internal-flash operation: from a PSRAM-
+  // stacked task it would panic instead of measuring anything, and the probe
+  // would report the panic as a result.
+  if (!memory::internalFlashAllowed(fault::Code::PdfProbeRefused)) {
+    LOG_ERR("PGPROBE", "flash xip probe refused: this task stack is in PSRAM");
+    return;
+  }
   const esp_partition_t* app1 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
   if (!app1) {
     LOG_ERR("PGPROBE", "flash xip: app1 partition missing");

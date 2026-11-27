@@ -86,10 +86,23 @@ class HttpDownloader {
    * Download a file to the SD card with optional credentials. `headers` are
    * added to the request (e.g. a Bearer Authorization), alongside any Basic
    * auth derived from username/password.
+   *
+   * `staging` says who owns atomicity:
+   *   - Staging::InPlace (default) writes the body to `<destPath>.part` and
+   *     renames it into place once the transfer is whole, so a caller that names
+   *     its real destination can never observe a partial file.
+   *   - Staging::CallerOwned writes exactly to `destPath`. Use it when the
+   *     caller already downloaded into its own temp name and intends to verify
+   *     before publishing. Passing a temp path with the default staging stages
+   *     the file twice: the inner rename becomes a second, avoidable FAT
+   *     failure, and its error is indistinguishable from a real storage
+   *     problem at the far end (0.8.2 font packs: "无法写入存储卡" after a full
+   *     download, with a `<name>.part.part` left on the card).
    */
+  enum class Staging : uint8_t { InPlace, CallerOwned };
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, const bool* cancelFlag = nullptr,
                                       const std::string& username = "", const std::string& password = "",
                                       const std::vector<Header>& headers = {}, bool downgradeRedirectsToHttp = false,
-                                      int timeoutMs = 0);
+                                      int timeoutMs = 0, Staging staging = Staging::InPlace);
 };

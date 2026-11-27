@@ -1,0 +1,56 @@
+--- a/libs/ui/FreeInkUI/include/FreeInkUICore.h
++++ b/libs/ui/FreeInkUI/include/FreeInkUICore.h
+@@ -121,8 +121,16 @@
+ };
+ 
+ struct DeviceContext {
++  // Layout size in the active logical space (design units when a UI viewport
++  // is active, native pixels otherwise).
+   int16_t width = 0;
+   int16_t height = 0;
++  // Panel-native logical size and the design->native scale. Touch always
++  // arrives in panel-native coordinates and is converted through these before
++  // hit testing; zero nativeWidth/nativeHeight means "same as width/height".
++  int16_t nativeWidth = 0;
++  int16_t nativeHeight = 0;
++  uint16_t scalePermille = 1000;
+   Orientation orientation = Orientation::Portrait;
+   // Transform selector for touchToLogical(): maps PANEL-NATIVE normalized touch
+   // coordinates (the BoardConfig touch contract) into this logical frame.
+@@ -195,8 +203,14 @@
+     ly = ny;
+     break;
+   }
+-  int32_t x = static_cast<int32_t>(lx * device.width);
+-  int32_t y = static_cast<int32_t>(ly * device.height);
++  const int32_t nativeW = device.nativeWidth > 0 ? device.nativeWidth : device.width;
++  const int32_t nativeH = device.nativeHeight > 0 ? device.nativeHeight : device.height;
++  int32_t x = static_cast<int32_t>(lx * nativeW);
++  int32_t y = static_cast<int32_t>(ly * nativeH);
++  if (device.scalePermille != 1000 && device.scalePermille != 0) {
++    x = static_cast<int32_t>((static_cast<int64_t>(x) * 1000 + device.scalePermille / 2) / device.scalePermille);
++    y = static_cast<int32_t>((static_cast<int64_t>(y) * 1000 + device.scalePermille / 2) / device.scalePermille);
++  }
+   if (x < 0)
+     x = 0;
+   if (x >= device.width)
+--- a/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
++++ b/libs/ui/FreeInkUI/include/FreeInkUIGfxRenderer.h
+@@ -72,6 +72,9 @@
+     DeviceContext device;
+     device.width = static_cast<int16_t>(renderer.getScreenWidth());
+     device.height = static_cast<int16_t>(renderer.getScreenHeight());
++    device.nativeWidth = static_cast<int16_t>(renderer.getNativeWidth());
++    device.nativeHeight = static_cast<int16_t>(renderer.getNativeHeight());
++    device.scalePermille = renderer.uiViewport().scalePermille;
+     device.orientation = static_cast<Orientation>(renderer.getOrientation());
+     // Same inverse-of-render-rotation selector as DisplayTarget: this makes
+     // touchToLogical() agree case-for-case with GfxRenderer::tapToLogical, so
+@@ -87,6 +90,7 @@
+     renderer.getOrientedViewableTRBL(&viTop, &viRight, &viBottom, &viLeft);
+     device.safeArea = Insets{static_cast<int16_t>(viTop), static_cast<int16_t>(viRight),
+                              static_cast<int16_t>(viBottom), static_cast<int16_t>(viLeft)};
++    device.minTouchSize = static_cast<int16_t>(renderer.uiViewport().lengthToDesign(44));
+     return device;
+   }
+ 

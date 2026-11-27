@@ -1,6 +1,7 @@
 #include "DeviceSecret.h"
 
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_random.h>
 #include <nvs.h>
 
@@ -27,7 +28,7 @@ bool deviceSecret(uint8_t (&out)[32]) {
     // render task's 32 KB stack is in PSRAM, and the library/thumbnail scan can
     // reach BookKey -> deviceSecret from there. Refuse instead of panicking;
     // setup() preloads the secret on the main task so this is only a backstop.
-    if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+    if (!memory::internalFlashAllowed(fault::Code::DeviceSecretRefused)) {
       LOG_ERR("DSEC", "refusing NVS secret read from a PSRAM-stack task");
       return false;
     }

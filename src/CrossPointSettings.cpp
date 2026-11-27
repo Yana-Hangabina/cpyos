@@ -1,4 +1,5 @@
 #include "CrossPointSettings.h"
+#include <FaultLog.h>
 
 #include <BoardConfig.h>
 #include <HalStorage.h>
@@ -878,6 +879,7 @@ bool CrossPointSettings::loadFromBinaryFile() {
   uint8_t version = 0;
   if (!serialization::readPod(inputFile, version) || version != SETTINGS_FILE_VERSION) {
     LOG_ERR("CPS", "Deserialization failed: Unknown version %u", version);
+    fault::raise(fault::Code::StateVersionUnknown, version);
     return false;
   }
 
@@ -886,6 +888,7 @@ bool CrossPointSettings::loadFromBinaryFile() {
   std::array<uint8_t, LEGACY_SETTING_COUNT> values{};
   if (!serialization::readPod(inputFile, fileSettingsCount) || fileSettingsCount > values.size()) {
     LOG_ERR("CPS", "Deserialization failed: Invalid settings count %u", fileSettingsCount);
+    fault::raise(fault::Code::StateVersionUnknown, fileSettingsCount);
     return false;
   }
   for (uint8_t i = 0; i < fileSettingsCount; i++) {

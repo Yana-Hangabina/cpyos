@@ -32,9 +32,10 @@ bool invalidateNextTextBlock = false;
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>&,
                      const std::vector<EpdFontFamily::Style>&, const std::vector<uint8_t>&,
                      const std::vector<uint16_t>&, const BlockStyle& blockStyle, std::vector<std::string> rubyTexts,
-                     std::vector<LinkSpan> linkSpans)
+                     std::vector<LinkSpan> linkSpans, const WordFonts& wordFonts)
     : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)), linkSpans(std::move(linkSpans)) {
   numWords = words.size();
+  fontSlotCount = wordFonts.count;
   isValid = !std::exchange(invalidateNextTextBlock, false);
   laidOutWords.insert(laidOutWords.end(), words.begin(), words.end());
 }
@@ -73,3 +74,15 @@ bool PageImage::serialize(HalFile&) { return false; }
 
 void PageHorizontalRule::render(GfxRenderer&, int, int, int) {}
 bool PageHorizontalRule::serialize(HalFile&) { return false; }
+
+// The parser constructs border boxes for decorated blocks; their pixels and wire
+// format belong to the real Page tests, this target only needs the symbols.
+void PageBorderBox::render(GfxRenderer&, int, int, int) {}
+void PageBorderBox::renderBackground(GfxRenderer&, int, int) const {}
+bool PageBorderBox::serialize(HalFile&) { return false; }
+std::unique_ptr<PageBorderBox> PageBorderBox::deserialize(HalFile&) { return nullptr; }
+
+// Same for the drop cap of a ::first-letter block.
+void PageDropCap::render(GfxRenderer&, int, int, int) {}
+bool PageDropCap::serialize(HalFile&) { return false; }
+std::unique_ptr<PageDropCap> PageDropCap::deserialize(HalFile&) { return nullptr; }

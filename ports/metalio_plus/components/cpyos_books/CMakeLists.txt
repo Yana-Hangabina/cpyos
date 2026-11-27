@@ -78,6 +78,8 @@ idf_component_register(
         "${REPO_ROOT}/lib/GfxRenderer"
         "${REPO_ROOT}/lib/EpdFont"
         "${REPO_ROOT}/lib/Memory"
+        "${REPO_ROOT}/lib/Diagnostics"
+    "${REPO_ROOT}/lib/Callbacks"
         "${REPO_ROOT}/lib/Logging"
         "${REPO_ROOT}/lib/Utf8"
         "${REPO_ROOT}/lib/Serialization"

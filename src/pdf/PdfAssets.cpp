@@ -4,6 +4,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
 #include <miniz.h>
@@ -134,6 +135,13 @@ bool installFromApp1() {
       esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
   if (!app1) {
     LOG_ERR("PDF", "asset carrier: app1 partition missing");
+    return false;
+  }
+  // app1 is internal flash: reading the carrier disables the cache, so a
+  // PSRAM-stack caller would panic instead of merely failing. Boot-time
+  // installation runs on the main task; this is the backstop.
+  if (!memory::internalFlashAllowed(fault::Code::PdfAssetCarrierRefused)) {
+    LOG_ERR("PDF", "asset carrier: read refused from a PSRAM-stack task");
     return false;
   }
   uint8_t header[kCarrierHeaderSize];

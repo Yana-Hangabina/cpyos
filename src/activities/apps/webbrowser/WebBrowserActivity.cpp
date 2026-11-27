@@ -1,4 +1,5 @@
 #include "WebBrowserActivity.h"
+#include <FaultLog.h>
 
 #if defined(CROSSPOINT_PORT_STUCK_JOB_RESTART)
 #include <esp_system.h>
@@ -670,7 +671,7 @@ void WebBrowserActivity::saveBookmarks() {
   const std::string raw(text.c_str(), text.size());
   const std::string tmp = std::string(kBookmarksPath) + ".tmp";
   if (!Storage.writeFile(tmp.c_str(), String(raw.c_str()))) return;
-  WeReadStore::atomicReplace(tmp, kBookmarksPath);
+  if (!WeReadStore::atomicReplace(tmp, kBookmarksPath)) fault::raise(fault::Code::AtomicReplaceDiscarded);
 }
 
 void WebBrowserActivity::saveHistory() {
@@ -679,7 +680,7 @@ void WebBrowserActivity::saveHistory() {
   const std::string raw(text.c_str(), text.size());
   const std::string tmp = std::string(kHistoryPath) + ".tmp";
   if (!Storage.writeFile(tmp.c_str(), String(raw.c_str()))) return;
-  WeReadStore::atomicReplace(tmp, kHistoryPath);
+  if (!WeReadStore::atomicReplace(tmp, kHistoryPath)) fault::raise(fault::Code::AtomicReplaceDiscarded);
 }
 
 void WebBrowserActivity::openAddressBar() {

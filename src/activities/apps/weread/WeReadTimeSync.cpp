@@ -1,4 +1,5 @@
 #include "WeReadTimeSync.h"
+#include <FaultLog.h>
 
 #if defined(ESP_PLATFORM)
 
@@ -301,6 +302,7 @@ bool kick(const char* bookId, const WeReadClient::ProgressSyncInput& input) {
                                                   tskIDLE_PRIORITY, &state().task, 0, kTaskCaps);
   if (ok != pdPASS) {
     LOG_ERR(kTag, "task creation refused (%d)", static_cast<int>(ok));
+    fault::raise(fault::Code::WorkerCreateFailed, static_cast<uint32_t>(ok));
     auto& st = state();
     Lock lock(lockFor(st));
     st.running = false;

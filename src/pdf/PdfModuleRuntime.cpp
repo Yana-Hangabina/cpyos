@@ -8,6 +8,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <esp_cache.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
@@ -343,7 +344,7 @@ bool flushScheduledUnload(const bool readerIdle) {
     return false;
   }
   // Same rule as onExit's own guard: never touch the MMU from a PSRAM stack.
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) return false;
+  if (!memory::internalFlashAllowed(fault::Code::PdfRuntimeMapRefused)) return false;
   gUnloadPending = false;
   if (!g_loaded) return false;  // nothing mapped: no unmap log should claim one
   unload();

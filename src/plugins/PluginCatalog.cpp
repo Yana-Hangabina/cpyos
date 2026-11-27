@@ -13,6 +13,7 @@
 #include "PluginManager.h"
 #include "cpyos_plugin_api.h"
 #include "network/HttpDownloader.h"
+#include "util/FilePublish.h"
 
 namespace native_plugins {
 namespace {
@@ -39,11 +40,11 @@ bool parseUnsigned(const std::string& text, size_t& out) {
 }
 
 bool installFile(const std::string& temp, const std::string& target) {
-  if (Storage.replaceFile(temp.c_str(), target.c_str())) return true;
-  // Some FAT wrappers refuse replace-over-existing; remove then rename is the
-  // same atomic-ish sequence the rest of the tree uses for sidecars.
-  Storage.remove(target.c_str());
-  return Storage.rename(temp.c_str(), target.c_str());
+  // One owner for "put this verified file where an old one already sits": the
+  // rename, the remove-then-rename and the in-place overwrite all live in
+  // file_publish, and the outcome is logged by name instead of returning a bare
+  // false that the caller can only report as "install failed".
+  return file_publish::succeeded(file_publish::replace("PLUG", temp, target));
 }
 
 bool writeTextFile(const char* path, const char* data, size_t length) {
@@ -177,7 +178,7 @@ bool loadCachedCatalog(std::vector<CatalogEntry>& out, std::string& error) {
 bool saveCatalogCache(const char* text, const size_t length) {
   const std::string temp = std::string(kCatalogCachePath) + ".part";
   if (!writeTextFile(temp.c_str(), text, length)) return false;
-  return Storage.replaceFile(temp.c_str(), kCatalogCachePath);
+  return file_publish::succeeded(file_publish::replace("PLUG", temp, kCatalogCachePath));
 }
 
 bool installCatalogEntry(const CatalogEntry& entry, const CatalogProgress& progress, const bool* cancelFlag,
@@ -232,7 +233,11 @@ bool installCatalogEntry(const CatalogEntry& entry, const CatalogProgress& progr
       return false;
     }
   } else {
-    const auto result = HttpDownloader::downloadToFile(entry.url, temp, progress, cancelFlag, "", "", {}, false, 20000);
+    // `temp` is this module's own scratch name, verified before installFile
+    // publishes it: staging it a second time inside the downloader adds a rename
+    // whose failure looks like a dead card.
+    const auto result = HttpDownloader::downloadToFile(entry.url, temp, progress, cancelFlag, "", "", {}, false, 20000,
+                                                       HttpDownloader::Staging::CallerOwned);
     if (result != HttpDownloader::OK) {
       Storage.remove(temp.c_str());
       error = result == HttpDownloader::ABORTED ? "download cancelled" : "download failed";

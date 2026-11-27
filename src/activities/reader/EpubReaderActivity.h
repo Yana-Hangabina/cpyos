@@ -179,7 +179,7 @@ class EpubReaderActivity final : public ReaderActivity {
   enum class Overlay { None, Toolbar, Contents, Text, Bookmarks, More };
   Overlay overlay = Overlay::None;
   // One-shot first-run map of the reader's touch zones. It is a full-screen
-  // page of its own (refreshed UI frame 16), not a wash over the body text; it owns
+  // page of its own (Pond v5 frame 16), not a wash over the body text; it owns
   // input until dismissed once.
   bool gestureHintVisible = false;
   // A tap that opened the book can still be mid-release when the first frame
@@ -192,7 +192,7 @@ class EpubReaderActivity final : public ReaderActivity {
   Rect gestureHintStartRect_{};
   Rect gestureHintSettingsRect_{};
   void drawGestureHint();
-  // Reader chrome (refreshed UI frame 04): a two-line header at the top, a wave
+  // Reader chrome (Pond v5 frame 04): a two-line header at the top, a wave
   // progress band and the page numbers at the foot. One geometry helper feeds
   // both the layout reserve in renderBook() and the per-minute clock repaint,
   // so the three cannot drift apart.
@@ -688,7 +688,7 @@ class EpubReaderActivity final : public ReaderActivity {
   // skip the repaint.
   bool gotoChapterIndex(int target);
   std::string currentChapterTitle() const;
-  // Text panel cells (refreshed UI frame 05, strict 2x4 grid): font, size, line
+  // Text panel cells (Pond v5 frame 05, strict 2x4 grid): font, size, line
   // spacing, paragraph spacing, page margin, fast page turn, water ripple,
   // restore defaults. Every value here is backed by an existing setting.
   static constexpr int kTextPanelCells = 8;

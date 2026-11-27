@@ -57,6 +57,20 @@ enum class SettingAction {
   CellularStatus,
   // Metalio E-INK4 Plus only: read-only charger/battery status.
   ChargingStatus,
+  // Opens the "Fonts & Dictionaries" hub (text settings, font downloads, font
+  // extensions, dictionaries, vocabulary). The five rows it replaces were the
+  // largest cluster in the Reader tab and mixed typography, asset downloads and
+  // a lookup history in one flat list.
+  FontsHub,
+  // Opens the "Updates" hub (OTA check, SD-card firmware, PDF engine, Plus
+  // device resources) so the infrequent maintenance actions stop occupying
+  // individual rows in the System tab.
+  UpdatesHub,
+  // Opens the "Web plugins" page (enable switch + the JS plugin catalog). The
+  // web plugin system only runs in the browser served by the device, so its
+  // door belongs to Network & Transfer, not to Apps & Maintenance where it used
+  // to read as another kind of "plugin" next to the native ELF packages.
+  WebPluginsHub,
 };
 
 struct SettingInfo {

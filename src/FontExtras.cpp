@@ -8,6 +8,7 @@
 #include <mbedtls/sha256.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -19,8 +20,10 @@
 #include "NetworkStartup.h"
 #include "SdCardFontRegistry.h"
 #include "network/CrossMuxEndpoints.h"
+#include "network/DownloadProbe.h"
 #include "network/DownloadRoutes.h"
 #include "network/HttpDownloader.h"
+#include "util/FilePublish.h"
 
 namespace font_extras {
 namespace {
@@ -40,9 +43,19 @@ std::string g_manifestOverride;
 // Mirror (or empty for direct GitHub) that served the last manifest or pack.
 // Pack downloads try it first; a successful pack can update it for the next one.
 std::string g_preferredMirror;
+// Language-neutral diagnostics for the last failure: path, byte counts, the
+// publish outcome label. Never a translated string and never a credential -- the
+// UI appends it to the reason so a field report can name the file and the step
+// instead of the single "无法写入存储卡" that 0.8.2 offered.
+std::string g_lastDetail;
 constexpr size_t kFileBufferBytes = 4096;
 constexpr int kManifestAttemptTimeoutMs = 20000;
 constexpr int kPackAttemptTimeoutMs = 30000;
+// A pack this small is not worth three TLS handshakes of route measuring; the
+// shortlist order is used as-is.
+constexpr uint64_t kProbeMinBytes = 512 * 1024;
+constexpr int kProbeTimeoutMs = 6000;
+constexpr size_t kProbeSampleBytes = 32768;
 
 // lwIP asserts if SNTP's pending DNS callback runs without the TCPIP lock when
 // the browser/network code clears the DNS cache (same class of crash as the
@@ -63,15 +76,6 @@ bool requireWifi(std::string& error) {
   return false;
 }
 
-// Dev/upstream builds do not define CPYOS_OTA_MANIFEST_URL, so they would have
-// no mirror list. Keep the same pass-through proxies here; the public build
-// still reuses CrossMuxEndpoints' list.
-constexpr const char* kFallbackMirrors[] = {
-    "https://gh-proxy.org/", "https://git.yylx.win/", "https://ghfast.top/",
-    "https://gh-proxy.com/", "https://github.tbap.top/", "https://gh.dpik.top/",
-    "https://ghproxy.net/",
-};
-
 bool readTextFile(const std::string& path, std::string& out, const size_t cap) {
   return Storage.readFileToString("FEXT", path, cap, out);
 }
@@ -79,14 +83,22 @@ bool readTextFile(const std::string& path, std::string& out, const size_t cap) {
 bool writeTextFile(const std::string& path, const std::string& text) {
   const std::string tmp = path + ".tmp";
   HalFile file;
-  if (!Storage.openFileForWrite("FEXT", tmp, file)) return false;
+  if (!Storage.openFileForWrite("FEXT", tmp, file)) {
+    g_lastDetail = "cannot create " + tmp;
+    return false;
+  }
   const size_t written = file.write(reinterpret_cast<const uint8_t*>(text.data()), text.size());
   file.close();
   if (written != text.size()) {
     Storage.remove(tmp.c_str());
+    g_lastDetail = "short write to " + tmp;
     return false;
   }
-  if (!Storage.replaceFile(tmp.c_str(), path.c_str())) {
+  // The state file is replaced, not created, on every install -- and a FAT rename
+  // over an existing entry is the one this card has been seen to refuse.
+  const auto outcome = file_publish::replace("FEXT", tmp, path);
+  if (!file_publish::succeeded(outcome)) {
+    g_lastDetail = std::string(file_publish::name(outcome)) + ": " + path;
     Storage.remove(tmp.c_str());
     return false;
   }
@@ -142,13 +154,8 @@ bool fileSizeMatches(const char* path, const uint64_t size) {
 }
 
 const char* const* mirrorList(size_t& count) {
-#ifdef CPYOS_OTA_MANIFEST_URL
   count = CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRROR_COUNT;
   return CrossMuxEndpoints::CPYOS_DOWNLOAD_MIRRORS;
-#else
-  count = sizeof(kFallbackMirrors) / sizeof(kFallbackMirrors[0]);
-  return kFallbackMirrors;
-#endif
 }
 
 bool parseInstalledLine(const std::string& line, InstalledPack& pack) {
@@ -248,6 +255,8 @@ const char* manifestUrl() {
   return kDefaultManifestUrl;
 }
 
+const std::string& lastDetail() { return g_lastDetail; }
+
 void setManifestUrlOverride(const char* url) {
   g_manifestOverride = (url != nullptr) ? url : "";
   g_preferredMirror.clear();
@@ -278,6 +287,7 @@ bool fetchManifest(std::vector<Pack>& packs, bool& fromCache, std::string& error
   packs.clear();
   fromCache = false;
   error.clear();
+  g_lastDetail.clear();
   if (failure != nullptr) *failure = Failure::None;
   const char* url = manifestUrl();
   if (url == nullptr || *url == '\0') {
@@ -472,17 +482,57 @@ bool emojiInstalled() {
   return false;
 }
 
+// Remove the scratch names a previous attempt could have left behind. Two names,
+// because 0.8.2 staged a pack download twice -- this module wrote `<name>.part`
+// and then handed that path to a downloader that stages at `<dest>.part` itself --
+// so a stale `<name>.part.part` on the card makes every later attempt fail at the
+// same step, and FAT does not always let it be deleted.
+void clearScratch(const std::string& temp) {
+  if (Storage.exists(temp.c_str()) && !Storage.remove(temp.c_str())) {
+    LOG_ERR("FEXT", "stale scratch file could not be removed: %s", temp.c_str());
+  }
+  const std::string legacy = temp + ".part";
+  if (!Storage.exists(legacy.c_str())) return;
+  if (Storage.remove(legacy.c_str())) {
+    LOG_INF("FEXT", "removed the scratch file an older build left: %s", legacy.c_str());
+  } else {
+    LOG_ERR("FEXT", "could not remove %s left by an older build", legacy.c_str());
+  }
+}
+
+// Free bytes on the card, or SIZE_MAX when the card cannot say. A full card and a
+// refused rename need different words; collapsing them is what made the 0.8.2
+// report undiagnosable.
+size_t freeSpace() {
+  uint64_t total = 0;
+  uint64_t free = 0;
+  if (!Storage.getSpace(total, free)) return SIZE_MAX;
+  return static_cast<size_t>(free);
+}
+
 bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, const bool* cancelFlag,
                         std::string& error, Failure* failure) {
   error.clear();
+  g_lastDetail.clear();
   if (failure != nullptr) *failure = Failure::None;
   if (!requireWifi(error)) {
     if (failure != nullptr) *failure = Failure::NoWifi;
     return false;
   }
+  const size_t free = freeSpace();
+  // 64 KiB of slack: the state file and its .tmp sibling have to fit as well.
+  if (free != SIZE_MAX && free < pack.size + 64 * 1024) {
+    error = "存储卡空间不足";
+    g_lastDetail = "free " + std::to_string(free / 1024) + " KB, need " +
+                   std::to_string(static_cast<size_t>(pack.size / 1024)) + " KB";
+    LOG_ERR("FEXT", "%s: %s", pack.id, g_lastDetail.c_str());
+    if (failure != nullptr) *failure = Failure::SdFull;
+    return false;
+  }
   TimeSyncPause timeSyncPause;
   if (!ensureStateDir()) {
     error = "无法创建字体扩展目录";
+    g_lastDetail = std::string("cannot create ") + kStateDir;
     if (failure != nullptr) *failure = Failure::SdCard;
     return false;
   }
@@ -491,32 +541,52 @@ bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, cons
     const std::string dir = familyDir(pack.family);
     if (!Storage.ensureDirectoryExists(dir.c_str())) {
       error = "无法创建字体目录";
+      g_lastDetail = "cannot create " + dir;
       if (failure != nullptr) *failure = Failure::SdCard;
       return false;
     }
   }
   const std::string temp = target + ".part";
-  Storage.remove(temp.c_str());
+  clearScratch(temp);
 
   size_t mirrorCount = 0;
   const char* const* mirrors = mirrorList(mirrorCount);
   auto candidates = download_routes::buildGithubShortlist(pack.url, g_preferredMirror, mirrors, mirrorCount, 3,
                                                           kPackAttemptTimeoutMs);
   if (candidates.empty()) candidates.push_back({"direct", pack.url, kPackAttemptTimeoutMs});
+  if (pack.size >= kProbeMinBytes && candidates.size() > 1) {
+    // Measure before committing. Walking the list in order means the first route
+    // that answers wins no matter how slow it is, which is what made a 2.5 MB
+    // pack take "a very long download" and then fail. Small packs skip this:
+    // three TLS handshakes cost more than the file.
+    const std::string chosen =
+        download_probe::selectUrl(candidates, pack.url, kProbeSampleBytes, kProbeTimeoutMs, "FEXT");
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      if (candidates[i].url != chosen) continue;
+      const auto it = candidates.begin() + static_cast<ptrdiff_t>(i);
+      std::rotate(candidates.begin(), it, it + 1);
+      break;
+    }
+  }
 
   bool downloaded = false;
   Failure networkFailure = Failure::Download;
   for (const auto& candidate : candidates) {
     LOG_INF("FEXT", "download %s [%s]: %s", pack.id, candidate.label.c_str(), candidate.url.c_str());
     const uint32_t attemptStarted = millis();
+    // CallerOwned: `temp` is already this module's scratch name, and it is
+    // verified before it is published. Letting the downloader stage it a second
+    // time added a rename whose failure looked like a dead card.
     const auto result = HttpDownloader::downloadToFile(candidate.url, temp, progress, cancelFlag, "", "", {}, false,
-                                                       candidate.timeoutMs);
+                                                       candidate.timeoutMs, HttpDownloader::Staging::CallerOwned);
     if (result == HttpDownloader::OK) {
       g_preferredMirror = download_routes::mirrorPrefixForUrl(candidate.url, mirrors, mirrorCount);
       downloaded = true;
       break;
     }
-    Storage.remove(temp.c_str());
+    if (!Storage.remove(temp.c_str())) {
+      g_lastDetail = "could not remove " + temp;
+    }
     if (result == HttpDownloader::ABORTED) {
       error = "已取消";
       if (failure != nullptr) *failure = Failure::Network;
@@ -535,6 +605,7 @@ bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, cons
   HalFile file;
   if (!Storage.openFileForRead("FEXT", temp, file)) {
     error = "无法读取下载文件";
+    g_lastDetail = "cannot read back " + temp;
     Storage.remove(temp.c_str());
     if (failure != nullptr) *failure = Failure::SdCard;
     return false;
@@ -545,6 +616,8 @@ bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, cons
     LOG_ERR("FEXT", "size mismatch for %s: got %u expected %llu", pack.id, static_cast<unsigned>(actualSize),
             static_cast<unsigned long long>(pack.size));
     error = "文件大小不符";
+    g_lastDetail = "size " + std::to_string(static_cast<unsigned long long>(actualSize)) + " of " +
+                   std::to_string(pack.size);
     Storage.remove(temp.c_str());
     if (failure != nullptr) *failure = Failure::Verify;
     return false;
@@ -554,6 +627,7 @@ bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, cons
       std::memcmp(actualSha, pack.sha256, sizeof(actualSha)) != 0) {
     LOG_ERR("FEXT", "sha256 mismatch for %s", pack.id);
     error = "校验失败";
+    g_lastDetail = "sha256 mismatch: " + temp;
     Storage.remove(temp.c_str());
     if (failure != nullptr) *failure = Failure::Verify;
     return false;
@@ -561,19 +635,28 @@ bool downloadAndInstall(const Pack& pack, const ProgressCallback& progress, cons
   if (!sfntMagicValid(temp.c_str())) {
     LOG_ERR("FEXT", "not an sfnt font: %s", pack.file);
     error = "不是有效的字体文件";
+    g_lastDetail = std::string("not sfnt: ") + temp;
     Storage.remove(temp.c_str());
     if (failure != nullptr) *failure = Failure::Verify;
     return false;
   }
-  if (!Storage.replaceFile(temp.c_str(), target.c_str())) {
+  const auto outcome = file_publish::replace("FEXT", temp, target);
+  if (!file_publish::succeeded(outcome)) {
     error = "无法安装字体文件";
+    g_lastDetail = std::string(file_publish::name(outcome)) + ": " + target;
     Storage.remove(temp.c_str());
     if (failure != nullptr) *failure = Failure::SdCard;
     return false;
   }
+  if (outcome == file_publish::Outcome::CopiedOver) {
+    // Not an error, but worth a line: it says this card refuses rename-over-existing,
+    // which is the fact that made the old code report a storage failure here.
+    LOG_INF("FEXT", "installed %s by overwriting the previous face in place", pack.id);
+  }
 
   if (!recordInstalled(pack)) {
     error = "无法保存安装状态";
+    if (g_lastDetail.empty()) g_lastDetail = "cannot save " + std::string(kStateFile);
     if (failure != nullptr) *failure = Failure::SdCard;
     return false;
   }

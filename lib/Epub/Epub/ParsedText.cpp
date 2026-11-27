@@ -1,5 +1,7 @@
 #include "ParsedText.h"
 
+#include <InvokeCallback.h>
+
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -1962,7 +1964,8 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, siz
       return false;
     }
     block->setVisibleOffset(lineVisibleOffset);
-    return processLine(std::move(block), lineVisibleOffset, paragraphFinal);
+    return callbacks::callOr<bool>("epub.processLine", processLine, false, std::move(block), lineVisibleOffset,
+                                     paragraphFinal);
   }
 
   // Each word is one TextBlock entry carrying its own boundary and an offset
@@ -1990,5 +1993,6 @@ bool ParsedText::extractLine(const size_t lineIndex, const size_t lineBreak, siz
     return false;
   }
   block->setVisibleOffset(lineVisibleOffset);
-  return processLine(std::move(block), lineVisibleOffset, paragraphFinal);
+  return callbacks::callOr<bool>("epub.processLine", processLine, false, std::move(block), lineVisibleOffset,
+                                   paragraphFinal);
 }

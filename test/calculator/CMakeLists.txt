@@ -24,6 +24,7 @@ target_include_directories(CalculatorFontTest PRIVATE
   ${REPO_ROOT}/src/activities/apps/calculator
   ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
+  ${REPO_ROOT}/lib/Memory
 )
 target_compile_options(CalculatorFontTest PRIVATE -UNDEBUG)
 add_test(NAME CalculatorFontTest COMMAND CalculatorFontTest)

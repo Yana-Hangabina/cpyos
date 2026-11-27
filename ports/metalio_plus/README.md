@@ -412,10 +412,10 @@ Every `cpyos-plus-*` release carries, next to the firmware:
 | Asset | Purpose | Where it goes |
 |---|---|---|
 | `cpyos-plus-<ver>.bin` | app image | app slot (CloudZao OTA writes this only) |
-| `plus-pdfmod.bin` | MuPDF engine, paired to that image's ELF SHA | `/.crosspoint/pdf/pdfmod.bin` on the card (or install from Settings) |
+| `plus-pdfmod.bin` | MuPDF engine, paired to that image's ELF SHA | `/.crosspoint/pdf/pdfmod.bin` on the card (or the pinned **PDF engine** row on the Plugins page) |
 | `plus-pdf-assets.bin` | font/CMap bundle for the engine | card root `/pdf_assets.bin`; installed at boot |
 | `plus-pdf-engine-manifest.txt` | one manifest line for this exact tag | consumed by the in-reader updater |
-| `pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core.dat` | data partition blobs | spiffs via `flash_plus_data.py` / `data_manifest_plus.txt` |
+| `pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core_8105.dat` | data partition blobs | spiffs via `flash_plus_data.py` / `data_manifest_plus.txt` (the core carrier is named after its tier; `cjk_core.dat` is only the last-built alias) |
 
 CloudZao OTA writes **only** the app slot: languages other than EN/ZH, pinyin,
 hyphenation, the emoji face and the 8,105-glyph reading core stay absent until
@@ -436,17 +436,23 @@ is meant to behave like Read Pico.
 
 ### Font tiers on the Plus
 
-The Plus uses the same tiers as Read Pico: a 190 KB CJK UI subset kept in PSRAM
-(no SD latency), a 25 KB non-CJK UI supplement, and the compressed 8,105-glyph
-reading core at spiffs +`0x180000`, released to `/fonts/CPYOSCJKCore/` on first
-boot. See [../../docs/engineering/font-tiers.md](../../docs/engineering/font-tiers.md).
+The Plus uses the same tier *mechanism* as Read Pico -- a 190 KB CJK UI subset kept
+in PSRAM (no SD latency), a 25 KB non-CJK UI supplement, and a compressed reading
+core in the data partition at spiffs +`0x15C000`, released to
+`/fonts/CPYOSCJKCore/` on first boot -- but **not the same core tier**. The carrier
+tier is chosen from the partition by `scripts/generate_data_manifest.py`: the Plus'
+3.125 MiB spiffs holds the full 8,105-glyph carrier (1,640,306 B compressed →
+2,555,704 B released, 211,086 B still free), while the Read Pico XIP layout's 2.0 MiB
+only fits the 3,500-glyph one. `test/test_data_layout.py` fails if the Plus table
+ever shrinks below 8,105, because that would cut Han coverage without failing a build.
+See [../../docs/engineering/font-tiers.md](../../docs/engineering/font-tiers.md).
 
 After the 2026-11-14 CRC fix the shell boot log reports:
 
 ```text
 [INF] [SFP] ... EMBEDDED-V1 ready: 293152 bytes; faces load on demand (4-bit coverage)
 [INF] [USF] UI script supplement ready: 49152 bytes
-[INF] [CORE] carrier present: 1638910 -> 2553580 bytes
+[INF] [CORE] carrier present: 1640306 -> 2555704 bytes
 [INF] [PERF] InxRecent first frame: render=1080ms
 ```
 
@@ -460,7 +466,7 @@ The reading core is released with a corrected mmap range (CPFZ header + deflate
 stream) and the shell now consumes `FontCacheManager` missing codepoints on
 stable pages, so a rare title or a font-extra pack name offers
 `FontExtrasActivity(ReaderPrompt)` once per boot. The expected first-boot lines
-are `[CORE] released the 2553580-byte core to /fonts/CPYOSCJKCore/...`,
+are `[CORE] released the 2555704-byte core to /fonts/CPYOSCJKCore/...`,
 `[SDREG] Discovery complete: 1 families` and
 `[SDFS] font supplements: 1 families at <pt>`.
 

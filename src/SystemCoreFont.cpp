@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <MinizConfig.h>
+#include <StackSafety.h>
 #include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
@@ -69,6 +70,16 @@ const esp_partition_t* spiffsPartition() {
 
 bool probe() {
   if (g_probed) return g_present;
+  // Reading the carrier header goes through internal flash, which disables the
+  // cache. On a PSRAM-stack task that is `esp_task_stack_is_sane_cache_disabled`
+  // and a reboot, and the answer is not "absent" either -- so refuse *before*
+  // anything is cached and leave the state unevaluated for the next caller whose
+  // stack is in internal RAM. Caching a refusal is how a perfectly good carrier
+  // turns into permanent tofu.
+  if (!memory::internalFlashAllowed(fault::Code::CoreFontProbeRefused)) {
+    LOG_ERR("CORE", "carrier probe refused: this task stack is in PSRAM; core state stays unknown");
+    return false;
+  }
   g_probed = true;
   g_present = false;
   g_problem = Status::Problem::None;
@@ -194,6 +205,12 @@ bool carrierPresent() { return probe(); }
 
 bool ready() {
   if (g_readyChecked) return g_ready;
+  // probe() refuses on a PSRAM stack; the verdict evaluation must not cache a
+  // refusal either, so bail out on the same guard before `g_readyChecked`.
+  if (!memory::internalFlashAllowed(fault::Code::CoreFontEvalRefused)) {
+    LOG_ERR("CORE", "core evaluation refused: this task stack is in PSRAM; verdict not cached");
+    return false;
+  }
   g_readyChecked = true;
   g_ready = false;
   g_verdict = Verdict::NotInstalled;
@@ -409,6 +426,7 @@ const char* problemName(Status::Problem problem) {
     case Status::Problem::NotInstalled: return "not-installed";
     case Status::Problem::SidecarStale: return "marker-stale";
     case Status::Problem::ForeignCopy: return "foreign-copy";
+    case Status::Problem::WrongTaskStack: return "wrong-task-stack";
     case Status::Problem::None: break;
   }
   return "ok";
@@ -416,6 +434,14 @@ const char* problemName(Status::Problem problem) {
 
 Status status() {
   Status out;
+  // This function used to be documented as render-safe. It is not: the first
+  // thing it does is read the carrier header from internal flash. Report the
+  // refusal instead of the misleading "bad-carrier" a cached miss would give.
+  if (!memory::internalFlashAllowed(fault::Code::CoreFontReadRefused)) {
+    out.problem = Status::Problem::WrongTaskStack;
+    out.tier = tierLabel();
+    return out;
+  }
   out.carrierPresent = probe();
   out.compressedSize = g_header.compressedSize;
   out.rawSize = g_header.rawSize;
@@ -451,7 +477,8 @@ bool installResident() {
   // This path reads internal flash (mmap/esp_partition_read). A caller whose stack is in
   // PSRAM would have that cache disabled underneath it and panic -- the exact crash AGENTS.md
   // §43 records for the font flash read. Refuse loudly instead of silently doing nothing.
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+  // The decision itself lives in memory::guardInternalFlash() so every flash site agrees.
+  if (!memory::internalFlashAllowed(fault::Code::CoreFontResidentRefused)) {
     LOG_ERR("CORE", "refused: called from a PSRAM-stack task; the core stays unavailable");
     return false;
   }

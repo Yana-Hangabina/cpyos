@@ -46,7 +46,13 @@ enum class Failure : uint8_t {
   Download,   // pack transfer failed
   Verify,     // size/SHA-256/sfnt mismatch
   SdCard,     // SD write/rename failed (not 'Storage': HalStorage.h defines that macro)
+  SdFull,     // the card cannot hold the pack; a different answer from a refused write
 };
+
+// Language-neutral diagnostics for the last failure: the path, the byte counts,
+// the publish outcome. The UI appends it to the translated reason so a field
+// report names the file and the step instead of one generic storage error.
+const std::string& lastDetail();
 
 // Fetches and parses the manifest. Falls back to the cached copy when the
 // network fails, so an installed device can still list/uninstall packs offline.

@@ -2,6 +2,21 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.8.3
+
+- 修复打开含生僻字书籍时的 `esp_task_stack_is_sane_cache_disabled` 崩溃：所有内部 flash
+  访问统一走栈守卫（`memory::guardInternalFlash(site)`），拒绝时返回「未知」。
+- 修复空 `std::function` 调用导致的 `std::terminate`/`abort()`：全部回调收进
+  `callbacks::call/callOr`。
+- 崩溃自证：故障码 + RTC 环、崩溃屏 `fault=…` 与 `file:line`、翻页、`crash_report.txt`、
+  `CMD:FAULTS`、异常/新分配失败钩子。
+- 书籍密钥绑定硬件身份（eFuse MAC），整片擦除不再使已缓存受保护书籍失效；旧 key 首次打开
+  自动迁移；无法解密的书给出原因与「重新缓存」入口。章节缓存同步升 v3。
+- 联网后缺字方框：字体状态回收与恢复配对。
+- 设置信息架构：具名分组、字体/更新枢纽页、工具页显示、应用/设备插件/网页插件术语分离。
+- 内存账本（只读，诊断用）。
+- 需要与固件一并更新数据包与 PDF 引擎。
+
 ## 0.8.2 — 2026-11-26
 
 > Read Pico `0.8.2-rp` · Metalio E-INK4 Plus `0.8.2-e4p`

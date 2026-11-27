@@ -7,6 +7,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <TtfEpdFont.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
@@ -167,6 +168,20 @@ unsigned long readSource(void* ctx, const unsigned long offset, unsigned char* b
     return source->file->read(buffer, count) == static_cast<int>(count) ? count : 0;
   }
   if (source->partition == nullptr) return 0;
+  // FreeType calls this while rasterizing a glyph, i.e. potentially on the
+  // render task, whose stack lives in PSRAM. A partition read there would take
+  // the cache -- and the caller's own stack -- away, so the device would panic
+  // instead of rendering. A failed read is the safe answer: FreeType reports a
+  // broken face, and the UI keeps the bitmap fallback it already has.
+  if (!memory::internalFlashAllowed(fault::Code::FontPackStreamRefused)) {
+    // Once per boot: this is a hot path and the answer will not change.
+    static bool warned = false;
+    if (!warned) {
+      warned = true;
+      LOG_ERR("SFP", "font pack read refused: this task stack is in PSRAM");
+    }
+    return 0;
+  }
   return esp_partition_read(source->partition, source->dataOffset + offset, buffer, count) == ESP_OK ? count : 0;
 }
 
@@ -333,6 +348,15 @@ bool begin(GfxRenderer& renderer) {
   g_source.payloadSize = header.rawSize;
   payloadSize = header.rawSize;
 #else
+  // The boot-time validation below reads the whole pack from SPI flash. That is
+  // only legal from a task whose stack lives in internal RAM; on the render task
+  // (PSRAM stack) the cache disable would pull the caller's own stack away.
+  // Refuse before the first read and say "refused", never "missing": the pack is
+  // still there, and the next boot from the UI task installs it normally.
+  if (!memory::internalFlashAllowed(fault::Code::FontPackLoadRefused)) {
+    LOG_ERR("SFP", "font pack load refused: this task stack is in PSRAM");
+    return false;
+  }
   const esp_partition_t* partition =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
   if (partition == nullptr) {

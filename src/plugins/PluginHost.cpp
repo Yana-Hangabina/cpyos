@@ -1,4 +1,5 @@
 #include "PluginHost.h"
+#include <FaultLog.h>
 
 #if defined(CROSSPOINT_PLUGIN_RUNTIME)
 
@@ -177,6 +178,7 @@ bool PluginHost::start(const native_plugins::PluginInfo& info) {
   taskStackInPsram_ = created == pdPASS;
   if (created != pdPASS) {
     LOG_ERR("PLUG", "PSRAM plugin stack refused (%d); trying internal RAM", static_cast<int>(created));
+    fault::raise(fault::Code::PluginStackFallback, static_cast<uint32_t>(kPluginTaskStackBytes));
     task_ = nullptr;
   }
 #endif
@@ -186,6 +188,9 @@ bool PluginHost::start(const native_plugins::PluginInfo& info) {
                           kPluginTaskPriority, &task_);
   }
   if (created != pdPASS) {
+    // No task at all: the plugin cannot run, which a user cannot tell apart from
+    // a plugin that was never installed unless it is recorded.
+    fault::raise(fault::Code::WorkerCreateFailed, static_cast<uint32_t>(created));
     task_ = nullptr;
     lastError_ = "cannot create the plugin task";
     state_.store(State::Failed, std::memory_order_release);

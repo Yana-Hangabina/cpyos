@@ -14,6 +14,9 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 ROOT = SCRIPTS.parent
+sys.path.insert(0, str(SCRIPTS))
+
+import font_cmap  # noqa: E402  (the one stdlib sfnt/cmap reader in the repo)
 
 TTF = ROOT / 'assets' / 'emoji' / 'NotoEmoji-subset.ttf'
 PACK = ROOT / 'build' / 'emoji.dat'
@@ -29,41 +32,6 @@ REQUIRED = [
 ]
 
 
-def cmap_codepoints(data):
-    """Minimal sfnt cmap reader (formats 4 and 12), no fontTools dependency."""
-    num_tables = struct.unpack_from('>H', data, 4)[0]
-    cmap_off = None
-    for i in range(num_tables):
-        tag, _checksum, offset, _length = struct.unpack_from('>4sIII', data, 12 + i * 16)
-        if tag == b'cmap':
-            cmap_off = offset
-            break
-    if cmap_off is None:
-        raise AssertionError('no cmap table')
-    _version, count = struct.unpack_from('>HH', data, cmap_off)
-    subtables = []
-    for i in range(count):
-        platform, encoding, offset = struct.unpack_from('>HHI', data, cmap_off + 4 + i * 8)
-        subtables.append((platform, encoding, cmap_off + offset))
-    codepoints = set()
-    for _platform, _encoding, off in subtables:
-        fmt = struct.unpack_from('>H', data, off)[0]
-        if fmt == 4:
-            segx2 = struct.unpack_from('>H', data, off + 6)[0]
-            seg = segx2 // 2
-            ends = struct.unpack_from('>%dH' % seg, data, off + 14)
-            starts = struct.unpack_from('>%dH' % seg, data, off + 16 + segx2)
-            for start, end in zip(starts, ends):
-                if 0xFFFF in (start, end):
-                    continue
-                codepoints.update(range(start, end + 1))
-        elif fmt == 12:
-            groups = struct.unpack_from('>I', data, off + 12)[0]
-            for g in range(groups):
-                start, end, _gid = struct.unpack_from('>III', data, off + 16 + g * 12)
-                codepoints.update(range(start, end + 1))
-    return codepoints
-
 
 class EmojiPackTest(unittest.TestCase):
     def test_subset_fits_the_partition_slot(self):
@@ -72,7 +40,7 @@ class EmojiPackTest(unittest.TestCase):
         self.assertGreater(size, 64 * 1024)
 
     def test_user_visible_codepoints_are_covered(self):
-        covered = cmap_codepoints(TTF.read_bytes())
+        covered = font_cmap.rendered_codepoints(TTF)
         missing = [cp for cp in HISTORIC + REQUIRED if cp not in covered]
         self.assertFalse(missing, 'missing emoji: ' + ', '.join('U+%04X' % cp for cp in missing))
 

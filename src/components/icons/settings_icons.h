@@ -248,15 +248,23 @@ inline const freeink::Icon* forSetting(const StrId id) {
     case StrId::STR_RESTORE_SYSTEM_SETTINGS:
       return &icon_refresh_cw_48;
     case StrId::STR_CHECK_UPDATES:
+    // One row opens the Updates hub (OTA / SD firmware / PDF engine / Plus
+    // resources); it stays on the download glyph.
+    case StrId::STR_UPDATE:
     case StrId::STR_USB_DOWNLOAD_MODE:
       return &icon_download_48;
     // A firmware file dragged onto the card, not the U-disk mode.
     case StrId::STR_SD_FIRMWARE_UPDATE:
+    case StrId::STR_PDF_ENGINE_UPDATE:
       return &icon_file_48;
+    // JJWXC builds only: the daily check-in reminder is a notification.
+    case StrId::STR_JJWXC_REMIND_DAILY:
+      return &icon_bell_48;
     // Three full-screen refreshes; the arrow glyph reads as "restore the panel".
     case StrId::STR_SCREEN_REPAIR:
       return &icon_maximize_48;
     case StrId::STR_PLUGINS:
+    case StrId::STR_WEB_PLUGINS:
       return &icon_blocks_48;
     case StrId::STR_KEYBOARD_LAYOUTS:
       return &icon_keyboard_48;

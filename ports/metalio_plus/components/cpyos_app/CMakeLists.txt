@@ -123,6 +123,8 @@ set(APP_INCLUDES
     "${REPO_ROOT}/lib/GfxRenderer"
     "${REPO_ROOT}/lib/LibraryIndex"
     "${REPO_ROOT}/lib/Memory"
+    "${REPO_ROOT}/lib/Diagnostics"
+    "${REPO_ROOT}/lib/Callbacks"
     "${REPO_ROOT}/lib/Serialization"
     "${REPO_ROOT}/lib/hal"
     "${REPO_ROOT}/lib/OpdsParser"

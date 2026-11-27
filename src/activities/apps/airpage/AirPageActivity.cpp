@@ -842,10 +842,14 @@ void AirPageActivity::doFetch() {
     return;
   }
 
-  HttpDownloader::DownloadError error =
-      HttpDownloader::downloadToFile(downloadUrl_, airpage::AirPageImageStore::kDownloadPartPath);
+  // kDownloadPartPath is already the store's scratch name (it renames it itself
+  // after inspecting it), so the downloader must not stage it a second time.
+  HttpDownloader::DownloadError error = HttpDownloader::downloadToFile(
+      downloadUrl_, airpage::AirPageImageStore::kDownloadPartPath, nullptr, nullptr, "", "", {}, false, 0,
+      HttpDownloader::Staging::CallerOwned);
   if (error != HttpDownloader::OK) {
-    error = HttpDownloader::downloadToFile(legacyDownloadUrl_, airpage::AirPageImageStore::kDownloadPartPath);
+    error = HttpDownloader::downloadToFile(legacyDownloadUrl_, airpage::AirPageImageStore::kDownloadPartPath, nullptr,
+                                           nullptr, "", "", {}, false, 0, HttpDownloader::Staging::CallerOwned);
   }
   if (error != HttpDownloader::OK) {
     LOG_ERR("AIRP", "Download failed: %d", static_cast<int>(error));

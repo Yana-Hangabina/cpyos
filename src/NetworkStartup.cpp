@@ -5,6 +5,7 @@
 #include <HalClock.h>
 #include <HalMemory.h>
 #include <Logging.h>
+#include <StackSafety.h>
 #include <WiFi.h>
 
 #if !defined(SIMULATOR)
@@ -89,6 +90,14 @@ void logMemory(const char* stage) {
           static_cast<unsigned>(psram.freeBytes));
 }
 
+// Set when prepare() actually released render memory, cleared once the main loop
+// has reloaded it. Kept here rather than in main.cpp because this module is the
+// one that took the memory away, and a flag the releaser cannot set is a pairing
+// that gets forgotten -- which is exactly how 0.8.2 shipped tofu in every list
+// drawn after a network entry.
+std::atomic<bool> g_renderMemoryPending{false};
+std::atomic<uint32_t> g_renderMemoryArmedAtMs{0};
+
 void prepare(GfxRenderer& renderer) {
 #if defined(CROSSPOINT_PLUS_PORT)
   // The S31 panel feeder queues and the audio I2S DMA pool share internal RAM;
@@ -112,6 +121,12 @@ void prepare(GfxRenderer& renderer) {
       fontCache->releaseSdFontCaches();
     }
   }
+  // Something the UI needs to draw CJK is now gone. Arm the restore; the main
+  // loop performs it when the network no longer needs the room (see
+  // font_restore::due()). Arming even when the reload later proves impossible is
+  // deliberate: the flag is the honest statement that the state is missing.
+  g_renderMemoryArmedAtMs.store(static_cast<uint32_t>(millis()), std::memory_order_relaxed);
+  g_renderMemoryPending.store(true, std::memory_order_relaxed);
   logMemory("after font reclaim");
 }
 
@@ -165,6 +180,22 @@ void enforceNoModemSleep(const uint32_t nowMs) {
 #endif
 }
 }  // namespace
+
+// Declared below the anonymous namespace that owns these atomics: the accessors
+// were first written above it, where `g_renderMemory*`/`g_networkHolds` do not
+// exist yet, and the translation unit would not compile.
+bool renderMemoryRestorePending() { return g_renderMemoryPending.load(std::memory_order_relaxed); }
+
+uint32_t renderMemoryArmedAtMs() { return g_renderMemoryArmedAtMs.load(std::memory_order_relaxed); }
+
+void rearmRenderMemoryRestore() {
+  g_renderMemoryArmedAtMs.store(static_cast<uint32_t>(millis()), std::memory_order_relaxed);
+  g_renderMemoryPending.store(true, std::memory_order_relaxed);
+}
+
+void clearRenderMemoryRestore() { g_renderMemoryPending.store(false, std::memory_order_relaxed); }
+
+bool networkHeld() { return g_networkHolds.load(std::memory_order_relaxed) > 0; }
 
 void noteActivity() {
   g_lastNetworkActivityMs.store(millis(), std::memory_order_relaxed);
@@ -524,7 +555,7 @@ bool flushDeepRelease() {
   return false;
 #else
   if (!gDeepReleasePending) return false;
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) return false;
+  if (!memory::internalFlashAllowed(fault::Code::RadioDeepReleaseRefused)) return false;
   gDeepReleasePending = false;
   return releaseRadioDeep();
 #endif
@@ -568,7 +599,7 @@ bool releaseRadioDeep() {
   // from being saved for the rest of the session (a connected-function bug that
   // would only show up the next boot).  Setting it before the next init is fine.
   esp_wifi_set_storage(WIFI_STORAGE_FLASH);
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) {
+  if (!memory::internalFlashAllowed(fault::Code::RadioStorageSwitchRefused)) {
     LOG_INF("NET", "deep radio release ran on a PSRAM stack; storage was RAM, no flash write");
   }
   resumeTimeSync();

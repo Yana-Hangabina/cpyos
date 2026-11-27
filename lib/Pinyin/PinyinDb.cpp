@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <StackSafety.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -89,6 +90,15 @@ bool PinyinDb::loadFromCard() {
 // board's payload, simply fails the header check and the caller keeps its old
 // behaviour.
 bool PinyinDb::loadBundled() {
+  // The bundled table lives in the data partition, and reading it disables the
+  // cache. The first keyboard use can land on the render task (PSRAM stack),
+  // so refuse through the shared guard and let the caller keep its old
+  // behaviour -- pinyin matching simply stays off, which is a documented
+  // fallback, not a panic.
+  if (!memory::internalFlashAllowed(fault::Code::PinyinDbRefused)) {
+    LOG_ERR(kTag, "bundled read refused: this task stack is in PSRAM");
+    return false;
+  }
   const esp_partition_t* partition =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
   if (partition == nullptr) return false;

@@ -683,6 +683,8 @@ const char* FontExtrasActivity::failureText(const font_extras::Failure failure) 
       return tr(STR_FONT_EXTRAS_VERIFY_FAILED);
     case font_extras::Failure::SdCard:
       return tr(STR_FONT_EXTRAS_STORAGE);
+    case font_extras::Failure::SdFull:
+      return tr(STR_FONT_EXTRAS_NO_SPACE);
     case font_extras::Failure::None:
     default:
       return errorMessage_.empty() ? tr(STR_ERROR_GENERAL_FAILURE) : errorMessage_.c_str();
@@ -722,8 +724,16 @@ void FontExtrasActivity::drawWait() {
                         .cancel;
 }
 
+std::string FontExtrasActivity::failureBody(const font_extras::Failure failure) const {
+  std::string body = failureText(failure);
+  const std::string& detail = font_extras::lastDetail();
+  if (!detail.empty()) body += " - " + detail;
+  return body;
+}
+
 void FontExtrasActivity::drawErrorCard() {
-  status_card::paintMessage(renderer, tr(STR_FONT_EXTRAS_ERROR), failureText(failure_));
+  const std::string body = failureBody(failure_);
+  status_card::paintMessage(renderer, tr(STR_FONT_EXTRAS_ERROR), body.c_str());
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, true);
   const auto& metrics = UITheme::getInstance().getMetrics();
   constexpr int kBtnH = 56;
@@ -840,7 +850,8 @@ bool FontExtrasActivity::paintOverlayBeforePresent() {
     return true;
   }
   if (offlineNotice_) {
-    status_card::paintMessage(renderer, tr(STR_FONT_EXTRAS_OFFLINE_TITLE), failureText(failure_));
+    const std::string noticeBody = failureBody(failure_);
+    status_card::paintMessage(renderer, tr(STR_FONT_EXTRAS_OFFLINE_TITLE), noticeBody.c_str());
     const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, true);
     const auto& metrics = UITheme::getInstance().getMetrics();
     constexpr int kBtnH = 56;

@@ -136,7 +136,7 @@ class LicenseScopeTest(unittest.TestCase):
         # kiikoread-original and is excluded; everything else must differ.
         tree = Path(os.environ.get(
             "KIIKOREAD_RC110_DIR",
-            ROOT.parents[1] / ".scratch" / "metalio-research" / "kiikoread-rc110"))
+            ROOT.parents[1] / ".scratch" / "metalio-research" / "rpr-rc110"))
         if not tree.is_dir():
             self.skipTest(f"no kiikoread checkout at {tree}")
         protected = set()

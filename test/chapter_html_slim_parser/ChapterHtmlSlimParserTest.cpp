@@ -60,24 +60,26 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
   ChapterHtmlSlimParser parser{nullptr,
                                filepath,
                                renderer,
-                               0,
-                               1.0f,
-                               false,
-                               false,
-                               0,
+                               /*fontId*/ 0,
+                               /*lineCompression*/ 1.0f,
+                               /*extraParagraphSpacing*/ 0,
+                               /*firstLineIndent*/ 0,
+                               /*firstLineIndentPx*/ 0,
+                               /*paragraphAlignment*/ 0,
+                               /*verticalBottomAlign*/ false,
                                static_cast<uint16_t>(renderer.getScreenWidth()),
                                static_cast<uint16_t>(renderer.getScreenHeight()),
-                               false,
-                               false,
+                               /*hyphenationEnabled*/ false,
+                               /*focusReadingEnabled*/ false,
                                {},
-                               true,
+                               /*embeddedStyle*/ true,
                                "",
                                "",
-                               0,
+                               /*imageRendering*/ 0,
                                {},
                                nullptr,
                                &cssParser,
-                               true};
+                               /*collectTouchLinks*/ true};
 
   void SetUp() override {
     ESP = {};
@@ -112,7 +114,7 @@ TEST_F(ChapterHtmlSlimParserTest, NoTouchKeepsFootnotesWithoutLinkStorage) {
   EXPECT_EQ(parser.currentTextBlock->linkTargets.capacity(), 0U);
   size_t lines = 0;
   EXPECT_TRUE(
-      parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](std::unique_ptr<TextBlock> line, uint32_t) {
+      parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](std::unique_ptr<TextBlock> line, uint32_t, bool) {
         EXPECT_EQ(line->takeLinkSpans().capacity(), 0U);
         ++lines;
         return true;
@@ -156,7 +158,7 @@ TEST_F(ChapterHtmlSlimParserTest, InvalidTextArenaFailsLayoutInsteadOfDroppingLi
   parser.currentTextBlock->addWord("first", EpdFontFamily::REGULAR);
   size_t lines = 0;
   invalidateNextTextBlock = true;
-  EXPECT_FALSE(parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](auto, auto) {
+  EXPECT_FALSE(parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](auto, auto, auto) {
     ++lines;
     return true;
   }));
@@ -193,7 +195,7 @@ TEST_F(ChapterHtmlSlimParserTest, LineWorkspaceFailureEmitsNothing) {
   parser.currentTextBlock->addWord("second", EpdFontFamily::REGULAR);
   size_t lines = 0;
   failNextArray = true;
-  EXPECT_FALSE(parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](auto, auto) {
+  EXPECT_FALSE(parser.currentTextBlock->layoutAndExtractLines(renderer, 0, 400, [&](auto, auto, auto) {
     ++lines;
     return true;
   }));

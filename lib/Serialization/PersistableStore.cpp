@@ -1,4 +1,5 @@
 #include "PersistableStore.h"
+#include <FaultLog.h>
 
 #include <HalStorage.h>
 #include <Logging.h>
@@ -10,6 +11,10 @@
 bool PersistableStoreBase::writeDocToFile(const char* path, const JsonDocument& doc) {
   if (doc.overflowed()) {
     LOG_ERR("PERSIST", "Insufficient heap for JSON document");
+    // The state was *not* saved: settings, statistics and recent books silently
+    // revert to the previous file next boot. This one choke point covers every
+    // store derived from PersistableStore.
+    fault::raise(fault::Code::PersistHeapFail);
     return false;
   }
 

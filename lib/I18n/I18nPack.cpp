@@ -40,6 +40,7 @@
 #if defined(I18N_PACK_HOST_TEST)
 #include "I18nPackHost.h"
 #else
+#include <StackSafety.h>
 #include <esp_cpu.h>
 #include <esp_memory_utils.h>
 #include <esp_partition.h>
@@ -74,11 +75,12 @@ const esp_partition_t* dataPartition() {
 // cannot run then, and ESP-IDF asserts. init()/loadLanguage() are expected on
 // the main task (boot) or the UI task (language picker); this is the backstop
 // that turns a caller mistake into a log line instead of a panic.
-bool stackIsInPsram() {
+bool stackIsInPsram(const fault::Code site) {
 #if defined(I18N_PACK_HOST_TEST)
+  (void)site;  // the host seam supplies the verdict; nothing to record
   return i18nPackStackIsPsram();
 #else
-  return esp_ptr_external_ram(esp_cpu_get_sp());
+  return !memory::internalFlashAllowed(site);
 #endif
 }
 
@@ -107,7 +109,7 @@ struct Pending {
 
 bool init() {
   if (gInitialized) return gStatus == Validity::Ok;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::LanguagePackReadRefused)) {
     gStatus = Validity::PsramStack;
     LOG_ERR(kTag, "refusing to read the language pack from a PSRAM-stack task");
     return false;
@@ -237,7 +239,7 @@ bool loadLanguage(Language lang) {
   if (gFailed[slot]) return false;
   if (!isPacked(lang)) return false;
   if (!init()) return false;
-  if (stackIsInPsram()) {
+  if (stackIsInPsram(fault::Code::LanguagePackLoadRefused)) {
     LOG_ERR(kTag, "refusing to load '%s' from a PSRAM-stack task", LANGUAGE_CODES[slot]);
     return false;
   }

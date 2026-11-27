@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <StackSafety.h>
 #include <SdCardFont.h>
 // Only the PSRAM-stack guard below needs these; keeping them unconditional
 // broke the host test build, which has no ESP headers.
@@ -139,9 +140,7 @@ Result preload(const char* sourcePath, ProgressCallback progress, void* context)
   // cache-disable guard asserts in esp_task_stack_is_sane_cache_disabled().
   // Boards without PSRAM have no external stack, so the check is compiled out
   // (the helper is not declared there).
-#if defined(BOARD_HAS_PSRAM)
-  if (esp_ptr_external_ram(esp_cpu_get_sp())) return Result::NotSafe;
-#endif
+  if (!memory::internalFlashAllowed(fault::Code::FontCachePreloadRefused)) return Result::NotSafe;
 
   SourceIdentity source{};
   const Result check = inspectSource(sourcePath, source);
