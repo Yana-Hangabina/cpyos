@@ -50,6 +50,7 @@
 #include "NetworkStartup.h"
 #include <MemoryLedger.h>
 #include "FontRestorePolicy.h"  // the pairing rule for NetworkStartup's render-memory reclaim
+#include "FontHealth.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -1115,15 +1116,22 @@ void maybeOfferFontExtrasForMissingUiGlyph() {
   std::vector<std::string> families;
   font_extras::installedFallbackFamilies(families);
   const bool emojiReady = font_extras::emojiInstalled();
+  // Only a CJK pack can fix a Han codepoint. "some family is installed" used to
+  // count, so installing world-scripts silenced the prompt for 冥 (U+51A5, outside
+  // the 3,500 core) forever: tofu with no way to learn why.
+  bool cjkPackInstalled = false;
+  for (const auto& family : families) {
+    if (family == "CPYOSCJKCore" || family == "CPYOSCJK") cjkPackInstalled = true;
+  }
   bool fixable = false;
   for (uint8_t i = 0; i < count; ++i) {
     const uint32_t cp = codepoints[i];
     const bool emojiLike = (cp >= 0x1F000 && cp <= 0x1FAFF) || (cp >= 0x2600 && cp <= 0x27BF);
-    // An emoji pack can fix an emoji codepoint; a fallback family can fix text.
+    // An emoji pack can fix an emoji codepoint; a CJK pack can fix text.
     // Already-installed packs must not suppress the other kind, and an
     // unfixable codepoint (e.g. a regional indicator) must not cause a prompt
     // on every boot after the emoji pack is installed.
-    if ((emojiLike && !emojiReady) || (!emojiLike && families.empty())) {
+    if ((emojiLike && !emojiReady) || (!emojiLike && !cjkPackInstalled)) {
       fixable = true;
       break;
     }
@@ -1132,8 +1140,8 @@ void maybeOfferFontExtrasForMissingUiGlyph() {
 
   LOG_INF("FEXT", "missing UI glyph U+%04X; offering font extras", static_cast<unsigned>(codepoints[0]));
   FontExtrasActivity::suppressPromptThisBoot();
-  activityManager.pushActivity(std::make_unique<FontExtrasActivity>(
-      renderer, mappedInputManager, FontExtrasActivity::Purpose::ReaderPrompt));
+  activityManager.pushActivityWith<FontExtrasActivity>(
+      renderer, mappedInputManager, FontExtrasActivity::Purpose::ReaderPrompt);
 }
 #endif
 
@@ -1608,7 +1616,7 @@ void setup() {
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivityWith<SdFirmwareUpdateActivity>(/*recoveryMode=*/true);
-  } else if (HalSystem::isRebootFromPanic()) {
+  } else if (HalSystem::isRebootFromPanic() || HalSystem::isRebootUnexplained()) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
   } else if (postOtaBoot) {
@@ -1823,38 +1831,10 @@ void loop() {
   // subset. Reload it as soon as the network no longer needs the room. Until
   // this pairing existed every screen drawn after a network entry boxed
   // characters the data partition carries (0.8.2: "晋江书籍列表一堆缺字").
-  {
-    font_restore::Situation situation;
-    situation.pending = NetworkStartup::renderMemoryRestorePending();
-    situation.radioIdle = NetworkStartup::radioIdle();
-    situation.stationClaimed = NetworkStartup::stationClaimed();
-    situation.networkHeld = NetworkStartup::networkHeld() || background_work::active();
-    situation.elapsedMs = static_cast<uint32_t>(millis() - NetworkStartup::renderMemoryArmedAtMs());
-    if (font_restore::due(situation)) {
-      NetworkStartup::clearRenderMemoryRestore();
-      const unsigned long reloadStart = millis();
-      {
-        // The independent render task shares the font maps and resident font objects.
-        RenderLock lock;
-        sdFontSystem.ensureLoaded(renderer);
-      }
-      // INFO, not DBG: this is the line that proves the reclaim was reverted, and
-      // the serial default level hides debug output (the 0.8.2 report was exactly
-      // a missing revert nobody could see).
-      LOG_INF("MAIN", "render memory reclaimed for the network was given back: %lu ms",
-              static_cast<unsigned long>(millis() - reloadStart));
-#if CROSSPOINT_VECTOR_FONTS
-      if (!sdFontSystem.hasSupplementFonts()) {
-        // Nothing could be stood up (usually PSRAM). Keep the pairing armed with a
-        // fresh timestamp so a later quiet window tries again; re-arming is what
-        // stops this from spinning the reload on every loop pass.
-        LOG_ERR("MAIN", "reload left no font supplement registered; retrying in a later quiet window");
-        NetworkStartup::rearmRenderMemoryRestore();
-      }
-#endif
-      activityManager.requestUpdate();
-    }
-  }
+  // Revert the network's font reclaim and rebuild any UI role that an earlier
+  // release/rebuild left unregistered. Shared with the Plus port (its main is not
+  // this file), see src/FontHealth.h.
+  font_health::tick(renderer, activityManager);
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
@@ -2165,9 +2145,9 @@ void loop() {
       }
 #endif
       else if (cmd == "FIND") {
-        activityManager.pushActivity(std::make_unique<FindBooksActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<FindBooksActivity>(renderer, mappedInputManager);
       } else if (cmd == "MY") {
-        activityManager.pushActivity(std::make_unique<MyActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<MyActivity>(renderer, mappedInputManager);
       } else if (cmd == "LIBDIRTY") {
         // Force the next Library entry through the reconciliation walk, for the
         // cold-entry latency measurement (the popup that used to follow it is gone).
@@ -2205,11 +2185,11 @@ void loop() {
       } else if (cmd == "HOME") {
         activityManager.goHome();
       } else if (cmd == "SEARCH") {
-        activityManager.pushActivity(std::make_unique<LibraryListActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<LibraryListActivity>(renderer, mappedInputManager);
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenSearch();
       } else if (cmd == "SETSEARCH") {
-        activityManager.pushActivity(std::make_unique<SettingsSearchActivity>(
-            renderer, mappedInputManager, "\xE5\xAD\x97\xE4\xBD\x93"));
+        activityManager.pushActivityWith<SettingsSearchActivity>(
+            renderer, mappedInputManager, "\xE5\xAD\x97\xE4\xBD\x93");
       } else if (cmd == "SEARCHSAMPLE") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugOpenSearchSample();
       } else if (cmd == "EMPTY") {
@@ -2501,7 +2481,7 @@ void loop() {
       } else if (cmd == "PWROFFDEMO") {
         // Bench: raise the shutdown card without a physical hold.
         LOG_ERR("PWR", "serial CMD:PWROFFDEMO");
-        activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<PowerOffActivity>(renderer, mappedInputManager);
       } else if (cmd == "FEXTCANCEL") {
         if (auto* activity = activityManager.currentActivityPtr()) activity->debugCancel();
       } else if (cmd == "ROWDOWN" || cmd == "ROWUP") {
@@ -2592,15 +2572,15 @@ void loop() {
         String path = "/test.epub";
         const int space = cmd.indexOf(' ');
         if (space > 0) path = cmd.substring(space + 1);
-        activityManager.pushActivity(std::make_unique<EpubReaderActivity>(
-            renderer, mappedInputManager, std::string(path.c_str()), false));
+        activityManager.pushActivityWith<EpubReaderActivity>(
+            renderer, mappedInputManager, std::string(path.c_str()), false);
       } else if (cmd == "STATS") {
         activityManager.goToReadingStatsMenu();
       } else if (cmd == "STATSPAGE") {
         // The heatmap always draws the dated sub-page header (the stats dashboard
         // switches to the tab-bar header when it is opened as a main tab), and the
         // menus in front of either need a touch the host cannot send.
-        activityManager.pushActivity(std::make_unique<ReadingHeatmapActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<ReadingHeatmapActivity>(renderer, mappedInputManager);
       } else if (cmd == "TRANSFER") {
         activityManager.goToFileTransfer();
       } else if (cmd == "JJWXC") {
@@ -2853,10 +2833,10 @@ void loop() {
                            WiFi.localIP().toString().c_str());
         }
       } else if (cmd == "WIFI") {
-        activityManager.pushActivity(std::make_unique<WifiSelectionActivity>(renderer, mappedInputManager, false, false));
+        activityManager.pushActivityWith<WifiSelectionActivity>(renderer, mappedInputManager, false, false);
 #if defined(BOARD_HAS_PSRAM)
       } else if (cmd == "FEXTDEMO") {
-        activityManager.pushActivity(std::make_unique<FontExtrasActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<FontExtrasActivity>(renderer, mappedInputManager);
       } else if (cmd.startsWith("FEXTURL")) {
         const int space = cmd.indexOf(' ');
         const String url = space > 0 ? cmd.substring(space + 1) : String();
@@ -3220,7 +3200,7 @@ void loop() {
       } else if (cmd == "JJCACHEUI") {
 #ifdef BOARD_HAS_PSRAM
         JjwxcActivity::requestDeepLink("", JjwxcActivity::DeepLinkAction::OpenCacheQueue);
-        activityManager.pushActivity(std::make_unique<JjwxcActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<JjwxcActivity>(renderer, mappedInputManager);
 #endif
       } else if (cmd.startsWith("JJCACHEENQR")) {
 #ifdef BOARD_HAS_PSRAM
@@ -3236,7 +3216,7 @@ void loop() {
         String novelId = cmd.substring(10);
         novelId.trim();
         JjwxcActivity::requestDeepLink(novelId.c_str(), JjwxcActivity::DeepLinkAction::EnqueueComments);
-        activityManager.pushActivity(std::make_unique<JjwxcActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<JjwxcActivity>(renderer, mappedInputManager);
 #endif
 #endif
       } else if (cmd == "WIFIOFF") {
@@ -3386,7 +3366,7 @@ void loop() {
           LOG_INF("DBG", "MAKEPDF wrote %u bytes", static_cast<unsigned>(sizeof(kPdf) - 1));
         }
       } else if (cmd == "PDF" || cmd.startsWith("PDF ")) {
-        String openPath = "/BOOKS/陈天宇.pdf";
+        String openPath = "/BOOKS/test.pdf";
         if (cmd.length() > 4) {
           openPath = cmd.substring(4);
           openPath.trim();
@@ -3397,8 +3377,8 @@ void loop() {
         }
         PdfReaderActivity::debugInitialPage = 0;
         LOG_ERR("PDF", "serial CMD:PDF opening %s", openPath.c_str());
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, openPath.c_str(), false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, openPath.c_str(), false);
       } else if (cmd == "PDFNEXT" || cmd == "PDFPREV") {
         auto* pdfActivity = pdfForeground(activityManager, cmd.c_str());
         if (pdfActivity) {
@@ -3419,8 +3399,8 @@ void loop() {
         PdfReaderActivity::debugSeedNotePage = page;
         PdfReaderActivity::debugInitialPage = page;
         LOG_ERR("PDF", "serial CMD:PDFNOTE seeding a note on page %d", page + 1);
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false);
       } else if (cmd.startsWith("PDFHL")) {
         int page = 0;
         const int space = cmd.indexOf(' ');
@@ -3429,14 +3409,14 @@ void loop() {
         PdfReaderActivity::debugSeedHighlightPage = page;
         PdfReaderActivity::debugInitialPage = page;
         LOG_ERR("PDF", "serial CMD:PDFHL seeding a highlight on page %d", page + 1);
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false);
       } else if (cmd == "SELFTEST") {
         PdfReaderActivity::debugSelfTest = true;
         PdfReaderActivity::debugInitialPage = -1;
         LOG_ERR("PDF", "serial CMD:SELFTEST walking every page");
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false);
       } else if (cmd == "REFLOW") {
         PdfReaderActivity::debugReflowEnabled = true;
         LOG_ERR("PDF", "serial CMD:REFLOW enabled for the next page render");
@@ -3447,8 +3427,8 @@ void loop() {
         Storage.removeDir("/.crosspoint/pdf_1508938855");
         PdfReaderActivity::debugInitialPage = -1;
         LOG_ERR("PDF", "serial CMD:PDFCACHE rebuilding the big-PDF cache");
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false);
       } else if (cmd.startsWith("PRUNE")) {
         // "CMD:PRUNE <book path>": run the product's per-book cache clear and report what
         // it kept.  This is the check that matters for that action -- a cleared cache must
@@ -3489,8 +3469,8 @@ void loop() {
         const std::string stale = "/.crosspoint/pdf_1508938855/page_" + std::to_string(page) + ".bmp";
         if (Storage.exists(stale.c_str())) Storage.remove(stale.c_str());
         LOG_ERR("PDF", "serial CMD:PDFBIG opening big PDF at page %d", page + 1);
-        activityManager.pushActivity(std::make_unique<PdfReaderActivity>(
-            renderer, mappedInputManager, "/BOOKS/Machine Learning Yearning - 吴恩达.pdf", false));
+        activityManager.pushActivityWith<PdfReaderActivity>(
+            renderer, mappedInputManager, "/BOOKS/test.pdf", false);
       } else if (cmd.startsWith("PDFSEL ")) {
         // ★ The trailing space is load-bearing: "PDFSELACTION" also starts with
         // "PDFSEL", and with a bare prefix here every chip / key-widen code fell into
@@ -3674,7 +3654,7 @@ void loop() {
     // press right after a 2.5 s hold and it opened standby on top of the card.
     // The whole remainder of this gesture is inert.
     pwIgnoreUntil = pwNow + 1200;
-    activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+    activityManager.pushActivityWith<PowerOffActivity>(renderer, mappedInputManager);
     return;
   }
   // Decide the release only after the continuity window: a short press is the

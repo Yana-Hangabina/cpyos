@@ -1,0 +1,18 @@
+{
+  "en": [
+    "Crash screen names the failed allocation and survives a full heap",
+    "Settings no longer aborts when memory is nearly gone",
+    "Wi-Fi failures say the cause and recover without a reboot",
+    "Fonts stay loaded after using the network (both devices)",
+    "The Plus gains a crash screen and fault record for the first time",
+    "Update the data packs together with this release"
+  ],
+  "zh": [
+    "崩溃屏显示失败分配大小并可翻页",
+    "设置页在内存紧张时不再崩溃",
+    "Wi-Fi 失败给出具体原因并可自恢复",
+    "联网后不再卸载字体（双设备）",
+    "Plus 首次具备崩溃屏与故障记录",
+    "请与固件一并更新数据包"
+  ]
+}

@@ -1,0 +1,43 @@
+diff --git a/libs/font/FreeInkFont/src/FontAlloc.c b/libs/font/FreeInkFont/src/FontAlloc.c
+--- a/libs/font/FreeInkFont/src/FontAlloc.c
++++ b/libs/font/FreeInkFont/src/FontAlloc.c
+@@ -5,19 +5,32 @@
+ #if defined(ESP_PLATFORM)
+ #include "esp_heap_caps.h"
+ 
+-// PSRAM first, internal heap as fallback. heap_caps_malloc(MALLOC_CAP_SPIRAM)
+-// returns NULL when no PSRAM is fitted (or it is exhausted), so the fallback
+-// also covers no-PSRAM boards transparently.
++// PSRAM only, with an internal-RAM fallback *only on boards that have no PSRAM*.
++//
++// The old code fell back to internal RAM whenever the PSRAM allocation failed.
++// On this device that silently moved font arenas (16 KB UI faces, 256 KB pack
++// arenas, the stream prefixes) into the ~90 KB internal heap once PSRAM was
++// full, starving the Wi-Fi/TLS budget -- the same class as the 0.7.x allocator
++// bug, with the same silent shape. A font that cannot get PSRAM now fails
++// loudly (the caller logs and keeps the previous face), and internal RAM stays
++// the radio's.
++// CPYOS-LOCAL-PATCH
+ void* fiFontMalloc(size_t size) {
+   void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+-  if (p == NULL) p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+-  return p;
++  if (p != NULL) return p;
++  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
++    return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++  }
++  return NULL;
+ }
+ 
+ void* fiFontRealloc(void* ptr, size_t size) {
+   void* p = heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM);
+-  if (p == NULL && size != 0) p = heap_caps_realloc(ptr, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+-  return p;
++  if (p != NULL || size == 0) return p;
++  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
++    return heap_caps_realloc(ptr, size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
++  }
++  return NULL;
+ }
+ 
+ void fiFontFree(void* ptr) { heap_caps_free(ptr); }

@@ -189,7 +189,7 @@ void SettingsSearchActivity::activate(const int index) {
     const auto page = hit.hub == 0   ? SettingsHubActivity::Page::Fonts
                       : hit.hub == 1 ? SettingsHubActivity::Page::Updates
                                      : SettingsHubActivity::Page::WebPlugins;
-    activityManager.pushActivity(std::make_unique<SettingsHubActivity>(renderer, mappedInput, page));
+    activityManager.pushActivityWith<SettingsHubActivity>(renderer, mappedInput, page);
     return;
   }
   activityManager.pushActivity(

@@ -81,7 +81,12 @@ class SdCardFontSystem {
   // supplements were attached; re-point the supplement faces at the id that is
   // actually live now. Cheap and idempotent.
   void attachSupplementReaderFonts(GfxRenderer& renderer, uint8_t readerPointSize);
-  bool hasSupplementFonts() const { return !supplementFamilies_.empty(); }
+  // True only when the reader face AND every UI role got a supplement face.
+  // A partly built set used to count as healthy: the loop below `break`s on an
+  // allocation failure but still recorded the point size, so the next call
+  // short-circuited on "same" and the UI stayed on the 1,526-codepoint subset
+  // until reboot -- the 0.8.4 "boxes on Home, reader fine" report.
+  bool hasSupplementFonts() const { return supplementComplete_; }
 #endif
 
   /// Resolve an SD card font ID from family name + reader point size.
@@ -210,6 +215,9 @@ class SdCardFontSystem {
   };
   std::vector<std::unique_ptr<SupplementFamily>> supplementFamilies_;
   uint8_t supplementPointSize_ = 0;
+  // Set only when the whole set was built; drives hasSupplementFonts() and the
+  // main-loop re-arm, and keeps a partial build retryable.
+  bool supplementComplete_ = false;
   // Role -> point bindings the current UI faces were built for. A uiFontScale
   // change moves them, which is what makes loadSupplementFonts() rebuild.
   std::array<typography::UiRolePoint, typography::kMaxUiRolePoints> supplementUiRoles_{};

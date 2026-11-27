@@ -486,20 +486,40 @@ void SettingsActivity::selectMainTabContentEdge(const MainTabContentEdge edge) {
   moveRingTo(edge == MainTabContentEdge::First ? firstSelectableRing() : lastSelectableRing());
 }
 
+bool SettingsActivity::saveSettingsChecked() {
+  if (SETTINGS.saveToFile()) return true;
+  LOG_ERR("SET", "settings save failed");
+  fault::raise(fault::Code::SettingsSaveFailed);
+  static const char* kOk[] = {"OK"};
+  // Reuse the SD wording: the write is what failed, and this is the one thing
+  // the user can act on (free space / reseat the card).
+  optionPopup.showMessage(tr(STR_ERROR_MSG), tr(STR_FONT_EXTRAS_STORAGE), kOk, 1, 0, [](int) {});
+  requestUpdate();
+  return false;
+}
+
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
 
+  // Peak allocation is the reason this screen once aborted with `operator new
+  // failed` (0.8.4 field report): getSettingsList() hands back a fresh ~18 KB
+  // vector of SettingInfo (each with std::function/vector members), and copying
+  // its entries into the four category vectors asked for a second ~18 KB while
+  // the first was still alive. Moving the entries costs nothing and leaves the
+  // temporary as an array of moved-from slots. The vectors keep their capacity
+  // across rebuilds (clear() only), so a settings change no longer reallocates.
   // Pick up any fonts uploaded/deleted over the web server since the last
   // reader activity ran — otherwise the font-family picker shows stale list.
   sdFontSystem.refreshIfDirty();
 
   std::vector<DictionaryEntry> dictionaries;
   DictionaryRegistry::discover(dictionaries);
+  std::vector<SettingInfo> all = getSettingsList(&sdFontSystem.registry(), &dictionaries);
 
-  for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
+  for (auto& setting : all) {
     if (setting.category == StrId::STR_NONE_OPT || home_button::isSetting(setting.valuePtr)) continue;
     // The shelf/apps/tab-position layouts stay live under CPY
     // (LibraryListActivity::usesCoverGrid and the apps/tab layouts honour
@@ -537,7 +557,7 @@ void SettingsActivity::rebuildSettingsLists() {
           SETTINGS.deepSleepStyle != CrossPointSettings::DEEP_SLEEP_COVER_TRANSPARENT) {
         continue;
       }
-      displaySettings.push_back(setting);
+      displaySettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_READER) {
       // Settings merged into "Text Settings"
       // (they stay in the shared list for the web settings API)
@@ -545,13 +565,13 @@ void SettingsActivity::rebuildSettingsLists() {
       // Vocabulary lookups moved into the Fonts & Dictionaries hub, next to the
       // dictionary picker and the lookup history they belong to.
       if (setting.valuePtr == &CrossPointSettings::vocabularyHistoryEnabled) continue;
-      readerSettings.push_back(setting);
+      readerSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
         continue;
       }
-      controlsSettings.push_back(setting);
+      controlsSettings.push_back(std::move(setting));
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
       // These stay in the shared list for persistence and the web API, but the
       // device UI owns them in the Date & Time submenu.
@@ -560,7 +580,7 @@ void SettingsActivity::rebuildSettingsLists() {
           setting.valuePtr == &CrossPointSettings::clockFormat) {
         continue;
       }
-      systemSettings.push_back(setting);
+      systemSettings.push_back(std::move(setting));
     }
   }
 
@@ -984,13 +1004,13 @@ bool SettingsActivity::handleButtons() {
     if (subpage_) {
       // A child page always leaves in one press (header arrow, Back key or
       // edge gesture): it returns to My/Search, not Home.
-      SETTINGS.saveToFile();
+      saveSettingsChecked();
       finish();
     } else if (ringPos() > 0) {
       activeNav().selected = 0;
       requestUpdate();
     } else {
-      SETTINGS.saveToFile();
+      saveSettingsChecked();
       onGoHome();
     }
     return true;
@@ -1056,7 +1076,7 @@ void SettingsActivity::toggleCurrentSetting() {
         valueSetter(static_cast<uint8_t>(idx));
         if (managedPicker) return;
         syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-        SETTINGS.saveToFile();
+        saveSettingsChecked();
         rebuildSettingsLists();
       };
       if (!setting.enumStringValues.empty()) {
@@ -1111,7 +1131,7 @@ void SettingsActivity::toggleCurrentSetting() {
               gpio.stopHapticFeedback();
 #endif
             syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-            SETTINGS.saveToFile();
+            saveSettingsChecked();
             rebuildSettingsLists();
           });
       requestUpdate();
@@ -1147,7 +1167,7 @@ void SettingsActivity::toggleCurrentSetting() {
     // Every child page returns here through ActivityManager's Pop; make sure the
     // settings list is both rebuilt (values may have changed) and repainted.
     auto resultHandler = [this](const ActivityResult&) {
-      SETTINGS.saveToFile();
+      saveSettingsChecked();
       rebuildSettingsLists();
       requestUpdate();
     };
@@ -1219,7 +1239,7 @@ void SettingsActivity::toggleCurrentSetting() {
           return;
         }
         startActivityForResult(std::move(activity), [this](const ActivityResult&) {
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           // Keep the connection for the idle timeout instead of restarting to
           // reclaim the driver heap; My/Settings both use this same policy.
           rebuildSettingsLists();
@@ -1371,7 +1391,7 @@ void SettingsActivity::toggleCurrentSetting() {
 #endif
       case SettingAction::ManageDictionaries:
         startActivityForResultWith<DictionaryDownloadActivity>([this](const ActivityResult&) {
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           rebuildSettingsLists();
           requestUpdate();
         });
@@ -1394,7 +1414,7 @@ void SettingsActivity::toggleCurrentSetting() {
         // re-run on Pop (see ActivityManager::loop()), so a language switch
         // needs an explicit rebuild here rather than the generic resultHandler.
         startActivityForResultWith<LanguageSelectActivity>([this](const ActivityResult&) {
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           rebuildSettingsLists();
         });
         break;
@@ -1463,7 +1483,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
-  SETTINGS.saveToFile();
+  saveSettingsChecked();
   if (setting.valuePtr == &CrossPointSettings::networkType) {
     // Official firmware semantics: the transport is chosen at boot, so a change
     // takes effect after a restart instead of switching under live sockets.
@@ -1557,7 +1577,7 @@ void SettingsActivity::openOtaUpdate() {
   }
 #else
   if (startActivityForResultWith<OtaUpdateActivity>([this](const ActivityResult&) {
-        SETTINGS.saveToFile();
+        saveSettingsChecked();
         rebuildSettingsLists();
       })) {
     return;
@@ -1573,7 +1593,7 @@ void SettingsActivity::openSleepTimeoutPicker() {
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
           SETTINGS.sleepTimeoutMinutes = static_cast<uint8_t>(std::get<IntervalResult>(result.data).value);
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
         }
         requestUpdate();
       },
@@ -1590,7 +1610,7 @@ void SettingsActivity::openBuzzerStrengthPicker() {
         if (!result.isCancelled) {
           const int value = std::get<IntervalResult>(result.data).value;
           SETTINGS.buzzerStrength = static_cast<uint8_t>(std::clamp(value, 0, 100));
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           BuzzerFeedback::preview(static_cast<BuzzerFeedback::Pitch>(SETTINGS.buzzerPitch),
                                   SETTINGS.buzzerStrength);
         }
@@ -1615,7 +1635,7 @@ void SettingsActivity::openReadingBackgroundMenu() {
                    SETTINGS.readingBackgroundEnabled ? 1 : 0, [this](const int selected) {
                      if (selected == 0) {
                        SETTINGS.readingBackgroundEnabled = 0;
-                       SETTINGS.saveToFile();
+                       saveSettingsChecked();
                        requestUpdate();
                        return;
                      }
@@ -1637,7 +1657,7 @@ void SettingsActivity::openReadingBackgroundPicker() {
         status_card::showWait(renderer, tr(STR_LOADING_POPUP), nullptr, nullptr, -1, false, millis());
         if (readingBackground::createCacheFromPng(renderer, selected->path.c_str())) {
           SETTINGS.readingBackgroundEnabled = 1;
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           requestUpdate();
         } else {
           optionPopup.show(StrId::STR_FAILED_LOWER, OK_OPTION, static_cast<int>(std::size(OK_OPTION)), 0, [](int) {});
@@ -1667,7 +1687,7 @@ void SettingsActivity::openSleepImagePicker(const char* destPath, uint8_t CrossP
         // renderer's Bitmap path streams it row by row; no full-frame buffer.
         if (PngToBmpConverter::pngFileToBmpFile(selected->path.c_str(), destPath, /*crop=*/false)) {
           SETTINGS.*stylePtr = customValue;
-          SETTINGS.saveToFile();
+          saveSettingsChecked();
           rebuildSettingsLists();
           requestUpdate();
         } else {

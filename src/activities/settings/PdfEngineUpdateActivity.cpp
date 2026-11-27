@@ -128,8 +128,9 @@ void PdfEngineUpdateActivity::connectAndStart() {
     return;
   }
   if (!pdf_engine::startUpdate()) {
-    // Either another run is still in flight or the task could not be created.
-    showResult(tr(STR_UPDATE_FAILED), nullptr, false);
+    // Either another run is still in flight or the task could not be created;
+    // both are retried from here, so say that rather than showing a bare title.
+    showResult(tr(STR_UPDATE_FAILED), tr(STR_TAP_TO_RETRY), false);
     return;
   }
   phase_ = Phase::Running;
@@ -183,8 +184,10 @@ void PdfEngineUpdateActivity::installNow() {
       showResult(tr(STR_UPDATE_FAILED), tr(STR_PDF_ENGINE_NOT_FOUND), false);
       break;
     case pdf_module::InstallStatus::BadHeader:
+      showResult(tr(STR_UPDATE_FAILED), tr(STR_PDF_ENGINE_MISMATCH), false);
+      break;
     case pdf_module::InstallStatus::IoError:
-      showResult(tr(STR_UPDATE_FAILED), nullptr, false);
+      showResult(tr(STR_UPDATE_FAILED), tr(STR_FONT_EXTRAS_STORAGE), false);
       break;
     case pdf_module::InstallStatus::Busy:
       // A PDF document still holds the engine.  Nothing was erased; closing

@@ -1,5 +1,7 @@
 #if defined(CROSSPOINT_PDF_XIP)
 #include "PdfDocumentXip.h"
+#include <FaultLog.h>
+#include <Memory.h>
 
 #include <Logging.h>
 
@@ -87,14 +89,25 @@ bool PdfDocument::extractText(int page, std::vector<std::string>& paragraphs, bo
   hasImages = false;
   const auto* table = pdf_module::ops();
   if (!handle_ || !table || !table->extract_text) return false;
-  // Called from the 8 KB UI loop as well as the PDF worker; this must not be
-  // a stack buffer.
-  std::vector<char> storage(16384, '\0');
-  char* buffer = storage.data();
+  // Called from the 8 KB UI loop as well as the PDF worker; this must not be a
+  // stack buffer. It used to be a throwing std::vector<char>(16384): after any
+  // Wi-Fi session the largest *internal* block falls to 8-11 KB on this board, and
+  // under -fno-exceptions the failed `new` aborted the reader (PNC-04 class).
+  // The buffer is CPU-only, so PSRAM is the right home; both allocations are
+  // no-throw and a failure returns false instead of dying.
+  constexpr size_t kTextBufferBytes = 16384;
+  auto storage = memory::makePsramByteBufferNoThrow(kTextBufferBytes);
+  if (storage.get() == nullptr) storage = memory::makeInternalByteBufferNoThrow(kTextBufferBytes);
+  if (storage.get() == nullptr) {
+    LOG_ERR("PDF", "no %u B buffer for page text; page treated as textless", static_cast<unsigned>(kTextBufferBytes));
+    fault::raise(fault::Code::PdfTextBufferRefused, static_cast<uint32_t>(kTextBufferBytes));
+    return false;
+  }
+  char* buffer = reinterpret_cast<char*>(storage.get());
   int images = 0;
-  const int n = table->extract_text(handle_, page, buffer, static_cast<int>(storage.size()) - 1, &images);
+  const int n = table->extract_text(handle_, page, buffer, static_cast<int>(kTextBufferBytes) - 1, &images);
   if (n <= 0) return false;
-  buffer[storage.size() - 1] = '\0';
+  buffer[kTextBufferBytes - 1] = '\0';
   hasImages = images != 0;
   size_t start = 0;
   for (size_t i = 0; i <= static_cast<size_t>(n); ++i) {

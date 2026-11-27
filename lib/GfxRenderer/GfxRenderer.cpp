@@ -405,6 +405,42 @@ int GfxRenderer::resolveFontFamilyId(const int fontId) const {
   return fontId;
 }
 
+int GfxRenderer::firstRegisteredFallback(const int fontId, const int resolvedFontId) const {
+  // Walk the two chains the resolver itself consults, in the same order, and
+  // return the first id that is actually in fontMap.
+  const auto consider = [this](const int id) -> int {
+    if (id == 0) return 0;
+    if (fontMap.find(id) == fontMap.end()) return 0;
+    return id;
+  };
+  for (const int start : {fontId, resolvedFontId}) {
+    const auto chain = fallbackFontMap_.find(start);
+    if (chain != fallbackFontMap_.end()) {
+      for (const int id : chain->second) {
+        if (const int hit = consider(id)) return hit;
+      }
+    }
+    const auto supplements = supplementalFontMap_.find(start);
+    if (supplements != supplementalFontMap_.end()) {
+      for (const int id : supplements->second) {
+        if (const int hit = consider(id)) return hit;
+      }
+    }
+  }
+  return 0;
+}
+
+void GfxRenderer::noteFontRouteMissing(const int fontId) const {
+  // Once per boot per id in the log; the fault ring already de-duplicates by
+  // code, and this line is what tells a reader which face went away.
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    LOG_ERR("GFX", "Font %d is not registered; text would have been skipped", fontId);
+  }
+  fault::raise(fault::Code::GfxFontRouteMissing, static_cast<uint32_t>(fontId));
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   // A target may rebind a UI id to the SD family its UI is drawn in (setPreferredFont).
   // Resolving it here, instead of swapping fontMap entries, keeps measuring and drawing
@@ -1337,13 +1373,17 @@ int GfxRenderer::getTextWidthRun(const int fontId, const char* text, const EpdFo
 #ifdef CROSSMUX_UI_PROFILE_HIGH_DPI
   const int resolvedFontId = resolveTextFontId(fontId, renderedText, style);
 #endif
-  const auto fontIt = fontMap.find(resolvedFontId);
+  auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-    return 0;
+    const int fallbackId = firstRegisteredFallback(fontId, resolvedFontId);
+    if (fallbackId == 0) {
+      noteFontRouteMissing(resolvedFontId);
+      return 0;
+    }
+    fontIt = fontMap.find(fallbackId);
   }
 
-  if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
+  if (fontIt->first != fontId) ensureSdGlyphsResident(fontIt->first, renderedText, style, true);
 
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(renderedText, &w, &h, style);
@@ -1534,10 +1574,22 @@ void GfxRenderer::drawTextRun(const int fontId, const int x, const int y, const 
 
   if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, renderedText, renderStyle, false);
 
-  const auto fontIt = fontMap.find(resolvedFontId);
+  int drawnFontId = resolvedFontId;
+  auto fontIt = fontMap.find(drawnFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
-    return;
+    const int fallbackId = firstRegisteredFallback(fontId, drawnFontId);
+    if (fallbackId == 0) {
+      noteFontRouteMissing(drawnFontId);
+      return;
+    }
+    drawnFontId = fallbackId;
+    fontIt = fontMap.find(drawnFontId);
+  }
+  if (drawnFontId != resolvedFontId) {
+    // Recompute the baseline for the face that will actually draw.
+    yPos = y + getFontAscenderSize(drawnFontId);
+    if (drawnFontId != fontId) yPos += (getLineHeight(fontId) - getLineHeight(drawnFontId)) / 2;
+    if (drawnFontId != fontId) ensureSdGlyphsResident(drawnFontId, renderedText, style, false);
   }
   const auto& font = fontIt->second;
 

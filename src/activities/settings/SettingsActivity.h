@@ -337,6 +337,9 @@ class SettingsActivity final : public UiTabListActivity {
   void confirmUsbDownloadMode();
   void releaseListsForMemoryHungryChild();
   void rebuildSettingsLists();
+  // SETTINGS.saveToFile() with a visible failure: the change silently reverts on
+  // the next boot otherwise, and the user has no way to know the card write failed.
+  bool saveSettingsChecked();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
 
   void drawChrome() override;

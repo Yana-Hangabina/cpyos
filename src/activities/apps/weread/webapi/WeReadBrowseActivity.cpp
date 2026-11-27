@@ -1,3 +1,4 @@
+#include "FontReclaim.h"
 #include "WeReadBrowseActivity.h"
 #include "components/StatusCards.h"
 
@@ -347,7 +348,7 @@ void WeReadBrowseActivity::activateList() {
 
 void WeReadBrowseActivity::releaseReaderFont() {
   if (!readerFontReady_) return;
-  sdFontSystem.releaseLoadedFont(renderer);
+  font_reclaim::releaseForMemory(renderer);
   if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
   readerFontId_ = 0;
   readerFontReady_ = false;

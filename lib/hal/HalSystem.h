@@ -34,7 +34,15 @@ uint64_t getUptimeSeconds();
 HeapInfo getHeapInfo();
 
 std::string getPanicInfo(bool full = false);
+// Allocation-free access to the short panic message: CrashActivity runs on a
+// heap that may already be empty, and a std::string copy there is a second crash.
+size_t getPanicMessage(char* out, size_t capacity);
 bool isRebootFromPanic();
+// True when the previous boot ended in a way the user cannot explain and the
+// fault ring is worth showing: task/interrupt watchdog, brown-out. Those reset
+// without running a panic hook, so isRebootFromPanic() is false and the device
+// used to reboot straight into the normal UI with the evidence unread.
+bool isRebootUnexplained();
 
 // ---------------------------------------------------------------------------
 // Crash context: what a field report can carry without a serial console.

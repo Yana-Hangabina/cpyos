@@ -34,6 +34,9 @@ uint64_t getUptimeSeconds();
 HeapInfo getHeapInfo();
 
 std::string getPanicInfo(bool full = false);
+// Allocation-free panic message for the crash screen (mirrors the shared
+// header). Plus installs no panic hooks, so there is nothing to copy.
+size_t getPanicMessage(char* out, size_t capacity);
 bool isRebootFromPanic();
 
 // True when this boot followed a reset that the firmware itself (or a flashing
@@ -41,6 +44,7 @@ bool isRebootFromPanic();
 // wake, etc. Those must not be mistaken for a reader crash. Power loss,
 // brownout, panic and watchdog resets return false.
 bool isRebootDeliberate();
+bool isRebootUnexplained();
 
 bool supportsUsbDownloadMode();
 bool rebootToUsbDownload();

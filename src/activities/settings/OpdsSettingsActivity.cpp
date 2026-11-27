@@ -231,6 +231,8 @@ const char* OpdsSettingsActivity::headerTitle() const {
 void OpdsSettingsActivity::drawFooter() {
   UiListActivity::drawFooter();
   if (showSaveError) {
-    status_card::paintMessage(renderer, tr(STR_ERROR_GENERAL_FAILURE), nullptr);
+    // The server itself is fine; the write to the card is what failed, and that
+    // is the thing the user can act on.
+    status_card::paintMessage(renderer, tr(STR_ERROR_GENERAL_FAILURE), tr(STR_FONT_EXTRAS_STORAGE));
   }
 }

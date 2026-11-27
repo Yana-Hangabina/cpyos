@@ -1,5 +1,7 @@
 #include "SdCardFontSystem.h"
 
+#include <FaultLog.h>
+
 #if defined(CROSSPOINT_SYSTEM_FONT_PACK)
 #include "SystemCoreFont.h"
 #include "SystemFontPack.h"
@@ -955,6 +957,7 @@ void SdCardFontSystem::attachSupplementReaderFonts(GfxRenderer& renderer, const 
 }
 
 void SdCardFontSystem::unloadSupplementFonts(GfxRenderer& renderer) {
+  supplementComplete_ = false;
   for (auto& set : supplementFamilies_) {
     for (const int id : set->uiIds) {
       renderer.unregisterTtfFont(id);
@@ -997,7 +1000,14 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   // `families`, and the memory-backed branch below is unreachable -- the fallback would be
   // code that exists but never runs.
   const bool residentCore = system_core_font::residentData(nullptr) != nullptr;
-  if ((system_core_font::faceOnSd() || residentCore) &&
+  const system_core_font::Presence corePresence = system_core_font::presence();
+  // A refused probe (PSRAM stack) is "unknown", not "absent": unloading the live
+  // set because the render task happened to ask first would drop the 3,500-glyph
+  // face mid-session. Keep what is registered and retry from an internal stack.
+  if (corePresence == system_core_font::Presence::Unknown && !supplementFamilies_.empty()) {
+    return hasSupplementFonts();
+  }
+  if ((corePresence != system_core_font::Presence::Absent || residentCore) &&
       std::find(families.begin(), families.end(), system_core_font::kFamilyName) == families.end()) {
     families.insert(families.begin(), system_core_font::kFamilyName);
   }
@@ -1019,8 +1029,11 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   }
 
   if (families.empty()) {
-    if (!supplementFamilies_.empty()) unloadSupplementFonts(renderer);
+    if (corePresence != system_core_font::Presence::Unknown && !supplementFamilies_.empty()) {
+      unloadSupplementFonts(renderer);
+    }
     supplementPointSize_ = 0;
+    supplementComplete_ = false;
     return false;
   }
 
@@ -1038,8 +1051,17 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
   if (same) return true;
 
   unloadSupplementFonts(renderer);
+  supplementComplete_ = false;
   // A pack installs a new family directory; re-scan so findFamily() sees it.
   registry_.discover();
+
+  // How many UI roles actually ended up with a face. Recorded below so a
+  // partly built set is not cached as healthy (see hasSupplementFonts()).
+  size_t coveredRoles = 0;
+  // The core is the page-text face; a set whose reader face failed but whose UI
+  // faces loaded looks healthy on every label while books silently fall back to
+  // the app0 subset. That must count as incomplete.
+  bool coreReaderMissing = false;
 
   const bool fourBit = renderer.getGrayscaleLevels() == 16;
   for (const auto& name : families) {
@@ -1116,6 +1138,7 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
       } else {
         LOG_ERR("SDFS", "font supplement %s: reader face failed at %upt", name.c_str(),
                 static_cast<unsigned>(readerPointSize));
+        if (isCore) coreReaderMissing = true;
       }
     }
 
@@ -1149,6 +1172,7 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
         uiIdBySize[pointSize] = supplementId;
       }
       renderer.addSupplementFont(roleFontId, supplementId);
+      ++coveredRoles;
       // A pack rebinds the role to its own CJK_UI_<pt> face, and the resolver
       // looks for supplements under the *effective* id as well as the role id.
       const int cjkId = cjkUiIdForPoint(pointSize);
@@ -1168,12 +1192,28 @@ bool SdCardFontSystem::loadSupplementFonts(GfxRenderer& renderer, uint8_t reader
     supplementFamilies_.push_back(std::move(set));
   }
 
-  supplementPointSize_ = readerPointSize;
-  supplementUiRoleCount_ = uiRoleCount;
-  supplementUiRoles_ = uiRoles;
-  LOG_INF("SDFS", "font supplements: %zu families at %upt (%u UI roles)", supplementFamilies_.size(),
-          static_cast<unsigned>(readerPointSize), static_cast<unsigned>(uiRoleCount));
-  return !supplementFamilies_.empty();
+  const bool complete = !supplementFamilies_.empty() && coveredRoles >= uiRoleCount && !coreReaderMissing;
+  supplementComplete_ = complete;
+  if (complete) {
+    supplementPointSize_ = readerPointSize;
+    supplementUiRoleCount_ = uiRoleCount;
+    supplementUiRoles_ = uiRoles;
+    LOG_INF("SDFS", "font supplements: %zu families at %upt (%u UI roles)", supplementFamilies_.size(),
+            static_cast<unsigned>(readerPointSize), static_cast<unsigned>(uiRoleCount));
+  } else {
+    // Leave the cache keys cleared so the next ensureLoaded()/due() retries
+    // instead of short-circuiting on "same" for the rest of the boot. The UI is
+    // on the app0 subset until then, which is exactly the state the field report
+    // photographed -- now it is visible as STR-06 and retried.
+    supplementPointSize_ = 0;
+    supplementUiRoleCount_ = 0;
+    LOG_ERR("SDFS", "font supplements incomplete: %u of %u UI roles%s; will retry",
+            static_cast<unsigned>(coveredRoles), static_cast<unsigned>(uiRoleCount),
+            coreReaderMissing ? ", core reader face failed" : "");
+    fault::raise(fault::Code::FontSupplementIncomplete,
+                 static_cast<uint32_t>(coveredRoles) | (static_cast<uint32_t>(uiRoleCount) << 16));
+  }
+  return complete;
 }
 
 // Public wrapper (distinct name) so a caller can mint an id with the SD font

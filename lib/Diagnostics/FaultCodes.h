@@ -114,6 +114,13 @@ enum class Code : uint16_t {
   PersistHeapFail = 0xA0,     // settings/statistics JSON could not be allocated: not saved
   StateVersionUnknown = 0xA1,  // a persisted blob was written by a newer/older format
   AtomicReplaceDiscarded = 0xA2,  // a caller ignored the result of an atomic replace
+  HeapAtAllocFailure = 0xA3,  // free/largest (KB, packed) at the operator new that failed
+  GfxFontRouteMissing = 0xA4,  // a resolved font id is not registered: that text was skipped
+  FontSupplementIncomplete = 0xA5,  // supplement faces only partly built; UI runs on the subset
+  FontRolesRebuilt = 0xA6,  // UI font roles were unbound and got rebuilt by the watchdog
+  ActivityCreateFailed = 0xA7,  // an activity could not be allocated; the tap did nothing
+  PdfTextBufferRefused = 0xA8,  // no 16 KB buffer for page text; page treated as textless
+  SettingsSaveFailed = 0xA9,  // a settings write failed; the change reverts on reboot
 
   // --- 0xC0..0xFF: reserved for the self-healing tier (deliberately not raised) ---------
   ReservedSelfHealingFirst = 0xC0,
@@ -196,6 +203,13 @@ inline constexpr Entry kTable[] = {
     {Code::PersistHeapFail, "STR-01", "persistable store could not allocate; state not saved"},
     {Code::StateVersionUnknown, "STR-02", "persisted state version unknown; defaults used"},
     {Code::AtomicReplaceDiscarded, "STR-03", "an atomic replace failure was ignored by its caller"},
+    {Code::HeapAtAllocFailure, "STR-04", "heap free/largest (KB) when an allocation failed"},
+    {Code::GfxFontRouteMissing, "STR-05", "text skipped: resolved font id is not registered"},
+    {Code::FontSupplementIncomplete, "STR-06", "supplement faces partly built; UI runs on the subset"},
+    {Code::FontRolesRebuilt, "STR-07", "UI font roles were unbound; the main-loop watchdog rebuilt them"},
+    {Code::ActivityCreateFailed, "STR-08", "activity allocation failed; the requested screen did not open"},
+    {Code::PdfTextBufferRefused, "STR-09", "no buffer for PDF page text; the page was treated as textless"},
+    {Code::SettingsSaveFailed, "STR-10", "a settings write failed; the change reverts on reboot"},
 };
 
 inline constexpr uint16_t kTableSize = static_cast<uint16_t>(sizeof(kTable) / sizeof(kTable[0]));

@@ -41,6 +41,28 @@
 namespace fui = freeink::ui;
 
 namespace {
+// The failure text the sheet shows. Every branch used to say 「错误:通用故障」,
+// which told the user (and us) nothing; the classification below is computed
+// from data the screen already has.
+StrId failureText(const wifi_attempt::FailureKind kind, const bool lowMemory) {
+  if (lowMemory) return StrId::STR_DICT_LOW_MEMORY;
+  switch (kind) {
+    case wifi_attempt::FailureKind::NetworkNotFound:
+      return StrId::STR_ERROR_NETWORK_NOT_FOUND;
+    case wifi_attempt::FailureKind::Timeout:
+      return StrId::STR_ERROR_CONNECTION_TIMEOUT;
+    case wifi_attempt::FailureKind::Auth:
+      return StrId::STR_WIFI_AUTH_FAILED;
+    case wifi_attempt::FailureKind::Refused:
+    case wifi_attempt::FailureKind::General:
+    default:
+      return StrId::STR_WIFI_CONN_FAILED;
+  }
+}
+}  // namespace
+
+
+namespace {
 constexpr fui::ActionId ACTION_ROW = 1;
 constexpr fui::ActionId ACTION_SCAN = 2;
 constexpr fui::ActionId ACTION_PROMPT = 3;
@@ -410,6 +432,7 @@ void WifiSelectionActivity::onEnter() {
   beginRefused_ = false;
   staleFailureNoted_ = false;
   scanRetryUsed_ = false;
+  hadFailure_ = false;
   const size_t savedCredentialCount = WIFI_STORE.getCredentialCount();
   autoAttemptedSsids.reserve(savedCredentialCount);
 
@@ -911,7 +934,13 @@ void WifiSelectionActivity::attemptConnection() {
 
   WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
   if (!NetworkStartup::setMode(renderer, WIFI_STA)) {
+    // Recovery belongs to NetworkStartup (it restarts the driver once and retries
+    // there), so this screen only reports the final failure -- with the cause the
+    // owner already measured: affordability is the one part the sheet can name.
     LOG_ERR("WIFI", "Station initialization failed");
+    lastFailure_ = failureText(wifi_attempt::FailureKind::Refused, !NetworkStartup::canAffiliate(false));
+    hadFailure_ = true;
+    connectionError = I18N.get(lastFailure_);
     showNetworkError("station init (connect)");
     return;
   }
@@ -962,6 +991,9 @@ void WifiSelectionActivity::attemptConnection() {
   if (wifi_attempt::classifyBegin(before, after, NetworkStartup::tracksRadioEvents()) ==
       wifi_attempt::Verdict::DriverRefused) {
     beginRefused_ = true;
+    // NetworkStartup::joinStation() already restarted the station and retried once
+    // when the driver refused without a radio event; reaching here means even that
+    // was refused, so report instead of starting a second recovery policy.
     LOG_ERR("WIFI", "join not issued: ssid=%s status=%d reason=%u", selectedSSID.c_str(), beginStatus,
             static_cast<unsigned>(lastDisconnectReason()));
   }
@@ -1094,7 +1126,9 @@ void WifiSelectionActivity::checkConnectionStatus() {
     beginRefused_ = false;
     LOG_ERR("WIFI", "join not issued; ending the attempt: ssid=%s status=%d reason=%u", selectedSSID.c_str(),
             static_cast<int>(status), static_cast<unsigned>(lastDisconnectReason()));
-    connectionError = tr(STR_ERROR_GENERAL_FAILURE);
+    lastFailure_ = failureText(wifi_attempt::FailureKind::Refused, !NetworkStartup::canAffiliate(false));
+    hadFailure_ = true;
+    connectionError = I18N.get(lastFailure_);
     if (autoConnecting) {
       handleAutoConnectFailure();
       return;
@@ -1118,10 +1152,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
       }
       return;
     }
-    connectionError = tr(STR_ERROR_GENERAL_FAILURE);
-    if (status == WL_NO_SSID_AVAIL) {
-      connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
-    }
+    lastFailure_ = failureText(
+        wifi_attempt::classifyFailure(status, lastDisconnectReason(), /*refused=*/false),
+        !NetworkStartup::canAffiliate(false));
+    hadFailure_ = true;
+    connectionError = I18N.get(lastFailure_);
     LOG_ERR("WIFI", "join rejected: ssid=%s status=%d reason=%u events=%u", selectedSSID.c_str(),
             static_cast<int>(status), static_cast<unsigned>(lastDisconnectReason()),
             static_cast<unsigned>(readAttemptSnapshot().disconnectEvents));
@@ -2088,9 +2123,10 @@ void WifiSelectionActivity::renderSheet() {
       renderer.drawText(SMALL_FONT_ID, textX, errY + 2 + renderer.getLineHeight(UI_12_FONT_ID) + 4, sub.c_str());
 
       const int reasonY = errY + kErr + 14;
-      renderer.drawText(SMALL_FONT_ID, g.sheet.x + kSheetSidePad, reasonY,
-                        state == WifiSelectionState::NETWORK_ERROR ? tr(STR_ERROR_GENERAL_FAILURE)
-                                                                   : connectionError.c_str());
+      // NETWORK_ERROR keeps the classified cause when one was recorded (memory
+      // refusal, driver refusal); the generic string is only the last resort.
+      const char* failureLine = connectionError.empty() ? tr(STR_ERROR_GENERAL_FAILURE) : connectionError.c_str();
+      renderer.drawText(SMALL_FONT_ID, g.sheet.x + kSheetSidePad, reasonY, failureLine);
       if (lastWifiStatus_ != 0) {
         char raw[32];
         snprintf(raw, sizeof(raw), "status %d", lastWifiStatus_);
@@ -2462,10 +2498,19 @@ void WifiSelectionActivity::onComplete(const bool connected) {
   if (completed_) return;
   completed_ = true;
   ActivityResult result;
-  result.isCancelled = !connected;
-  if (connected) {
-    result.data = WifiResult{true, selectedSSID, connectedIP};
+  // `isCancelled` stays the user's intent (Back). A failure that the sheet can
+  // name is reported through WifiResult so a caller driving a job does not have
+  // to guess between "the user changed their mind" and "the radio said no".
+  result.isCancelled = !connected && !hadFailure_;
+  WifiResult outcome;
+  outcome.connected = connected;
+  outcome.ssid = selectedSSID;
+  outcome.ip = connected ? connectedIP : std::string();
+  if (!connected && hadFailure_) {
+    outcome.failed = true;
+    outcome.failure = static_cast<int>(lastFailure_);
   }
+  result.data = std::move(outcome);
   setResult(std::move(result));
   finish();
 }

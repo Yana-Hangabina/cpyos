@@ -68,4 +68,26 @@ inline bool polledFailureIsLive(const Snapshot& attemptStart, const Snapshot& no
   return !eventsTracked || now.disconnectEvents != attemptStart.disconnectEvents;
 }
 
+// What to tell the user. The code knows this at every failure site; printing
+// 「错误:通用故障」 for all of them is what made the 0.8.4 reports undiagnosable.
+enum class FailureKind : uint8_t {
+  General,         // nothing more specific known
+  NetworkNotFound, // WL_NO_SSID_AVAIL, or 802.11 reason 3 (AP not found)
+  Timeout,         // association/4-way handshake ran out of time (reason 15 and friends)
+  Auth,            // 802.11 reason 2/202 (auth fail) or 203 (assoc fail): password likely wrong
+  Refused,         // the driver never put the join on the air
+};
+
+// `reason` is NetworkStartup::lastDisconnectReason() (0 when untracked). The
+// order matters: a driver refusal has no reason and must win over the status,
+// and WL_NO_SSID_AVAIL wins over a generic CONNECT_FAILED.
+inline FailureKind classifyFailure(const int status, const uint8_t reason, const bool refused) {
+  if (refused) return FailureKind::Refused;
+  if (status == kStatusNoSsidAvail || reason == 3) return FailureKind::NetworkNotFound;
+  if (reason == 2 || reason == 202 || reason == 203) return FailureKind::Auth;
+  if (reason == 15) return FailureKind::Timeout;
+  if (status == kStatusConnectFailed) return FailureKind::Timeout;
+  return FailureKind::General;
+}
+
 }  // namespace wifi_attempt

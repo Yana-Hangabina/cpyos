@@ -206,6 +206,21 @@ bool setMode(wifi_mode_t mode);
 // writing the log line again (setMode has already written it).
 bool canAffiliate(bool verbose = true);
 
+// "The radio is actually being used": a screen/worker holds it, a command is
+// in flight, or the station is associated. Driver *existence* is deliberately
+// not part of this: since 0.8.0 releaseRadio() keeps the station initialised
+// (deinit/mode-off panic inside tcpip_thread) and only drops the association,
+// so WiFi.getMode() stays STA for the rest of the boot. Sleep decisions must ask
+// this, not the mode.
+bool radioInUse();
+
+// Light-sleep radio parking (esp_wifi_stop, never deinit/mode-off). Only valid
+// when radioInUse() is false; the driver stays resident and is started again by
+// resumeRadioAfterLightSleep(). Both are safe to call when the radio is already
+// off, and resume is a no-op unless park succeeded.
+bool parkRadioForLightSleep();
+void resumeRadioAfterLightSleep();
+
 // Drop the radio entirely (disconnect, WIFI_OFF, driver deinit). Idempotent.
 // This is the immediate path: sleep/standby and screens that explicitly must
 // not keep the radio use it. Normal "connect and leave" screens leave the STA

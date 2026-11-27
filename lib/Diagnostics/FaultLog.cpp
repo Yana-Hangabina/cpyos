@@ -260,23 +260,32 @@ void notePanicAbort(const char* message) {
   }
 }
 
-void noteCppFailure(const char* exceptionName) {
+void noteCppFailure(const char* exceptionName, uint32_t detail) {
   gCppFailureNoted = true;
   if (exceptionName == nullptr) {
-    raise(Code::PanicOtherException);
+    raise(Code::PanicOtherException, detail);
     return;
   }
   // Matched on the distinctive substring, not the whole mangled symbol, so a
   // toolchain rename cannot silently lose a class.
   if (contains(exceptionName, "bad_function_call")) {
-    raise(Code::PanicBadFunctionCall);
+    raise(Code::PanicBadFunctionCall, detail);
   } else if (contains(exceptionName, "bad_alloc") || contains(exceptionName, "operator new failed")) {
-    raise(Code::PanicBadAlloc);
+    raise(Code::PanicBadAlloc, detail);
   } else if (contains(exceptionName, "length_error")) {
-    raise(Code::PanicLengthError);
+    raise(Code::PanicLengthError, detail);
   } else {
-    raise(Code::PanicOtherException);
+    raise(Code::PanicOtherException, detail);
   }
+}
+
+uint32_t detailOf(Code code) {
+  Slot slots[kCapacity];
+  const uint8_t found = copy(slots, kCapacity);
+  for (uint8_t i = 0; i < found; ++i) {
+    if (slots[i].code == static_cast<uint32_t>(code)) return slots[i].detail;
+  }
+  return 0;
 }
 
 const char* assertLocation() { return gAssertLocation; }

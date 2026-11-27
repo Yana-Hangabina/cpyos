@@ -1035,77 +1035,66 @@ inline void forEachSettingsListEntry(const SdCardFontRegistry* registry, Callbac
   }
 }
 
+// Visits the rows the *device UI* shows, in display order, without building
+// any list: board filters, the dynamic font entries and the motion-sensor
+// availability are applied here, and the dictionary/home-key rows are left to
+// the caller (they belong at the end of their category).
+//
+// This is what keeps the settings screen from needing two live copies of the
+// table. getSettingsList() materialises ~18 KB of SettingInfo (std::function and
+// vector members included); the activity used to copy that into four category
+// vectors while the temporary was still alive, which is the exact allocation
+// that failed on the 0.8.4 field device (largest free block 24 KB). Walking the
+// source and appending straight into the category vectors means only the
+// categories exist.
+template <typename Callback>
+inline void forEachDeviceSetting(const SdCardFontRegistry* registry, Callback&& callback) {
+  const bool touch = BoardConfig::hasTouch();
+  const bool homeKey = BoardConfig::hasHomeKey();
+  const bool imu = halTiltSensor.isAvailable();
+  forEachSettingsListEntry(registry, [&](const SettingInfo& setting) {
+    if (!touch && (setting.nameId == StrId::STR_TOUCH_READER_CONTROLS ||
+                   setting.nameId == StrId::STR_NEXT_PAGE_GESTURE ||
+                   setting.nameId == StrId::STR_PREV_PAGE_GESTURE)) {
+      return;
+    }
+    if (!homeKey && setting.nameId == StrId::STR_SHOW_READER_MENU) return;
+    if (touch && (setting.nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION ||
+                  setting.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
+                  setting.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER)) {
+      return;
+    }
+    // Motion page turn needs an IMU. UI-only: toJson()/fromJson() walk the base
+    // list, so it must stay there and keep the saved value across a failed probe.
+    if (!imu && setting.nameId == StrId::STR_MOTION_PAGE_TURN) return;
+    callback(setting);
+  });
+}
+
+// The home-key gesture rows, appended after the base rows (same order the old
+// monolithic list produced).
+inline void appendHomeKeySettings(std::vector<SettingInfo>& out) {
+  if (!BoardConfig::hasHomeKey()) return;
+  out.reserve(out.size() + 3);
+  for (unsigned i = 0; i < 3; ++i) {
+    out.push_back(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i],
+                                          home_button::ACTION_LABELS, home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
+  }
+}
+
 // Device settings need an owned list because they retain category entries and
 // may insert a dynamically discovered dictionary entry.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
-  const auto& baseList = getBaseSettingsList();
-
-  std::vector<SettingInfo> v = baseList;
-  if (!BoardConfig::hasTouch()) {
-    // The reader menu style stays available on button boards (the toolbar
-    // chrome is button-navigable); only the touch controls are hidden.
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) {
-                             return s.nameId == StrId::STR_TOUCH_READER_CONTROLS ||
-                                    s.nameId == StrId::STR_NEXT_PAGE_GESTURE ||
-                                    s.nameId == StrId::STR_PREV_PAGE_GESTURE;
-                           }),
-            v.end());
-  }
-  // The reader-menu gesture choice only makes sense where the menu stays
-  // reachable without the tap and the bottom edge is free (the capacitive
-  // Home key); everywhere else the bottom-edge up-swipe is Home and the
-  // center tap is the primary path, so the setting stays at its Tap default.
-  if (!BoardConfig::hasHomeKey()) {
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) { return s.nameId == StrId::STR_SHOW_READER_MENU; }),
-            v.end());
-  }
-  if (BoardConfig::hasHomeKey()) {
-    v.reserve(v.size() + 3);
-    for (unsigned i = 0; i < 3; ++i) {
-      v.push_back(SettingInfo::StaticEnum(home_button::GESTURE_LABELS[i], home_button::FIELDS[i],
-                                          home_button::ACTION_LABELS, home_button::KEYS[i], StrId::STR_CAT_CONTROLS));
-    }
-  }
-  if (BoardConfig::hasTouch()) {
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) {
-                             return s.nameId == StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION ||
-                                    s.nameId == StrId::STR_SUNLIGHT_FADING_FIX ||
-                                    s.nameId == StrId::STR_BACK_SHORT_TO_FILE_BROWSER;
-                           }),
-            v.end());
-  }
-  v.erase(std::remove_if(v.begin(), v.end(), [](const SettingInfo& s) { return !isSettingAvailableOnBoard(s); }),
-          v.end());
-  {
-    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_FAMILY; });
-    if (it != v.end()) {
-      *it = buildFontFamilySetting(registry);
-    }
-  }
-  {
-    // Unconditional: even with no SD fonts installed the sizes come from the
-    // built-in family rather than a fixed Small/Medium/Large/XL enum.
-    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_SIZE; });
-    if (it != v.end()) {
-      *it = buildFontSizeSetting(registry);
-    }
-  }
+  std::vector<SettingInfo> v;
+  v.reserve(getBaseSettingsList().size() + 5);
+  forEachDeviceSetting(registry, [&](const SettingInfo& setting) { v.push_back(setting); });
+  appendHomeKeySettings(v);
   if (dictionaries && !dictionaries->empty()) {
     // Insert at the end of the Reader category (just before the first Controls entry).
     auto it =
         std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.category == StrId::STR_CAT_CONTROLS; });
     v.insert(it, buildDictionarySetting(*dictionaries));
-  }
-  // Motion page turn needs an IMU. UI-only: toJson()/fromJson() walk the base
-  // list, so it must stay there and keep the saved value across a failed probe.
-  if (!halTiltSensor.isAvailable()) {
-    v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) { return s.nameId == StrId::STR_MOTION_PAGE_TURN; }),
-            v.end());
   }
   return v;
 }

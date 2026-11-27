@@ -14,6 +14,13 @@ if [ ! -d freeink-sdk/libs ]; then
   echo "freeink-sdk working tree missing; run: git submodule update --init freeink-sdk" >&2
   exit 1
 fi
+# Font allocations never fall back to internal RAM when PSRAM is fitted (FW-154):
+# silent DRAM fallback starves the radio's heap. Separate small patch so it can be
+# applied to trees already carrying the display work.
+if ! grep -q "CPYOS-LOCAL-PATCH" freeink-sdk/libs/font/FreeInkFont/src/FontAlloc.c; then
+  patch -p1 -d freeink-sdk < patches/freeink-sdk/font-alloc-psram.patch
+fi
+
 # Marker: the water-ripple engine directory only this patch creates. Its presence means
 # the work is already in place (idempotent on repeated runs).
 if [ -f freeink-sdk/libs/display/EpdiyLcd/src/e0470_page_turn/e0470_page_turn.c ]; then

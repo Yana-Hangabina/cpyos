@@ -9,6 +9,7 @@
 #include <Memory.h>
 
 #include "activities/Activity.h"
+#include <I18nKeys.h>
 #include "activities/network/WifiAttempt.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
@@ -165,6 +166,10 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   bool staleFailureNoted_ = false;
   // One re-ask per sheet for a scan the driver refused because it was busy.
   bool scanRetryUsed_ = false;
+  // Set when the sheet knows *why* it failed, so onComplete() can report a
+  // failure instead of a cancellation (see WifiResult::failed).
+  bool hadFailure_ = false;
+  StrId lastFailure_ = StrId::STR_ERROR_GENERAL_FAILURE;
   // The sheet holds the station for its entire lifetime, so a background queue
   // never starts a join on top of this one (see NetworkStartup.h: radio
   // ownership). Tracked as a flag because the claim is paired with onExit, not

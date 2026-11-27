@@ -1,3 +1,4 @@
+#include "FontReclaim.h"
 #include "BootActivity.h"
 
 #include <GfxRenderer.h>
@@ -63,7 +64,7 @@ void BootActivity::runPostOta() {
   if (result == SdCardFontCache::Result::Ok) {
     {
       RenderLock lock(*this);
-      sdFontSystem.releaseLoadedFont(renderer);
+      font_reclaim::releaseForMemory(renderer);
       completed_.store(0);
       total_.store(1);
       lastRequestedPercent_ = 0;

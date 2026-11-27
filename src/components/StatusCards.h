@@ -1,6 +1,7 @@
 #pragma once
 
 #include <GfxRenderer.h>
+#include <TextFit.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -92,14 +93,18 @@ inline Layout paintWait(const GfxRenderer& renderer, const char* title, const ch
 
   const int lineWidth = cardW - 2 * kPad;
   int y = cardY + kTitleY;
-  const std::string shownTitle = renderer.truncatedText(UI_10_FONT_ID, title != nullptr ? title : "", lineWidth,
-                                                       EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, cardX + kPad, y, shownTitle.c_str(), true, EpdFontFamily::BOLD);
+  // Fixed buffers: this card exists to report failures, including "not enough
+  // memory", so it must not allocate (see lib/GfxRenderer/TextFit.h).
+  char shownTitle[128];
+  textfit::truncate(renderer, UI_10_FONT_ID, title != nullptr ? title : "", lineWidth, EpdFontFamily::BOLD,
+                    shownTitle, sizeof(shownTitle));
+  renderer.drawText(UI_10_FONT_ID, cardX + kPad, y, shownTitle, true, EpdFontFamily::BOLD);
   y += titleH + 6;
   const auto detailLine = [&](const char* text) {
     if (text == nullptr || text[0] == '\0') return;
-    const std::string shown = renderer.truncatedText(SMALL_FONT_ID, text, lineWidth);
-    renderer.drawText(SMALL_FONT_ID, cardX + kPad, y, shown.c_str(), true);
+    char shown[128];
+    textfit::truncate(renderer, SMALL_FONT_ID, text, lineWidth, EpdFontFamily::REGULAR, shown, sizeof(shown));
+    renderer.drawText(SMALL_FONT_ID, cardX + kPad, y, shown, true);
     y += smallH + 4;
   };
   detailLine(detail);
@@ -144,21 +149,30 @@ inline void paintMessage(const GfxRenderer& renderer, const char* title, const c
   const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
   const int smallH = renderer.getLineHeight(SMALL_FONT_ID);
   const bool hasBody = body != nullptr && body[0] != '\0';
-  const auto lines = hasBody ? renderer.wrappedText(SMALL_FONT_ID, body, innerW, 6, EpdFontFamily::REGULAR)
-                             : std::vector<std::string>{};
-  int contentH = lineH + (hasBody ? static_cast<int>(lines.size()) * smallH + 10 : 0);
+  // Fixed line buffers, same reasoning as paintWait(): a message that reports an
+  // allocation failure must not allocate to say so.
+  constexpr uint8_t kMaxBodyLines = 6;
+  constexpr size_t kStride = 160;
+  char bodyLines[kMaxBodyLines][kStride] = {};
+  uint8_t bodyCount = 0;
+  if (hasBody) {
+    bodyCount = textfit::wrap(renderer, SMALL_FONT_ID, body, innerW, EpdFontFamily::REGULAR, &bodyLines[0][0], kStride,
+                              kMaxBodyLines);
+  }
+  int contentH = lineH + (hasBody ? static_cast<int>(bodyCount) * smallH + 10 : 0);
   const int cardH = contentH + kPad * 2;
   const int cardX = safe.x + (safe.width - cardW) / 2;
   const int cardY = safe.y + (safe.height - cardH) / 2;
   GUI.drawModalCardFrame(renderer, Rect{cardX, cardY, cardW, cardH});
 
   int y = cardY + kPad;
-  const std::string shownTitle =
-      renderer.truncatedText(UI_10_FONT_ID, title != nullptr ? title : "", innerW, EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, cardX + kPad, y, shownTitle.c_str(), true, EpdFontFamily::BOLD);
+  char shownTitle[128];
+  textfit::truncate(renderer, UI_10_FONT_ID, title != nullptr ? title : "", innerW, EpdFontFamily::BOLD, shownTitle,
+                    sizeof(shownTitle));
+  renderer.drawText(UI_10_FONT_ID, cardX + kPad, y, shownTitle, true, EpdFontFamily::BOLD);
   y += lineH + 10;
-  for (const auto& line : lines) {
-    renderer.drawText(SMALL_FONT_ID, cardX + kPad, y, line.c_str(), true, EpdFontFamily::REGULAR);
+  for (uint8_t i = 0; i < bodyCount; ++i) {
+    renderer.drawText(SMALL_FONT_ID, cardX + kPad, y, bodyLines[i], true, EpdFontFamily::REGULAR);
     y += smallH;
   }
 }

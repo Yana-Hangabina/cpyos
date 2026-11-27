@@ -35,7 +35,7 @@ uint32_t countOf(const fault::Code code) {
   return 0;
 }
 
-uint32_t detailOf(const fault::Code code) {
+uint32_t recordedDetail(const fault::Code code) {
   fault::Slot slots[fault::kCapacity];
   const uint8_t found = fault::copy(slots, fault::kCapacity);
   for (uint8_t i = 0; i < found; ++i) {
@@ -140,7 +140,7 @@ int main() {
     expect(memory::guardInternalFlash(kSite, 4096) == memory::FlashGuard::RefusedPsramStack,
            "a refusal still answers the question that was asked");
     expect(countOf(kSite) == before + 1, "the refusal is recorded in the fault ring");
-    expect(detailOf(kSite) == 4096, "the site's number reaches the report");
+    expect(recordedDetail(kSite) == 4096, "the site's number reaches the report");
     stacktest::stackPointer() = stacktest::kDramBase + 0x1000u;
     (void)memory::guardInternalFlash(kSite);
     expect(countOf(kSite) == before + 1, "an allowed decision records nothing");

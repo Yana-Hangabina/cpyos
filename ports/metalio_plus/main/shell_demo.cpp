@@ -172,6 +172,8 @@ extern "C" void plus_boot_hang_request(void);
 #include "EmojiFont.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "FontHealth.h"
+#include <HalSystem.h>
 #if defined(CROSSPOINT_PLUGIN_RUNTIME)
 #include "Memory.h"
 #include "activities/apps/plugins/PluginActivity.h"
@@ -876,7 +878,14 @@ extern "C" void cpyos_shell_demo(void) {
         }
     }
 
+    HalSystem::installCppFailureHandlers();
     activityManager.begin();
+    // Crash visibility parity with Read Pico: a panic/brown-out/watchdog boot
+    // lands on the shared crash screen (it prints the fault ring), and the C++
+    // failure hooks record a bad_alloc/terminate instead of dying silently.
+    if (HalSystem::isRebootFromPanic()) {
+        activityManager.goToCrashReport();
+    }
     // Now that the UI exists, let the expander's INT line drive touch/keys.
     if (epd_board_metalio_eink4_plus_ioexp_irq_start() != ESP_OK) {
         LOG_ERR("PLUS", "expander INT handler not installed");
@@ -2853,7 +2862,7 @@ void consoleExec(char* line) {
         s_benchPowerHoldUntil = millis() + (unsigned long)ms;
         printf("pwrhold: simulating a %d ms power-key hold\n", ms);
     } else if (strcmp(command, "pwrdemo") == 0) {
-        activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+        activityManager.pushActivityWith<PowerOffActivity>(renderer, mappedInputManager);
         printf("pwrdemo: shutdown confirmation pushed\n");
     } else if (strcmp(command, "pwroff") == 0) {
         printf("pwroff: vendor P1.3 pulse train\n");
@@ -3694,8 +3703,8 @@ static void maybeOfferFontExtrasForMissingUiGlyph() {
     ESP_LOGI("PLUS", "missing UI glyph U+%04X; offering font extras",
              static_cast<unsigned>(codepoints[0]));
     FontExtrasActivity::suppressPromptThisBoot();
-    activityManager.pushActivity(std::make_unique<FontExtrasActivity>(
-        renderer, mappedInputManager, FontExtrasActivity::Purpose::ReaderPrompt));
+    activityManager.pushActivityWith<FontExtrasActivity>(
+        renderer, mappedInputManager, FontExtrasActivity::Purpose::ReaderPrompt);
 }
 #endif
 
@@ -3738,8 +3747,8 @@ extern "C" void cpyos_shell_loop(void) {
             if (!blocked) {
                 const bool longPress = aiEvent == plus_ai_key::Event::Long;
                 if (!current->onAiKey(longPress)) {
-                    activityManager.pushActivity(std::make_unique<PlusVoiceActivity>(
-                        renderer, mappedInputManager, longPress, /*fromKey=*/true));
+                    activityManager.pushActivityWith<PlusVoiceActivity>(
+                        renderer, mappedInputManager, longPress, /*fromKey=*/true);
                 }
             }
         }
@@ -3804,10 +3813,15 @@ extern "C" void cpyos_shell_loop(void) {
                 if (!longHandled && heldMs >= kPowerHoldMs && !powerOffCard &&
                     !activityManager.isSwitchPending() && !activityManager.isSleepActivity()) {
                     ESP_LOGI("PLUS", "power key released after %lu ms -> shutdown card", heldMs);
-                    activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+                    activityManager.pushActivityWith<PowerOffActivity>(renderer, mappedInputManager);
                 } else if (!longHandled && heldMs < kTapMaxMs && !powerOffCard &&
                            SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STANDBY &&
-                           !activityManager.isStandbyActivity() && !activityManager.isSleepActivity()) {
+                           !activityManager.isStandbyActivity() && !activityManager.isSleepActivity() &&
+                           // A release that closed the standby overlay (or a PMU
+                           // release bounce right after it) must not become a
+                           // second entry. Standby registers the deadline; the
+                           // same gate covers the bounce.
+                           !mappedInputManager.powerGestureBlocked()) {
                     activityManager.goToStandby();
                 }
             }
@@ -3832,12 +3846,25 @@ extern "C" void cpyos_shell_loop(void) {
                     ESP_LOGI("PLUS", "power key held %lu ms -> shutdown card (activity=%s)",
                              (unsigned long)(millis() - powerDownMs),
                              current != nullptr ? current->debugName() : "?");
-                    activityManager.pushActivity(std::make_unique<PowerOffActivity>(renderer, mappedInputManager));
+                    activityManager.pushActivityWith<PowerOffActivity>(renderer, mappedInputManager);
                 }
             }
         }
     }
     activityManager.loop();
+    // Crash ambience (heap/psram/uptime) for the screen a panic boot shows; the
+    // shared main samples this once a second, this port has its own loop.
+    {
+        static unsigned long lastAmbienceMs = 0;
+        if (millis() - lastAmbienceMs >= 1000) {
+            lastAmbienceMs = millis();
+            HalSystem::snapshotCrashAmbience();
+        }
+    }
+    // Shared font policy (network reclaim revert + role watchdog). src/main.cpp
+    // is not part of this build, so without this call the Plus target would
+    // keep the reclaim without the restore and the blank-label failure mode.
+    font_health::tick(renderer, activityManager);
     // Battery sampling: the SoC policy averages one accepted sample per second,
     // so the gauge must be read from the loop, never from the renderer (that
     // inversion is why this port's capsule sat at the "no reading" placeholder
@@ -4025,8 +4052,11 @@ extern "C" void cpyos_shell_loop(void) {
         const unsigned long timeoutMs =
             static_cast<unsigned long>(SETTINGS.sleepTimeoutMinutes) * 60000UL;
         if (timeoutMs != 0 && !activityManager.isStandbyActivity() && !activityManager.isSleepActivity() &&
-            static_cast<int>(WiFi.getMode()) == static_cast<int>(WIFI_MODE_NULL) &&
             nowMs - lastActivityMs >= timeoutMs) {
+            // The old WiFi.getMode()==NULL condition made one network session
+            // disable auto-standby for the rest of the boot (releaseRadio keeps
+            // the station initialised). The overlay is safe to enter with a
+            // resident driver; light sleep decides for itself what may run.
             activityManager.goToStandby();
             lastActivityMs = nowMs;
         }

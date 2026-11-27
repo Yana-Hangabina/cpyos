@@ -1,3 +1,4 @@
+#include "FontReclaim.h"
 #include "BleInput.h"
 
 #include "BleRemotePolicy.h"
@@ -209,7 +210,7 @@ StartResult ensureStarted(GfxRenderer& renderer, const StartContext context) {
         if (auto* cache = renderer.getFontCacheManager()) cache->releaseSdFontCaches();
         break;
       case StartContext::Explicit:
-        sdFontSystem.releaseLoadedFont(renderer);
+        font_reclaim::releaseForMemory(renderer);
         if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
         break;
     }

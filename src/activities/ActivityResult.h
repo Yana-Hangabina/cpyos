@@ -13,6 +13,12 @@ struct WifiResult {
   bool connected = false;
   std::string ssid;
   std::string ip;
+  // A failure is not a cancellation: callers that drive a job off this result
+  // used to treat both as "user backed out" and returned to Home in silence,
+  // which is the 0.8.4 "re-cache silently goes home" report. `failure` names why
+  // so the caller can say it; `failure` is meaningless unless `failed`.
+  bool failed = false;
+  int failure = 0;  // StrId, stored as int so this header stays I18n-free
 };
 
 struct KeyboardResult {

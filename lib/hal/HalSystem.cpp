@@ -8,6 +8,7 @@
 #include "HalStorage.h"
 #include "Logging.h"
 #include <FaultLog.h>
+#include <NewTrace.h>
 #include <InvokeCallback.h>
 #include "driver/temperature_sensor.h"
 #include "esp_debug_helpers.h"
@@ -301,7 +302,9 @@ void begin() {
 }
 
 void checkPanic() {
-  if (isRebootFromPanic()) {
+  // An unexplained reset has no panic message but the fault ring is exactly the
+  // evidence the next report needs; write it before the ring can be overwritten.
+  if (isRebootFromPanic() || isRebootUnexplained()) {
     auto panicInfo = getPanicInfo(true);
     auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
@@ -382,7 +385,25 @@ void crashTerminateHandler() {
 void crashNewHandler() {
   // operator new() calls the handler when the heap is gone and expects it to
   // either fix the situation or terminate; returning would loop forever.
+  //
+  // The size of the request is the one fact a photograph cannot otherwise carry:
+  // 0.8.4 reported `PNC-04` with a PC that symbolizes to this handler, so the
+  // caller stayed unknown. newtrace records the size in the wrapped operator new;
+  // the heap numbers go into a separate code so neither number crowds the other.
+  const std::size_t requested = newtrace::take();
   stampCppFailure("operator new failed (bad_alloc)");
+  fault::noteCppFailure("operator new failed (bad_alloc)",
+                        requested > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<uint32_t>(requested));
+#if !defined(SIMULATOR)
+  {
+    // heap_caps_* returns 0 when the pool is gone; the packing is 16 bits of KB
+    // each, which covers every size this board can have.
+    const uint32_t freeKb = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >> 10);
+    const uint32_t largestKb = static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >> 10);
+    fault::raise(fault::Code::HeapAtAllocFailure,
+                 (freeKb > 0xFFFFu ? 0xFFFFu : freeKb) | ((largestKb > 0xFFFFu ? 0xFFFFu : largestKb) << 16));
+  }
+#endif
   abort();
 }
 
@@ -550,6 +571,15 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
+size_t getPanicMessage(char* out, size_t capacity) {
+  if (out == nullptr || capacity == 0) return 0;
+  const size_t length = strlen(panicMessage);
+  const size_t copied = length < capacity - 1 ? length : capacity - 1;
+  memcpy(out, panicMessage, copied);
+  out[copied] = '\0';
+  return copied;
+}
+
 std::string getPanicInfo(bool full) {
   if (!full) {
     return panicMessage;
@@ -640,6 +670,12 @@ std::string getPanicInfo(bool full) {
 
     return info;
   }
+}
+
+bool isRebootUnexplained() {
+  const esp_reset_reason_t reason = esp_reset_reason();
+  return reason == ESP_RST_TASK_WDT || reason == ESP_RST_INT_WDT || reason == ESP_RST_WDT ||
+         reason == ESP_RST_BROWNOUT;
 }
 
 bool isRebootFromPanic() {

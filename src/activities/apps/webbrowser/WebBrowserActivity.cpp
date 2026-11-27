@@ -1,3 +1,4 @@
+#include "FontReclaim.h"
 #include "WebBrowserActivity.h"
 #include <FaultLog.h>
 
@@ -832,7 +833,7 @@ void WebBrowserActivity::beginFetch(const std::string& url) {
     // font (2-3 MB) leaves PSRAM too fragmented -- "no fetch buffer" on a
     // device with 3.7 MB free. Drop the loaded face unconditionally; it is
     // lazily rebuilt by the next reader render.
-    sdFontSystem.releaseLoadedFont(renderer);
+    font_reclaim::releaseForMemory(renderer);
     if (auto* fontCache = renderer.getFontCacheManager()) fontCache->releaseSdFontCaches();
   }
   jobUrl_ = url;

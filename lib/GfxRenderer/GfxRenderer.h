@@ -269,6 +269,14 @@ class GfxRenderer {
 
   // Resolve a missing-glyph fallback; the high-density profile checks whole-run coverage.
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  // The first id along this id's fallback/supplement chain that is actually
+  // registered, or 0. resolveTextFontId() answers with the *requested* face when
+  // it cannot find a better one, and that face can have been removed (a font
+  // reclaim that outlived its restore) -- drawing then skipped the text in
+  // silence, which is the 0.8.4 "labels vanished" report. Callers use this to
+  // degrade to a registered face and to raise STR-05 once.
+  int firstRegisteredFallback(int fontId, int resolvedFontId) const;
+  void noteFontRouteMissing(int fontId) const;
   int getTextWidthRun(int fontId, const char* text, EpdFontFamily::Style style,
                       BidiUtils::BidiBaseDir baseDir) const;
   void drawTextRun(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style,
@@ -362,6 +370,10 @@ class GfxRenderer {
   void prewarmFallbackText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
+  // True when this id can actually be drawn. The main loop's font watchdog asks
+  // this for the handful of UI roles so a half-built font state repairs itself
+  // within a second instead of depending on each release path to restore.
+  bool isFontRegistered(int fontId) const { return fontMap.find(fontId) != fontMap.end(); }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
   void clearSdCardFonts() {

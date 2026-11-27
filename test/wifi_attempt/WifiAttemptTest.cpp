@@ -97,6 +97,27 @@ void testStatusNumbersMatchTheCore() {
   check(wifi_attempt::kStatusDisconnected == 6, "WL_DISCONNECTED is 6");
 }
 
+void testFailureClassification() {
+  using K = wifi_attempt::FailureKind;
+  // A refusal has no reason code and must win over the status it parked.
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 0, true) == K::Refused,
+        "a refused join is reported as refused");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusNoSsidAvail, 3, false) == K::NetworkNotFound,
+        "reason 3 is 'network not found'");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 2, false) == K::Auth,
+        "reason 2 is an authentication failure");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 202, false) == K::Auth,
+        "reason 202 is an authentication failure");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 203, false) == K::Auth,
+        "reason 203 is an association failure");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 15, false) == K::Timeout,
+        "reason 15 (4-way handshake timeout) is a timeout");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusConnectFailed, 0, false) == K::Timeout,
+        "CONNECT_FAILED with no reason is a timeout, not a generic error");
+  check(wifi_attempt::classifyFailure(wifi_attempt::kStatusDisconnected, 0, false) == K::General,
+        "no failure status and no reason stays generic");
+}
+
 }  // namespace
 
 int main() {
@@ -105,6 +126,7 @@ int main() {
   testIssuedPaths();
   testPolledFailure();
   testStatusNumbersMatchTheCore();
+  testFailureClassification();
   std::printf("wifi_attempt: %d checks, %d failures\n", checks, failures);
   return failures == 0 ? 0 : 1;
 }

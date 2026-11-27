@@ -67,6 +67,13 @@ const uint8_t* residentData(uint32_t* len);
 // the build could supply. See SystemCoreFontCheck.h facePresent().
 bool faceOnSd();
 
+// Tri-state version for callers that must not confuse "could not look" with
+// "nothing there". A PSRAM-stack probe (render task) is refused by the flash
+// guard without caching anything, so faceOnSd() answers false; treating that as
+// "absent" made loadSupplementFonts() unload a perfectly good live face.
+enum class Presence : uint8_t { Present, Absent, Unknown };
+Presence presence();
+
 // The tier this build's carrier declares ("3500", "8105"), or "unknown" for a carrier
 // written before the field existed. Reporting only: nothing on this path branches on it.
 // Meaningful after the evaluation has run (ready()/releaseToSd()/status()).

@@ -1,3 +1,4 @@
+#include "FontReclaim.h"
 #include "SdFirmwareUpdateActivity.h"
 
 #include <Arduino.h>
@@ -161,7 +162,7 @@ void SdFirmwareUpdateActivity::onConfirmationResult(const ActivityResult& result
     state = State::UPDATING;
     writtenBytes = 0;
     lastProgressRefreshPercent = 0;
-    sdFontSystem.releaseLoadedFont(renderer);
+    font_reclaim::releaseForMemory(renderer);
   }
   requestUpdateAndWait();
   performUpdate();

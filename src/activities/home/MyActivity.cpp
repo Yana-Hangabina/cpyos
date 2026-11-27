@@ -810,7 +810,7 @@ void MyActivity::activateTab(const Tab tab) {
 
 void MyActivity::openSettingsCategory(const int category) {
   // Child of My: back header + pop, not the main-tab root.
-  activityManager.pushActivity(std::make_unique<SettingsActivity>(renderer, mappedInput, category, true));
+  activityManager.pushActivityWith<SettingsActivity>(renderer, mappedInput, category, true);
 }
 
 void MyActivity::openTool(const int index) {
@@ -851,7 +851,7 @@ bool MyActivity::handleRecordTouch(const int x, const int y) {
   const int baseline = layout.barsTop + layout.barMaxH + 8;
   const int rowsTop = layout.listTop + 32;
   if (y >= layout.heatTop - 6 && y <= layout.heatTop + 34 + 7 * layout.cellPitch + 6) {
-    activityManager.pushActivity(std::make_unique<ReadingHeatmapActivity>(renderer, mappedInput));
+    activityManager.pushActivityWith<ReadingHeatmapActivity>(renderer, mappedInput);
     return true;
   }
   if (layout.rows > 0 && y >= rowsTop && y <= rowsTop + layout.rows * 88) {
@@ -892,7 +892,7 @@ bool MyActivity::handleToolTouch(const int x, const int y) {
 bool MyActivity::handleSettingsTouch(const int x, const int y) {
   const Rect search = searchRowRect();
   if (x >= search.x && x < search.x + search.width && y >= search.y && y < search.y + search.height) {
-    activityManager.pushActivity(std::make_unique<SettingsSearchActivity>(renderer, mappedInput));
+    activityManager.pushActivityWith<SettingsSearchActivity>(renderer, mappedInput);
     return true;
   }
   for (int i = 0; i < 3; ++i) {
@@ -908,7 +908,7 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
       } else if (i == 1) {
 #if !defined(SIMULATOR)
 #if !defined(SIMULATOR)
-        activityManager.pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput));
+        activityManager.pushActivityWith<BluetoothSettingsActivity>(renderer, mappedInput);
 #else
         openSettingsCategory(2);
 #endif
@@ -934,7 +934,7 @@ bool MyActivity::handleSettingsTouch(const int x, const int y) {
   }
   const Rect about = aboutRect();
   if (x >= about.x && x < about.x + about.width && y >= about.y && y < about.y + about.height) {
-    activityManager.pushActivity(std::make_unique<AboutActivity>(renderer, mappedInput));
+    activityManager.pushActivityWith<AboutActivity>(renderer, mappedInput);
     return true;
   }
   return false;

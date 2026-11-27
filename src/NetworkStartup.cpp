@@ -382,6 +382,43 @@ uint8_t lastDisconnectReason() {
 #endif
 }
 
+// Restart the station in place. Lives in this module because every join goes
+// through it -- the sheet, the standby silent reconnect and the background cache
+// queue. 0.8.x keeps the driver resident between sessions (releaseRadio() only
+// drops the association; mode(OFF)/deinit panicked inside tcpip_thread on
+// 2026-11-20), so WiFi.mode(WIFI_STA) short-circuits and one driver-level refusal
+// is inherited byte-for-byte by every later attempt. A recovery that only the
+// sheet runs leaves the other two paths -- which is how "re-cache silently
+// returns home" survived. stop()/start() rebuild the driver without touching the
+// lwIP-referenced mode.
+bool recoverStationInternal() {
+#if defined(SIMULATOR) || defined(CROSSPOINT_PLUS_PORT)
+  return false;  // the compat layer owns the link; nothing to restart here
+#else
+  CommandLock lock;
+  const bool autoReconnectWas = WiFi.getAutoReconnect();
+  WiFi.setAutoReconnect(false);
+  const esp_err_t disconnectErr = esp_wifi_disconnect();
+  const esp_err_t stopErr = esp_wifi_stop();
+  delay(150);
+  const esp_err_t startErr = esp_wifi_start();
+  const uint32_t freeInternal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  LOG_INF("NET", "station reset: disconnect=%d stop=%d start=%d mode=%d free=%u", static_cast<int>(disconnectErr),
+          static_cast<int>(stopErr), static_cast<int>(startErr), static_cast<int>(WiFi.getMode()),
+          static_cast<unsigned>(freeInternal));
+  if (startErr == ESP_OK) {
+    noteActivity();
+    return true;
+  }
+  // A failed reset must not leave the session with auto-reconnect disabled: every
+  // later candidate would then depend on an explicit begin() in that same screen.
+  WiFi.setAutoReconnect(autoReconnectWas);
+  LOG_ERR("NET", "station reset failed: start=%d", static_cast<int>(startErr));
+  return false;
+#endif
+}
+
+
 bool radioCommandActive() { return g_gate.commandDepth.load(std::memory_order_relaxed) > 0; }
 
 bool stationClaimed() { return g_gate.stationClaims.load(std::memory_order_relaxed) > 0; }
@@ -444,15 +481,47 @@ int joinStation(const char* ssid, const char* password, const bool connect) {
 #else
   if (ssid == nullptr || ssid[0] == '\0') return static_cast<int>(WL_DISCONNECTED);
   ensureRadioEventClock();
-  // The five-argument form, so an empty passphrase is an open network rather
-  // than a literal empty string, and so a screen that runs its own connect
-  // state machine can ask the driver only to configure the station.
-  CommandLock lock;
-  // int, not wl_status_t: the Plus compatibility layer's begin() returns int and
-  // an int does not convert implicitly to an unscoped enum, so naming the enum
-  // type here would break that target while compiling fine on Arduino.
-  const int status = WiFi.begin(ssid, (password != nullptr && password[0] != '\0') ? password : nullptr,
-                                 /*channel=*/0, /*bssid=*/nullptr, connect);
+  const wifi_attempt::Snapshot before = radioSnapshot();
+  int status;
+  {
+    // The five-argument form, so an empty passphrase is an open network rather
+    // than a literal empty string, and so a screen that runs its own connect
+    // state machine can ask the driver only to configure the station.
+    CommandLock lock;
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+    // Prevention, not repair: whatever stopped the driver earlier, a join cannot
+    // be issued on a stopped station if every join starts it first. The call is
+    // idempotent -- ESP_OK when already started -- so it only costs a driver call.
+    const esp_err_t startErr = esp_wifi_start();
+    if (startErr != ESP_OK) {
+      LOG_ERR("NET", "station start before join failed: %d", static_cast<int>(startErr));
+    }
+#endif
+    // int, not wl_status_t: the Plus compatibility layer's begin() returns int and
+    // an int does not convert implicitly to an unscoped enum, so naming the enum
+    // type here would break that target while compiling fine on Arduino.
+    status = WiFi.begin(ssid, (password != nullptr && password[0] != '\0') ? password : nullptr,
+                        /*channel=*/0, /*bssid=*/nullptr, connect);
+  }
+  if (connect && tracksRadioEvents() && status == static_cast<int>(WL_CONNECT_FAILED)) {
+    // A join that failed without a single radio event was never put on the air:
+    // the driver refused to start it. That refusal is sticky while the driver
+    // stays up, so restart the station and issue the join again -- once, here,
+    // for every caller (sheet, silent connect, cache queue). Nothing else in the
+    // tree has to know this rule.
+    const wifi_attempt::Snapshot after = radioSnapshot();
+    if (after.disconnectEvents == before.disconnectEvents) {
+      LOG_ERR("NET", "join refused without a radio event; restarting the station and retrying once");
+      if (recoverStationInternal()) {
+        CommandLock lock;
+        WiFi.setAutoReconnect(true);
+        WiFi.setSleep(false);
+        status = WiFi.begin(ssid, (password != nullptr && password[0] != '\0') ? password : nullptr,
+                            /*channel=*/0, /*bssid=*/nullptr, connect);
+      }
+      LOG_INF("NET", "join retry after a station reset: status=%d", status);
+    }
+  }
   return status;
 #endif
 }
@@ -494,7 +563,10 @@ void shutdownStation() {
   delay(100);
   WiFi.mode(WIFI_OFF);
   esp_wifi_deinit();
+  // The session ends here, so the SNTP hold setMode() took must go with it: the
+  // hold is owned by the *session*, not by the mode value a caller happens to see.
 #endif
+  resumeTimeSync();
 }
 
 void powerDownRadio() {
@@ -502,6 +574,7 @@ void powerDownRadio() {
   CommandLock lock;
   WiFi.mode(WIFI_OFF);
 #endif
+  resumeTimeSync();
 }
 
 void releaseRadio() {
@@ -511,6 +584,18 @@ void releaseRadio() {
   g_psCheckMs.store(0, std::memory_order_relaxed);
   g_lastNetworkActivityMs.store(millis(), std::memory_order_relaxed);
 #if !defined(SIMULATOR)
+  // A background worker or the standby loop is using the station. Dropping the
+  // association here would tear the join out from under it (its next request
+  // fails and the queue parks as NeedsWifi with no message). Defer to the idle
+  // path, which re-checks the claim before releasing.
+  if (stationClaimed() || networkHeld() || background_work::active()) {
+    LOG_INF("NET", "releaseRadio: a station claim is live; keeping the association");
+    g_idleReleaseEnabled.store(SETTINGS.wifiIdleTimeoutSeconds != 0, std::memory_order_relaxed);
+    return;
+  }
+  // Session-scoped SNTP hold: release ends the session on every path below,
+  // including the cellular early return and the already-NULL mode.
+  resumeTimeSync();
 #if defined(CROSSPOINT_PLUS_PORT)
   // 4G: the compat layer reports the modem link as WIFI_STA (so the Arduino API
   // behaves), which means the teardown below would stop the data path the caller
@@ -540,12 +625,77 @@ void releaseRadio() {
   }
   LOG_INF("NET", "radio released (association dropped, stack intact), mode=%d",
           static_cast<int>(WiFi.getMode()));
-  // The radio session ends here, so the SNTP hold that setMode() took can go.
-  resumeTimeSync();
 #endif
 }
 
 static bool gDeepReleasePending = false;
+
+// Light-sleep parking state. The driver is stopped, not deinitialised: the
+// station object (and its netifs) survive, so nothing lwIP still references is
+// torn down. Only park() sets the flag, so resume() cannot start a driver a
+// screen deliberately left off.
+static bool g_radioParkedForLightSleep = false;
+static bool g_autoReconnectBeforePark = true;
+
+bool radioInUse() {
+#if defined(SIMULATOR)
+  return false;
+#else
+  if (stationClaimed() || networkHeld() || background_work::active() || radioCommandActive()) return true;
+#if defined(CROSSPOINT_PLUS_PORT)
+  // The cellular transport aliases the station; stopping it would cut the data
+  // path the device is configured to use.
+  if (plus_cellular_active()) return true;
+#endif
+  return WiFi.status() == WL_CONNECTED;
+#endif
+}
+
+bool parkRadioForLightSleep() {
+#if defined(SIMULATOR)
+  return true;
+#else
+  if (WiFi.getMode() == WIFI_MODE_NULL) return true;
+  if (radioInUse()) return false;
+  CommandLock lock;
+#if !defined(CROSSPOINT_PLUS_PORT)
+  // The Plus compat layer has no saved auto-reconnect state of its own (its
+  // setAutoReconnect is a no-op), and its station is never re-armed by Arduino
+  // behind the app's back.
+  g_autoReconnectBeforePark = WiFi.getAutoReconnect();
+#endif
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false);
+  // stop() keeps the driver initialised; mode-off/deinit are the calls that
+  // panic inside tcpip_thread (see releaseRadio).
+  const esp_err_t err = esp_wifi_stop();
+  if (err != ESP_OK) {
+    WiFi.setAutoReconnect(g_autoReconnectBeforePark);
+    LOG_ERR("NET", "light-sleep park failed: stop=%d", static_cast<int>(err));
+    return false;
+  }
+  g_radioParkedForLightSleep = true;
+  // DEBUG: with a resident driver this would print once per light-sleep cycle
+  // (every minute). The wake.log "timer" line and the blocker log are the
+  // field evidence; this is bring-up detail.
+  LOG_DBG("NET", "radio parked for light sleep (association dropped, driver resident)");
+  return true;
+#endif
+}
+
+void resumeRadioAfterLightSleep() {
+#if !defined(SIMULATOR)
+  if (!g_radioParkedForLightSleep) return;
+  g_radioParkedForLightSleep = false;
+  CommandLock lock;
+  const esp_err_t err = esp_wifi_start();
+  WiFi.setAutoReconnect(g_autoReconnectBeforePark);
+  if (err != ESP_OK) {
+    LOG_ERR("NET", "light-sleep resume failed: start=%d", static_cast<int>(err));
+  }
+  noteActivity();
+#endif
+}
 
 void requestDeepRelease() { gDeepReleasePending = true; }
 
@@ -569,6 +719,9 @@ bool releaseRadioDeep() {
       heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
   const uint32_t beforeLargest =
       heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  // Session-scoped hold, same rule as releaseRadio(): resume even when the mode is
+  // already NULL, or the hold leaks for the rest of the boot.
+  resumeTimeSync();
   if (WiFi.getMode() == WIFI_MODE_NULL) return true;
   g_idleReleaseEnabled.store(false, std::memory_order_relaxed);
   g_psVerified.store(false, std::memory_order_relaxed);
@@ -684,6 +837,18 @@ bool setModeInternal(GfxRenderer* renderer, const wifi_mode_t mode) {
     CommandLock lock;
     WiFi.setAutoReconnect(true);  // releaseRadio() disables it; every session re-enables
     const bool ok = WiFi.mode(mode);
+#if !defined(SIMULATOR) && !defined(CROSSPOINT_PLUS_PORT)
+    if (ok) {
+      // WiFi.mode() short-circuits when the mode is unchanged, which can hide a
+      // driver that was stopped since (0.8.x keeps it resident between sessions).
+      // Starting here makes "mode says STA but the station is down" impossible.
+      const esp_err_t startErr = esp_wifi_start();
+      if (startErr != ESP_OK) {
+        // ESP_OK when already running; anything else names the driver state.
+        LOG_ERR("NET", "station start after mode failed: %d", static_cast<int>(startErr));
+      }
+    }
+#endif
     if (ok && (mode & WIFI_MODE_STA) != 0) {
       // Kill the modem-sleep path before it can kill the device: with PS enabled,
       // IDF toggles PHY power gating and calls phy_track_pll_init(), which creates
@@ -712,6 +877,13 @@ bool setModeInternal(GfxRenderer* renderer, const wifi_mode_t mode) {
     delay(400);
 #endif
     started = applyMode();
+  }
+  if (!started && (mode & WIFI_MODE_STA) != 0) {
+    // Still refused: the driver itself is in the state that makes every later
+    // attempt fail. Restart it once and try again, here, so every caller gets the
+    // same recovery instead of each screen inventing one.
+    LOG_ERR("NET", "station mode still refused; restarting the driver once");
+    if (recoverStationInternal()) started = applyMode();
   }
   if (!started && wasOff) resumeTimeSync();
   if (started) noteActivity();

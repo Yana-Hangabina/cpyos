@@ -78,7 +78,13 @@ void notePanicAbort(const char* message);
 
 // Same, for the C++ runtime hooks (terminate / new_handler) where the type name is
 // known but there is no panic message to classify.
-void noteCppFailure(const char* exceptionName);
+// `detail` rides along with the code; the bad_alloc hook passes the requested
+// size so the next photograph names the allocation that failed.
+void noteCppFailure(const char* exceptionName, uint32_t detail = 0);
+
+// The number recorded most recently for `code` (0 when absent). The crash
+// screen uses it for the failed allocation's size and the heap at that moment.
+uint32_t detailOf(Code code);
 
 // "cache_utils.c:127" for an assert, "" when the death was not an assert. Points
 // into static storage; valid until the next notePanicAbort().

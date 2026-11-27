@@ -98,6 +98,7 @@ idf_component_register(
         # The guard records a fault code at every refusal, so the recorder is part
         # of every target that links the guard.
         "${REPO_ROOT}/lib/Diagnostics/FaultLog.cpp"
+        "${REPO_ROOT}/lib/Diagnostics/NewTrace.cpp"
         "${REPO_ROOT}/lib/Callbacks/InvokeCallback.cpp"
         "HalDisplay.cpp"
         "HalStorage.cpp"

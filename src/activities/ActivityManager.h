@@ -1,5 +1,7 @@
 #pragma once
 
+#include <FaultLog.h>
+
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
@@ -132,6 +134,26 @@ class ActivityManager {
     }
     replaceActivity(std::move(activity));
     return true;
+  }
+
+  // Push counterpart of replaceActivityWith(): the tappable product paths used to
+  // call pushActivity(std::make_unique<...>) directly, and under
+  // -fno-exceptions a failed `new` aborts (0.8.4's PNC-04 class). Every push of a
+  // product activity goes through here; nullptr means the caller stays put.
+  // Unlike replaceActivityWith(), the arguments are forwarded verbatim (the
+  // existing call sites already spell `renderer, mappedInput`), so this is a
+  // drop-in for the std::make_unique spelling.
+  template <typename T, typename... Args>
+  T* pushActivityWith(Args&&... args) {
+    auto activity = makeUniqueNoThrow<T>(std::forward<Args>(args)...);
+    if (!activity) {
+      LOG_ERR("ACT", "OOM: pushed activity (%u bytes)", static_cast<unsigned>(sizeof(T)));
+      fault::raise(fault::Code::ActivityCreateFailed, static_cast<uint32_t>(sizeof(T)));
+      return nullptr;
+    }
+    T* raw = activity.get();
+    pushActivity(std::move(activity));
+    return raw;
   }
 
   // goTo... functions are convenient wrapper for replaceActivity()

@@ -302,6 +302,12 @@ bool faceOnSd() {
   return facePresent(g_verdict);
 }
 
+Presence presence() {
+  const Status s = status();
+  if (s.problem == Status::Problem::WrongTaskStack) return Presence::Unknown;
+  return s.faceInUse ? Presence::Present : Presence::Absent;
+}
+
 const char* tierLabel() {
   // Deliberately does not probe: probe()'s own log line calls this, and re-entering it would
   // recurse. Every caller that needs an answer here has already run the evaluation (ready(),
@@ -537,6 +543,7 @@ const char* problemName(Status::Problem) { return "unsupported"; }
 
 // No carrier was ever released in this config, so there is no core family on the card.
 bool faceOnSd() { return false; }
+Presence presence() { return Presence::Absent; }
 
 // Nothing was decompressed, so there is no tier to report; "unknown" is the documented
 // answer and this value is never branched on.
