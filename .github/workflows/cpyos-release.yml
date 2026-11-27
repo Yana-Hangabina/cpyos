@@ -120,7 +120,7 @@ jobs:
       # moment a book needed a glyph the UI subset didn't have. Failing here is
       # cheaper than failing there, and it makes the rule survive a file copied
       # back from an older tree.
-      - name: Gate: no unguarded internal-flash access
+      - name: "Gate: no unguarded internal-flash access"
         run: python3 -m unittest scripts.tests.test_internal_flash_guard -v
 
       - name: Build Read Pico (XIP PDF + private book source)
