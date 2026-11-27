@@ -123,6 +123,11 @@ jobs:
       - name: "Gate: no unguarded internal-flash access"
         run: python3 -m unittest scripts.tests.test_internal_flash_guard -v
 
+      # The note validator inside the packager runs after the ~20 minute build;
+      # 0.8.4's first run failed there. Fail in a second instead.
+      - name: "Gate: OTA release notes are valid"
+        run: python3 scripts/check_release_notes.py "$VERSION"
+
       - name: Build Read Pico (XIP PDF + private book source)
         run: |
           set -euo pipefail
