@@ -236,12 +236,36 @@ jobs:
           gh release upload pdf-engine "$RUNNER_TEMP/readpico-manifest-v2.txt" \
             --repo "$GITHUB_REPOSITORY" --clobber
 
+      # Build the site from the *release*, not from this job's dist: the Plus
+      # half (firmware, partition table, data manifest, packs) is uploaded by the
+      # other workflow, and flash-plus.json -- the one-shot Plus web install --
+      # can only be derived from it. 0.8.1..0.8.5 shipped a 404 for that page
+      # because this step only ever saw dist/cpyos/$VERSION.
       - name: Assemble the Pages artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 scripts/build_cpyos_site.py \
-            --release-dir "dist/cpyos/$VERSION" \
-            --output _site
+          dir="$RUNNER_TEMP/release-assets"
+          rm -rf "$dir"; mkdir -p "$dir"
+          # Both workflows start on the same tag; this one may finish first. Wait
+          # (bounded) for the Plus assets rather than deploy a site without them.
+          for attempt in $(seq 1 40); do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dir" --clobber
+            if compgen -G "$dir/cpyos-plus-*-partition-table.bin" >/dev/null \
+               && [ -f "$dir/data_manifest_plus.txt" ] \
+               && compgen -G "$dir/cpyos-plus-*.bin" >/dev/null; then
+              break
+            fi
+            echo "waiting for the Plus assets to land on $TAG (attempt $attempt)"
+            sleep 45
+          done
+          if ! compgen -G "$dir/cpyos-plus-*-partition-table.bin" >/dev/null; then
+            echo "::error::$TAG has no cpyos-plus-*-partition-table.bin after 30 minutes;"
+            echo "::error::refusing to deploy a site whose Plus installer would 404"
+            exit 1
+          fi
+          python3 scripts/build_cpyos_site.py --release-dir "$dir" --output _site
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
