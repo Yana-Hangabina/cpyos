@@ -353,6 +353,15 @@ def build(release_dir: Path, source: Path, output: Path, pages_base: str) -> dic
     if not isinstance(version, str) or not version:
         fail('latest.json has no version')
     ota_path = release_dir / 'ota' / 'readpico.json'
+    if not ota_path.exists():
+        # GitHub release assets are flat: the packager publishes the manifest as
+        # `readpico-ota.json`, while a locally assembled dist keeps it under
+        # `ota/`. Accept both, or a site built from release assets silently loses
+        # /ota/readpico.json (and the page's upgrade links) -- 0.8.6 shipped that
+        # way because this step had just been switched to build from the release.
+        flat = release_dir / 'readpico-ota.json'
+        if flat.is_file():
+            ota_path = flat
     firmware_name = latest['firmware'].get('filename', 'readpico-firmware.bin')
     for name in REQUIRED_MANIFESTS:
         if name in OTA_MANIFESTS and not ota_path.exists():
