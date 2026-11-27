@@ -83,6 +83,24 @@ class FlashPlusDataTest(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("missing", result.stderr)
 
+    def test_bundle_relative_name_resolves_next_to_the_manifest(self) -> None:
+        """A release bundle ships plus-*.dat beside its manifest, no build/ tree."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmpdir = Path(tmp)
+            blob = b"release-pack" * 8
+            (tmpdir / "plus-web_pack.dat").write_bytes(blob)
+            manifest = tmpdir / "data_manifest_plus.txt"
+            manifest.write_text(
+                "# bundle manifest\n"
+                "partition\tspiffs\t0x%08x\t0x%08x\t\t\t\n"
+                "data\tweb\t0x00056000\t0x%08x\t%d\t%s\tplus-web_pack.dat\n"
+                % (BASE, SIZE, BASE + 0x56000, len(blob), sha256(blob)),
+                encoding="utf-8")
+            result = run(manifest)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(str(tmpdir / "plus-web_pack.dat"), result.stdout,
+                          "a bare manifest name must resolve inside the bundle directory")
+
 
 if __name__ == "__main__":
     unittest.main()

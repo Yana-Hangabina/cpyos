@@ -200,6 +200,9 @@ jobs:
             --partitions ports/metalio_plus/partitions_plus_ota.csv \
             --out build/data_manifest_plus.txt
 
+      - name: "Gate: data packs are target-scoped and match their digests"
+        run: python3 -m unittest scripts.tests.test_plus_release_bundle -v
+
       - name: Stage the release asset
         run: |
           set -euo pipefail
@@ -217,15 +220,15 @@ jobs:
           # The image runs without them, but the UI subset lacks the common
           # Han reading face and 33 languages fall back to English; flash them
           # with ports/metalio_plus/scripts/flash_plus_data.py.
-          # Copy exactly the blobs the manifest names. A hardcoded list drifted
-          # (build/cjk_core.dat is an alias the generator may leave holding the
-          # other tier), and the device-facing names must match what
-          # data_manifest_plus.txt tells flash_plus_data.py to find.
-          while IFS=$'\t' read -r kind role offset address size digest relative; do
-            [ "$kind" = "data" ] || continue
-            cp "$relative" "dist/cpyos-plus/$BASE/$(basename "$relative")"
-          done < build/data_manifest_plus.txt
-          cp build/data_manifest_plus.txt "dist/cpyos-plus/$BASE/data_manifest_plus.txt"
+          #
+          # Published as plus-<build name>, not the plain name: i18n_pack.dat and
+          # web_pack.dat differ between the targets (same size, different bytes),
+          # and 0.8.3 published both targets' packs under the same asset names in
+          # one release -- last writer wins, so every hash-checking installer
+          # refused a pack and a non-checking one wrote the other target's bytes.
+          # The bundler also re-verifies every blob against the manifest digest,
+          # so the two targets' packs cannot be mixed up inside one bundle.
+          python3 scripts/plus_release_bundle.py --out "dist/cpyos-plus/$BASE"
           # Both device jobs publish into one release. The readpico job keeps the
           # plain SHA256SUMS; this one is named so neither overwrites the other
           # and a Plus user can verify the assets it actually downloads.

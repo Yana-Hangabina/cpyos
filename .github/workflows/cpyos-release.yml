@@ -158,6 +158,12 @@ jobs:
             --firmware .pio/build/readpico_pdf_jjwxc/firmware.bin \
             --partitions partitions_readpico_xip.csv
 
+      # The Plus job publishes its packs as plus-<name>; this side keeps plain
+      # names. One shared namespace per release is how 0.8.3 shipped the wrong
+      # i18n/web pack, so both jobs assert the invariant.
+      - name: "Gate: data packs keep target-scoped names"
+        run: python3 -m unittest scripts.tests.test_plus_release_bundle -v
+
       - name: Assemble the release bundle
         run: |
           set -euo pipefail

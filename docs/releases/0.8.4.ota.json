@@ -1,0 +1,14 @@
+{
+  "en": [
+    "Fixes 0.8.3's colliding data packs: Plus assets are now published as plus-<name>",
+    "Re-flash the Plus data partition with 0.8.4 if 0.8.3 left languages in English",
+    "Read Pico 0.8.3 data packs were correct; OTA from 0.8.3 is safe",
+    "Firmware behaviour, partition layout and pack formats are unchanged"
+  ],
+  "zh": [
+    "修复 0.8.3 数据包重名：Plus 数据包改为 plus-<名> 发布",
+    "若 0.8.3 后语言回退英文，用 0.8.4 重刷一次 Plus 数据分区",
+    "Read Pico 的 0.8.3 数据包无误，可直接 OTA",
+    "固件行为、分区布局与包格式均未变化，无需整片擦除"
+  ]
+}

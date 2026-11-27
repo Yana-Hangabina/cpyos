@@ -110,7 +110,8 @@ python3 scripts/build_cpyos_site.py --release-dir dist/cpyos/0.7.0 --output _sit
 | `readpico-firmware.bin` | app-only，OTA / 手动升级（app0） |
 | `readpico-app1.bin` | 同一镜像，升级/仅 app 清单写到 app1（避免设备从非活动槽启动旧固件） |
 | `readpico-bootloader.bin` / `readpico-partitions.bin` / `readpico-boot_app0.bin` | 首次安装 |
-| `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` / `emoji.dat` | 数据分区 |
+| `pinyin.dat` / `hyphen.dat` / `i18n_pack.dat` / `web_pack.dat` / `emoji.dat` / `cjk_core_3500.dat` | Read Pico 数据分区（**Plain name = Read Pico**） |
+| `plus-pinyin.dat` / `plus-hyphen.dat` / `plus-i18n_pack.dat` / `plus-web_pack.dat` / `plus-emoji.dat` / `plus-cjk_core_*.dat` + `data_manifest_plus.txt` | Plus 数据分区，`plus-` 前缀**不可去掉**（`i18n` 与 `web` 两包两目标字节不同，0.8.3 就是同名互相覆盖）；`scripts/plus_release_bundle.py` 打包前逐个校验 manifest 摘要 |
 | `readpico-packs.txt` | 设备 OTA 的数据包清单（偏移、大小、SHA-256、擦除上限） |
 | `manifest-install.json` | 网页刷机：完整安装 / 恢复（擦除） |
 | `manifest-upgrade.json` | 网页刷机：CPYOS 升级（保留 NVS） |

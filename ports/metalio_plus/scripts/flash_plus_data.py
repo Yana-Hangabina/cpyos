@@ -35,6 +35,19 @@ def sha256(path: str) -> str:
     return digest.hexdigest()
 
 
+def resolve_blob(manifest_path: str, relative: str) -> str:
+    """Where a data row's file lives.
+
+    A release bundle ships the manifest next to its packs (plus-*.dat), so the
+    manifest's own directory wins; a path that is not there falls back to the
+    repository root, which is what a checkout with build/ expects.
+    """
+    local = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), relative)
+    if os.path.isfile(local):
+        return local
+    return os.path.join(ROOT, relative)
+
+
 def parse_manifest(path: str):
     base = size = None
     rows = []
@@ -53,7 +66,7 @@ def parse_manifest(path: str):
                     "address": int(fields[3], 0),
                     "size": int(fields[4], 0),
                     "sha256": fields[5],
-                    "path": os.path.join(ROOT, fields[6]),
+                    "path": resolve_blob(path, fields[6]),
                 })
     if base is None or size is None:
         raise SystemExit(f"{path}: no partition row")

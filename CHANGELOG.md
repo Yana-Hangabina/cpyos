@@ -2,6 +2,17 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.8.4
+
+- 修复 0.8.3 发布资产里 **Plus 与 Read Pico 数据包同名互相覆盖**：`i18n_pack.dat` 与
+  `web_pack.dat` 两目标字节不同（大小相同），Release 上只剩最后上传的一份。
+- Plus 的全部数据包改为 `plus-<构建文件名>` 发布；`scripts/plus_release_bundle.py` 打包前
+  逐个校验 manifest 的 size/SHA-256，并改写发布版 `data_manifest_plus.txt`。
+- `flash_plus_data.py` 优先在 manifest 旁解析数据包，下载的发布包可直接刷写。
+- 新增门禁 `scripts/tests/test_plus_release_bundle.py`（命名不相交 + 摘要不符必须拒绝），
+  两个发布作业在打包前都会运行。
+- 固件行为、分区布局、包格式与 0.8.3 相同。
+
 ## 0.8.3
 
 - 修复打开含生僻字书籍时的 `esp_task_stack_is_sane_cache_disabled` 崩溃：所有内部 flash

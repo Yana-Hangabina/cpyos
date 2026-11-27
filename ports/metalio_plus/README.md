@@ -415,7 +415,19 @@ Every `cpyos-plus-*` release carries, next to the firmware:
 | `plus-pdfmod.bin` | MuPDF engine, paired to that image's ELF SHA | `/.crosspoint/pdf/pdfmod.bin` on the card (or the pinned **PDF engine** row on the Plugins page) |
 | `plus-pdf-assets.bin` | font/CMap bundle for the engine | card root `/pdf_assets.bin`; installed at boot |
 | `plus-pdf-engine-manifest.txt` | one manifest line for this exact tag | consumed by the in-reader updater |
-| `pinyin.dat`, `web_pack.dat`, `hyphen.dat`, `i18n_pack.dat`, `emoji.dat`, `cjk_core_8105.dat` | data partition blobs | spiffs via `flash_plus_data.py` / `data_manifest_plus.txt` (the core carrier is named after its tier; `cjk_core.dat` is only the last-built alias) |
+| `pinyin.dat`, `web_pack.dat` … | data partition blobs, **Read Pico only** (published under their plain build names) | spiffs via `exp/flash_device.sh` / `data_manifest.txt` |
+| `plus-pinyin.dat`, `plus-web_pack.dat`, `plus-hyphen.dat`, `plus-i18n_pack.dat`, `plus-emoji.dat`, `plus-cjk_core_8105.dat` | the same six blobs for **Plus**, published under a `plus-` prefix | spiffs via `flash_plus_data.py` / `data_manifest_plus.txt` |
+
+★ **The prefix is not cosmetic.** `i18n_pack.dat` and `web_pack.dat` differ
+between the targets (same size, different bytes), and 0.8.3 published both
+targets' packs under the same names in one release, so the uploaded bytes were
+whichever job finished last (Read Pico's i18n + Plus's web). A hash-checking
+installer refused a pack; an unverified one wrote the wrong bytes. Since 0.8.4
+every Plus blob is `plus-<build name>` and `scripts/plus_release_bundle.py`
+re-verifies each file against the manifest digest while staging. The released
+`data_manifest_plus.txt` names the prefixed files, and `flash_plus_data.py`
+resolves them next to the manifest, so a downloaded bundle is self-contained:
+`python3 flash_plus_data.py --manifest data_manifest_plus.txt`.
 
 CloudZao OTA writes **only** the app slot: languages other than EN/ZH, pinyin,
 hyphenation, the emoji face and the 8,105-glyph reading core stay absent until
