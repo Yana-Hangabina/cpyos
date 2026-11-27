@@ -2,6 +2,15 @@
 
 CPYOS 的版本号来自 `platformio.ini` 的 `[crosspoint] version`，Git tag 与它一致（不带 `v`）。每个版本的完整安装包、应用固件、OTA 清单和校验和见 [Releases](https://github.com/Yana-Hangabina/cpyos/releases)。
 
+## 0.8.5
+
+- 修复从 0.8.1 起 Plus 发布材料缺少 `cpyos-plus-<ver>-partition-table.bin` 的问题：
+  官网网页一键安装（`flash-plus.json`）与 README 的手动完整安装都依赖它。
+- 站点生成器改为**缺分区表/缺数据清单即失败**（只发布 Read Pico 的版本仍跳过），
+  不再静默省略 Plus 安装清单。
+- 含 0.8.4：Plus 数据包以 `plus-<名>` 发布，两目标不再重名。
+- 固件行为、分区布局、数据包格式与 0.8.4 相同。
+
 ## 0.8.4
 
 - 修复 0.8.3 发布资产里 **Plus 与 Read Pico 数据包同名互相覆盖**：`i18n_pack.dat` 与

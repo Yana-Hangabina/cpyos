@@ -1,0 +1,12 @@
+{
+  "en": [
+    "Plus releases ship the partition table again; the web installer works",
+    "Includes 0.8.4: Plus data packs are published as plus-NAME",
+    "Firmware behaviour and partition layout are unchanged"
+  ],
+  "zh": [
+    "Plus 安装重新带上分区表，网页一键安装可用",
+    "含 0.8.4 修复：Plus 数据包以 plus- 前缀发布",
+    "固件行为与分区布局不变，可直接 OTA"
+  ]
+}
