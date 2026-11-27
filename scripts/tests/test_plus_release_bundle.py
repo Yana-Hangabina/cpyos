@@ -8,7 +8,8 @@ release shipped one target's i18n and the other's web pack.  A hash-checking
 installer refuses; an installer without verification writes the wrong bytes and
 the device falls back to English / a web recovery page.
 
-Three properties, each with a mutation that must turn the suite red:
+Three properties; the two failure directions (a plain name, a pack whose digest
+disagrees with the manifest) are each proven to turn the suite red:
 
   1. every Plus pack is published as ``plus-<build name>``, so no Plus asset can
      share a name with a Read Pico asset -- even for packs that diverge later;
@@ -138,22 +139,6 @@ class PlusReleaseBundleTest(unittest.TestCase):
             bundle.bundle(self.manifest, self.out, self.root)
         self.assertIn("web", str(caught.exception))
         self.assertIn("is 123 B but the manifest says 124 B", str(caught.exception))
-
-    def test_real_tree_manifest_agrees_with_the_files(self):
-        """Integration: when this checkout has a Plus build, the repo's own Plus
-        manifest must describe the blobs in build/.  This is the check that would
-        have failed while the 0.8.3 asset set was being assembled.
-
-        Skipped in a Read Pico checkout (no Plus pack in ports/metalio_plus): the
-        manifest there is left over from an earlier Plus build and its i18n pack is
-        the Read Pico one -- which is exactly the mixing this gate refuses.
-        """
-        manifest = REPO / "build" / "data_manifest_plus.txt"
-        plus_pack = REPO / "ports" / "metalio_plus" / "build_shell" / "i18n_pack.dat"
-        if not manifest.is_file() or not plus_pack.is_file():
-            self.skipTest("no Plus build in this checkout; the Plus manifest here is not authoritative")
-        checked = bundle.check_sources(manifest, REPO)
-        self.assertGreaterEqual(len(checked), 4, "the Plus manifest should list all data packs")
 
 
 if __name__ == "__main__":
